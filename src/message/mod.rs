@@ -1,18 +1,19 @@
 mod message;
+mod metadata;
 mod part;
-mod status;
+mod state;
 mod usage;
 
-pub use message::SessionMessage;
+pub use message::{MessageStateTransitionError, MessageStatus, SessionMessage};
+pub use metadata::{MessageMetadata, MessageSource};
 pub use part::{
-    AgentPart, BashToolInput, BashToolMetadata, CompactionPart, CompletedTime, CustomToolInput,
-    CustomToolMetadata, EditToolInput, EditToolMetadata, ErrorTime, FilePart, GlobToolInput,
-    GlobToolMetadata, GrepToolInput, GrepToolMetadata, PartContent, PartKind, PartType, PatchPart,
-    ReadToolInput, ReadToolMetadata, ReasoningPart, RetryPart, RunningTime, SessionMessagePart,
-    SnapshotPart, StepFinishPart, StepStartPart, StructuredField, StructuredObject,
-    StructuredValue, SubtaskPart, TaskToolInput, TaskToolMetadata, TextPart, ToolAttachment,
-    ToolCallPart, ToolInput, ToolKind, ToolMetadata, ToolResultPart, ToolState, WriteToolInput,
-    WriteToolMetadata,
+    BashToolInput, BuiltinToolInput, BuiltinToolOutput, CommandExecutionPart, CustomToolOutput,
+    EditToolInput, ErrorPart, ExecutionStatus, FileChangeEntry, FileChangeKind, FileChangePart,
+    GlobToolInput, GrepToolInput, McpToolOutput, PartContent, PartKind,
+    PartStateTransitionError, ReadToolInput, ReasoningPart, SessionMessagePart, StructuredField,
+    StructuredObject, StructuredValue, TaskToolInput, TextPart, TimeRange, TodoItem,
+    TodoListPart, TodoPriority, TodoStatus, ToolAttachment, ToolExecutionPart, ToolInvocation,
+    ToolOutput, ToolResultBlock, WebSearchPart, WebSearchResult, WriteToolInput,
 };
-pub use status::ToolCallStatus;
+pub use state::{MessageStateStore, MessageStateStoreError, MessageUpdate};
 pub use usage::MessageUsage;

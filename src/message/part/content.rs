@@ -1,60 +1,50 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentPart, CompactionPart, FilePart, PartKind, PatchPart, ReasoningPart, RetryPart,
-    SnapshotPart, StepFinishPart, StepStartPart, SubtaskPart, TextPart, ToolCallPart,
-    ToolResultPart,
+    CommandExecutionPart, ErrorPart, ExecutionStatus, FileChangePart, PartKind, ReasoningPart,
+    TextPart, TodoListPart, ToolExecutionPart, WebSearchPart,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PartContent {
     Text(TextPart),
-    ToolCall(ToolCallPart),
-    ToolResult(ToolResultPart),
     Reasoning(ReasoningPart),
-    File(FilePart),
-    StepStart(StepStartPart),
-    StepFinish(StepFinishPart),
-    Snapshot(SnapshotPart),
-    Patch(PatchPart),
-    Agent(AgentPart),
-    Subtask(SubtaskPart),
-    Retry(RetryPart),
-    Compaction(CompactionPart),
+    ToolExecution(ToolExecutionPart),
+    CommandExecution(CommandExecutionPart),
+    FileChange(FileChangePart),
+    WebSearch(WebSearchPart),
+    TodoList(TodoListPart),
+    Error(ErrorPart),
 }
-
-/// Backward-compatible alias for older call-sites.
-pub type PartType = PartContent;
 
 impl PartContent {
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text(TextPart {
             text: text.into(),
-            synthetic: None,
-            ignored: None,
+            synthetic: false,
+            ignored: false,
         })
     }
 
-    pub fn reasoning(text: impl Into<String>) -> Self {
-        Self::Reasoning(ReasoningPart { text: text.into() })
+    pub fn reasoning_summary(summary: impl Into<String>) -> Self {
+        Self::Reasoning(ReasoningPart {
+            summary: vec![summary.into()],
+            raw_content: Vec::new(),
+            encrypted_content: None,
+        })
     }
 
     pub const fn kind(&self) -> PartKind {
         match self {
             Self::Text(_) => PartKind::Text,
-            Self::ToolCall(_) => PartKind::ToolCall,
-            Self::ToolResult(_) => PartKind::ToolResult,
             Self::Reasoning(_) => PartKind::Reasoning,
-            Self::File(_) => PartKind::File,
-            Self::StepStart(_) => PartKind::StepStart,
-            Self::StepFinish(_) => PartKind::StepFinish,
-            Self::Snapshot(_) => PartKind::Snapshot,
-            Self::Patch(_) => PartKind::Patch,
-            Self::Agent(_) => PartKind::Agent,
-            Self::Subtask(_) => PartKind::Subtask,
-            Self::Retry(_) => PartKind::Retry,
-            Self::Compaction(_) => PartKind::Compaction,
+            Self::ToolExecution(_) => PartKind::ToolExecution,
+            Self::CommandExecution(_) => PartKind::CommandExecution,
+            Self::FileChange(_) => PartKind::FileChange,
+            Self::WebSearch(_) => PartKind::WebSearch,
+            Self::TodoList(_) => PartKind::TodoList,
+            Self::Error(_) => PartKind::Error,
         }
     }
 
@@ -65,10 +55,61 @@ impl PartContent {
         }
     }
 
-    pub fn reasoning_value(&self) -> Option<&str> {
+    pub fn reasoning_summary_value(&self) -> Option<&[String]> {
         match self {
-            Self::Reasoning(part) => Some(part.text.as_str()),
+            Self::Reasoning(part) => Some(part.summary.as_slice()),
             _ => None,
+        }
+    }
+
+    pub fn append_text_delta(&mut self, delta: &str) -> bool {
+        match self {
+            Self::Text(part) => {
+                part.text.push_str(delta);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn append_reasoning_summary_delta(&mut self, delta: impl Into<String>) -> bool {
+        match self {
+            Self::Reasoning(part) => {
+                part.summary.push(delta.into());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn append_reasoning_raw_delta(&mut self, delta: impl Into<String>) -> bool {
+        match self {
+            Self::Reasoning(part) => {
+                part.raw_content.push(delta.into());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn append_command_output_delta(&mut self, delta: &str) -> bool {
+        match self {
+            Self::CommandExecution(part) => {
+                part.status = ExecutionStatus::InProgress;
+                match &mut part.output {
+                    Some(text) => text.push_str(delta),
+                    None => part.output = Some(delta.to_string()),
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn append_tool_output_delta(&mut self, delta: &str) -> bool {
+        match self {
+            Self::ToolExecution(part) => part.append_output_delta(delta),
+            _ => false,
         }
     }
 }

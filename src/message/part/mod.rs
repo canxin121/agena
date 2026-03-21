@@ -6,17 +6,16 @@ mod structured;
 mod tool;
 
 pub use activity::{
-    AgentPart, CompactionPart, FilePart, PatchPart, ReasoningPart, RetryPart, SnapshotPart,
-    StepFinishPart, StepStartPart, SubtaskPart, TextPart,
+    CommandExecutionPart, ErrorPart, FileChangeEntry, FileChangeKind, FileChangePart,
+    ReasoningPart, TextPart, TodoItem, TodoListPart, TodoPriority, TodoStatus, WebSearchPart,
+    WebSearchResult,
 };
-pub use common::{CompletedTime, ErrorTime, PartKind, RunningTime};
-pub use content::{PartContent, PartType};
-pub use session_part::SessionMessagePart;
+pub use common::{ExecutionStatus, PartKind, TimeRange};
+pub use content::PartContent;
+pub use session_part::{PartStateTransitionError, SessionMessagePart};
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
-    BashToolInput, BashToolMetadata, CustomToolInput, CustomToolMetadata, EditToolInput,
-    EditToolMetadata, GlobToolInput, GlobToolMetadata, GrepToolInput, GrepToolMetadata,
-    ReadToolInput, ReadToolMetadata, TaskToolInput, TaskToolMetadata, ToolAttachment, ToolCallPart,
-    ToolInput, ToolKind, ToolMetadata, ToolResultPart, ToolState, WriteToolInput,
-    WriteToolMetadata,
+    BashToolInput, BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, EditToolInput,
+    GlobToolInput, GrepToolInput, McpToolOutput, ReadToolInput, TaskToolInput, ToolAttachment,
+    ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock, WriteToolInput,
 };

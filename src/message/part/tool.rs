@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::message::status::ToolCallStatus;
-
-use super::{CompletedTime, ErrorTime, RunningTime, StructuredObject};
+use super::{ExecutionStatus, StructuredObject, TimeRange};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ToolAttachment {
@@ -11,19 +9,6 @@ pub struct ToolAttachment {
     pub filename: String,
     #[serde(default)]
     pub mime: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolKind {
-    Bash,
-    Read,
-    Write,
-    Edit,
-    Glob,
-    Grep,
-    Task,
-    Custom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,16 +74,8 @@ pub struct TaskToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CustomToolInput {
-    pub name: String,
-    #[serde(default)]
-    pub args: StructuredObject,
-}
-
-/// Tool input is fully static for built-ins, with a single Custom escape hatch.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
-pub enum ToolInput {
+pub enum BuiltinToolInput {
     Bash(BashToolInput),
     Read(ReadToolInput),
     Write(WriteToolInput),
@@ -106,181 +83,238 @@ pub enum ToolInput {
     Glob(GlobToolInput),
     Grep(GrepToolInput),
     Task(TaskToolInput),
-    Custom(CustomToolInput),
 }
 
-impl ToolInput {
-    pub const fn kind(&self) -> ToolKind {
-        match self {
-            Self::Bash(_) => ToolKind::Bash,
-            Self::Read(_) => ToolKind::Read,
-            Self::Write(_) => ToolKind::Write,
-            Self::Edit(_) => ToolKind::Edit,
-            Self::Glob(_) => ToolKind::Glob,
-            Self::Grep(_) => ToolKind::Grep,
-            Self::Task(_) => ToolKind::Task,
-            Self::Custom(_) => ToolKind::Custom,
-        }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum ToolInvocation {
+    Builtin {
+        input: BuiltinToolInput,
+    },
+    Mcp {
+        server: String,
+        tool: String,
+        #[serde(default)]
+        input: StructuredObject,
+    },
+    Custom {
+        name: String,
+        #[serde(default)]
+        input: StructuredObject,
+    },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct BashToolMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct ReadToolMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub truncated: Option<bool>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub loaded_paths: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct WriteToolMetadata {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct EditToolMetadata {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diff: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file_diff: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct GlobToolMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub count: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct GrepToolMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matches: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct TaskToolMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_provider_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct CustomToolMetadata {
-    #[serde(default)]
-    pub fields: StructuredObject,
-}
-
-/// Tool metadata is fixed for built-ins, with a single Custom variant.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
-pub enum ToolMetadata {
-    Bash(BashToolMetadata),
-    Read(ReadToolMetadata),
-    Write(WriteToolMetadata),
-    Edit(EditToolMetadata),
-    Glob(GlobToolMetadata),
-    Grep(GrepToolMetadata),
-    Task(TaskToolMetadata),
-    Custom(CustomToolMetadata),
+pub enum BuiltinToolOutput {
+    Bash {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    Read {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preview: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        truncated: Option<bool>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        loaded_paths: Vec<String>,
+    },
+    Write {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<String>,
+    },
+    Edit {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diagnostics: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_diff: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<String>,
+    },
+    Glob {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<u32>,
+    },
+    Grep {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        matches: Option<u32>,
+    },
+    Task {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_provider_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_id: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolResultBlock {
+    Text {
+        text: String,
+    },
+    Image {
+        mime: String,
+        url: String,
+    },
+    Audio {
+        mime: String,
+        url: String,
+    },
+    ResourceLink {
+        uri: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    EmbeddedResource {
+        uri: String,
+        mime: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base64: Option<String>,
+    },
+    File {
+        url: String,
+        filename: String,
+        mime: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpToolOutput {
+    pub server: String,
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_blocks: Vec<ToolResultBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<StructuredObject>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomToolOutput {
+    pub name: String,
+    #[serde(default)]
+    pub payload: StructuredObject,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum ToolOutput {
+    None,
+    Builtin {
+        output: BuiltinToolOutput,
+    },
+    Mcp {
+        output: McpToolOutput,
+    },
+    Custom {
+        output: CustomToolOutput,
+    },
+    Unknown {
+        name: String,
+        #[serde(default)]
+        payload: StructuredObject,
+    },
+}
+
+impl Default for ToolOutput {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "status", rename_all = "lowercase")]
-pub enum ToolState {
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ToolExecutionPart {
     Pending {
-        input: ToolInput,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        raw: Option<String>,
-    },
-    Running {
-        input: ToolInput,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        metadata: Option<ToolMetadata>,
+        call_id: i64,
+        invocation: ToolInvocation,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        title: String,
         #[serde(default)]
-        time: RunningTime,
+        lifecycle: TimeRange,
+    },
+    InProgress {
+        call_id: i64,
+        invocation: ToolInvocation,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        title: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        output_text: String,
+        #[serde(default)]
+        lifecycle: TimeRange,
     },
     Completed {
-        input: ToolInput,
+        call_id: i64,
+        invocation: ToolInvocation,
         #[serde(default)]
-        output: String,
-        #[serde(default)]
-        title: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        metadata: Option<ToolMetadata>,
-        #[serde(default)]
-        time: CompletedTime,
+        output_text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        blocks: Vec<ToolResultBlock>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<ToolAttachment>,
+        #[serde(default)]
+        details: ToolOutput,
+        #[serde(default)]
+        lifecycle: TimeRange,
     },
-    Error {
-        input: ToolInput,
+    Failed {
+        call_id: i64,
+        invocation: ToolInvocation,
+        error_message: String,
         #[serde(default)]
-        error: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        metadata: Option<ToolMetadata>,
+        output_text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        blocks: Vec<ToolResultBlock>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<ToolAttachment>,
         #[serde(default)]
-        time: ErrorTime,
+        details: ToolOutput,
+        #[serde(default)]
+        lifecycle: TimeRange,
     },
 }
 
-impl ToolState {
-    pub const fn status(&self) -> ToolCallStatus {
+impl ToolExecutionPart {
+    pub const fn status(&self) -> ExecutionStatus {
         match self {
-            Self::Pending { .. } => ToolCallStatus::Pending,
-            Self::Running { .. } => ToolCallStatus::Running,
-            Self::Completed { .. } => ToolCallStatus::Completed,
-            Self::Error { .. } => ToolCallStatus::Error,
+            Self::Pending { .. } => ExecutionStatus::Pending,
+            Self::InProgress { .. } => ExecutionStatus::InProgress,
+            Self::Completed { .. } => ExecutionStatus::Completed,
+            Self::Failed { .. } => ExecutionStatus::Failed,
         }
     }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ToolCallPart {
-    pub id: String,
-    pub input: ToolInput,
-    #[serde(default)]
-    pub status: ToolCallStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state: Option<ToolState>,
-}
-
-impl ToolCallPart {
-    pub const fn tool_kind(&self) -> ToolKind {
-        self.input.kind()
+    pub fn append_output_delta(&mut self, delta: &str) -> bool {
+        match self {
+            Self::Pending {
+                call_id,
+                invocation,
+                title,
+                lifecycle,
+            } => {
+                *self = Self::InProgress {
+                    call_id: call_id.clone(),
+                    invocation: invocation.clone(),
+                    title: title.clone(),
+                    output_text: delta.to_string(),
+                    lifecycle: lifecycle.clone(),
+                };
+                true
+            }
+            Self::InProgress { output_text, .. }
+            | Self::Completed { output_text, .. }
+            | Self::Failed { output_text, .. } => {
+                output_text.push_str(delta);
+                true
+            }
+        }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ToolResultPart {
-    pub tool_call_id: String,
-    pub content: String,
-    pub is_error: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<ToolMetadata>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<ToolAttachment>,
 }

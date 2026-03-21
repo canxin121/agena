@@ -1,32 +1,34 @@
 use sea_orm::entity::prelude::*;
 
-use super::message;
+use super::session;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "parts")]
+#[sea_orm(table_name = "agena_checkpoints")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: i64,
-    pub message_id: i64,
-    pub part_type_json: String,
+    pub session_id: i64,
+    pub upto_seq: i64,
+    pub snapshot_json: String,
+    pub state_hash: Option<String>,
     pub created_at_ms: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
-        belongs_to = "message::Entity",
-        from = "Column::MessageId",
-        to = "message::Column::Id",
+        belongs_to = "session::Entity",
+        from = "Column::SessionId",
+        to = "session::Column::Id",
         on_update = "Cascade",
         on_delete = "Cascade"
     )]
-    Message,
+    Session,
 }
 
-impl Related<message::Entity> for Entity {
+impl Related<session::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::Message.def()
+        Relation::Session.def()
     }
 }
 

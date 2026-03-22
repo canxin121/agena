@@ -1,5 +1,3 @@
-pub mod message;
 pub mod message_part;
-pub mod message_part_detail;
 pub mod session;
 pub mod workspace;

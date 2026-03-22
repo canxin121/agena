@@ -1,37 +1,25 @@
 mod command;
-mod id;
-mod item;
 mod part_update;
 mod reducer;
 mod thread;
 
+use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
 pub use command::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, CommandOutputStream,
 };
-pub use id::{CallId, ItemId, MessageId, PartId, ThreadId, TurnId};
-pub use item::{ItemCompletedEvent, ItemRef, ItemSnapshot, ItemStartedEvent, ItemUpdatedEvent};
 pub use part_update::{MessagePartDeltaEvent, MessagePartUpdatedEvent, PartDeltaField};
 pub use reducer::{AiStreamEvent, MessageReducer};
-pub use thread::{
-    ErrorInfo, StreamErrorEvent, ThreadStartedEvent, TurnCompletedEvent, TurnFailedEvent,
-    TurnStartedEvent,
-};
+pub use thread::{ErrorInfo, StreamErrorEvent, ThreadFailedEvent, ThreadStartedEvent};
 
 /// Unified runtime event stream combining codex-style lifecycle + command deltas
 /// and opencode-style part-level updates.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum AgentEvent {
     ThreadStarted(ThreadStartedEvent),
-    TurnStarted(TurnStartedEvent),
-    TurnCompleted(TurnCompletedEvent),
-    TurnFailed(TurnFailedEvent),
-
-    ItemStarted(ItemStartedEvent),
-    ItemUpdated(ItemUpdatedEvent),
-    ItemCompleted(ItemCompletedEvent),
+    ThreadFailed(ThreadFailedEvent),
 
     MessagePartUpdated(MessagePartUpdatedEvent),
     MessagePartDelta(MessagePartDeltaEvent),

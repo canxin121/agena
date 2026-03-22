@@ -1,6 +1,7 @@
+use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, FromJsonQueryResult)]
 pub struct MessageUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,

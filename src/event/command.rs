@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::event::{CallId, ItemId, MessageId, PartId, ThreadId, TurnId};
 use crate::message::ExecutionStatus;
 
 fn is_false(value: &bool) -> bool {
@@ -16,15 +15,12 @@ pub enum CommandOutputStream {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandContext {
-    pub thread_id: ThreadId,
-    pub turn_id: TurnId,
-    pub call_id: CallId,
+    pub thread_id: i64,
+    pub call_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_id: Option<MessageId>,
+    pub message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub part_id: Option<PartId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub item_id: Option<ItemId>,
+    pub part_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

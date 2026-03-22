@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use strum::Display;
 
 use super::{ExecutionStatus, StructuredObject, TimeRange};
 
@@ -74,12 +75,19 @@ pub struct TaskToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApplyPatchToolInput {
+    pub patch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum BuiltinToolInput {
     Bash(BashToolInput),
     Read(ReadToolInput),
     Write(WriteToolInput),
     Edit(EditToolInput),
+    ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
     Grep(GrepToolInput),
     Task(TaskToolInput),
@@ -134,6 +142,16 @@ pub enum BuiltinToolOutput {
         file_diff: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         files: Vec<String>,
+    },
+    ApplyPatch {
+        operation_id: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after_hash: Option<String>,
+        inverse_patch: String,
     },
     Glob {
         #[serde(default, skip_serializing_if = "Option::is_none")]

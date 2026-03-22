@@ -181,17 +181,17 @@ impl MessageReducer {
             } => {
                 vec![MessageUpdate::InsertPart {
                     message_id,
-                    part: SessionMessagePart {
-                        id: part_id,
+                    part: SessionMessagePart::with_content(
+                        part_id,
                         message_id,
-                        status: ExecutionStatus::Pending,
                         created_at,
-                        content: PartContent::Text(TextPart {
+                        ExecutionStatus::Pending,
+                        PartContent::Text(TextPart {
                             text: String::new(),
                             synthetic,
                             ignored,
                         }),
-                    },
+                    ),
                 }]
             }
             AiStreamEvent::TextDelta { part_id, delta } => {
@@ -209,13 +209,13 @@ impl MessageReducer {
             } => {
                 vec![MessageUpdate::InsertPart {
                     message_id,
-                    part: SessionMessagePart {
-                        id: part_id,
+                    part: SessionMessagePart::with_content(
+                        part_id,
                         message_id,
-                        status: ExecutionStatus::Pending,
                         created_at,
-                        content: PartContent::reasoning_summary(""),
-                    },
+                        ExecutionStatus::Pending,
+                        PartContent::reasoning_summary(""),
+                    ),
                 }]
             }
             AiStreamEvent::ReasoningSummaryDelta { part_id, delta } => {
@@ -239,12 +239,12 @@ impl MessageReducer {
             } => {
                 vec![MessageUpdate::InsertPart {
                     message_id,
-                    part: SessionMessagePart {
-                        id: part_id,
+                    part: SessionMessagePart::with_content(
+                        part_id,
                         message_id,
-                        status: ExecutionStatus::Pending,
                         created_at,
-                        content: PartContent::ToolExecution(ToolExecutionPart::Pending {
+                        ExecutionStatus::Pending,
+                        PartContent::ToolExecution(ToolExecutionPart::Pending {
                             call_id,
                             invocation,
                             title,
@@ -253,7 +253,7 @@ impl MessageReducer {
                                 end_ms: None,
                             },
                         }),
-                    },
+                    ),
                 }]
             }
             AiStreamEvent::ToolOutputDelta { part_id, delta } => {
@@ -324,12 +324,12 @@ impl MessageReducer {
             } => {
                 vec![MessageUpdate::InsertPart {
                     message_id,
-                    part: SessionMessagePart {
-                        id: part_id,
+                    part: SessionMessagePart::with_content(
+                        part_id,
                         message_id,
-                        status: ExecutionStatus::Pending,
                         created_at,
-                        content: PartContent::CommandExecution(CommandExecutionPart {
+                        ExecutionStatus::Pending,
+                        PartContent::CommandExecution(CommandExecutionPart {
                             command,
                             status: ExecutionStatus::Pending,
                             lifecycle: TimeRange {
@@ -339,7 +339,7 @@ impl MessageReducer {
                             exit_code: None,
                             output: None,
                         }),
-                    },
+                    ),
                 }]
             }
             AiStreamEvent::CommandOutputDelta { part_id, delta } => {

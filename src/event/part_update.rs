@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::event::{CallId, ItemId, MessageId, PartId, ThreadId, TurnId};
 use crate::message::SessionMessagePart;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -17,23 +16,19 @@ pub enum PartDeltaField {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessagePartUpdatedEvent {
-    pub thread_id: ThreadId,
-    pub turn_id: TurnId,
-    pub message_id: MessageId,
+    pub thread_id: i64,
+    pub message_id: i64,
     pub part: SessionMessagePart,
     pub ts_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessagePartDeltaEvent {
-    pub thread_id: ThreadId,
-    pub turn_id: TurnId,
-    pub message_id: MessageId,
-    pub part_id: PartId,
+    pub thread_id: i64,
+    pub message_id: i64,
+    pub part_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub item_id: Option<ItemId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub call_id: Option<CallId>,
+    pub call_id: Option<i64>,
     pub field: PartDeltaField,
     pub delta: String,
     pub seq: u64,

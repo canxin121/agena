@@ -12,10 +12,10 @@ pub use activity::{
 };
 pub use common::{ExecutionStatus, PartKind, TimeRange};
 pub use content::PartContent;
-pub use session_part::{PartStateTransitionError, SessionMessagePart};
+pub use session_part::{PartStateTransitionError, SessionMessagePart, SessionMessagePartSummary};
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
-    BashToolInput, BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, EditToolInput,
-    GlobToolInput, GrepToolInput, McpToolOutput, ReadToolInput, TaskToolInput, ToolAttachment,
-    ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock, WriteToolInput,
+    ApplyPatchToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput, CustomToolOutput,
+    EditToolInput, GlobToolInput, GrepToolInput, McpToolOutput, ReadToolInput, TaskToolInput,
+    ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock, WriteToolInput,
 };

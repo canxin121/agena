@@ -1,3 +1,4 @@
+use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -5,7 +6,7 @@ use super::{
     TextPart, TodoListPart, ToolExecutionPart, WebSearchPart,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PartContent {
     Text(TextPart),

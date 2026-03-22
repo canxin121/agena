@@ -24,6 +24,16 @@ impl MessageEntry {
             .collect();
         message
     }
+
+    fn summary_snapshot(&self) -> SessionMessage {
+        let mut message = self.message.clone();
+        message.parts = self
+            .part_order
+            .iter()
+            .filter_map(|part_id| self.parts.get(part_id).map(SessionMessagePart::without_detail))
+            .collect();
+        message
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +160,19 @@ impl MessageStateStore {
         self.messages.values().map(MessageEntry::snapshot).collect()
     }
 
+    pub fn get_message_summary_snapshot(&self, message_id: i64) -> Option<SessionMessage> {
+        self.messages
+            .get(&message_id)
+            .map(MessageEntry::summary_snapshot)
+    }
+
+    pub fn list_message_summary_snapshots(&self) -> Vec<SessionMessage> {
+        self.messages
+            .values()
+            .map(MessageEntry::summary_snapshot)
+            .collect()
+    }
+
     pub fn apply(&mut self, update: MessageUpdate) -> Result<(), MessageStateStoreError> {
         match update {
             MessageUpdate::InsertMessage { message } => self.insert_message(message),
@@ -187,7 +210,7 @@ impl MessageStateStore {
             MessageUpdate::InsertPart { message_id, part } => self.insert_part_inner(message_id, part),
             MessageUpdate::ReplacePartContent { part_id, content } => {
                 let (message_id, part) = self.part_mut(part_id)?;
-                part.content = content;
+                part.set_content(content);
                 self.touch_message_in_progress(message_id);
                 Ok(())
             }
@@ -199,28 +222,26 @@ impl MessageStateStore {
                     })
             }
             MessageUpdate::AppendTextDelta { part_id, delta } => {
-                self.append_delta(part_id, "append_text_delta", move |part| {
-                    part.content.append_text_delta(&delta)
-                })
+                self.append_delta(part_id, "append_text_delta", move |part| part.append_text_delta(&delta))
             }
             MessageUpdate::AppendReasoningSummaryDelta { part_id, delta } => {
                 self.append_delta(part_id, "append_reasoning_summary_delta", move |part| {
-                    part.content.append_reasoning_summary_delta(delta)
+                    part.append_reasoning_summary_delta(delta)
                 })
             }
             MessageUpdate::AppendReasoningRawDelta { part_id, delta } => {
                 self.append_delta(part_id, "append_reasoning_raw_delta", move |part| {
-                    part.content.append_reasoning_raw_delta(delta)
+                    part.append_reasoning_raw_delta(delta)
                 })
             }
             MessageUpdate::AppendCommandOutputDelta { part_id, delta } => {
                 self.append_delta(part_id, "append_command_output_delta", move |part| {
-                    part.content.append_command_output_delta(&delta)
+                    part.append_command_output_delta(&delta)
                 })
             }
             MessageUpdate::AppendToolOutputDelta { part_id, delta } => {
                 self.append_delta(part_id, "append_tool_output_delta", move |part| {
-                    part.content.append_tool_output_delta(&delta)
+                    part.append_tool_output_delta(&delta)
                 })
             }
         }
@@ -241,6 +262,7 @@ impl MessageStateStore {
         }
 
         part.message_id = message_id;
+        part.part_index = entry.part_order.len() as i32;
         self.part_owner.insert(part.id, message_id);
         entry.part_order.push(part.id);
         entry.parts.insert(part.id, part);

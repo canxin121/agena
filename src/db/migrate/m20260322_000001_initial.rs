@@ -1,5 +1,5 @@
-use sea_orm::sea_query::Index;
 use sea_orm::Schema;
+use sea_orm::sea_query::Index;
 use sea_orm_migration::prelude::*;
 
 use crate::db::entities;
@@ -34,10 +34,22 @@ impl MigrationTrait for Migration {
             .if_not_exists()
             .to_owned();
 
-        manager.get_connection().execute(backend.build(&create_workspaces)).await?;
-        manager.get_connection().execute(backend.build(&create_sessions)).await?;
-        manager.get_connection().execute(backend.build(&create_messages)).await?;
-        manager.get_connection().execute(backend.build(&create_message_parts)).await?;
+        manager
+            .get_connection()
+            .execute(backend.build(&create_workspaces))
+            .await?;
+        manager
+            .get_connection()
+            .execute(backend.build(&create_sessions))
+            .await?;
+        manager
+            .get_connection()
+            .execute(backend.build(&create_messages))
+            .await?;
+        manager
+            .get_connection()
+            .execute(backend.build(&create_message_parts))
+            .await?;
         manager
             .get_connection()
             .execute(backend.build(&create_message_part_details))
@@ -117,7 +129,10 @@ impl MigrationTrait for Migration {
         ];
 
         for index in indexes {
-            manager.get_connection().execute(backend.build(&index)).await?;
+            manager
+                .get_connection()
+                .execute(backend.build(&index))
+                .await?;
         }
 
         Ok(())

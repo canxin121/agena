@@ -23,7 +23,10 @@ pub async fn get_workspace_id_by_path(
         .await
 }
 
-pub async fn ensure_workspace_id(db: &DatabaseConnection, workspace_path: &str) -> Result<i64, DbErr> {
+pub async fn ensure_workspace_id(
+    db: &DatabaseConnection,
+    workspace_path: &str,
+) -> Result<i64, DbErr> {
     if let Some(existing_id) = get_workspace_id_by_path(db, workspace_path).await? {
         return Ok(existing_id);
     }

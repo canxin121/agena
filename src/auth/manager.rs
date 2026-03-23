@@ -1,0 +1,399 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
+use crate::{
+    auth::{
+        AuthData, AuthStore, CopilotDeployment, DeviceCodeStart, OAuthAuthorizeStart,
+        OAuthTokenResponse, exchange_gitlab_oauth_code, exchange_openai_oauth_code,
+        poll_copilot_device_code, poll_openai_headless_device_code, refresh_gitlab_token,
+        refresh_openai_token, start_copilot_device_code, start_gitlab_oauth,
+        start_openai_browser_oauth, start_openai_headless_device_code, wait_for_oauth_callback,
+    },
+    error::AppError,
+};
+
+pub struct AuthManager<S: AuthStore> {
+    store: S,
+}
+
+impl<S: AuthStore> AuthManager<S> {
+    pub fn new(store: S) -> Self {
+        Self { store }
+    }
+
+    pub fn all(&self) -> Result<HashMap<String, AuthData>, AppError> {
+        self.store.all()
+    }
+
+    pub fn get(&self, provider_id: &str) -> Result<Option<AuthData>, AppError> {
+        self.store.get(provider_id)
+    }
+
+    pub fn remove(&self, provider_id: &str) -> Result<(), AppError> {
+        self.store.remove(provider_id)
+    }
+
+    pub fn set_api_key(&self, provider_id: &str, key: impl Into<String>) -> Result<(), AppError> {
+        let key = key.into();
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(AppError::Config(format!(
+                "{provider_id} api key cannot be empty"
+            )));
+        }
+
+        self.store.set(
+            provider_id,
+            AuthData::Api {
+                key: key.to_owned(),
+            },
+        )
+    }
+
+    pub fn set_anthropic_api_key(&self, key: impl Into<String>) -> Result<(), AppError> {
+        self.set_api_key("anthropic", key)
+    }
+
+    pub fn set_openai_api_key(&self, key: impl Into<String>) -> Result<(), AppError> {
+        self.set_api_key("openai", key)
+    }
+
+    pub fn start_openai_browser_login(
+        &self,
+        redirect_uri: impl Into<String>,
+    ) -> Result<OAuthAuthorizeStart, AppError> {
+        start_openai_browser_oauth(redirect_uri.into().as_str())
+    }
+
+    pub async fn finish_openai_browser_login(
+        &self,
+        code: impl Into<String>,
+        pkce_verifier: impl Into<String>,
+        redirect_uri: impl Into<String>,
+    ) -> Result<AuthData, AppError> {
+        let token = exchange_openai_oauth_code(
+            code.into().as_str(),
+            pkce_verifier.into().as_str(),
+            redirect_uri.into().as_str(),
+        )
+        .await?;
+        let auth = AuthData::OAuth {
+            refresh: token.refresh,
+            access: token.access,
+            expires_at_ms: token.expires_at_ms,
+            account_id: token.account_id,
+            enterprise_url: None,
+        };
+        self.store.set("openai", auth.clone())?;
+        Ok(auth)
+    }
+
+    pub async fn openai_browser_login_auto(
+        &self,
+        port: u16,
+        timeout: Duration,
+    ) -> Result<(String, AuthData), AppError> {
+        let redirect_uri = format!("http://localhost:{port}/auth/callback");
+        let start = self.start_openai_browser_login(redirect_uri.clone())?;
+        let callback = wait_for_oauth_callback(port, start.state.as_str(), timeout)?;
+        let auth = self
+            .finish_openai_browser_login(callback.code, start.pkce_verifier, redirect_uri)
+            .await?;
+        Ok((start.authorize_url, auth))
+    }
+
+    pub async fn start_openai_headless_login(&self) -> Result<DeviceCodeStart, AppError> {
+        start_openai_headless_device_code().await
+    }
+
+    pub async fn poll_openai_headless_login(
+        &self,
+        device_code: impl Into<String>,
+        user_code: impl Into<String>,
+    ) -> Result<Option<AuthData>, AppError> {
+        let token = poll_openai_headless_device_code(
+            device_code.into().as_str(),
+            user_code.into().as_str(),
+        )
+        .await?;
+        let Some(token) = token else {
+            return Ok(None);
+        };
+
+        let auth = AuthData::OAuth {
+            refresh: token.refresh,
+            access: token.access,
+            expires_at_ms: token.expires_at_ms,
+            account_id: token.account_id,
+            enterprise_url: None,
+        };
+        self.store.set("openai", auth.clone())?;
+        Ok(Some(auth))
+    }
+
+    pub async fn refresh_openai_login(&self) -> Result<AuthData, AppError> {
+        let Some(AuthData::OAuth {
+            refresh,
+            enterprise_url,
+            ..
+        }) = self.store.get("openai")?
+        else {
+            return Err(AppError::Config(
+                "openai oauth credential not found".to_owned(),
+            ));
+        };
+
+        let token = refresh_openai_token(refresh.as_str()).await?;
+        let auth = AuthData::OAuth {
+            refresh: token.refresh,
+            access: token.access,
+            expires_at_ms: token.expires_at_ms,
+            account_id: token.account_id,
+            enterprise_url,
+        };
+        self.store.set("openai", auth.clone())?;
+        Ok(auth)
+    }
+
+    pub async fn start_copilot_login(
+        &self,
+        deployment: CopilotDeployment,
+    ) -> Result<DeviceCodeStart, AppError> {
+        let domain = match deployment {
+            CopilotDeployment::GitHubCom => "github.com".to_owned(),
+            CopilotDeployment::Enterprise { domain } => domain,
+        };
+        start_copilot_device_code(domain.as_str()).await
+    }
+
+    pub async fn poll_copilot_login(
+        &self,
+        device_code: impl Into<String>,
+        deployment: CopilotDeployment,
+    ) -> Result<Option<AuthData>, AppError> {
+        let (domain, provider_id, enterprise_url) = match deployment {
+            CopilotDeployment::GitHubCom => {
+                ("github.com".to_owned(), "github-copilot".to_owned(), None)
+            }
+            CopilotDeployment::Enterprise { domain } => {
+                let normalized = normalize_domain(domain.as_str());
+                (
+                    normalized.clone(),
+                    "github-copilot-enterprise".to_owned(),
+                    Some(normalized),
+                )
+            }
+        };
+
+        let token = poll_copilot_device_code(domain.as_str(), device_code.into().as_str()).await?;
+        let Some(token) = token else {
+            return Ok(None);
+        };
+
+        let auth = AuthData::OAuth {
+            refresh: token.refresh,
+            access: token.access,
+            expires_at_ms: token.expires_at_ms,
+            account_id: None,
+            enterprise_url,
+        };
+        self.store.set(provider_id.as_str(), auth.clone())?;
+        Ok(Some(auth))
+    }
+
+    pub fn start_gitlab_login(
+        &self,
+        instance_url: impl Into<String>,
+        redirect_uri: impl Into<String>,
+    ) -> Result<OAuthAuthorizeStart, AppError> {
+        start_gitlab_oauth(instance_url.into().as_str(), redirect_uri.into().as_str())
+    }
+
+    pub async fn finish_gitlab_login(
+        &self,
+        instance_url: impl Into<String>,
+        code: impl Into<String>,
+        pkce_verifier: impl Into<String>,
+        redirect_uri: impl Into<String>,
+    ) -> Result<AuthData, AppError> {
+        let instance = instance_url.into();
+        let token: OAuthTokenResponse = exchange_gitlab_oauth_code(
+            instance.as_str(),
+            code.into().as_str(),
+            pkce_verifier.into().as_str(),
+            redirect_uri.into().as_str(),
+        )
+        .await?;
+
+        let auth = AuthData::OAuth {
+            refresh: token.refresh,
+            access: token.access,
+            expires_at_ms: token.expires_at_ms,
+            account_id: None,
+            enterprise_url: None,
+        };
+        self.store.set("gitlab", auth.clone())?;
+        self.store.set(
+            "gitlab-instance",
+            AuthData::WellKnown {
+                key: instance,
+                token: String::new(),
+            },
+        )?;
+        Ok(auth)
+    }
+
+    pub async fn refresh_gitlab_login(&self) -> Result<AuthData, AppError> {
+        let Some(AuthData::OAuth {
+            refresh,
+            account_id,
+            ..
+        }) = self.store.get("gitlab")?
+        else {
+            return Err(AppError::Config(
+                "gitlab oauth credential not found".to_owned(),
+            ));
+        };
+
+        let instance_url = self
+            .store
+            .get("gitlab-instance")?
+            .and_then(|auth| auth.api_key().map(ToOwned::to_owned))
+            .or_else(|| std::env::var("GITLAB_INSTANCE_URL").ok())
+            .unwrap_or_else(|| "https://gitlab.com".to_owned());
+
+        let token = refresh_gitlab_token(instance_url.as_str(), refresh.as_str()).await?;
+        let auth = AuthData::OAuth {
+            refresh: token.refresh,
+            access: token.access,
+            expires_at_ms: token.expires_at_ms,
+            account_id,
+            enterprise_url: None,
+        };
+        self.store.set("gitlab", auth.clone())?;
+        Ok(auth)
+    }
+
+    pub async fn gitlab_browser_login_auto(
+        &self,
+        instance_url: impl Into<String>,
+        port: u16,
+        timeout: Duration,
+    ) -> Result<(String, AuthData), AppError> {
+        let instance_url = instance_url.into();
+        let redirect_uri = format!("http://localhost:{port}/auth/callback");
+        let start = self.start_gitlab_login(instance_url.clone(), redirect_uri.clone())?;
+        let callback = wait_for_oauth_callback(port, start.state.as_str(), timeout)?;
+        let auth = self
+            .finish_gitlab_login(
+                instance_url,
+                callback.code,
+                start.pkce_verifier,
+                redirect_uri,
+            )
+            .await?;
+        Ok((start.authorize_url, auth))
+    }
+}
+
+fn normalize_domain(url_or_domain: &str) -> String {
+    let trimmed = url_or_domain.trim();
+    let without_scheme = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+    without_scheme.trim_end_matches('/').to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Mutex};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct MemoryStore {
+        data: Mutex<HashMap<String, AuthData>>,
+    }
+
+    impl AuthStore for MemoryStore {
+        fn all(&self) -> Result<HashMap<String, AuthData>, AppError> {
+            Ok(self
+                .data
+                .lock()
+                .map_err(|_| AppError::Internal("memory auth store lock poisoned".to_owned()))?
+                .clone())
+        }
+
+        fn get(&self, provider_id: &str) -> Result<Option<AuthData>, AppError> {
+            Ok(self
+                .data
+                .lock()
+                .map_err(|_| AppError::Internal("memory auth store lock poisoned".to_owned()))?
+                .get(provider_id)
+                .cloned())
+        }
+
+        fn set(&self, provider_id: &str, auth: AuthData) -> Result<(), AppError> {
+            self.data
+                .lock()
+                .map_err(|_| AppError::Internal("memory auth store lock poisoned".to_owned()))?
+                .insert(provider_id.to_owned(), auth);
+            Ok(())
+        }
+
+        fn remove(&self, provider_id: &str) -> Result<(), AppError> {
+            self.data
+                .lock()
+                .map_err(|_| AppError::Internal("memory auth store lock poisoned".to_owned()))?
+                .remove(provider_id);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn set_api_key_rejects_empty_value() {
+        let manager = AuthManager::new(MemoryStore::default());
+        let err = manager
+            .set_api_key("openai", "   ")
+            .expect_err("empty api key should be rejected");
+        assert!(matches!(err, AppError::Config(_)));
+    }
+
+    #[test]
+    fn set_api_key_trims_and_persists_value() {
+        let manager = AuthManager::new(MemoryStore::default());
+        manager
+            .set_api_key("openai", "  sk-test  ")
+            .expect("api key should be stored");
+
+        let stored = manager
+            .get("openai")
+            .expect("store read should succeed")
+            .expect("openai auth should exist");
+
+        match stored {
+            AuthData::Api { key } => assert_eq!(key, "sk-test"),
+            other => panic!("unexpected auth variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalize_domain_strips_protocol_and_slash() {
+        assert_eq!(
+            normalize_domain("https://github.example.com/"),
+            "github.example.com"
+        );
+        assert_eq!(normalize_domain("http://gitlab.local"), "gitlab.local");
+    }
+
+    #[tokio::test]
+    async fn refresh_gitlab_login_requires_oauth_credential() {
+        let manager = AuthManager::new(MemoryStore::default());
+        let err = manager
+            .refresh_gitlab_login()
+            .await
+            .expect_err("missing gitlab oauth should fail");
+        assert!(matches!(err, AppError::Config(_)));
+    }
+}

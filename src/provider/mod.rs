@@ -32,8 +32,8 @@ pub use copilot::CopilotProvider;
 pub use gemini::GeminiProvider;
 pub use gitlab::GitlabProvider;
 pub use google_vertex::GoogleVertexProvider;
-pub use openai::OpenAiProvider;
-pub use openai_compatible::OpenAiCompatibleProvider;
+pub use openai::{OpenAiProvider, OpenAiStreamMode};
+pub use openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleStreamMode};
 pub use types::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
     CompletionToolCall, CompletionUsage, ProviderContent, ProviderContentPart, ProviderMessage,
@@ -332,7 +332,37 @@ fn build_opencode_compatible_provider(
         provider = provider.with_extra_headers(headers);
     }
 
+    let stream_mode = provider_env_value(provider_id, "STREAM_MODE")
+        .or_else(|| provider_env_value(provider_id, "STREAM_TRANSPORT"));
+    if let Some(raw_mode) = stream_mode {
+        provider = provider.with_stream_mode(parse_openai_compatible_stream_mode(
+            provider_id,
+            raw_mode.as_str(),
+        )?);
+    }
+
+    let realtime_ws_url = provider_env_value(provider_id, "REALTIME_WS_URL")
+        .or_else(|| provider_env_value(provider_id, "WS_URL"));
+    if realtime_ws_url.is_some() {
+        provider = provider.with_realtime_ws_url(realtime_ws_url);
+    }
+
     Ok(Some(provider))
+}
+
+fn parse_openai_compatible_stream_mode(
+    provider_id: &str,
+    value: &str,
+) -> Result<OpenAiCompatibleStreamMode, AppError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "sse" | "http" | "chat_sse" => Ok(OpenAiCompatibleStreamMode::Sse),
+        "ws" | "websocket" | "realtime" | "realtime_ws" => {
+            Ok(OpenAiCompatibleStreamMode::RealtimeWebSocket)
+        }
+        other => Err(AppError::Config(format!(
+            "{provider_id} stream mode `{other}` is invalid; expected sse|ws"
+        ))),
+    }
 }
 
 fn provider_env_value(provider_id: &str, suffix: &str) -> Option<String> {
@@ -497,6 +527,30 @@ mod tests {
             provider_default_api_key("opencode").as_deref(),
             Some("public")
         );
+    }
+
+    #[test]
+    fn parse_stream_mode_accepts_ws_aliases() {
+        assert_eq!(
+            parse_openai_compatible_stream_mode("deepseek", "ws").expect("ws should be accepted"),
+            OpenAiCompatibleStreamMode::RealtimeWebSocket
+        );
+        assert_eq!(
+            parse_openai_compatible_stream_mode("deepseek", "realtime")
+                .expect("realtime should be accepted"),
+            OpenAiCompatibleStreamMode::RealtimeWebSocket
+        );
+        assert_eq!(
+            parse_openai_compatible_stream_mode("deepseek", "sse").expect("sse should be accepted"),
+            OpenAiCompatibleStreamMode::Sse
+        );
+    }
+
+    #[test]
+    fn parse_stream_mode_rejects_unknown_values() {
+        let err = parse_openai_compatible_stream_mode("deepseek", "grpc")
+            .expect_err("unknown mode should fail");
+        assert!(matches!(err, AppError::Config(_)));
     }
 
     #[tokio::test]

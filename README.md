@@ -21,6 +21,8 @@ OpenAI:
 - `OPENAI_BASE_URL`（可选，默认 `https://api.openai.com/v1`）
 - `OPENAI_MODEL`（可选，默认 `gpt-4.1-mini`）
 - `OPENAI_API_MODE`（可选：`auto|responses|chat`，默认 `auto`）
+- `OPENAI_STREAM_MODE`（可选：`sse|ws`，默认 `sse`）
+- `OPENAI_REALTIME_WS_URL`（可选，`ws` 模式可显式指定 realtime endpoint）
 
 Anthropic:
 
@@ -43,6 +45,14 @@ agena 内置了 opencode provider ID 清单（去掉 OAuth-only）。
 - `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_API_KEY`（必填）
 - `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_BASE_URL`（通常必填；部分 provider 内置默认）
 - `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_MODEL`（可选）
+- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_STREAM_MODE`（可选：`sse|ws`，默认 `sse`）
+- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_REALTIME_WS_URL`（可选，`ws` 模式下可显式指定）
+
+说明：
+
+- 当 `STREAM_MODE=ws` 时，agena 会使用 OpenAI Realtime 事件模型（`response.output_text.delta` / `response.done`）。
+- 若未设置 `..._REALTIME_WS_URL`，会由 `..._BASE_URL` 自动推导为 `wss://.../realtime?model=...`。
+- 不是所有 OpenAI-compatible provider 都支持 Realtime WebSocket；不支持时请切回 `STREAM_MODE=sse`。
 
 例如 `openrouter`：
 

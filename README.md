@@ -1,0 +1,235 @@
+# Agena
+
+## Provider / Model
+
+当前已提供可真实调用 API 的 provider：
+
+- `openai`（OpenAI Responses API + Models API）
+- `anthropic`（Anthropic Messages API + Models API）
+- `google`（Gemini GenerateContent + Models API）
+- `opencode` 同步的 **OpenAI-compatible provider 族**（通过统一适配器启用）
+
+目前不包含 OAuth/网页登录流程（如 GitHub Copilot 登录），仅支持 API key 模式。
+
+> 更新：现已支持 OAuth / Device Code 登录鉴权（OpenAI Codex、GitHub Copilot、GitLab）。
+
+### 环境变量
+
+OpenAI:
+
+- `OPENAI_API_KEY`（必填）
+- `OPENAI_BASE_URL`（可选，默认 `https://api.openai.com/v1`）
+- `OPENAI_MODEL`（可选，默认 `gpt-4.1-mini`）
+- `OPENAI_API_MODE`（可选：`auto|responses|chat`，默认 `auto`）
+
+Anthropic:
+
+- `ANTHROPIC_API_KEY`（必填）
+- `ANTHROPIC_BASE_URL`（可选，默认 `https://api.anthropic.com/v1`）
+- `ANTHROPIC_MODEL`（可选，默认 `claude-3-7-sonnet-latest`）
+- `ANTHROPIC_INCLUDE_THINKING`（可选，`1/true/yes` 时把 thinking block 拼入输出文本）
+
+Gemini:
+
+- `GEMINI_API_KEY` 或 `GOOGLE_API_KEY`（二选一必填）
+- `GEMINI_BASE_URL`（可选，默认 `https://generativelanguage.googleapis.com/v1beta`）
+- `GEMINI_MODEL`（可选，默认 `gemini-2.5-flash`）
+
+### OpenAI-compatible provider 族（对齐 opencode）
+
+agena 内置了 opencode provider ID 清单（去掉 OAuth-only）。
+任意一个 provider 都可通过以下约定启用：
+
+- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_API_KEY`（必填）
+- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_BASE_URL`（通常必填；部分 provider 内置默认）
+- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_MODEL`（可选）
+
+例如 `openrouter`：
+
+```bash
+set AGENA_PROVIDER_OPENROUTER_API_KEY=...
+set AGENA_PROVIDER_OPENROUTER_MODEL=openai/gpt-4o-mini
+set AGENA_PROVIDER=openrouter
+set AGENA_MODEL=openai/gpt-4o-mini
+set AGENA_PROMPT=Say hello in one sentence
+cargo run
+```
+
+也支持常见直连环境变量（如 `OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL`、`OPENROUTER_MODEL`）。
+
+部分 provider 已内置默认 `BASE_URL`（如 openrouter/groq/deepseek/mistral/togetherai/xai 等），
+其余请显式设置 `..._BASE_URL`。
+
+### 最小 smoke 运行
+
+可通过 `main.rs` 内置 smoke 流程直接验证联通性：
+
+```bash
+set AGENA_PROVIDER=openai
+set AGENA_MODEL=gpt-4.1-mini
+set AGENA_PROMPT=Say hello in one sentence
+set OPENAI_API_KEY=...
+cargo run
+```
+
+Anthropic 同理：
+
+```bash
+set AGENA_PROVIDER=anthropic
+set AGENA_MODEL=claude-3-7-sonnet-latest
+set AGENA_PROMPT=Say hello in one sentence
+set ANTHROPIC_API_KEY=...
+cargo run
+```
+
+Gemini 同理：
+
+```bash
+set GEMINI_API_KEY=...
+set AGENA_PROVIDER=google
+set AGENA_MODEL=gemini-2.5-flash
+set AGENA_PROMPT=Say hello in one sentence
+cargo run
+```
+
+## 鉴权（OAuth / API Key）
+
+新增 `agena::auth` 模块：
+
+- `AuthManager<FileAuthStore>`：统一管理 API key / OAuth token
+- `FileAuthStore`：默认存储在 `~/.agena/auth.json`（可用 `AGENA_AUTH_FILE` 覆盖）
+
+支持能力：
+
+- OpenAI
+  - API Key
+  - OAuth Browser（PKCE）
+  - OAuth Refresh（Codex token 续期）
+- GitHub Copilot
+  - Device Code（github.com 与 enterprise）
+- GitLab
+  - OAuth Authorization Code + PKCE
+- Anthropic
+  - API Key
+
+示例（Rust）：
+
+```rust
+use agena::auth::{AuthManager, FileAuthStore};
+
+let mgr = AuthManager::new(FileAuthStore::new(FileAuthStore::default_path()));
+mgr.set_anthropic_api_key("sk-ant-...")?;
+```
+
+OpenAI Browser OAuth（两段式）：
+
+```rust
+let start = mgr.start_openai_browser_login("http://localhost:1455/auth/callback")?;
+// 打开 start.authorize_url，拿到 code 后：
+let auth = mgr
+    .finish_openai_browser_login(code, start.pkce_verifier, "http://localhost:1455/auth/callback")
+    .await?;
+```
+
+OpenAI Browser OAuth（自动 callback 等待，接近 opencode 行为）：
+
+```rust
+use std::time::Duration;
+use agena::auth::wait_for_oauth_callback;
+
+let redirect = "http://localhost:1455/auth/callback";
+let start = mgr.start_openai_browser_login(redirect)?;
+// 先打开 start.authorize_url 到浏览器
+let callback = wait_for_oauth_callback(1455, &start.state, Duration::from_secs(300))?;
+let _auth = mgr
+    .finish_openai_browser_login(callback.code, start.pkce_verifier, redirect)
+    .await?;
+```
+
+GitLab 也支持自动 callback 等待：
+
+```rust
+let (url, _auth) = mgr
+    .gitlab_browser_login_auto("https://gitlab.com", 1455, Duration::from_secs(300))
+    .await?;
+```
+
+Copilot Device Code（轮询）：
+
+```rust
+use agena::auth::CopilotDeployment;
+
+let s = mgr.start_copilot_login(CopilotDeployment::GitHubCom).await?;
+// 用户在 s.verification_url 输入 s.user_code，随后循环 poll:
+let maybe_auth = mgr
+    .poll_copilot_login(s.device_code, CopilotDeployment::GitHubCom)
+    .await?;
+```
+
+## 与 opencode 对齐的行为细节（本阶段）
+
+- Codex (`openai` OAuth)
+  - 请求前检查过期并自动 refresh
+  - refresh 后回写 `auth.json`
+  - 请求使用 Codex endpoint（`chatgpt.com/backend-api/codex/responses`）
+  - 自动携带 `ChatGPT-Account-Id`（如果 token claims 可提取）
+
+- GitHub Copilot
+  - 支持 `github-copilot` / `github-copilot-enterprise`
+  - 自动注入 `openai-intent: conversation-edits` / `x-initiator` / `User-Agent`
+  - 视觉请求启发式设置 `Copilot-Vision-Request: true`
+  - 模型路由规则：GPT-5（非 `gpt-5-mini`）走 `/responses`，其余走 `/chat/completions`
+
+- OpenAI
+  - 支持 `responses` / `chat.completions` 双路径（`OPENAI_API_MODE` 可控）
+  - `auto` 下对高阶模型（如 gpt-5/o3/o4）优先走 responses
+
+- Anthropic
+  - 支持 `tool_use` / `tool_result` 块映射
+  - usage 映射包含 cache write/read token
+
+- Gemini
+  - completion / stream 的 `provider_metadata` 会带回候选元数据（如 safety/grounding）
+
+## 流式输出（SSE）
+
+- `CodexProvider.complete_stream()`：使用 `responses` + `stream=true`，实时解析 SSE data 帧并输出 `TextDelta`。
+- `CopilotProvider.complete_stream()`：
+  - GPT-5（非 `gpt-5-mini`）走 `responses` 流式；
+  - 其余走 `chat/completions` 流式；
+  - 均会增量输出 `TextDelta`，结束时输出 `Completed`。
+- `OpenAiProvider.complete_stream()`：OpenAI Responses 原生流式。
+- `AnthropicProvider.complete_stream()`：Anthropic Messages 原生流式（`content_block_delta`）。
+- `GeminiProvider.complete_stream()`：Gemini `streamGenerateContent` 流式（自动做增量 diff）。
+- `OpenAiCompatibleProvider.complete_stream()`：通用 `chat/completions` SSE 流式（适配大量 provider）。
+
+## 迁移说明（Breaking Changes）
+
+本轮 provider 重构后，以下字段已升级为强类型：
+
+1. `ProviderMessage.content`
+   - 旧：`String`
+   - 新：`ProviderContent`（`Text` / `Parts`）
+
+2. `CompletionResponse.finish_reason`
+   - 旧：`Option<String>`
+   - 新：`Option<CompletionFinishReason>`
+
+3. `CompletionResponse.usage`
+   - 旧：`Option<MessageUsage>`
+   - 新：`Option<CompletionUsage>`
+
+4. `CompletionResponse` 新增字段
+   - `tool_calls: Vec<CompletionToolCall>`
+   - `provider_metadata: Option<serde_json::Value>`
+
+5. `CompletionStreamEvent::Completed` 新增字段
+   - `provider_metadata: Option<serde_json::Value>`
+
+6. `CompletionStreamEvent` 新增事件
+   - `ToolCallDelta`（用于流式 tool call 参数增量）
+
+兼容性说明：
+
+- 旧的纯文本调用仍可继续使用 `ProviderMessage::new(role, "text")`。
+- 如需快速兼容旧逻辑，可通过 `ProviderMessage::as_text_lossy()` 获取文本降级结果。

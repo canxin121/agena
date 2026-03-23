@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use sea_orm::entity::prelude::{DeriveActiveEnum, EnumIter};
 use sea_orm::FromJsonQueryResult;
+use sea_orm::entity::prelude::{DeriveActiveEnum, EnumIter};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumString};
 

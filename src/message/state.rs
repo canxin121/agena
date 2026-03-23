@@ -30,7 +30,11 @@ impl MessageEntry {
         message.parts = self
             .part_order
             .iter()
-            .filter_map(|part_id| self.parts.get(part_id).map(SessionMessagePart::without_detail))
+            .filter_map(|part_id| {
+                self.parts
+                    .get(part_id)
+                    .map(SessionMessagePart::without_detail)
+            })
             .collect();
         message
     }
@@ -129,7 +133,10 @@ pub struct MessageStateStore {
 }
 
 impl MessageStateStore {
-    pub fn insert_message(&mut self, mut message: SessionMessage) -> Result<(), MessageStateStoreError> {
+    pub fn insert_message(
+        &mut self,
+        mut message: SessionMessage,
+    ) -> Result<(), MessageStateStoreError> {
         if self.messages.contains_key(&message.id) {
             return Err(MessageStateStoreError::MessageAlreadyExists(message.id));
         }
@@ -207,7 +214,9 @@ impl MessageStateStore {
                 entry.message.usage = Some(usage);
                 Ok(())
             }
-            MessageUpdate::InsertPart { message_id, part } => self.insert_part_inner(message_id, part),
+            MessageUpdate::InsertPart { message_id, part } => {
+                self.insert_part_inner(message_id, part)
+            }
             MessageUpdate::ReplacePartContent { part_id, content } => {
                 let (message_id, part) = self.part_mut(part_id)?;
                 part.set_content(content);
@@ -222,7 +231,9 @@ impl MessageStateStore {
                     })
             }
             MessageUpdate::AppendTextDelta { part_id, delta } => {
-                self.append_delta(part_id, "append_text_delta", move |part| part.append_text_delta(&delta))
+                self.append_delta(part_id, "append_text_delta", move |part| {
+                    part.append_text_delta(&delta)
+                })
             }
             MessageUpdate::AppendReasoningSummaryDelta { part_id, delta } => {
                 self.append_delta(part_id, "append_reasoning_summary_delta", move |part| {

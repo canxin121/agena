@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use futures_core::Stream;
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -25,6 +25,8 @@ pub struct OpenAiProvider {
     default_model: String,
     api_mode: OpenAiApiMode,
     extra_headers: HashMap<String, String>,
+    stream_mode: OpenAiStreamMode,
+    realtime_ws_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +34,12 @@ enum OpenAiApiMode {
     Responses,
     Chat,
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiStreamMode {
+    Sse,
+    RealtimeWebSocket,
 }
 
 impl OpenAiProvider {
@@ -48,11 +56,23 @@ impl OpenAiProvider {
             default_model: default_model.into(),
             api_mode: OpenAiApiMode::Responses,
             extra_headers: HashMap::new(),
+            stream_mode: OpenAiStreamMode::Sse,
+            realtime_ws_url: None,
         }
     }
 
     pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.extra_headers = headers;
+        self
+    }
+
+    pub fn with_stream_mode(mut self, mode: OpenAiStreamMode) -> Self {
+        self.stream_mode = mode;
+        self
+    }
+
+    pub fn with_realtime_ws_url(mut self, ws_url: Option<String>) -> Self {
+        self.realtime_ws_url = ws_url.and_then(|value| utils::normalize_optional_text(Some(value)));
         self
     }
 
@@ -74,6 +94,19 @@ impl OpenAiProvider {
             "auto" => OpenAiApiMode::Auto,
             _ => OpenAiApiMode::Responses,
         };
+        provider.stream_mode = match std::env::var("OPENAI_STREAM_MODE")
+            .or_else(|_| std::env::var("OPENAI_STREAM_TRANSPORT"))
+            .unwrap_or_else(|_| "sse".to_owned())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "ws" | "websocket" | "realtime" | "realtime_ws" => OpenAiStreamMode::RealtimeWebSocket,
+            _ => OpenAiStreamMode::Sse,
+        };
+        provider.realtime_ws_url = std::env::var("OPENAI_REALTIME_WS_URL")
+            .or_else(|_| std::env::var("OPENAI_WS_URL"))
+            .ok()
+            .and_then(|value| utils::normalize_optional_text(Some(value)));
         Ok(provider)
     }
 
@@ -87,6 +120,105 @@ impl OpenAiProvider {
 
     fn chat_endpoint(&self) -> String {
         format!("{}/chat/completions", self.base_url)
+    }
+
+    fn realtime_ws_endpoint(&self, model: &str) -> Result<url::Url, AppError> {
+        let mut endpoint = if let Some(ws_url) = self.realtime_ws_url.as_ref() {
+            url::Url::parse(ws_url).map_err(|err| {
+                AppError::Config(format!("openai realtime websocket url is invalid: {err}"))
+            })?
+        } else {
+            let mut url = url::Url::parse(self.base_url.as_str())
+                .map_err(|err| AppError::Config(format!("openai base url is invalid: {err}")))?;
+            let realtime_path = format!("{}/realtime", url.path().trim_end_matches('/'));
+            url.set_path(realtime_path.as_str());
+            url
+        };
+
+        match endpoint.scheme() {
+            "http" => endpoint.set_scheme("ws").map_err(|_| {
+                AppError::Config("openai realtime websocket url is invalid".to_owned())
+            })?,
+            "https" => endpoint.set_scheme("wss").map_err(|_| {
+                AppError::Config("openai realtime websocket url is invalid".to_owned())
+            })?,
+            "ws" | "wss" => {}
+            other => {
+                return Err(AppError::Config(format!(
+                    "openai realtime websocket url has unsupported scheme `{other}`"
+                )));
+            }
+        }
+
+        let existing = endpoint
+            .query_pairs()
+            .into_owned()
+            .filter(|(key, _)| key != "model")
+            .collect::<Vec<_>>();
+
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        for (key, value) in existing {
+            serializer.append_pair(key.as_str(), value.as_str());
+        }
+        serializer.append_pair("model", model);
+        let query = serializer.finish();
+        endpoint.set_query(Some(query.as_str()));
+
+        Ok(endpoint)
+    }
+
+    fn realtime_handshake_request(
+        &self,
+        endpoint: &url::Url,
+    ) -> Result<http::Request<()>, AppError> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        let mut request = endpoint.as_str().into_client_request().map_err(|err| {
+            AppError::Config(format!(
+                "openai realtime websocket handshake invalid: {err}"
+            ))
+        })?;
+
+        let auth_header_name = http::header::HeaderName::from_static("authorization");
+        let auth_header_value =
+            http::header::HeaderValue::from_str(format!("Bearer {}", self.api_key).as_str())
+                .map_err(|err| {
+                    AppError::Config(format!("openai auth header value is invalid: {err}"))
+                })?;
+        request
+            .headers_mut()
+            .insert(auth_header_name, auth_header_value);
+
+        if endpoint
+            .host_str()
+            .map(|host| {
+                host.eq_ignore_ascii_case("api.openai.com") || host.ends_with(".openai.com")
+            })
+            .unwrap_or(false)
+        {
+            request.headers_mut().insert(
+                http::header::HeaderName::from_static("openai-beta"),
+                http::header::HeaderValue::from_static("realtime=v1"),
+            );
+        }
+
+        for (key, value) in &self.extra_headers {
+            let header_name =
+                http::header::HeaderName::from_bytes(key.as_bytes()).map_err(|err| {
+                    AppError::Config(format!(
+                        "openai extra header name `{key}` is invalid: {err}"
+                    ))
+                })?;
+            let header_value =
+                http::header::HeaderValue::from_str(value.as_str()).map_err(|err| {
+                    AppError::Config(format!(
+                        "openai extra header `{key}` value is invalid: {err}"
+                    ))
+                })?;
+            request.headers_mut().insert(header_name, header_value);
+        }
+
+        Ok(request)
     }
 
     fn should_use_responses(&self, model: &str) -> bool {
@@ -321,6 +453,282 @@ impl OpenAiProvider {
             }
 
             if stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some() {
+                yield CompletionStreamEvent::Completed {
+                    provider_id: provider_id.clone(),
+                    model: model_name.clone(),
+                    finish_reason: CompletionFinishReason::from_provider(
+                        stream_finish_reason.as_deref(),
+                    ),
+                    usage: stream_usage,
+                    provider_metadata: None,
+                };
+            }
+        };
+
+        Ok(Box::pin(stream))
+    }
+
+    async fn complete_stream_with_realtime_ws(
+        &self,
+        request: &CompletionRequest,
+        model: String,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+        AppError,
+    > {
+        let ws_endpoint = self.realtime_ws_endpoint(model.as_str())?;
+        let handshake = self.realtime_handshake_request(&ws_endpoint)?;
+        let (ws_stream, _) = tokio_tungstenite::connect_async(handshake)
+            .await
+            .map_err(|err| {
+                AppError::Provider(format!("openai realtime websocket connect failed: {err}"))
+            })?;
+
+        let provider_id = PROVIDER_ID.to_owned();
+        let model_name = model;
+        let input_text = build_realtime_input_text(request.messages.as_slice());
+        let system = request.system.clone();
+        let temperature = request.temperature;
+        let max_output_tokens = request.max_output_tokens;
+
+        let stream = async_stream::try_stream! {
+            let (mut ws_writer, mut ws_reader) = ws_stream.split();
+
+            if let Some(instructions) = system.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                let event = serde_json::json!({
+                    "type": "session.update",
+                    "session": {
+                        "instructions": instructions,
+                    }
+                });
+                ws_writer
+                    .send(tokio_tungstenite::tungstenite::Message::Text(event.to_string().into()))
+                    .await
+                    .map_err(|err| {
+                        AppError::Provider(format!(
+                            "openai realtime websocket send session.update failed: {err}"
+                        ))
+                    })?;
+            }
+
+            if let Some(text) = input_text.filter(|value| !value.is_empty()) {
+                let event = serde_json::json!({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": text,
+                        }],
+                    }
+                });
+
+                ws_writer
+                    .send(tokio_tungstenite::tungstenite::Message::Text(event.to_string().into()))
+                    .await
+                    .map_err(|err| {
+                        AppError::Provider(format!(
+                            "openai realtime websocket send conversation.item.create failed: {err}"
+                        ))
+                    })?;
+            }
+
+            let mut response = serde_json::json!({
+                "modalities": ["text"],
+            });
+            if let Some(temperature) = temperature {
+                response["temperature"] = serde_json::json!(temperature);
+            }
+            if let Some(max_tokens) = max_output_tokens {
+                response["max_output_tokens"] = serde_json::json!(max_tokens);
+            }
+
+            let create_event = serde_json::json!({
+                "type": "response.create",
+                "response": response,
+            });
+
+            ws_writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(create_event.to_string().into()))
+                .await
+                .map_err(|err| {
+                    AppError::Provider(format!(
+                        "openai realtime websocket send response.create failed: {err}"
+                    ))
+                })?;
+
+            let mut pending_tool_calls: std::collections::BTreeMap<String, ResponsesToolState> = std::collections::BTreeMap::new();
+            let mut stream_usage: Option<CompletionUsage> = None;
+            let mut stream_finish_reason: Option<String> = None;
+            let mut stream_has_content = false;
+            let mut completed_emitted = false;
+
+            while let Some(message) = ws_reader.next().await {
+                let message = message.map_err(|err| {
+                    AppError::Provider(format!("openai realtime websocket receive failed: {err}"))
+                })?;
+
+                let payload = match message {
+                    tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
+                    tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
+                        String::from_utf8(bytes.to_vec()).map_err(|err| {
+                            AppError::Provider(format!(
+                                "openai realtime websocket binary frame is not utf-8: {err}"
+                            ))
+                        })?
+                    }
+                    tokio_tungstenite::tungstenite::Message::Close(_) => break,
+                    tokio_tungstenite::tungstenite::Message::Ping(_) => continue,
+                    tokio_tungstenite::tungstenite::Message::Pong(_) => continue,
+                    tokio_tungstenite::tungstenite::Message::Frame(_) => continue,
+                };
+
+                let event: serde_json::Value = serde_json::from_str(payload.as_str()).map_err(|err| {
+                    AppError::Provider(format!("openai realtime websocket event decode failed: {err}"))
+                })?;
+
+                if let Some(err) = utils::responses_stream_error(PROVIDER_ID, &event)? {
+                    Err(err)?;
+                }
+
+                if let Some(delta) = utils::responses_text_delta(&event) {
+                    stream_has_content = true;
+                    yield CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model_name.clone(),
+                        delta,
+                    };
+                }
+
+                if let Some(tool_event) = utils::responses_tool_event(PROVIDER_ID, &event)? {
+                    let key = tool_event.stream_key(PROVIDER_ID)?;
+
+                    let state = pending_tool_calls.entry(key.clone()).or_default();
+                    if let Some(id) = tool_event.id.clone() {
+                        state.id = Some(id);
+                    }
+                    if let Some(name) = tool_event.name.clone() {
+                        state.name = Some(name);
+                    }
+
+                    match tool_event.kind {
+                        utils::ResponsesToolEventKind::Delta => {
+                            if let Some(arguments_delta) =
+                                tool_event.arguments.filter(|s| !s.is_empty())
+                            {
+                                state.arguments.push_str(arguments_delta.as_str());
+                                stream_has_content = true;
+                                yield CompletionStreamEvent::ToolCallDelta {
+                                    provider_id: provider_id.clone(),
+                                    model: model_name.clone(),
+                                    stream_key: key.clone(),
+                                    id: state.id.clone(),
+                                    name: state.name.clone(),
+                                    arguments_delta,
+                                };
+                            }
+                        }
+                        utils::ResponsesToolEventKind::Added => {
+                            if let Some(arguments_snapshot) =
+                                tool_event.arguments.filter(|s| !s.is_empty())
+                            {
+                                let arguments_delta = if arguments_snapshot.starts_with(&state.arguments)
+                                {
+                                    arguments_snapshot[state.arguments.len()..].to_owned()
+                                } else {
+                                    arguments_snapshot.clone()
+                                };
+
+                                if arguments_snapshot.starts_with(&state.arguments) {
+                                    state.arguments.push_str(arguments_delta.as_str());
+                                } else {
+                                    state.arguments = arguments_snapshot;
+                                }
+
+                                if !arguments_delta.is_empty() {
+                                    stream_has_content = true;
+                                    yield CompletionStreamEvent::ToolCallDelta {
+                                        provider_id: provider_id.clone(),
+                                        model: model_name.clone(),
+                                        stream_key: key.clone(),
+                                        id: state.id.clone(),
+                                        name: state.name.clone(),
+                                        arguments_delta,
+                                    };
+                                }
+                            }
+                        }
+                        utils::ResponsesToolEventKind::Done => {
+                            if let Some(arguments_snapshot) =
+                                tool_event.arguments.filter(|s| !s.is_empty())
+                            {
+                                let arguments_delta = if arguments_snapshot.starts_with(&state.arguments)
+                                {
+                                    arguments_snapshot[state.arguments.len()..].to_owned()
+                                } else {
+                                    arguments_snapshot.clone()
+                                };
+
+                                if arguments_snapshot.starts_with(&state.arguments) {
+                                    state.arguments.push_str(arguments_delta.as_str());
+                                } else {
+                                    state.arguments = arguments_snapshot;
+                                }
+
+                                if !arguments_delta.is_empty() {
+                                    stream_has_content = true;
+                                    yield CompletionStreamEvent::ToolCallDelta {
+                                        provider_id: provider_id.clone(),
+                                        model: model_name.clone(),
+                                        stream_key: key.clone(),
+                                        id: state.id.clone(),
+                                        name: state.name.clone(),
+                                        arguments_delta,
+                                    };
+                                }
+                            }
+
+                            pending_tool_calls.remove(key.as_str());
+                        }
+                    }
+                }
+
+                if let Some(raw_usage) = utils::responses_usage_value(&event) {
+                    let usage = utils::parse_json_value::<OpenAiUsage>(
+                        PROVIDER_ID,
+                        "realtime stream usage",
+                        raw_usage,
+                    )?;
+                    stream_usage = Self::map_usage(Some(usage));
+                }
+
+                if stream_finish_reason.is_none() {
+                    stream_finish_reason = utils::responses_finish_reason(&event);
+                }
+
+                if utils::responses_is_completed(&event) {
+                    yield CompletionStreamEvent::Completed {
+                        provider_id: provider_id.clone(),
+                        model: model_name.clone(),
+                        finish_reason: CompletionFinishReason::from_provider(
+                            stream_finish_reason.as_deref(),
+                        ),
+                        usage: stream_usage.clone(),
+                        provider_metadata: None,
+                    };
+                    completed_emitted = true;
+                    break;
+                }
+            }
+
+            let _ = ws_writer
+                .send(tokio_tungstenite::tungstenite::Message::Close(None))
+                .await;
+
+            if !completed_emitted
+                && (stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some())
+            {
                 yield CompletionStreamEvent::Completed {
                     provider_id: provider_id.clone(),
                     model: model_name.clone(),
@@ -857,6 +1265,10 @@ impl ModelProvider for OpenAiProvider {
             request.model.clone()
         };
 
+        if matches!(self.stream_mode, OpenAiStreamMode::RealtimeWebSocket) {
+            return self.complete_stream_with_realtime_ws(&request, model).await;
+        }
+
         if !self.should_use_responses(model.as_str()) {
             return self.complete_stream_with_chat_api(&request, model).await;
         }
@@ -1297,10 +1709,44 @@ fn extract_chat_content_text(value: &serde_json::Value) -> String {
     }
 }
 
+fn build_realtime_input_text(messages: &[crate::provider::ProviderMessage]) -> Option<String> {
+    let normalized = messages
+        .iter()
+        .filter_map(|message| {
+            let text = message.as_text_lossy();
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some((message.role, trimmed.to_owned()))
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if normalized.is_empty() {
+        return None;
+    }
+
+    if normalized.len() == 1 && matches!(normalized[0].0, Role::User) {
+        return Some(normalized[0].1.clone());
+    }
+
+    Some(
+        normalized
+            .into_iter()
+            .map(|(role, text)| format!("{role}: {text}"))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
     use futures_util::StreamExt;
+    use tokio::net::TcpListener;
 
     use crate::provider::{ProviderContent, ProviderContentPart, ProviderMessage};
 
@@ -1634,5 +2080,217 @@ mod tests {
         assert_eq!(text, "Done");
         assert_eq!(tool, "part1part2");
         assert!(completed);
+    }
+
+    #[test]
+    fn realtime_ws_endpoint_uses_ws_scheme_and_model_query() {
+        let provider = OpenAiProvider::new(
+            reqwest::Client::new(),
+            "sk-test",
+            "https://api.openai.com/v1",
+            "gpt-4o-realtime-preview",
+        )
+        .with_stream_mode(OpenAiStreamMode::RealtimeWebSocket);
+
+        let endpoint = provider
+            .realtime_ws_endpoint("gpt-4o-realtime-preview")
+            .expect("endpoint should derive");
+
+        assert_eq!(endpoint.scheme(), "wss");
+        assert_eq!(endpoint.path(), "/v1/realtime");
+        assert_eq!(
+            endpoint
+                .query_pairs()
+                .find(|(key, _)| key == "model")
+                .map(|(_, value)| value.into_owned()),
+            Some("gpt-4o-realtime-preview".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_stream_realtime_ws_emits_text_tool_delta_and_completed() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+
+        let auth_header = Arc::new(Mutex::new(None::<String>));
+        let auth_header_server = auth_header.clone();
+
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener
+                .accept()
+                .await
+                .expect("connection should be accepted");
+
+            let ws_stream = tokio_tungstenite::accept_hdr_async(
+                tcp,
+                move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                      response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    let value = request
+                        .headers()
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    *auth_header_server
+                        .lock()
+                        .expect("auth header lock should succeed") = value;
+                    Ok(response)
+                },
+            )
+            .await
+            .expect("websocket upgrade should succeed");
+
+            let (mut writer, mut reader) = ws_stream.split();
+
+            let mut saw_response_create = false;
+            while let Some(message) = reader.next().await {
+                let message = message.expect("request message should parse");
+                let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+                    continue;
+                };
+                let value: serde_json::Value =
+                    serde_json::from_str(text.as_str()).expect("request event should be json");
+                if value.get("type").and_then(|v| v.as_str()) == Some("response.create") {
+                    saw_response_create = true;
+                    break;
+                }
+            }
+
+            assert!(saw_response_create);
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "type": "response.output_text.delta",
+                        "delta": "Hel"
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("text delta should send");
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "type": "response.function_call_arguments.delta",
+                        "output_index": 0,
+                        "call_id": "call_1",
+                        "name": "search",
+                        "delta": "{"
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("tool delta should send");
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "type": "response.function_call_arguments.done",
+                        "output_index": 0,
+                        "call_id": "call_1",
+                        "name": "search",
+                        "arguments": "{\"q\":\"rust\"}"
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("tool done should send");
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "type": "response.done",
+                        "response": {
+                            "status": "completed",
+                            "usage": {
+                                "input_tokens": 5,
+                                "output_tokens": 3
+                            }
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("response done should send");
+        });
+
+        let provider = OpenAiProvider::new(
+            reqwest::Client::new(),
+            "sk-test",
+            format!("http://{addr}"),
+            "gpt-4o-realtime-preview",
+        )
+        .with_stream_mode(OpenAiStreamMode::RealtimeWebSocket)
+        .with_realtime_ws_url(Some(format!("ws://{addr}/realtime")));
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: "gpt-4o-realtime-preview".to_owned(),
+                system: Some("you are helpful".to_owned()),
+                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                temperature: Some(0.2),
+                max_output_tokens: Some(64),
+            })
+            .await
+            .expect("stream should start");
+
+        let mut saw_text = false;
+        let mut saw_tool = false;
+        let mut saw_completed = false;
+
+        while let Some(item) = stream.next().await {
+            match item.expect("event should parse") {
+                CompletionStreamEvent::TextDelta { delta, .. } => {
+                    if delta == "Hel" {
+                        saw_text = true;
+                    }
+                }
+                CompletionStreamEvent::ToolCallDelta {
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
+                    if id.as_deref() == Some("call_1")
+                        && name.as_deref() == Some("search")
+                        && !arguments_delta.is_empty()
+                    {
+                        saw_tool = true;
+                    }
+                }
+                CompletionStreamEvent::Completed {
+                    finish_reason,
+                    usage,
+                    ..
+                } => {
+                    assert!(matches!(finish_reason, Some(CompletionFinishReason::Stop)));
+                    let usage = usage.expect("usage should be present");
+                    assert_eq!(usage.input_tokens, 5);
+                    assert_eq!(usage.output_tokens, 3);
+                    saw_completed = true;
+                }
+            }
+        }
+
+        assert!(saw_text);
+        assert!(saw_tool);
+        assert!(saw_completed);
+
+        server.await.expect("server task should finish");
+        assert_eq!(
+            auth_header
+                .lock()
+                .expect("auth header lock should succeed")
+                .as_deref(),
+            Some("Bearer sk-test")
+        );
     }
 }

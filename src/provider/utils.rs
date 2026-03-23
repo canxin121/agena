@@ -292,7 +292,7 @@ pub fn optional_non_empty(value: Option<String>) -> Option<String> {
 pub fn responses_is_completed(event: &serde_json::Value) -> bool {
     matches!(
         responses_event_type(event),
-        Some("response.completed" | "response.incomplete")
+        Some("response.completed" | "response.incomplete" | "response.done")
     )
 }
 
@@ -303,6 +303,14 @@ pub fn responses_text_delta(event: &serde_json::Value) -> Option<String> {
     }
 
     if matches!(event_type, Some("response.output_text.delta")) {
+        return event
+            .get("delta")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .filter(|s| !s.is_empty());
+    }
+
+    if matches!(event_type, Some("response.text.delta")) {
         return event
             .get("delta")
             .and_then(|v| v.as_str())
@@ -346,6 +354,21 @@ pub fn responses_tool_event(
         }));
     }
 
+    if event_type == "response.function_call_arguments.done" {
+        let parsed: ResponsesFunctionArgumentsDonePayload = parse_json_value(
+            provider_id,
+            "responses function_call_arguments.done",
+            event.clone(),
+        )?;
+        return Ok(Some(ResponsesToolEvent {
+            kind: ResponsesToolEventKind::Done,
+            output_index: parsed.output_index,
+            id: normalize_optional_text(parsed.call_id).or(normalize_optional_text(parsed.item_id)),
+            name: normalize_optional_text(parsed.name),
+            arguments: optional_non_empty(Some(parsed.arguments)),
+        }));
+    }
+
     if event_type == "response.output_item.added" || event_type == "response.output_item.done" {
         let parsed: ResponsesOutputItemPayload =
             parse_json_value(provider_id, "responses output_item payload", event.clone())?;
@@ -382,6 +405,21 @@ pub fn responses_finish_reason(event: &serde_json::Value) -> Option<String> {
                 .get("response")
                 .and_then(|r| r.get("incomplete_details"))
                 .and_then(|d| d.get("reason"))
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            event
+                .get("response")
+                .and_then(|r| r.get("status_details"))
+                .and_then(|d| d.get("reason"))
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            event
+                .get("response")
+                .and_then(|r| r.get("status"))
                 .and_then(|v| v.as_str())
                 .map(ToOwned::to_owned)
         })
@@ -429,6 +467,19 @@ fn responses_event_type(event: &serde_json::Value) -> Option<&str> {
 #[derive(Debug, Deserialize)]
 struct ResponsesFunctionArgumentsDeltaPayload {
     delta: String,
+    #[serde(default)]
+    output_index: Option<usize>,
+    #[serde(default)]
+    call_id: Option<String>,
+    #[serde(default)]
+    item_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesFunctionArgumentsDonePayload {
+    arguments: String,
     #[serde(default)]
     output_index: Option<usize>,
     #[serde(default)]
@@ -494,12 +545,77 @@ mod tests {
         assert!(responses_is_completed(
             &serde_json::json!({ "type": "response.incomplete" })
         ));
+        assert!(responses_is_completed(
+            &serde_json::json!({ "type": "response.done" })
+        ));
         assert!(!responses_is_completed(
             &serde_json::json!({ "type": "response.output_item.completed" })
         ));
         assert!(!responses_is_completed(
             &serde_json::json!({ "type": "response.output_text.delta" })
         ));
+    }
+
+    #[test]
+    fn responses_text_delta_supports_legacy_realtime_delta_type() {
+        assert_eq!(
+            responses_text_delta(&serde_json::json!({
+                "type": "response.text.delta",
+                "delta": "hi"
+            }))
+            .as_deref(),
+            Some("hi")
+        );
+    }
+
+    #[test]
+    fn responses_tool_event_supports_function_arguments_done() {
+        let event = responses_tool_event(
+            "openai",
+            &serde_json::json!({
+                "type": "response.function_call_arguments.done",
+                "output_index": 1,
+                "call_id": "call_1",
+                "name": "search",
+                "arguments": "{\"q\":\"rust\"}"
+            }),
+        )
+        .expect("tool event should parse")
+        .expect("tool event should exist");
+
+        assert!(matches!(event.kind, ResponsesToolEventKind::Done));
+        assert_eq!(event.output_index, Some(1));
+        assert_eq!(event.id.as_deref(), Some("call_1"));
+        assert_eq!(event.name.as_deref(), Some("search"));
+        assert_eq!(event.arguments.as_deref(), Some("{\"q\":\"rust\"}"));
+    }
+
+    #[test]
+    fn responses_finish_reason_supports_realtime_status_and_reason() {
+        assert_eq!(
+            responses_finish_reason(&serde_json::json!({
+                "type": "response.done",
+                "response": {
+                    "status": "completed"
+                }
+            }))
+            .as_deref(),
+            Some("completed")
+        );
+
+        assert_eq!(
+            responses_finish_reason(&serde_json::json!({
+                "type": "response.done",
+                "response": {
+                    "status": "incomplete",
+                    "status_details": {
+                        "reason": "max_output_tokens"
+                    }
+                }
+            }))
+            .as_deref(),
+            Some("max_output_tokens")
+        );
     }
 
     #[test]

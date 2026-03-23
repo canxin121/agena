@@ -85,6 +85,16 @@ impl ToolExecutor {
 
     pub(crate) fn ensure_edit_permission(&self, target_path: &Path) -> Result<(), ToolError> {
         match self.agent.authorize_path_access(
+            AccessKind::ExternalDirectory,
+            self.workspace_root(),
+            target_path,
+        ) {
+            PermissionDecision::Allow => {}
+            PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
+            PermissionDecision::Deny { reason } => return Err(ToolError::PermissionDenied(reason)),
+        }
+
+        match self.agent.authorize_path_access(
             AccessKind::Write,
             self.workspace_root(),
             target_path,

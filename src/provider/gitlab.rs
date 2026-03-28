@@ -20,7 +20,38 @@ use crate::{
 const PROVIDER_ID: &str = "gitlab";
 const DEFAULT_INSTANCE_URL: &str = "https://gitlab.com";
 const DEFAULT_AI_GATEWAY_URL: &str = "https://cloud.gitlab.com";
+const DEFAULT_MODEL: &str = "claude-sonnet-4-5";
 const DIRECT_ACCESS_CACHE_TTL: Duration = Duration::from_secs(25 * 60);
+
+#[derive(Debug, Clone)]
+pub struct GitlabProviderConfig {
+    pub instance_url: String,
+    pub ai_gateway_url: String,
+    pub default_model: String,
+    pub ai_gateway_headers: HashMap<String, String>,
+    pub feature_flags: HashMap<String, bool>,
+}
+
+impl Default for GitlabProviderConfig {
+    fn default() -> Self {
+        Self {
+            instance_url: DEFAULT_INSTANCE_URL.to_owned(),
+            ai_gateway_url: DEFAULT_AI_GATEWAY_URL.to_owned(),
+            default_model: DEFAULT_MODEL.to_owned(),
+            ai_gateway_headers: HashMap::from([
+                ("User-Agent".to_owned(), "agena/0.1.0".to_owned()),
+                (
+                    "anthropic-beta".to_owned(),
+                    "context-1m-2025-08-07".to_owned(),
+                ),
+            ]),
+            feature_flags: HashMap::from([
+                ("duo_agent_platform_agentic_chat".to_owned(), true),
+                ("duo_agent_platform".to_owned(), true),
+            ]),
+        }
+    }
+}
 
 pub struct GitlabProvider {
     client: reqwest::Client,
@@ -35,7 +66,7 @@ pub struct GitlabProvider {
 
 impl GitlabProvider {
     pub fn from_auth(client: reqwest::Client, auth: &AuthData) -> Result<Self, AppError> {
-        Self::from_auth_with_instance(client, auth, None)
+        Self::from_auth_with_config(client, auth, GitlabProviderConfig::default())
     }
 
     pub fn from_auth_with_instance(
@@ -43,13 +74,25 @@ impl GitlabProvider {
         auth: &AuthData,
         instance_url: Option<String>,
     ) -> Result<Self, AppError> {
+        let mut config = GitlabProviderConfig::default();
+        if let Some(instance_url) = instance_url {
+            config.instance_url = instance_url;
+        }
+        Self::from_auth_with_config(client, auth, config)
+    }
+
+    pub fn from_auth_with_config(
+        client: reqwest::Client,
+        auth: &AuthData,
+        config: GitlabProviderConfig,
+    ) -> Result<Self, AppError> {
         let token = match auth {
             AuthData::OAuth { access, .. } => access.clone(),
             AuthData::Api { key } => key.clone(),
             AuthData::WellKnown { key, .. } => key.clone(),
         };
 
-        Self::from_token_with_urls(client, token, instance_url, None)
+        Self::from_token_with_config(client, token, config)
     }
 
     pub fn from_token(
@@ -57,7 +100,11 @@ impl GitlabProvider {
         token: impl Into<String>,
         instance_url: Option<String>,
     ) -> Result<Self, AppError> {
-        Self::from_token_with_urls(client, token, instance_url, None)
+        let mut config = GitlabProviderConfig::default();
+        if let Some(instance_url) = instance_url {
+            config.instance_url = instance_url;
+        }
+        Self::from_token_with_config(client, token, config)
     }
 
     pub fn from_token_with_urls(
@@ -66,42 +113,29 @@ impl GitlabProvider {
         instance_url: Option<String>,
         ai_gateway_url: Option<String>,
     ) -> Result<Self, AppError> {
-        let mut ai_gateway_headers = HashMap::from([
-            ("User-Agent".to_owned(), "agena/0.1.0".to_owned()),
-            (
-                "anthropic-beta".to_owned(),
-                "context-1m-2025-08-07".to_owned(),
-            ),
-        ]);
-        if let Some(raw_headers) = env_non_empty("GITLAB_AI_GATEWAY_HEADERS_JSON") {
-            ai_gateway_headers.extend(parse_feature_headers(raw_headers.as_str())?);
+        let mut config = GitlabProviderConfig::default();
+        if let Some(instance_url) = instance_url {
+            config.instance_url = instance_url;
         }
-
-        let mut feature_flags = HashMap::from([
-            ("duo_agent_platform_agentic_chat".to_owned(), true),
-            ("duo_agent_platform".to_owned(), true),
-        ]);
-        if let Some(raw_flags) = env_non_empty("GITLAB_FEATURE_FLAGS_JSON") {
-            feature_flags.extend(parse_feature_flags(raw_flags.as_str())?);
+        if let Some(ai_gateway_url) = ai_gateway_url {
+            config.ai_gateway_url = ai_gateway_url;
         }
+        Self::from_token_with_config(client, token, config)
+    }
 
+    pub fn from_token_with_config(
+        client: reqwest::Client,
+        token: impl Into<String>,
+        config: GitlabProviderConfig,
+    ) -> Result<Self, AppError> {
         Ok(Self {
             client,
             api_key: token.into(),
-            instance_url: normalize_url(
-                instance_url
-                    .or_else(|| env_non_empty("GITLAB_INSTANCE_URL"))
-                    .unwrap_or_else(|| DEFAULT_INSTANCE_URL.to_owned()),
-            ),
-            ai_gateway_url: normalize_url(
-                ai_gateway_url
-                    .or_else(|| env_non_empty("GITLAB_AI_GATEWAY_URL"))
-                    .unwrap_or_else(|| DEFAULT_AI_GATEWAY_URL.to_owned()),
-            ),
-            default_model: std::env::var("GITLAB_MODEL")
-                .unwrap_or_else(|_| "claude-sonnet-4-5".to_owned()),
-            ai_gateway_headers,
-            feature_flags,
+            instance_url: normalize_url(config.instance_url),
+            ai_gateway_url: normalize_url(config.ai_gateway_url),
+            default_model: config.default_model,
+            ai_gateway_headers: config.ai_gateway_headers,
+            feature_flags: config.feature_flags,
             direct_access_cache: Mutex::new(None),
         })
     }
@@ -403,15 +437,6 @@ fn remap_stream_provider_id(event: CompletionStreamEvent) -> CompletionStreamEve
     }
 }
 
-fn parse_feature_headers(value: &str) -> Result<HashMap<String, String>, AppError> {
-    utils::parse_headers_json(value)
-}
-
-fn parse_feature_flags(value: &str) -> Result<HashMap<String, bool>, AppError> {
-    serde_json::from_str::<HashMap<String, bool>>(value)
-        .map_err(|e| AppError::Config(format!("invalid gitlab feature flags json: {e}")))
-}
-
 fn normalize_url(value: String) -> String {
     value.trim().trim_end_matches('/').to_owned()
 }
@@ -462,13 +487,6 @@ fn normalize_unix_timestamp_ms(value: i64) -> Option<i64> {
     } else {
         Some(value * 1_000)
     }
-}
-
-fn env_non_empty(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty())
 }
 
 fn now_ms() -> i64 {
@@ -539,7 +557,7 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
-                messages: vec![crate::provider::ProviderMessage::new(
+                messages: vec![crate::message::Message::prompt_text(
                     crate::role::Role::User,
                     "hello",
                 )],

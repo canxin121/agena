@@ -1,106 +1,83 @@
 # Agena
 
-## Provider / Model
+## Provider / Model（显式注册）
 
-当前已提供可真实调用 API 的 provider：
+当前 provider 架构改为：**仅显式注册**。
 
-- `openai`（OpenAI Responses API + Models API）
-- `anthropic`（Anthropic Messages API + Models API）
-- `google`（Gemini GenerateContent + Models API）
-- `opencode` 同步的 **OpenAI-compatible provider 族**（通过统一适配器启用）
+- 不再从环境变量自动发现/自动注册 provider。
+- provider 参数通过构造函数显式传入。
+- 自定义 provider 通过“内部 provider 别名”机制实现（不是新写协议栈）。
 
-目前不包含 OAuth/网页登录流程（如 GitHub Copilot 登录），仅支持 API key 模式。
+### 全局运行时参数（显式）
 
-> 更新：现已支持 OAuth / Device Code 登录鉴权（OpenAI Codex、GitHub Copilot、GitLab）。
+```rust
+use std::time::Duration;
+use agena::provider::{
+    ProviderHttpClientConfig, ProviderRegistry, ProviderRuntimeConfig,
+    ProviderRequestRetryConfig, ProviderStreamReplayConfig,
+};
 
-### 环境变量
+let client = ProviderRegistry::build_http_client(ProviderHttpClientConfig {
+    timeout: Duration::from_secs(120),
+    connect_timeout: Duration::from_secs(15),
+})?;
 
-OpenAI:
-
-- `OPENAI_API_KEY`（必填）
-- `OPENAI_BASE_URL`（可选，默认 `https://api.openai.com/v1`）
-- `OPENAI_MODEL`（可选，默认 `gpt-4.1-mini`）
-- `OPENAI_API_MODE`（可选：`auto|responses|chat`，默认 `auto`）
-- `OPENAI_STREAM_MODE`（可选：`sse|ws`，默认 `sse`）
-- `OPENAI_REALTIME_WS_URL`（可选，`ws` 模式可显式指定 realtime endpoint）
-
-Anthropic:
-
-- `ANTHROPIC_API_KEY`（必填）
-- `ANTHROPIC_BASE_URL`（可选，默认 `https://api.anthropic.com/v1`）
-- `ANTHROPIC_MODEL`（可选，默认 `claude-3-7-sonnet-latest`）
-- `ANTHROPIC_INCLUDE_THINKING`（可选，`1/true/yes` 时把 thinking block 拼入输出文本）
-
-Gemini:
-
-- `GEMINI_API_KEY` 或 `GOOGLE_API_KEY`（二选一必填）
-- `GEMINI_BASE_URL`（可选，默认 `https://generativelanguage.googleapis.com/v1beta`）
-- `GEMINI_MODEL`（可选，默认 `gemini-2.5-flash`）
-
-### OpenAI-compatible provider 族（对齐 opencode）
-
-agena 内置了 opencode provider ID 清单（去掉 OAuth-only）。
-任意一个 provider 都可通过以下约定启用：
-
-- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_API_KEY`（必填）
-- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_BASE_URL`（通常必填；部分 provider 内置默认）
-- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_MODEL`（可选）
-- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_STREAM_MODE`（可选：`sse|ws`，默认 `sse`）
-- `AGENA_PROVIDER_<PROVIDER_ID_UPPER>_REALTIME_WS_URL`（可选，`ws` 模式下可显式指定）
-
-说明：
-
-- 当 `STREAM_MODE=ws` 时，agena 会使用 OpenAI Realtime 事件模型（`response.output_text.delta` / `response.done`）。
-- 若未设置 `..._REALTIME_WS_URL`，会由 `..._BASE_URL` 自动推导为 `wss://.../realtime?model=...`。
-- 不是所有 OpenAI-compatible provider 都支持 Realtime WebSocket；不支持时请切回 `STREAM_MODE=sse`。
-
-例如 `openrouter`：
-
-```bash
-set AGENA_PROVIDER_OPENROUTER_API_KEY=...
-set AGENA_PROVIDER_OPENROUTER_MODEL=openai/gpt-4o-mini
-set AGENA_PROVIDER=openrouter
-set AGENA_MODEL=openai/gpt-4o-mini
-set AGENA_PROMPT=Say hello in one sentence
-cargo run
+let mut registry = ProviderRegistry::with_runtime_config(ProviderRuntimeConfig {
+    request_retry: ProviderRequestRetryConfig {
+        max_retries: 1,
+        base_delay: Duration::from_millis(250),
+        max_delay: Duration::from_millis(2_000),
+    },
+    stream_replay: ProviderStreamReplayConfig {
+        max_retries_after_output: 1,
+        max_tracked_events: 2_048,
+    },
+});
 ```
 
-也支持常见直连环境变量（如 `OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL`、`OPENROUTER_MODEL`）。
+### 显式注册 provider（示例）
 
-部分 provider 已内置默认 `BASE_URL`（如 openrouter/groq/deepseek/mistral/togetherai/xai 等），
-其余请显式设置 `..._BASE_URL`。
+```rust
+use agena::provider::OpenAiProvider;
 
-### 最小 smoke 运行
-
-可通过 `main.rs` 内置 smoke 流程直接验证联通性：
-
-```bash
-set AGENA_PROVIDER=openai
-set AGENA_MODEL=gpt-4.1-mini
-set AGENA_PROMPT=Say hello in one sentence
-set OPENAI_API_KEY=...
-cargo run
+registry.register(OpenAiProvider::new(
+    client.clone(),
+    "sk-xxx",
+    "https://api.openai.com/v1",
+    "gpt-4.1-mini",
+));
 ```
 
-Anthropic 同理：
+### 自定义 provider（内部别名）
 
-```bash
-set AGENA_PROVIDER=anthropic
-set AGENA_MODEL=claude-3-7-sonnet-latest
-set AGENA_PROMPT=Say hello in one sentence
-set ANTHROPIC_API_KEY=...
-cargo run
+你可以把新 provider id 映射到内部 provider，实现“同一实现、多入口名”：
+
+```rust
+use agena::provider::ProviderAliasRegistration;
+
+registry.register_alias(
+    ProviderAliasRegistration::new("my-openai", "openai")
+        .with_default_model("gpt-4.1-mini"),
+)?;
 ```
 
-Gemini 同理：
+行为说明：
 
-```bash
-set GEMINI_API_KEY=...
-set AGENA_PROVIDER=google
-set AGENA_MODEL=gemini-2.5-flash
-set AGENA_PROMPT=Say hello in one sentence
-cargo run
-```
+- 调用 `my-openai` 实际执行的是内部 `openai` provider 代码。
+- 返回结果和流式事件的 `provider_id` 会重写为别名 id（`my-openai`）。
+
+### OpenAI-compatible 可显式自定义的项
+
+通过 `OpenAiCompatibleProvider::new(...)` + builder 方法显式设置：
+
+- `provider_id`
+- `api_key`
+- `base_url`
+- `default_model`
+- `auth_header` / `auth_scheme`
+- `extra_headers`
+- `stream_mode`（SSE / Realtime WS）
+- `realtime_ws_url`
 
 ## 鉴权（OAuth / API Key）
 

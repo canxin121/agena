@@ -38,18 +38,6 @@ impl GeminiProvider {
         }
     }
 
-    pub fn from_env(client: reqwest::Client) -> Result<Self, AppError> {
-        let api_key = std::env::var("GEMINI_API_KEY")
-            .or_else(|_| std::env::var("GOOGLE_API_KEY"))
-            .map_err(|_| AppError::Config("GEMINI_API_KEY or GOOGLE_API_KEY is not set".into()))?;
-        let base_url = std::env::var("GEMINI_BASE_URL")
-            .unwrap_or_else(|_| "https://generativelanguage.googleapis.com/v1beta".to_owned());
-        let default_model =
-            std::env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".to_owned());
-
-        Ok(Self::new(client, api_key, base_url, default_model))
-    }
-
     fn list_models_endpoint(&self) -> String {
         format!("{}/models?key={}", self.base_url, self.api_key)
     }
@@ -113,8 +101,8 @@ impl ModelProvider for GeminiProvider {
         };
 
         let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(system);
+        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
+            system_chunks.push(system.clone());
         }
 
         let mut contents = Vec::new();
@@ -200,8 +188,8 @@ impl ModelProvider for GeminiProvider {
         };
 
         let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(system);
+        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
+            system_chunks.push(system.clone());
         }
 
         let mut contents = Vec::new();
@@ -469,7 +457,8 @@ mod tests {
 
     use super::*;
 
-    use crate::provider::{CompletionRequest, ProviderMessage};
+    use crate::message::Message;
+    use crate::provider::CompletionRequest;
 
     #[tokio::test]
     async fn complete_stream_parses_typed_gemini_chunks() {
@@ -504,7 +493,7 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "gemini-2.5-flash".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(64),
             })

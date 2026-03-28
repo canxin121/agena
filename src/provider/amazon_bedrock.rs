@@ -9,19 +9,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    auth::AuthData,
     error::AppError,
-    message::MessageUsage,
+    message::{MessageUsage, Message},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, OpenAiCompatibleProvider,
-        ProviderContent, ProviderContentPart, ProviderModel, sse, utils,
+        ProviderModel, StreamResumePolicy, sse, utils,
     },
     role::Role,
 };
 
 const PROVIDER_ID: &str = "amazon-bedrock";
-const DEFAULT_MODEL: &str = "anthropic.claude-3-7-sonnet-20250219-v1:0";
 
 const CROSS_REGION_PREFIXES: &[&str] = &["global.", "us.", "eu.", "jp.", "apac.", "au."];
 const US_MODELS: &[&str] = &[
@@ -72,60 +70,49 @@ pub struct AmazonBedrockProvider {
 }
 
 impl AmazonBedrockProvider {
-    pub fn from_env_and_auth(
+    pub fn new_bearer(
         client: reqwest::Client,
-        auth: Option<&AuthData>,
-    ) -> Result<Option<Self>, AppError> {
-        let api_token = env_non_empty("AWS_BEARER_TOKEN_BEDROCK")
-            .or_else(|| scoped_env_non_empty("API_KEY"))
-            .or_else(|| auth.and_then(AuthData::api_key).map(ToOwned::to_owned));
-
-        let profile = scoped_env_non_empty("PROFILE").or_else(|| env_non_empty("AWS_PROFILE"));
-        let static_credentials = resolve_static_credentials();
-
-        if api_token.is_none()
-            && static_credentials.is_none()
-            && !should_enable_credential_chain(profile.as_deref())
-        {
-            return Ok(None);
-        }
-
-        let region = scoped_env_non_empty("REGION")
-            .or_else(|| env_non_empty("AWS_REGION"))
-            .unwrap_or_else(|| "us-east-1".to_owned());
-
-        let base_url = scoped_env_non_empty("ENDPOINT")
-            .or_else(|| env_non_empty("AWS_BEDROCK_ENDPOINT"))
-            .or_else(|| scoped_env_non_empty("BASE_URL"))
-            .or_else(|| env_non_empty("AWS_BEDROCK_BASE_URL"))
-            .unwrap_or_else(|| format!("https://bedrock-runtime.{region}.amazonaws.com/openai/v1"));
-
-        let default_model = scoped_env_non_empty("MODEL")
-            .or_else(|| env_non_empty("AWS_BEDROCK_MODEL"))
-            .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
-
-        let auth_mode = if let Some(token) = api_token {
-            BedrockAuthMode::Bearer(OpenAiCompatibleProvider::new(
+        api_token: impl Into<String>,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        region: impl Into<String>,
+    ) -> Self {
+        let base_url = utils::normalize_base_url(base_url.into().as_str());
+        let default_model = default_model.into();
+        let region = region.into();
+        Self {
+            client: client.clone(),
+            base_url: base_url.clone(),
+            default_model: default_model.clone(),
+            region,
+            auth_mode: BedrockAuthMode::Bearer(OpenAiCompatibleProvider::new(
                 PROVIDER_ID,
-                client.clone(),
-                token,
-                base_url.clone(),
-                default_model.clone(),
-            ))
-        } else {
-            BedrockAuthMode::SigV4 {
+                client,
+                api_token,
+                base_url,
+                default_model,
+            )),
+        }
+    }
+
+    pub fn new_sigv4(
+        client: reqwest::Client,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        region: impl Into<String>,
+        profile: Option<String>,
+        static_credentials: Option<Credentials>,
+    ) -> Self {
+        Self {
+            client,
+            base_url: utils::normalize_base_url(base_url.into().as_str()),
+            default_model: default_model.into(),
+            region: region.into(),
+            auth_mode: BedrockAuthMode::SigV4 {
                 profile,
                 static_credentials,
-            }
-        };
-
-        Ok(Some(Self {
-            client,
-            base_url: utils::normalize_base_url(base_url.as_str()),
-            default_model,
-            region,
-            auth_mode,
-        }))
+            },
+        }
     }
 
     fn resolve_model(&self, model: &str) -> String {
@@ -521,6 +508,10 @@ impl ModelProvider for AmazonBedrockProvider {
         self.default_model.as_str()
     }
 
+    fn stream_resume_policy(&self) -> StreamResumePolicy {
+        StreamResumePolicy::ReplaySafePrefix
+    }
+
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         match &self.auth_mode {
             BedrockAuthMode::Bearer(inner) => inner.list_models().await,
@@ -573,10 +564,7 @@ impl ModelProvider for AmazonBedrockProvider {
     }
 }
 
-fn convert_messages(
-    system: Option<String>,
-    messages: Vec<crate::provider::ProviderMessage>,
-) -> Vec<ChatMessage> {
+fn convert_messages(system: Option<String>, messages: Vec<Message>) -> Vec<ChatMessage> {
     let mut result = Vec::new();
 
     if let Some(system) = system.filter(|s| !s.trim().is_empty()) {
@@ -589,11 +577,15 @@ fn convert_messages(
     }
 
     for message in messages {
+        let projected_parts = utils::project_session_parts(&message);
         match message.role {
             Role::System => {
                 result.push(ChatMessage {
                     role: "system".to_owned(),
-                    content: Some(Value::String(message.as_text_lossy())),
+                    content: Some(Value::String(session_text_lossy(
+                        &message,
+                        &projected_parts,
+                    ))),
                     tool_call_id: None,
                     tool_calls: None,
                 });
@@ -601,13 +593,14 @@ fn convert_messages(
             Role::User => {
                 result.push(ChatMessage {
                     role: "user".to_owned(),
-                    content: Some(provider_content_to_openai_value(&message.content)),
+                    content: Some(provider_message_to_openai_value(&message, &projected_parts)),
                     tool_call_id: None,
                     tool_calls: None,
                 });
             }
             Role::Assistant => {
-                let (content, tool_calls) = assistant_content_and_tool_calls(&message.content);
+                let (content, tool_calls) =
+                    assistant_content_and_tool_calls(&message, &projected_parts);
                 result.push(ChatMessage {
                     role: "assistant".to_owned(),
                     content,
@@ -616,11 +609,14 @@ fn convert_messages(
                 });
             }
             Role::Tool => {
-                let tool_messages = tool_messages_from_content(&message.content);
+                let tool_messages = tool_messages_from_parts(projected_parts.as_slice());
                 if tool_messages.is_empty() {
                     result.push(ChatMessage {
                         role: "tool".to_owned(),
-                        content: Some(Value::String(message.as_text_lossy())),
+                        content: Some(Value::String(session_text_lossy(
+                            &message,
+                            &projected_parts,
+                        ))),
                         tool_call_id: Some("tool".to_owned()),
                         tool_calls: None,
                     });
@@ -634,81 +630,79 @@ fn convert_messages(
     result
 }
 
-fn provider_content_to_openai_value(content: &ProviderContent) -> Value {
-    match content {
-        ProviderContent::Text(text) => Value::String(text.clone()),
-        ProviderContent::Parts(parts) => {
-            let items = parts
-                .iter()
-                .map(|part| match part {
-                    ProviderContentPart::Text { text } => {
-                        serde_json::json!({ "type": "text", "text": text })
-                    }
-                    ProviderContentPart::ImageUrl { url } => serde_json::json!({
-                        "type": "image_url",
-                        "image_url": { "url": url }
-                    }),
-                    ProviderContentPart::ToolCall { name, .. } => {
-                        serde_json::json!({ "type": "text", "text": format!("[tool_call:{name}]") })
-                    }
-                    ProviderContentPart::ToolResult { tool_call_id, .. } => {
-                        serde_json::json!({ "type": "text", "text": format!("[tool_result:{tool_call_id}]") })
-                    }
-                })
-                .collect::<Vec<_>>();
-            Value::Array(items)
-        }
+fn provider_message_to_openai_value(
+    message: &Message,
+    parts: &[utils::ProjectedSessionPart],
+) -> Value {
+    if parts.is_empty() {
+        return Value::String(message.as_text_lossy());
     }
+
+    let items = parts
+        .iter()
+        .map(|part| match part {
+            utils::ProjectedSessionPart::Text { text } => {
+                serde_json::json!({ "type": "text", "text": text })
+            }
+            utils::ProjectedSessionPart::ImageUrl { url } => serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": url }
+            }),
+            utils::ProjectedSessionPart::ToolCall { name, .. } => {
+                serde_json::json!({ "type": "text", "text": format!("[tool_call:{name}]") })
+            }
+            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                serde_json::json!({ "type": "text", "text": format!("[tool_result:{tool_call_id}]") })
+            }
+        })
+        .collect::<Vec<_>>();
+    Value::Array(items)
 }
 
 fn assistant_content_and_tool_calls(
-    content: &ProviderContent,
+    message: &Message,
+    parts: &[utils::ProjectedSessionPart],
 ) -> (Option<Value>, Vec<ChatToolCallRequest>) {
-    match content {
-        ProviderContent::Text(text) => (Some(Value::String(text.clone())), Vec::new()),
-        ProviderContent::Parts(parts) => {
-            let mut text_chunks = Vec::new();
-            let mut tool_calls = Vec::new();
-            for part in parts {
-                match part {
-                    ProviderContentPart::Text { text } => text_chunks.push(text.clone()),
-                    ProviderContentPart::ToolCall {
-                        id,
-                        name,
-                        arguments_json,
-                    } => {
-                        tool_calls.push(ChatToolCallRequest {
-                            kind: "function".to_owned(),
-                            id: id.clone(),
-                            function: ChatFunctionCallRequest {
-                                name: name.clone(),
-                                arguments: arguments_json.clone(),
-                            },
-                        });
-                    }
-                    ProviderContentPart::ImageUrl { url } => {
-                        text_chunks.push(format!("[image:{url}]"));
-                    }
-                    ProviderContentPart::ToolResult { tool_call_id, .. } => {
-                        text_chunks.push(format!("[tool_result:{tool_call_id}]"));
-                    }
-                }
+    if parts.is_empty() {
+        return (Some(Value::String(message.as_text_lossy())), Vec::new());
+    }
+
+    let mut text_chunks = Vec::new();
+    let mut tool_calls = Vec::new();
+    for part in parts {
+        match part {
+            utils::ProjectedSessionPart::Text { text } => text_chunks.push(text.clone()),
+            utils::ProjectedSessionPart::ToolCall {
+                id,
+                name,
+                arguments_json,
+            } => {
+                tool_calls.push(ChatToolCallRequest {
+                    kind: "function".to_owned(),
+                    id: id.clone(),
+                    function: ChatFunctionCallRequest {
+                        name: name.clone(),
+                        arguments: arguments_json.clone(),
+                    },
+                });
             }
-            let content = (!text_chunks.is_empty()).then(|| Value::String(text_chunks.join("")));
-            (content, tool_calls)
+            utils::ProjectedSessionPart::ImageUrl { url } => {
+                text_chunks.push(format!("[image:{url}]"));
+            }
+            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                text_chunks.push(format!("[tool_result:{tool_call_id}]"));
+            }
         }
     }
+    let content = (!text_chunks.is_empty()).then(|| Value::String(text_chunks.join("")));
+    (content, tool_calls)
 }
 
-fn tool_messages_from_content(content: &ProviderContent) -> Vec<ChatMessage> {
-    let ProviderContent::Parts(parts) = content else {
-        return Vec::new();
-    };
-
+fn tool_messages_from_parts(parts: &[utils::ProjectedSessionPart]) -> Vec<ChatMessage> {
     parts
         .iter()
         .filter_map(|part| match part {
-            ProviderContentPart::ToolResult {
+            utils::ProjectedSessionPart::ToolResult {
                 tool_call_id,
                 output_json,
             } => Some(ChatMessage {
@@ -720,6 +714,17 @@ fn tool_messages_from_content(content: &ProviderContent) -> Vec<ChatMessage> {
             _ => None,
         })
         .collect()
+}
+
+fn session_text_lossy(
+    message: &Message,
+    projected_parts: &[utils::ProjectedSessionPart],
+) -> String {
+    if projected_parts.is_empty() {
+        message.as_text_lossy()
+    } else {
+        utils::projected_parts_text_lossy(projected_parts)
+    }
 }
 
 fn parse_tool_calls(
@@ -806,31 +811,6 @@ fn prefix_bedrock_model(region: &str, model: &str) -> String {
     model.to_owned()
 }
 
-fn resolve_static_credentials() -> Option<Credentials> {
-    let access_key_id =
-        scoped_env_non_empty("ACCESS_KEY_ID").or_else(|| env_non_empty("AWS_ACCESS_KEY_ID"))?;
-    let secret_access_key = scoped_env_non_empty("SECRET_ACCESS_KEY")
-        .or_else(|| env_non_empty("AWS_SECRET_ACCESS_KEY"))?;
-    let session_token =
-        scoped_env_non_empty("SESSION_TOKEN").or_else(|| env_non_empty("AWS_SESSION_TOKEN"));
-
-    Some(Credentials::new(
-        access_key_id,
-        secret_access_key,
-        session_token,
-        None,
-        "agena-bedrock-static",
-    ))
-}
-
-fn should_enable_credential_chain(profile: Option<&str>) -> bool {
-    profile.is_some_and(|value| !value.trim().is_empty())
-        || env_non_empty("AWS_ACCESS_KEY_ID").is_some()
-        || env_non_empty("AWS_WEB_IDENTITY_TOKEN_FILE").is_some()
-        || env_non_empty("AWS_CONTAINER_CREDENTIALS_FULL_URI").is_some()
-        || env_non_empty("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").is_some()
-}
-
 fn has_cross_region_prefix(model: &str) -> bool {
     CROSS_REGION_PREFIXES
         .iter()
@@ -892,18 +872,6 @@ fn signed_sigv4_headers(
 
     instructions.apply_to_request_http1x(&mut signing_request);
     Ok(signing_request.headers().clone())
-}
-
-fn scoped_env_non_empty(suffix: &str) -> Option<String> {
-    env_non_empty(format!("AGENA_PROVIDER_AMAZON_BEDROCK_{suffix}").as_str())
-        .or_else(|| env_non_empty(format!("AMAZON_BEDROCK_{suffix}").as_str()))
-}
-
-fn env_non_empty(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1081,11 +1049,6 @@ mod tests {
     }
 
     #[test]
-    fn credential_chain_can_be_enabled_by_profile_hint() {
-        assert!(should_enable_credential_chain(Some("default")));
-    }
-
-    #[test]
     fn sigv4_signing_includes_auth_and_date_headers() {
         let credentials = Credentials::new(
             "AKIDEXAMPLE",
@@ -1236,7 +1199,7 @@ data: [DONE]\n\n";
         AmazonBedrockProvider {
             client: reqwest::Client::new(),
             base_url,
-            default_model: DEFAULT_MODEL.to_owned(),
+            default_model: "anthropic.claude-3-7-sonnet-20250219-v1:0".to_owned(),
             region: "us-east-1".to_owned(),
             auth_mode: BedrockAuthMode::SigV4 {
                 profile: None,
@@ -1253,9 +1216,12 @@ data: [DONE]\n\n";
 
     fn test_request() -> CompletionRequest {
         CompletionRequest {
-            model: DEFAULT_MODEL.to_owned(),
+            model: "anthropic.claude-3-7-sonnet-20250219-v1:0".to_owned(),
             system: None,
-            messages: vec![crate::provider::ProviderMessage::new(Role::User, "hello")],
+            messages: vec![crate::message::Message::prompt_text(
+                Role::User,
+                "hello",
+            )],
             temperature: None,
             max_output_tokens: None,
         }

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{message::MessageUsage, role::Role};
+use crate::message::{MessageUsage, Message};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderModel {
@@ -9,83 +9,12 @@ pub struct ProviderModel {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProviderMessage {
-    pub role: Role,
-    pub content: ProviderContent,
-}
-
-impl ProviderMessage {
-    pub fn new(role: Role, content: impl Into<String>) -> Self {
-        Self {
-            role,
-            content: ProviderContent::Text(content.into()),
-        }
-    }
-
-    pub fn as_text_lossy(&self) -> String {
-        self.content.as_text_lossy()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ProviderContent {
-    Text(String),
-    Parts(Vec<ProviderContentPart>),
-}
-
-impl ProviderContent {
-    pub fn as_text_lossy(&self) -> String {
-        match self {
-            Self::Text(text) => text.clone(),
-            Self::Parts(parts) => parts
-                .iter()
-                .map(ProviderContentPart::as_text_lossy)
-                .collect::<Vec<_>>()
-                .join(""),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ProviderContentPart {
-    Text {
-        text: String,
-    },
-    ImageUrl {
-        url: String,
-    },
-    ToolCall {
-        id: String,
-        name: String,
-        #[serde(default)]
-        arguments_json: String,
-    },
-    ToolResult {
-        tool_call_id: String,
-        output_json: String,
-    },
-}
-
-impl ProviderContentPart {
-    pub fn as_text_lossy(&self) -> String {
-        match self {
-            Self::Text { text } => text.clone(),
-            Self::ImageUrl { url } => format!("[image:{url}]"),
-            Self::ToolCall { id, name, .. } => format!("[tool_call:{name}:{id}]"),
-            Self::ToolResult { tool_call_id, .. } => format!("[tool_result:{tool_call_id}]"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompletionRequest {
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
-    pub messages: Vec<ProviderMessage>,
+    pub messages: Vec<Message>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

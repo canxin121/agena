@@ -2,8 +2,9 @@ use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CommandExecutionPart, ErrorPart, ExecutionStatus, FileChangePart, PartKind, ReasoningPart,
-    TextPart, TodoListPart, ToolExecutionPart, WebSearchPart,
+    AttachmentItem, AttachmentPart, CommandExecutionPart, ErrorPart, ExecutionStatus,
+    FileChangePart, PartKind, ReasoningPart, TextPart, TodoListPart, ToolExecutionPart,
+    WebSearchPart,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
@@ -17,6 +18,7 @@ pub enum PartContent {
     WebSearch(WebSearchPart),
     TodoList(TodoListPart),
     Error(ErrorPart),
+    Attachment(AttachmentPart),
 }
 
 impl PartContent {
@@ -36,6 +38,10 @@ impl PartContent {
         })
     }
 
+    pub fn attachments(items: Vec<AttachmentItem>) -> Self {
+        Self::Attachment(AttachmentPart { attachments: items })
+    }
+
     pub const fn kind(&self) -> PartKind {
         match self {
             Self::Text(_) => PartKind::Text,
@@ -46,6 +52,7 @@ impl PartContent {
             Self::WebSearch(_) => PartKind::WebSearch,
             Self::TodoList(_) => PartKind::TodoList,
             Self::Error(_) => PartKind::Error,
+            Self::Attachment(_) => PartKind::Attachment,
         }
     }
 
@@ -112,5 +119,32 @@ impl PartContent {
             Self::ToolExecution(part) => part.append_output_delta(delta),
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::{AttachmentKind, AttachmentSource};
+
+    #[test]
+    fn attachments_constructor_sets_attachment_kind() {
+        let content = PartContent::attachments(vec![AttachmentItem {
+            kind: AttachmentKind::File,
+            mime: "application/octet-stream".to_owned(),
+            source: AttachmentSource::FileId {
+                file_id: "f_1".to_owned(),
+            },
+            filename: Some("blob.bin".to_owned()),
+            title: None,
+            size_bytes: None,
+            sha256: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
+        }]);
+
+        assert_eq!(content.kind(), PartKind::Attachment);
     }
 }

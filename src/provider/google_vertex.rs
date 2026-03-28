@@ -2,16 +2,13 @@ use async_trait::async_trait;
 use futures_core::Stream;
 
 use crate::{
-    auth::AuthData,
     error::AppError,
     provider::{
         CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider,
-        OpenAiCompatibleProvider, ProviderModel,
+        OpenAiCompatibleProvider, ProviderModel, StreamResumePolicy,
     },
 };
 
-const PROVIDER_ID: &str = "google-vertex";
-const PROVIDER_ID_ANTHROPIC: &str = "google-vertex-anthropic";
 const GOOGLE_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,67 +27,35 @@ pub struct GoogleVertexProvider {
 }
 
 impl GoogleVertexProvider {
-    pub fn from_env_and_auth(
-        provider_id: &str,
+    pub fn new_static_token(
+        provider_id: impl Into<String>,
         client: reqwest::Client,
-        auth: Option<&AuthData>,
-    ) -> Result<Option<Self>, AppError> {
-        if provider_id != PROVIDER_ID && provider_id != PROVIDER_ID_ANTHROPIC {
-            return Err(AppError::Config(format!(
-                "unsupported google vertex provider id: {provider_id}"
-            )));
-        }
-
-        let project = scoped_env_non_empty(provider_id, "PROJECT").or_else(|| {
-            first_non_empty_env(&["GOOGLE_CLOUD_PROJECT", "GCP_PROJECT", "GCLOUD_PROJECT"])
-        });
-
-        let Some(project) = project else {
-            return Ok(None);
-        };
-
-        let location = scoped_env_non_empty(provider_id, "LOCATION")
-            .or_else(|| first_non_empty_env(&["GOOGLE_CLOUD_LOCATION", "VERTEX_LOCATION"]))
-            .unwrap_or_else(|| {
-                if provider_id == PROVIDER_ID_ANTHROPIC {
-                    "global".to_owned()
-                } else {
-                    "us-central1".to_owned()
-                }
-            });
-
-        let explicit_token = scoped_env_non_empty(provider_id, "ACCESS_TOKEN")
-            .or_else(|| scoped_env_non_empty(provider_id, "API_KEY"))
-            .or_else(|| env_non_empty("GOOGLE_VERTEX_ACCESS_TOKEN"))
-            .or_else(|| auth.and_then(AuthData::api_key).map(ToOwned::to_owned));
-
-        let endpoint = if location == "global" {
-            "aiplatform.googleapis.com".to_owned()
-        } else {
-            format!("{location}-aiplatform.googleapis.com")
-        };
-
-        let base_url = scoped_env_non_empty(provider_id, "BASE_URL").unwrap_or_else(|| {
-            format!(
-                "https://{endpoint}/v1/projects/{project}/locations/{location}/endpoints/openapi"
-            )
-        });
-
-        let default_model = scoped_env_non_empty(provider_id, "MODEL").unwrap_or_else(|| {
-            if provider_id == PROVIDER_ID_ANTHROPIC {
-                "anthropic/claude-sonnet-4@20250514".to_owned()
-            } else {
-                "google/gemini-2.5-flash".to_owned()
-            }
-        });
-
-        Ok(Some(Self {
-            id: provider_id.to_owned(),
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        access_token: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: provider_id.into(),
             client,
-            base_url,
-            default_model,
-            auth: resolve_auth(explicit_token),
-        }))
+            base_url: crate::provider::utils::normalize_base_url(base_url.into().as_str()),
+            default_model: default_model.into(),
+            auth: GoogleVertexAuth::Static(access_token.into()),
+        }
+    }
+
+    pub fn new_adc(
+        provider_id: impl Into<String>,
+        client: reqwest::Client,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: provider_id.into(),
+            client,
+            base_url: crate::provider::utils::normalize_base_url(base_url.into().as_str()),
+            default_model: default_model.into(),
+            auth: GoogleVertexAuth::Adc,
+        }
     }
 
     async fn auth_token(&self) -> Result<String, AppError> {
@@ -139,6 +104,10 @@ impl ModelProvider for GoogleVertexProvider {
         self.default_model.as_str()
     }
 
+    fn stream_resume_policy(&self) -> StreamResumePolicy {
+        StreamResumePolicy::ReplaySafePrefix
+    }
+
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let token = self.auth_token().await?;
         self.provider_with_token(token).list_models().await
@@ -163,56 +132,30 @@ impl ModelProvider for GoogleVertexProvider {
     }
 }
 
-fn resolve_auth(explicit_token: Option<String>) -> GoogleVertexAuth {
-    if let Some(token) = explicit_token {
-        return GoogleVertexAuth::Static(token);
-    }
-    GoogleVertexAuth::Adc
-}
-
-fn scoped_env_non_empty(provider_id: &str, suffix: &str) -> Option<String> {
-    let normalized = provider_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-
-    let mut keys = vec![format!("AGENA_PROVIDER_{normalized}_{suffix}")];
-    keys.push(format!("{normalized}_{suffix}"));
-
-    keys.into_iter().find_map(|k| env_non_empty(k.as_str()))
-}
-
-fn first_non_empty_env(keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| env_non_empty(key))
-}
-
-fn env_non_empty(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn resolve_auth_prefers_static_token() {
-        assert_eq!(
-            resolve_auth(Some("token".to_owned())),
-            GoogleVertexAuth::Static("token".to_owned())
+    fn new_static_token_configures_static_auth() {
+        let provider = GoogleVertexProvider::new_static_token(
+            "google-vertex",
+            reqwest::Client::new(),
+            "https://example.com/openapi",
+            "google/gemini-2.5-flash",
+            "token",
         );
+        assert_eq!(provider.auth, GoogleVertexAuth::Static("token".to_owned()));
     }
 
     #[test]
-    fn resolve_auth_falls_back_to_adc() {
-        assert_eq!(resolve_auth(None), GoogleVertexAuth::Adc);
+    fn new_adc_configures_adc_auth() {
+        let provider = GoogleVertexProvider::new_adc(
+            "google-vertex",
+            reqwest::Client::new(),
+            "https://example.com/openapi",
+            "google/gemini-2.5-flash",
+        );
+        assert_eq!(provider.auth, GoogleVertexAuth::Adc);
     }
 }

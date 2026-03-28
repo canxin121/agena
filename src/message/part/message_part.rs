@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::{ExecutionStatus, PartContent, PartKind, ToolExecutionPart, ToolInvocation};
+use super::{
+    AttachmentPart, ExecutionStatus, PartContent, PartKind, ToolExecutionPart, ToolInvocation,
+};
 
 #[derive(Debug, Error)]
 #[error("invalid part state transition: {from:?} -> {to:?}")]
@@ -28,7 +30,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionMessagePartSummary {
+pub struct MessagePartSummary {
     pub id: i64,
     pub message_id: i64,
     pub part_index: i32,
@@ -47,7 +49,7 @@ pub struct SessionMessagePartSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SessionMessagePart {
+pub struct MessagePart {
     pub id: i64,
     pub message_id: i64,
     pub part_index: i32,
@@ -67,7 +69,7 @@ pub struct SessionMessagePart {
     pub content: Option<PartContent>,
 }
 
-impl SessionMessagePart {
+impl MessagePart {
     pub fn with_content(
         id: i64,
         message_id: i64,
@@ -92,7 +94,7 @@ impl SessionMessagePart {
         part
     }
 
-    pub fn from_summary(summary: SessionMessagePartSummary, content: Option<PartContent>) -> Self {
+    pub fn from_summary(summary: MessagePartSummary, content: Option<PartContent>) -> Self {
         let mut part = Self {
             id: summary.id,
             message_id: summary.message_id,
@@ -114,8 +116,8 @@ impl SessionMessagePart {
         part
     }
 
-    pub fn summary_view(&self) -> SessionMessagePartSummary {
-        SessionMessagePartSummary {
+    pub fn summary_view(&self) -> MessagePartSummary {
+        MessagePartSummary {
             id: self.id,
             message_id: self.message_id,
             part_index: self.part_index,
@@ -253,6 +255,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
                 Some(code.to_string())
             }
         }
+        PartContent::Attachment(_) => Some("attachment".to_string()),
     }
 }
 
@@ -316,6 +319,26 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
         PartContent::Error(error) => {
             truncate_summary(&format!("{}: {}", error.code.trim(), error.message.trim()))
         }
+        PartContent::Attachment(attachment) => attachment_part_summary(attachment),
+    }
+}
+
+fn attachment_part_summary(part: &AttachmentPart) -> Option<String> {
+    let count = part.attachments.len();
+    if count == 0 {
+        return Some("0 attachment(s)".to_string());
+    }
+
+    let first = part
+        .attachments
+        .first()
+        .map(|item| item.summary_label())
+        .unwrap_or_else(|| "attachment".to_string());
+
+    if count == 1 {
+        truncate_summary(&format!("1 attachment: {first}"))
+    } else {
+        truncate_summary(&format!("{count} attachments (first: {first})"))
     }
 }
 
@@ -349,4 +372,81 @@ fn truncate_summary(value: &str) -> Option<String> {
     }
 
     Some(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+    use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource};
+
+    #[test]
+    fn attachment_part_sets_kind_name_and_summary() {
+        let part = MessagePart::with_content(
+            10,
+            1,
+            Utc::now(),
+            ExecutionStatus::Pending,
+            PartContent::attachments(vec![AttachmentItem {
+                kind: AttachmentKind::Pdf,
+                mime: "application/pdf".to_owned(),
+                source: AttachmentSource::FileId {
+                    file_id: "file_123".to_owned(),
+                },
+                filename: Some("manual.pdf".to_owned()),
+                title: None,
+                size_bytes: Some(1024),
+                sha256: None,
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: Some(12),
+            }]),
+        );
+
+        assert_eq!(part.kind, PartKind::Attachment);
+        assert_eq!(part.name.as_deref(), Some("attachment"));
+        assert_eq!(part.summary.as_deref(), Some("1 attachment: manual.pdf"));
+    }
+
+    #[test]
+    fn attachment_summary_handles_multiple_items() {
+        let summary = attachment_part_summary(&AttachmentPart {
+            attachments: vec![
+                AttachmentItem {
+                    kind: AttachmentKind::Image,
+                    mime: "image/png".to_owned(),
+                    source: AttachmentSource::Url {
+                        url: "https://example.com/a.png".to_owned(),
+                    },
+                    filename: Some("a.png".to_owned()),
+                    title: None,
+                    size_bytes: None,
+                    sha256: None,
+                    width: Some(100),
+                    height: Some(100),
+                    duration_ms: None,
+                    page_count: None,
+                },
+                AttachmentItem {
+                    kind: AttachmentKind::Audio,
+                    mime: "audio/mpeg".to_owned(),
+                    source: AttachmentSource::FileId {
+                        file_id: "file_2".to_owned(),
+                    },
+                    filename: Some("voice.mp3".to_owned()),
+                    title: None,
+                    size_bytes: None,
+                    sha256: None,
+                    width: None,
+                    height: None,
+                    duration_ms: Some(5000),
+                    page_count: None,
+                },
+            ],
+        });
+
+        assert_eq!(summary.as_deref(), Some("2 attachments (first: a.png)"));
+    }
 }

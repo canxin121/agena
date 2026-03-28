@@ -2,12 +2,12 @@ use chrono::{DateTime, Utc};
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder};
 
 use crate::db::entities;
-use crate::message::{PartContent, SessionMessagePart, SessionMessagePartSummary};
+use crate::message::{MessagePart, MessagePartSummary, PartContent};
 
 pub async fn list_message_part_summaries(
     db: &DatabaseConnection,
     message_id: i64,
-) -> Result<Vec<SessionMessagePartSummary>, DbErr> {
+) -> Result<Vec<MessagePartSummary>, DbErr> {
     let models = entities::message_part::Entity::find()
         .filter(entities::message_part::Column::MessageId.eq(message_id))
         .order_by_asc(entities::message_part::Column::PartIndex)
@@ -31,7 +31,7 @@ pub async fn get_message_part_detail(
 pub async fn get_message_part_with_detail(
     db: &DatabaseConnection,
     part_id: i64,
-) -> Result<Option<SessionMessagePart>, DbErr> {
+) -> Result<Option<MessagePart>, DbErr> {
     let Some(model) = entities::message_part::Entity::find_by_id(part_id)
         .one(db)
         .await?
@@ -46,13 +46,13 @@ pub async fn get_message_part_with_detail(
         None
     };
 
-    Ok(Some(SessionMessagePart::from_summary(summary, detail)))
+    Ok(Some(MessagePart::from_summary(summary, detail)))
 }
 
 fn map_message_part_summary(
     model: entities::message_part::Model,
-) -> Result<SessionMessagePartSummary, DbErr> {
-    Ok(SessionMessagePartSummary {
+) -> Result<MessagePartSummary, DbErr> {
+    Ok(MessagePartSummary {
         id: model.id,
         message_id: model.message_id,
         part_index: model.part_index,

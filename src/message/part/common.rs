@@ -75,4 +75,6 @@ pub enum PartKind {
     TodoList,
     #[sea_orm(num_value = 8)]
     Error,
+    #[sea_orm(num_value = 9)]
+    Attachment,
 }

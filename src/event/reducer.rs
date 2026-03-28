@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 
 use crate::message::{
-    CommandExecutionPart, ExecutionStatus, MessageMetadata, MessageSource, MessageStateStore,
-    MessageStateStoreError, MessageStatus, MessageUpdate, MessageUsage, PartContent,
-    SessionMessage, SessionMessagePart, TextPart, TimeRange, ToolAttachment, ToolExecutionPart,
+    AttachmentItem, CommandExecutionPart, ExecutionStatus, Message, MessageMetadata, MessagePart,
+    MessageSource, MessageStateStore, MessageStateStoreError, MessageStatus, MessageUpdate,
+    MessageUsage, PartContent, TextPart, TimeRange, ToolAttachment, ToolExecutionPart,
     ToolInvocation, ToolOutput, ToolResultBlock,
 };
 use crate::role::Role;
@@ -56,6 +56,13 @@ pub enum AiStreamEvent {
     },
     ReasoningCompleted {
         part_id: i64,
+    },
+
+    AttachmentPartAdded {
+        message_id: i64,
+        part_id: i64,
+        created_at: DateTime<Utc>,
+        attachments: Vec<AttachmentItem>,
     },
 
     ToolExecutionStarted {
@@ -132,7 +139,7 @@ impl MessageReducer {
             } => {
                 let metadata = metadata.unwrap_or_else(|| default_metadata_for_role(role));
                 vec![MessageUpdate::InsertMessage {
-                    message: SessionMessage {
+                    message: Message {
                         id: message_id,
                         role,
                         state: MessageStatus::Pending,
@@ -181,7 +188,7 @@ impl MessageReducer {
             } => {
                 vec![MessageUpdate::InsertPart {
                     message_id,
-                    part: SessionMessagePart::with_content(
+                    part: MessagePart::with_content(
                         part_id,
                         message_id,
                         created_at,
@@ -209,7 +216,7 @@ impl MessageReducer {
             } => {
                 vec![MessageUpdate::InsertPart {
                     message_id,
-                    part: SessionMessagePart::with_content(
+                    part: MessagePart::with_content(
                         part_id,
                         message_id,
                         created_at,
@@ -229,6 +236,24 @@ impl MessageReducer {
                 to: ExecutionStatus::Completed,
             }],
 
+            AiStreamEvent::AttachmentPartAdded {
+                message_id,
+                part_id,
+                created_at,
+                attachments,
+            } => {
+                vec![MessageUpdate::InsertPart {
+                    message_id,
+                    part: MessagePart::with_content(
+                        part_id,
+                        message_id,
+                        created_at,
+                        ExecutionStatus::Completed,
+                        PartContent::attachments(attachments),
+                    ),
+                }]
+            }
+
             AiStreamEvent::ToolExecutionStarted {
                 message_id,
                 part_id,
@@ -239,7 +264,7 @@ impl MessageReducer {
             } => {
                 vec![MessageUpdate::InsertPart {
                     message_id,
-                    part: SessionMessagePart::with_content(
+                    part: MessagePart::with_content(
                         part_id,
                         message_id,
                         created_at,
@@ -324,7 +349,7 @@ impl MessageReducer {
             } => {
                 vec![MessageUpdate::InsertPart {
                     message_id,
-                    part: SessionMessagePart::with_content(
+                    part: MessagePart::with_content(
                         part_id,
                         message_id,
                         created_at,
@@ -423,5 +448,45 @@ fn default_metadata_for_role(role: Role) -> MessageMetadata {
     MessageMetadata {
         source,
         ..MessageMetadata::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+    use crate::message::{AttachmentKind, AttachmentSource};
+
+    #[test]
+    fn attachment_part_added_event_creates_attachment_content() {
+        let reducer = MessageReducer;
+        let updates = reducer.reduce(AiStreamEvent::AttachmentPartAdded {
+            message_id: 7,
+            part_id: 9,
+            created_at: Utc::now(),
+            attachments: vec![AttachmentItem {
+                kind: AttachmentKind::Image,
+                mime: "image/png".to_owned(),
+                source: AttachmentSource::Url {
+                    url: "https://example.com/p.png".to_owned(),
+                },
+                filename: Some("p.png".to_owned()),
+                title: None,
+                size_bytes: Some(12),
+                sha256: None,
+                width: Some(10),
+                height: Some(10),
+                duration_ms: None,
+                page_count: None,
+            }],
+        });
+
+        assert_eq!(updates.len(), 1);
+        let MessageUpdate::InsertPart { part, .. } = &updates[0] else {
+            panic!("expected insert part update")
+        };
+        assert_eq!(part.kind, crate::message::PartKind::Attachment);
+        assert!(matches!(part.content, Some(PartContent::Attachment(_))));
     }
 }

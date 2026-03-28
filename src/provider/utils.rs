@@ -4,6 +4,150 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::error::{AppError, ProviderErrorKind};
+use crate::message::{AttachmentSource, Message, PartContent, ToolExecutionPart, ToolInvocation};
+use crate::role::Role;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectedSessionPart {
+    Text {
+        text: String,
+    },
+    ImageUrl {
+        url: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments_json: String,
+    },
+    ToolResult {
+        tool_call_id: String,
+        output_json: String,
+    },
+}
+
+impl ProjectedSessionPart {
+    pub fn as_text_lossy(&self) -> String {
+        match self {
+            Self::Text { text } => text.clone(),
+            Self::ImageUrl { url } => format!("[image:{url}]"),
+            Self::ToolCall { id, name, .. } => format!("[tool_call:{name}:{id}]"),
+            Self::ToolResult { tool_call_id, .. } => format!("[tool_result:{tool_call_id}]"),
+        }
+    }
+}
+
+pub fn project_session_parts(message: &Message) -> Vec<ProjectedSessionPart> {
+    let mut parts: Vec<ProjectedSessionPart> = Vec::new();
+    for part in &message.parts {
+        let Some(content) = part.content.as_ref() else {
+            continue;
+        };
+
+        match content {
+            PartContent::Text(text) => {
+                if !text.text.is_empty() {
+                    parts.push(ProjectedSessionPart::Text {
+                        text: text.text.clone(),
+                    });
+                }
+            }
+            PartContent::Attachment(attachment) => {
+                for item in &attachment.attachments {
+                    if let AttachmentSource::Url { url } = &item.source {
+                        parts.push(ProjectedSessionPart::ImageUrl { url: url.clone() });
+                    }
+                }
+            }
+            PartContent::ToolExecution(exec) => {
+                let call_id = part.operation_id.clone().unwrap_or_else(|| match exec {
+                    ToolExecutionPart::Pending { call_id, .. }
+                    | ToolExecutionPart::InProgress { call_id, .. }
+                    | ToolExecutionPart::Completed { call_id, .. }
+                    | ToolExecutionPart::Failed { call_id, .. } => call_id.to_string(),
+                });
+
+                if message.role == Role::Tool {
+                    let output_json = match exec {
+                        ToolExecutionPart::Pending { .. }
+                        | ToolExecutionPart::InProgress { .. } => String::new(),
+                        ToolExecutionPart::Completed { output_text, .. } => output_text.clone(),
+                        ToolExecutionPart::Failed {
+                            output_text,
+                            error_message,
+                            ..
+                        } => {
+                            if output_text.is_empty() {
+                                error_message.clone()
+                            } else {
+                                output_text.clone()
+                            }
+                        }
+                    };
+                    parts.push(ProjectedSessionPart::ToolResult {
+                        tool_call_id: call_id,
+                        output_json,
+                    });
+                } else {
+                    let (name, arguments_json) = match exec {
+                        ToolExecutionPart::Pending { invocation, .. }
+                        | ToolExecutionPart::InProgress { invocation, .. }
+                        | ToolExecutionPart::Completed { invocation, .. }
+                        | ToolExecutionPart::Failed { invocation, .. } => {
+                            project_tool_invocation(invocation)
+                        }
+                    };
+                    parts.push(ProjectedSessionPart::ToolCall {
+                        id: call_id,
+                        name,
+                        arguments_json,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    parts
+}
+
+pub fn projected_parts_text_lossy(parts: &[ProjectedSessionPart]) -> String {
+    parts
+        .iter()
+        .map(ProjectedSessionPart::as_text_lossy)
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+pub fn project_session_text_lossy(message: &Message) -> String {
+    let parts = project_session_parts(message);
+    if parts.is_empty() {
+        message.as_text_lossy()
+    } else {
+        projected_parts_text_lossy(parts.as_slice())
+    }
+}
+
+fn project_tool_invocation(invocation: &ToolInvocation) -> (String, String) {
+    match invocation {
+        ToolInvocation::Builtin { input } => (
+            input.to_string(),
+            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
+        ),
+        ToolInvocation::Mcp {
+            server,
+            tool,
+            input,
+        } => (
+            format!("{server}:{tool}"),
+            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
+        ),
+        ToolInvocation::Custom { name, input } => (
+            name.clone(),
+            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
+        ),
+    }
+}
 
 pub fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_owned()
@@ -88,11 +232,6 @@ pub async fn http_status_error_from_response(
         kind: classified.kind,
         retryable: classified.retryable,
     }
-}
-
-pub fn parse_headers_json(value: &str) -> Result<HashMap<String, String>, AppError> {
-    serde_json::from_str::<HashMap<String, String>>(value)
-        .map_err(|e| AppError::Config(format!("invalid provider headers json: {e}")))
 }
 
 #[derive(Debug, Clone, Copy)]

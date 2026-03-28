@@ -7,11 +7,10 @@ use std::collections::HashMap;
 
 use crate::{
     error::AppError,
-    message::MessageUsage,
+    message::{MessageUsage, Message},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelProvider, ProviderContent, ProviderContentPart,
-        ProviderModel, sse, utils,
+        CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, sse, utils,
     },
     role::Role,
 };
@@ -25,6 +24,7 @@ pub struct AnthropicProvider {
     api_key: String,
     base_url: String,
     default_model: String,
+    include_thinking: bool,
     auth_header: String,
     auth_scheme: Option<String>,
     extra_headers: HashMap<String, String>,
@@ -42,6 +42,7 @@ impl AnthropicProvider {
             api_key: api_key.into(),
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: default_model.into(),
+            include_thinking: false,
             auth_header: "x-api-key".to_owned(),
             auth_scheme: None,
             extra_headers: HashMap::from([(
@@ -67,14 +68,9 @@ impl AnthropicProvider {
         self
     }
 
-    pub fn from_env(client: reqwest::Client) -> Result<Self, AppError> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .map_err(|_| AppError::Config("ANTHROPIC_API_KEY is not set".to_owned()))?;
-        let base_url = std::env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.anthropic.com/v1".to_owned());
-        let default_model = std::env::var("ANTHROPIC_MODEL")
-            .unwrap_or_else(|_| "claude-3-7-sonnet-latest".to_owned());
-        Ok(Self::new(client, api_key, base_url, default_model))
+    pub fn with_include_thinking(mut self, include_thinking: bool) -> Self {
+        self.include_thinking = include_thinking;
+        self
     }
 
     fn models_endpoint(&self) -> String {
@@ -89,44 +85,43 @@ impl AnthropicProvider {
         usage.map(map_anthropic_usage)
     }
 
-    fn content_to_blocks(
-        content: &ProviderContent,
-        is_tool_result: bool,
-    ) -> Vec<AnthropicTextBlock> {
-        match content {
-            ProviderContent::Text(text) => {
-                if is_tool_result {
-                    vec![AnthropicTextBlock::tool_result("tool", text)]
-                } else {
-                    vec![AnthropicTextBlock::text(text)]
-                }
+    fn content_to_blocks(message: &Message) -> Vec<AnthropicTextBlock> {
+        let projected = utils::project_session_parts(message);
+        if projected.is_empty() {
+            let text = message.as_text_lossy();
+            if text.is_empty() {
+                return Vec::new();
             }
-            ProviderContent::Parts(parts) => {
-                let mut blocks = Vec::new();
-                for part in parts {
-                    match part {
-                        ProviderContentPart::Text { text } => {
-                            blocks.push(AnthropicTextBlock::text(text))
-                        }
-                        ProviderContentPart::ImageUrl { url } => {
-                            blocks.push(AnthropicTextBlock::text(format!("[image:{url}]")))
-                        }
-                        ProviderContentPart::ToolCall {
-                            id,
-                            name,
-                            arguments_json,
-                        } => blocks.push(AnthropicTextBlock::tool_use(id, name, arguments_json)),
-                        ProviderContentPart::ToolResult {
-                            tool_call_id,
-                            output_json,
-                        } => {
-                            blocks.push(AnthropicTextBlock::tool_result(tool_call_id, output_json))
-                        }
-                    }
+
+            if message.role == Role::Tool {
+                return vec![AnthropicTextBlock::tool_result("tool", text)];
+            }
+
+            return vec![AnthropicTextBlock::text(text)];
+        }
+
+        let mut blocks = Vec::new();
+        for part in projected {
+            match part {
+                utils::ProjectedSessionPart::Text { text } => {
+                    blocks.push(AnthropicTextBlock::text(text));
                 }
-                blocks
+                utils::ProjectedSessionPart::ImageUrl { url } => {
+                    blocks.push(AnthropicTextBlock::text(format!("[image:{url}]")));
+                }
+                utils::ProjectedSessionPart::ToolCall {
+                    id,
+                    name,
+                    arguments_json,
+                } => blocks.push(AnthropicTextBlock::tool_use(id, name, arguments_json)),
+                utils::ProjectedSessionPart::ToolResult {
+                    tool_call_id,
+                    output_json,
+                } => blocks.push(AnthropicTextBlock::tool_result(tool_call_id, output_json)),
             }
         }
+
+        blocks
     }
 
     async fn send_json<R>(&self, endpoint: String, body: &impl Serialize) -> Result<R, AppError>
@@ -206,11 +201,11 @@ impl ModelProvider for AnthropicProvider {
                 Role::System => system_chunks.push(msg.as_text_lossy()),
                 Role::Assistant => messages.push(AnthropicMessage {
                     role: "assistant".to_owned(),
-                    content: Self::content_to_blocks(&msg.content, false),
+                    content: Self::content_to_blocks(&msg),
                 }),
                 Role::User | Role::Tool => messages.push(AnthropicMessage {
                     role: "user".to_owned(),
-                    content: Self::content_to_blocks(&msg.content, msg.role == Role::Tool),
+                    content: Self::content_to_blocks(&msg),
                 }),
             }
         }
@@ -229,7 +224,7 @@ impl ModelProvider for AnthropicProvider {
         let text = response
             .content
             .iter()
-            .filter(|c| c.kind == "text" || (anthropic_include_thinking() && c.kind == "thinking"))
+            .filter(|c| c.kind == "text" || (self.include_thinking && c.kind == "thinking"))
             .filter_map(|c| c.text.clone())
             .collect::<Vec<_>>()
             .join("");
@@ -302,11 +297,11 @@ impl ModelProvider for AnthropicProvider {
                 Role::System => system_chunks.push(msg.as_text_lossy()),
                 Role::Assistant => messages.push(AnthropicMessage {
                     role: "assistant".to_owned(),
-                    content: Self::content_to_blocks(&msg.content, false),
+                    content: Self::content_to_blocks(&msg),
                 }),
                 Role::User | Role::Tool => messages.push(AnthropicMessage {
                     role: "user".to_owned(),
-                    content: Self::content_to_blocks(&msg.content, msg.role == Role::Tool),
+                    content: Self::content_to_blocks(&msg),
                 }),
             }
         }
@@ -338,7 +333,7 @@ impl ModelProvider for AnthropicProvider {
         let mut events = sse::json_events(response);
         let provider_id = PROVIDER_ID.to_owned();
         let model_name = model;
-        let include_thinking = anthropic_include_thinking();
+        let include_thinking = self.include_thinking;
 
         let stream = async_stream::try_stream! {
             let mut pending_tool_calls: HashMap<usize, AnthropicToolCallState> = HashMap::new();
@@ -727,23 +722,14 @@ struct AnthropicToolCallState {
     name: String,
 }
 
-fn anthropic_include_thinking() -> bool {
-    std::env::var("ANTHROPIC_INCLUDE_THINKING")
-        .ok()
-        .map(|v| {
-            let v = v.to_ascii_lowercase();
-            v == "1" || v == "true" || v == "yes"
-        })
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use futures_util::StreamExt;
 
     use super::*;
+    use crate::message::Message;
 
-    use crate::provider::{CompletionRequest, ProviderMessage};
+    use crate::provider::CompletionRequest;
 
     #[tokio::test]
     async fn complete_parses_tool_use_object_input() {
@@ -789,7 +775,10 @@ mod tests {
             .complete(CompletionRequest {
                 model: "claude-3-7-sonnet-latest".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(
+                    crate::role::Role::User,
+                    "hello",
+                )],
                 temperature: None,
                 max_output_tokens: Some(128),
             })
@@ -843,7 +832,10 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "claude-3-7-sonnet-latest".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(
+                    crate::role::Role::User,
+                    "hello",
+                )],
                 temperature: None,
                 max_output_tokens: Some(64),
             })
@@ -908,7 +900,10 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "claude-3-7-sonnet-latest".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(
+                    crate::role::Role::User,
+                    "hello",
+                )],
                 temperature: None,
                 max_output_tokens: Some(64),
             })

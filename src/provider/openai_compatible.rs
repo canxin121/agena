@@ -8,11 +8,11 @@ use serde_json::Value;
 
 use crate::{
     error::AppError,
-    message::MessageUsage,
+    message::{Message, MessageUsage},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelProvider, ProviderContent, ProviderContentPart,
-        ProviderModel, sse, utils,
+        CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse,
+        utils,
     },
     role::Role,
 };
@@ -229,10 +229,7 @@ impl OpenAiCompatibleProvider {
             .collect())
     }
 
-    fn convert_messages(
-        system: Option<String>,
-        messages: Vec<crate::provider::ProviderMessage>,
-    ) -> Vec<ChatMessage> {
+    fn convert_messages(system: Option<String>, messages: Vec<Message>) -> Vec<ChatMessage> {
         let mut result = Vec::new();
 
         if let Some(system) = system.filter(|s| !s.trim().is_empty()) {
@@ -245,11 +242,15 @@ impl OpenAiCompatibleProvider {
         }
 
         for message in messages {
+            let projected_parts = utils::project_session_parts(&message);
             match message.role {
                 Role::System => {
                     result.push(ChatMessage {
                         role: "system".to_owned(),
-                        content: Some(Value::String(message.as_text_lossy())),
+                        content: Some(Value::String(session_text_lossy(
+                            &message,
+                            &projected_parts,
+                        ))),
                         tool_call_id: None,
                         tool_calls: None,
                     });
@@ -257,13 +258,14 @@ impl OpenAiCompatibleProvider {
                 Role::User => {
                     result.push(ChatMessage {
                         role: "user".to_owned(),
-                        content: Some(provider_content_to_openai_value(&message.content)),
+                        content: Some(provider_message_to_openai_value(&message, &projected_parts)),
                         tool_call_id: None,
                         tool_calls: None,
                     });
                 }
                 Role::Assistant => {
-                    let (content, tool_calls) = assistant_content_and_tool_calls(&message.content);
+                    let (content, tool_calls) =
+                        assistant_content_and_tool_calls(&message, &projected_parts);
                     result.push(ChatMessage {
                         role: "assistant".to_owned(),
                         content,
@@ -272,11 +274,14 @@ impl OpenAiCompatibleProvider {
                     });
                 }
                 Role::Tool => {
-                    let tool_messages = tool_messages_from_content(&message.content);
+                    let tool_messages = tool_messages_from_parts(projected_parts.as_slice());
                     if tool_messages.is_empty() {
                         result.push(ChatMessage {
                             role: "tool".to_owned(),
-                            content: Some(Value::String(message.as_text_lossy())),
+                            content: Some(Value::String(session_text_lossy(
+                                &message,
+                                &projected_parts,
+                            ))),
                             tool_call_id: Some("tool".to_owned()),
                             tool_calls: None,
                         });
@@ -651,11 +656,11 @@ fn usage_to_completion_usage(usage: ChatUsage) -> CompletionUsage {
     .into()
 }
 
-fn build_realtime_input_text(messages: &[crate::provider::ProviderMessage]) -> Option<String> {
+fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
     let normalized = messages
         .iter()
         .filter_map(|message| {
-            let text = message.as_text_lossy();
+            let text = utils::project_session_text_lossy(message);
             let trimmed = text.trim();
             if trimmed.is_empty() {
                 None
@@ -682,81 +687,79 @@ fn build_realtime_input_text(messages: &[crate::provider::ProviderMessage]) -> O
     )
 }
 
-fn provider_content_to_openai_value(content: &ProviderContent) -> Value {
-    match content {
-        ProviderContent::Text(text) => Value::String(text.clone()),
-        ProviderContent::Parts(parts) => {
-            let items = parts
-                .iter()
-                .map(|part| match part {
-                    ProviderContentPart::Text { text } => {
-                        serde_json::json!({ "type": "text", "text": text })
-                    }
-                    ProviderContentPart::ImageUrl { url } => serde_json::json!({
-                        "type": "image_url",
-                        "image_url": { "url": url }
-                    }),
-                    ProviderContentPart::ToolCall { name, .. } => {
-                        serde_json::json!({ "type": "text", "text": format!("[tool_call:{name}]") })
-                    }
-                    ProviderContentPart::ToolResult { tool_call_id, .. } => {
-                        serde_json::json!({ "type": "text", "text": format!("[tool_result:{tool_call_id}]") })
-                    }
-                })
-                .collect::<Vec<_>>();
-            Value::Array(items)
-        }
+fn provider_message_to_openai_value(
+    message: &Message,
+    parts: &[utils::ProjectedSessionPart],
+) -> Value {
+    if parts.is_empty() {
+        return Value::String(message.as_text_lossy());
     }
+
+    let items = parts
+        .iter()
+        .map(|part| match part {
+            utils::ProjectedSessionPart::Text { text } => {
+                serde_json::json!({ "type": "text", "text": text })
+            }
+            utils::ProjectedSessionPart::ImageUrl { url } => serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": url }
+            }),
+            utils::ProjectedSessionPart::ToolCall { name, .. } => {
+                serde_json::json!({ "type": "text", "text": format!("[tool_call:{name}]") })
+            }
+            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                serde_json::json!({ "type": "text", "text": format!("[tool_result:{tool_call_id}]") })
+            }
+        })
+        .collect::<Vec<_>>();
+    Value::Array(items)
 }
 
 fn assistant_content_and_tool_calls(
-    content: &ProviderContent,
+    message: &Message,
+    parts: &[utils::ProjectedSessionPart],
 ) -> (Option<Value>, Vec<ChatToolCallRequest>) {
-    match content {
-        ProviderContent::Text(text) => (Some(Value::String(text.clone())), Vec::new()),
-        ProviderContent::Parts(parts) => {
-            let mut text_chunks = Vec::new();
-            let mut tool_calls = Vec::new();
-            for part in parts {
-                match part {
-                    ProviderContentPart::Text { text } => text_chunks.push(text.clone()),
-                    ProviderContentPart::ToolCall {
-                        id,
-                        name,
-                        arguments_json,
-                    } => {
-                        tool_calls.push(ChatToolCallRequest {
-                            kind: "function".to_owned(),
-                            id: id.clone(),
-                            function: ChatFunctionCallRequest {
-                                name: name.clone(),
-                                arguments: arguments_json.clone(),
-                            },
-                        });
-                    }
-                    ProviderContentPart::ImageUrl { url } => {
-                        text_chunks.push(format!("[image:{url}]"));
-                    }
-                    ProviderContentPart::ToolResult { tool_call_id, .. } => {
-                        text_chunks.push(format!("[tool_result:{tool_call_id}]"));
-                    }
-                }
+    if parts.is_empty() {
+        return (Some(Value::String(message.as_text_lossy())), Vec::new());
+    }
+
+    let mut text_chunks = Vec::new();
+    let mut tool_calls = Vec::new();
+    for part in parts {
+        match part {
+            utils::ProjectedSessionPart::Text { text } => text_chunks.push(text.clone()),
+            utils::ProjectedSessionPart::ToolCall {
+                id,
+                name,
+                arguments_json,
+            } => {
+                tool_calls.push(ChatToolCallRequest {
+                    kind: "function".to_owned(),
+                    id: id.clone(),
+                    function: ChatFunctionCallRequest {
+                        name: name.clone(),
+                        arguments: arguments_json.clone(),
+                    },
+                });
             }
-            let content = (!text_chunks.is_empty()).then(|| Value::String(text_chunks.join("")));
-            (content, tool_calls)
+            utils::ProjectedSessionPart::ImageUrl { url } => {
+                text_chunks.push(format!("[image:{url}]"));
+            }
+            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                text_chunks.push(format!("[tool_result:{tool_call_id}]"));
+            }
         }
     }
+    let content = (!text_chunks.is_empty()).then(|| Value::String(text_chunks.join("")));
+    (content, tool_calls)
 }
 
-fn tool_messages_from_content(content: &ProviderContent) -> Vec<ChatMessage> {
-    let ProviderContent::Parts(parts) = content else {
-        return Vec::new();
-    };
-
+fn tool_messages_from_parts(parts: &[utils::ProjectedSessionPart]) -> Vec<ChatMessage> {
     parts
         .iter()
         .filter_map(|part| match part {
-            ProviderContentPart::ToolResult {
+            utils::ProjectedSessionPart::ToolResult {
                 tool_call_id,
                 output_json,
             } => Some(ChatMessage {
@@ -768,6 +771,17 @@ fn tool_messages_from_content(content: &ProviderContent) -> Vec<ChatMessage> {
             _ => None,
         })
         .collect()
+}
+
+fn session_text_lossy(
+    message: &Message,
+    projected_parts: &[utils::ProjectedSessionPart],
+) -> String {
+    if projected_parts.is_empty() {
+        message.as_text_lossy()
+    } else {
+        utils::projected_parts_text_lossy(projected_parts)
+    }
 }
 
 fn parse_tool_calls(
@@ -813,6 +827,10 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
     fn default_model(&self) -> &str {
         &self.default_model
+    }
+
+    fn stream_resume_policy(&self) -> StreamResumePolicy {
+        StreamResumePolicy::ReplaySafePrefix
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -1170,7 +1188,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::provider::ProviderMessage;
+    use crate::message::Message;
     use tokio::net::TcpListener;
 
     #[tokio::test]
@@ -1218,7 +1236,7 @@ mod tests {
             .complete(CompletionRequest {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(128),
             })
@@ -1311,7 +1329,7 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(64),
             })
@@ -1516,7 +1534,7 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "gpt-4o-mini".to_owned(),
                 system: Some("you are helpful".to_owned()),
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: Some(0.2),
                 max_output_tokens: Some(64),
             })
@@ -1607,7 +1625,7 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1660,7 +1678,7 @@ mod tests {
             .complete(CompletionRequest {
                 model: "text-davinci-003".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1703,7 +1721,7 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1753,7 +1771,7 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
-                messages: vec![ProviderMessage::new(crate::role::Role::User, "hello")],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(32),
             })

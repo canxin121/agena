@@ -3,19 +3,19 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use super::{
-    ExecutionStatus, MessageStateTransitionError, MessageStatus, MessageUsage, PartContent,
-    PartKind, PartStateTransitionError, SessionMessage, SessionMessagePart,
+    ExecutionStatus, Message, MessageStateTransitionError, MessageStatus, MessageUsage,
+    PartContent, PartKind, PartStateTransitionError, MessagePart,
 };
 
 #[derive(Debug, Clone)]
 struct MessageEntry {
-    message: SessionMessage,
+    message: Message,
     part_order: Vec<i64>,
-    parts: HashMap<i64, SessionMessagePart>,
+    parts: HashMap<i64, MessagePart>,
 }
 
 impl MessageEntry {
-    fn snapshot(&self) -> SessionMessage {
+    fn snapshot(&self) -> Message {
         let mut message = self.message.clone();
         message.parts = self
             .part_order
@@ -25,7 +25,7 @@ impl MessageEntry {
         message
     }
 
-    fn summary_snapshot(&self) -> SessionMessage {
+    fn summary_snapshot(&self) -> Message {
         let mut message = self.message.clone();
         message.parts = self
             .part_order
@@ -33,7 +33,7 @@ impl MessageEntry {
             .filter_map(|part_id| {
                 self.parts
                     .get(part_id)
-                    .map(SessionMessagePart::without_detail)
+                    .map(MessagePart::without_detail)
             })
             .collect();
         message
@@ -43,7 +43,7 @@ impl MessageEntry {
 #[derive(Debug, Clone)]
 pub enum MessageUpdate {
     InsertMessage {
-        message: SessionMessage,
+        message: Message,
     },
     TransitionMessage {
         message_id: i64,
@@ -59,7 +59,7 @@ pub enum MessageUpdate {
     },
     InsertPart {
         message_id: i64,
-        part: SessionMessagePart,
+        part: MessagePart,
     },
     ReplacePartContent {
         part_id: i64,
@@ -133,10 +133,7 @@ pub struct MessageStateStore {
 }
 
 impl MessageStateStore {
-    pub fn insert_message(
-        &mut self,
-        mut message: SessionMessage,
-    ) -> Result<(), MessageStateStoreError> {
+    pub fn insert_message(&mut self, mut message: Message) -> Result<(), MessageStateStoreError> {
         if self.messages.contains_key(&message.id) {
             return Err(MessageStateStoreError::MessageAlreadyExists(message.id));
         }
@@ -159,21 +156,21 @@ impl MessageStateStore {
         Ok(())
     }
 
-    pub fn get_message_snapshot(&self, message_id: i64) -> Option<SessionMessage> {
+    pub fn get_message_snapshot(&self, message_id: i64) -> Option<Message> {
         self.messages.get(&message_id).map(MessageEntry::snapshot)
     }
 
-    pub fn list_message_snapshots(&self) -> Vec<SessionMessage> {
+    pub fn list_message_snapshots(&self) -> Vec<Message> {
         self.messages.values().map(MessageEntry::snapshot).collect()
     }
 
-    pub fn get_message_summary_snapshot(&self, message_id: i64) -> Option<SessionMessage> {
+    pub fn get_message_summary_snapshot(&self, message_id: i64) -> Option<Message> {
         self.messages
             .get(&message_id)
             .map(MessageEntry::summary_snapshot)
     }
 
-    pub fn list_message_summary_snapshots(&self) -> Vec<SessionMessage> {
+    pub fn list_message_summary_snapshots(&self) -> Vec<Message> {
         self.messages
             .values()
             .map(MessageEntry::summary_snapshot)
@@ -261,7 +258,7 @@ impl MessageStateStore {
     fn insert_part_inner(
         &mut self,
         message_id: i64,
-        mut part: SessionMessagePart,
+        mut part: MessagePart,
     ) -> Result<(), MessageStateStoreError> {
         let entry = self
             .messages
@@ -284,7 +281,7 @@ impl MessageStateStore {
     fn part_mut(
         &mut self,
         part_id: i64,
-    ) -> Result<(i64, &mut SessionMessagePart), MessageStateStoreError> {
+    ) -> Result<(i64, &mut MessagePart), MessageStateStoreError> {
         let message_id = *self
             .part_owner
             .get(&part_id)
@@ -307,7 +304,7 @@ impl MessageStateStore {
         apply_fn: F,
     ) -> Result<(), MessageStateStoreError>
     where
-        F: FnOnce(&mut SessionMessagePart) -> bool,
+        F: FnOnce(&mut MessagePart) -> bool,
     {
         let (message_id, part) = self.part_mut(part_id)?;
         match part.status {

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::message::SessionMessagePart;
+use crate::message::MessagePart;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "field", rename_all = "snake_case")]
@@ -18,7 +18,7 @@ pub enum PartDeltaField {
 pub struct MessagePartUpdatedEvent {
     pub thread_id: i64,
     pub message_id: i64,
-    pub part: SessionMessagePart,
+    pub part: MessagePart,
     pub ts_ms: i64,
 }
 

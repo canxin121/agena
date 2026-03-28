@@ -1,7 +1,8 @@
 mod activity;
+mod attachment;
 mod common;
 mod content;
-mod session_part;
+mod message_part;
 mod structured;
 mod tool;
 
@@ -10,9 +11,10 @@ pub use activity::{
     ReasoningPart, TextPart, TodoItem, TodoListPart, TodoPriority, TodoStatus, WebSearchPart,
     WebSearchResult,
 };
+pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use common::{ExecutionStatus, PartKind, TimeRange};
 pub use content::PartContent;
-pub use session_part::{PartStateTransitionError, SessionMessagePart, SessionMessagePartSummary};
+pub use message_part::{MessagePart, MessagePartSummary, PartStateTransitionError};
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput, CustomToolOutput,

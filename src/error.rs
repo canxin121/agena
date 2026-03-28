@@ -49,6 +49,7 @@ impl AppError {
             Self::HttpStatus { retryable, .. } | Self::ProviderClassified { retryable, .. } => {
                 *retryable
             }
+            Self::Http(err) => err.is_timeout() || err.is_connect(),
             _ => false,
         }
     }

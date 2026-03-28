@@ -10,8 +10,7 @@ use crate::{
     message::MessageUsage,
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionUsage, ModelProvider, ProviderContent, ProviderContentPart, ProviderModel, sse,
-        utils,
+        CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse, utils,
     },
     role::Role,
 };
@@ -19,6 +18,7 @@ use crate::{
 const PROVIDER_ID: &str = "openai";
 const CODEX_API_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
 const MAX_AUTH_RETRY_ATTEMPTS: usize = 2;
+const DEFAULT_MODEL: &str = "gpt-5.3-codex";
 
 pub struct CodexProvider {
     client: reqwest::Client,
@@ -33,6 +33,15 @@ impl CodexProvider {
         auth_store: Arc<dyn AuthStore>,
         auth: &AuthData,
     ) -> Result<Self, AppError> {
+        Self::from_auth_with_default_model(client, auth_store, auth, DEFAULT_MODEL)
+    }
+
+    pub fn from_auth_with_default_model(
+        client: reqwest::Client,
+        auth_store: Arc<dyn AuthStore>,
+        auth: &AuthData,
+        default_model: impl Into<String>,
+    ) -> Result<Self, AppError> {
         let AuthData::OAuth {
             refresh,
             access,
@@ -46,9 +55,6 @@ impl CodexProvider {
             ));
         };
 
-        let default_model =
-            std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5.3-codex".to_owned());
-
         Ok(Self {
             client,
             auth_store,
@@ -58,7 +64,7 @@ impl CodexProvider {
                 expires_at_ms: *expires_at_ms,
                 account_id: account_id.clone(),
             }),
-            default_model,
+            default_model: default_model.into(),
         })
     }
 
@@ -183,7 +189,7 @@ impl CodexProvider {
         }
 
         for message in &request.messages {
-            Self::append_responses_items_for_message(&mut input, message.role, &message.content);
+            Self::append_responses_items_for_message(&mut input, message);
         }
 
         input
@@ -209,27 +215,33 @@ impl CodexProvider {
 
     fn append_responses_items_for_message(
         input: &mut Vec<OpenAiResponsesInputItem>,
-        role: Role,
-        content: &ProviderContent,
+        message: &crate::message::Message,
     ) {
-        match role {
-            Role::System => {
-                Self::push_responses_text_message(input, "system", content.as_text_lossy())
-            }
-            Role::User => Self::push_responses_text_message(input, "user", content.as_text_lossy()),
-            Role::Assistant => match content {
-                ProviderContent::Text(text) => {
-                    Self::push_responses_text_message(input, "assistant", text.clone());
-                }
-                ProviderContent::Parts(parts) => {
+        let projected_parts = utils::project_session_parts(message);
+
+        match message.role {
+            Role::System => Self::push_responses_text_message(
+                input,
+                "system",
+                session_text_lossy(message, projected_parts.as_slice()),
+            ),
+            Role::User => Self::push_responses_text_message(
+                input,
+                "user",
+                session_text_lossy(message, projected_parts.as_slice()),
+            ),
+            Role::Assistant => {
+                if projected_parts.is_empty() {
+                    Self::push_responses_text_message(input, "assistant", message.as_text_lossy());
+                } else {
                     let mut text_chunks = Vec::new();
-                    for part in parts {
+                    for part in projected_parts {
                         match part {
-                            ProviderContentPart::Text { text } => text_chunks.push(text.clone()),
-                            ProviderContentPart::ImageUrl { url } => {
+                            utils::ProjectedSessionPart::Text { text } => text_chunks.push(text),
+                            utils::ProjectedSessionPart::ImageUrl { url } => {
                                 text_chunks.push(format!("[image:{url}]"));
                             }
-                            ProviderContentPart::ToolCall {
+                            utils::ProjectedSessionPart::ToolCall {
                                 id,
                                 name,
                                 arguments_json,
@@ -238,14 +250,14 @@ impl CodexProvider {
                                     input.push(OpenAiResponsesInputItem::FunctionCall(
                                         OpenAiFunctionCallItem {
                                             kind: "function_call",
-                                            call_id: id.clone(),
-                                            name: name.clone(),
-                                            arguments: arguments_json.clone(),
+                                            call_id: id,
+                                            name,
+                                            arguments: arguments_json,
                                         },
                                     ));
                                 }
                             }
-                            ProviderContentPart::ToolResult {
+                            utils::ProjectedSessionPart::ToolResult {
                                 tool_call_id,
                                 output_json,
                             } => {
@@ -253,8 +265,8 @@ impl CodexProvider {
                                     input.push(OpenAiResponsesInputItem::FunctionCallOutput(
                                         OpenAiFunctionCallOutputItem {
                                             kind: "function_call_output",
-                                            call_id: tool_call_id.clone(),
-                                            output: output_json.clone(),
+                                            call_id: tool_call_id,
+                                            output: output_json,
                                         },
                                     ));
                                 }
@@ -266,38 +278,37 @@ impl CodexProvider {
                         Self::push_responses_text_message(input, "assistant", text_chunks.join(""));
                     }
                 }
-            },
-            Role::Tool => match content {
-                ProviderContent::Text(text) => {
-                    Self::push_responses_text_message(input, "user", text.clone())
-                }
-                ProviderContent::Parts(parts) => {
+            }
+            Role::Tool => {
+                if projected_parts.is_empty() {
+                    Self::push_responses_text_message(input, "user", message.as_text_lossy());
+                } else {
                     let mut fallback_text = Vec::new();
                     let mut emitted_output = false;
-                    for part in parts {
+                    for part in projected_parts {
                         match part {
-                            ProviderContentPart::ToolResult {
+                            utils::ProjectedSessionPart::ToolResult {
                                 tool_call_id,
                                 output_json,
                             } => {
                                 if tool_call_id.trim().is_empty() {
-                                    fallback_text.push(output_json.clone());
+                                    fallback_text.push(output_json);
                                     continue;
                                 }
                                 emitted_output = true;
                                 input.push(OpenAiResponsesInputItem::FunctionCallOutput(
                                     OpenAiFunctionCallOutputItem {
                                         kind: "function_call_output",
-                                        call_id: tool_call_id.clone(),
-                                        output: output_json.clone(),
+                                        call_id: tool_call_id,
+                                        output: output_json,
                                     },
                                 ));
                             }
-                            ProviderContentPart::Text { text } => fallback_text.push(text.clone()),
-                            ProviderContentPart::ImageUrl { url } => {
+                            utils::ProjectedSessionPart::Text { text } => fallback_text.push(text),
+                            utils::ProjectedSessionPart::ImageUrl { url } => {
                                 fallback_text.push(format!("[image:{url}]"));
                             }
-                            ProviderContentPart::ToolCall { name, .. } => {
+                            utils::ProjectedSessionPart::ToolCall { name, .. } => {
                                 fallback_text.push(format!("[tool_call:{name}]"));
                             }
                         }
@@ -307,7 +318,7 @@ impl CodexProvider {
                         Self::push_responses_text_message(input, "user", fallback_text.join(""));
                     }
                 }
-            },
+            }
         }
     }
 
@@ -344,6 +355,17 @@ impl CodexProvider {
     }
 }
 
+fn session_text_lossy(
+    message: &crate::message::Message,
+    projected_parts: &[utils::ProjectedSessionPart],
+) -> String {
+    if projected_parts.is_empty() {
+        message.as_text_lossy()
+    } else {
+        utils::projected_parts_text_lossy(projected_parts)
+    }
+}
+
 #[async_trait]
 impl ModelProvider for CodexProvider {
     fn id(&self) -> &str {
@@ -352,6 +374,10 @@ impl ModelProvider for CodexProvider {
 
     fn default_model(&self) -> &str {
         &self.default_model
+    }
+
+    fn stream_resume_policy(&self) -> StreamResumePolicy {
+        StreamResumePolicy::ReplaySafePrefix
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {

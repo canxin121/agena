@@ -1,5 +1,6 @@
 pub mod crud;
 pub mod entities;
+pub mod tx;
 
 mod migrate;
 

@@ -1,5 +1,6 @@
 mod apply_patch;
 mod bash;
+mod catalog;
 mod edit;
 mod glob;
 mod grep;
@@ -7,21 +8,35 @@ mod orchestrator;
 mod read;
 mod result;
 mod task;
+mod truncation;
 mod write;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{BuiltinToolInput, BuiltinToolOutput};
-use crate::permission::{AccessKind, PermissionDecision};
+use crate::permission::{
+    AccessKind, PermissionAction, PermissionDecision, PermissionRuleStore, PermissionRuntime,
+    PermissionRuntimeDecision,
+};
+use crate::session::{InMemorySubtaskSessionManager, SubtaskSessionManager};
 use procwarden::{
     SandboxCommandRequest, SandboxError, SandboxExecOutput, SandboxManager, SandboxPolicy,
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
+pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use result::{BuiltinExecution, ToolExecutionView};
+pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
+
+#[derive(Debug)]
+pub enum PermissionedBuiltinExecution {
+    Executed(BuiltinExecution),
+    Pending(crate::permission::PendingPermission),
+}
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -48,6 +63,9 @@ pub enum ToolError {
 pub struct ToolExecutor {
     workspace_root: PathBuf,
     agent: Agent,
+    model_id: Option<String>,
+    subtask_manager: Arc<dyn SubtaskSessionManager>,
+    truncator: ToolOutputTruncator,
     sandbox_policy: SandboxPolicy,
     sandbox_manager: SandboxManager,
 }
@@ -69,9 +87,27 @@ impl ToolExecutor {
         Self {
             workspace_root: workspace_root.into(),
             agent,
+            model_id: None,
+            subtask_manager: Arc::new(InMemorySubtaskSessionManager::new()),
+            truncator: ToolOutputTruncator::default(),
             sandbox_policy,
             sandbox_manager: SandboxManager::new(),
         }
+    }
+
+    pub fn with_subtask_manager(mut self, manager: Arc<dyn SubtaskSessionManager>) -> Self {
+        self.subtask_manager = manager;
+        self
+    }
+
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
+    }
+
+    pub fn with_truncation_policy(mut self, policy: ToolOutputTruncationPolicy) -> Self {
+        self.truncator = ToolOutputTruncator::new(policy);
+        self
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -86,10 +122,74 @@ impl ToolExecutor {
         &self.sandbox_policy
     }
 
+    pub fn subtask_manager(&self) -> &Arc<dyn SubtaskSessionManager> {
+        &self.subtask_manager
+    }
+
+    pub fn tool_catalog(&self) -> ToolCatalog {
+        ToolCatalog::for_model(self.model_id.as_deref())
+    }
+
+    pub fn available_builtins(&self) -> Vec<ToolAvailability> {
+        let catalog = self.tool_catalog();
+        vec![
+            BuiltinToolInput::Bash(crate::message::BashToolInput {
+                command: String::new(),
+                description: String::new(),
+                timeout_ms: None,
+                workdir: None,
+            }),
+            BuiltinToolInput::Read(crate::message::ReadToolInput {
+                file_path: String::new(),
+                offset: None,
+                limit: None,
+            }),
+            BuiltinToolInput::Write(crate::message::WriteToolInput {
+                file_path: String::new(),
+                content: String::new(),
+            }),
+            BuiltinToolInput::Edit(crate::message::EditToolInput {
+                file_path: String::new(),
+                old_string: String::new(),
+                new_string: String::new(),
+                replace_all: false,
+            }),
+            BuiltinToolInput::ApplyPatch(crate::message::ApplyPatchToolInput {
+                patch: String::new(),
+            }),
+            BuiltinToolInput::Glob(crate::message::GlobToolInput {
+                pattern: String::new(),
+                path: None,
+            }),
+            BuiltinToolInput::Grep(crate::message::GrepToolInput {
+                pattern: String::new(),
+                path: None,
+                include: None,
+            }),
+            BuiltinToolInput::Task(crate::message::TaskToolInput {
+                description: String::new(),
+                prompt: String::new(),
+                subagent_type: String::new(),
+                task_id: None,
+                command: None,
+            }),
+        ]
+        .into_iter()
+        .map(|input| catalog.availability_for_input(&self.agent, &input))
+        .collect()
+    }
+
     pub fn execute_builtin_detailed(
         &self,
         input: &BuiltinToolInput,
     ) -> Result<BuiltinExecution, ToolError> {
+        let availability = self
+            .tool_catalog()
+            .availability_for_input(&self.agent, input);
+        if !availability.enabled {
+            return Err(ToolError::UnsupportedBuiltin(availability.tool_name));
+        }
+
         match self.agent.authorize_builtin_tool(input) {
             PermissionDecision::Allow => {}
             PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
@@ -98,7 +198,46 @@ impl ToolExecutor {
             }
         }
 
-        orchestrator::execute_builtin(self, input)
+        let execution = orchestrator::execute_builtin(self, input)?;
+        Ok(self.truncator.apply(execution))
+    }
+
+    pub(crate) fn execute_builtin_unchecked(
+        &self,
+        input: &BuiltinToolInput,
+    ) -> Result<BuiltinExecution, ToolError> {
+        let execution = orchestrator::execute_builtin(self, input)?;
+        Ok(self.truncator.apply(execution))
+    }
+
+    pub fn execute_builtin_with_permission_runtime<S>(
+        &self,
+        session_id: Option<i64>,
+        runtime: &mut PermissionRuntime<S>,
+        input: &BuiltinToolInput,
+    ) -> Result<PermissionedBuiltinExecution, ToolError>
+    where
+        S: PermissionRuleStore,
+    {
+        let base = self.agent.authorize_builtin_tool(input);
+        let action = PermissionAction::BuiltinTool {
+            tool_name: crate::permission::builtin_name(input).to_string(),
+        };
+        match runtime.decide_or_request(session_id, action, base) {
+            Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Allow)) => Ok(
+                PermissionedBuiltinExecution::Executed(self.execute_builtin_detailed(input)?),
+            ),
+            Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Deny { reason })) => {
+                Err(ToolError::PermissionDenied(reason))
+            }
+            Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Ask { reason })) => {
+                Err(ToolError::PermissionAsk(reason))
+            }
+            Ok(PermissionRuntimeDecision::Pending(request)) => {
+                Ok(PermissionedBuiltinExecution::Pending(request))
+            }
+            Err(err) => Err(ToolError::InvalidInput(err.to_string())),
+        }
     }
 
     pub fn execute_builtin(
@@ -382,5 +521,24 @@ mod tests {
             }
             other => panic!("expected bash output, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn readonly_model_profile_disables_write_and_task_tools() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root).with_model_id("gpt-readonly");
+
+        let availability = executor.available_builtins();
+        let find = |tool_name: &str| {
+            availability
+                .iter()
+                .find(|item| item.tool_name == tool_name)
+                .expect("tool should exist")
+                .enabled
+        };
+
+        assert!(find("read"));
+        assert!(!find("write"));
+        assert!(!find("task"));
     }
 }

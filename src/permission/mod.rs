@@ -1,3 +1,7 @@
+mod request;
+mod runtime;
+mod store;
+
 use globset::{Glob, GlobMatcher};
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
@@ -6,6 +10,15 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::message::BuiltinToolInput;
+
+pub use request::{
+    PendingPermission, PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
+    PermissionScope,
+};
+pub use runtime::{PermissionRuntime, PermissionRuntimeDecision, PermissionRuntimeError};
+pub use store::{
+    decide_from_mode, InMemoryPermissionRuleStore, PermissionRuleStore, PermissionStoreError,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,7 +92,7 @@ impl ToolPermissionPolicy {
     }
 }
 
-fn builtin_name(input: &BuiltinToolInput) -> &'static str {
+pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
     match input {
         BuiltinToolInput::Bash(_) => "bash",
         BuiltinToolInput::Read(_) => "read",
@@ -440,8 +453,8 @@ mod tests {
     use crate::message::{BuiltinToolInput, ReadToolInput, WriteToolInput};
 
     use super::{
-        AccessKind, AccessSelector, PermissionDecision, PermissionMode, PermissionPolicy,
-        ToolPermissionPolicy, normalize_path_string,
+        normalize_path_string, AccessKind, AccessSelector, PermissionDecision, PermissionMode,
+        PermissionPolicy, ToolPermissionPolicy,
     };
 
     #[test]

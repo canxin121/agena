@@ -23,6 +23,7 @@ const DEFAULT_MODEL: &str = "gpt-5.3-codex";
 pub struct CodexProvider {
     client: reqwest::Client,
     auth_store: Arc<dyn AuthStore>,
+    auth_provider_id: String,
     state: Mutex<CodexAuthState>,
     default_model: String,
 }
@@ -42,6 +43,16 @@ impl CodexProvider {
         auth: &AuthData,
         default_model: impl Into<String>,
     ) -> Result<Self, AppError> {
+        Self::from_auth_with_options(client, auth_store, auth, default_model, PROVIDER_ID)
+    }
+
+    pub fn from_auth_with_options(
+        client: reqwest::Client,
+        auth_store: Arc<dyn AuthStore>,
+        auth: &AuthData,
+        default_model: impl Into<String>,
+        auth_provider_id: impl Into<String>,
+    ) -> Result<Self, AppError> {
         let AuthData::OAuth {
             refresh,
             access,
@@ -58,6 +69,7 @@ impl CodexProvider {
         Ok(Self {
             client,
             auth_store,
+            auth_provider_id: auth_provider_id.into(),
             state: Mutex::new(CodexAuthState {
                 refresh: refresh.clone(),
                 access: access.clone(),
@@ -98,8 +110,10 @@ impl CodexProvider {
             *guard = updated.clone();
         }
 
-        self.auth_store
-            .set(PROVIDER_ID, Self::auth_data_from_state(&updated))?;
+        self.auth_store.set(
+            self.auth_provider_id.as_str(),
+            Self::auth_data_from_state(&updated),
+        )?;
 
         Ok(updated)
     }

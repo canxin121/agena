@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::message::{MessageUsage, Message};
+use crate::message::{Message, MessageUsage};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderModel {

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::{
     error::AppError,
-    message::{MessageUsage, Message},
+    message::{Message, MessageUsage},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, sse, utils,
@@ -775,10 +775,7 @@ mod tests {
             .complete(CompletionRequest {
                 model: "claude-3-7-sonnet-latest".to_owned(),
                 system: None,
-                messages: vec![Message::prompt_text(
-                    crate::role::Role::User,
-                    "hello",
-                )],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(128),
             })
@@ -832,10 +829,7 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "claude-3-7-sonnet-latest".to_owned(),
                 system: None,
-                messages: vec![Message::prompt_text(
-                    crate::role::Role::User,
-                    "hello",
-                )],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(64),
             })
@@ -900,10 +894,7 @@ mod tests {
             .complete_stream(CompletionRequest {
                 model: "claude-3-7-sonnet-latest".to_owned(),
                 system: None,
-                messages: vec![Message::prompt_text(
-                    crate::role::Role::User,
-                    "hello",
-                )],
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 temperature: None,
                 max_output_tokens: Some(64),
             })

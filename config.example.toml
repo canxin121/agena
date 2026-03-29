@@ -1,0 +1,81 @@
+mode = "dev"
+
+[tracing]
+filter = "info"
+
+[runtime.provider_http]
+timeout_secs = 120
+connect_timeout_secs = 15
+
+[runtime.request_retry]
+max_retries = 1
+base_delay_ms = 250
+max_delay_ms = 2000
+
+[runtime.stream_replay]
+max_retries_after_output = 1
+max_tracked_events = 2048
+
+[permission]
+default_read = "allow"
+default_write = "deny"
+default_external_directory = "deny"
+
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key_env = "OPENAI_API_KEY"
+api_mode = "auto"
+stream_mode = "sse"
+
+[providers.codex]
+kind = "codex"
+default_model = "gpt-5.3-codex"
+auth_provider_id = "openai"
+
+[providers."github-copilot"]
+kind = "copilot"
+auth_provider_id = "github-copilot"
+
+[providers."local-openai"]
+kind = "openai_compatible"
+base_url = "http://localhost:11434/v1"
+default_model = "qwen3:14b"
+api_key = "dummy"
+auth_header = "authorization"
+auth_scheme = "Bearer"
+
+[providers."prod-openai"]
+kind = "alias"
+target_provider_id = "openai"
+default_model = "gpt-5"
+
+[providers.gitlab]
+kind = "gitlab"
+instance_url = "https://gitlab.com"
+ai_gateway_url = "https://cloud.gitlab.com"
+default_model = "claude-sonnet-4-5"
+auth_provider_id = "gitlab"
+
+[providers."google-vertex"]
+kind = "google_vertex"
+base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
+default_model = "google/gemini-2.5-flash"
+access_token_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
+
+[modes.dev.tracing]
+filter = "debug"
+
+[modes.dev.providers.openai]
+default_model = "gpt-4.1-mini"
+
+[modes.prod.permission]
+default_write = "ask"
+
+[modes.prod.providers.openai]
+default_model = "gpt-5"
+api_mode = "responses"
+
+[modes.prod.providers."local-openai"]
+enabled = false

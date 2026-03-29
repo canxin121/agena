@@ -61,3 +61,9 @@ impl AppError {
         }
     }
 }
+
+impl From<crate::config::ConfigError> for AppError {
+    fn from(value: crate::config::ConfigError) -> Self {
+        Self::Config(value.to_string())
+    }
+}

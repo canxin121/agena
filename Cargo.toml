@@ -11,6 +11,7 @@ aws-config = { version = "1.8.15", default-features = true }
 aws-credential-types = "1.2.14"
 aws-sigv4 = { version = "1.4.2", default-features = false, features = ["sign-http", "http1"] }
 base64 = "0.22.1"
+clap = { version = "4.5.51", features = ["derive", "env"] }
 derive_more = { version = "2.1.1", features = ["display", "from"] }
 gcp_auth = "0.12.6"
 globset = "0.4.16"
@@ -31,6 +32,7 @@ strum = { version = "0.27.2", features = ["derive"] }
 thiserror = "2.0.18"
 tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "signal"] }
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+toml = "0.9.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 url = { version = "2.5.8", features = ["serde"] }

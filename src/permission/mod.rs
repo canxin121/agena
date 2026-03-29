@@ -1,12 +1,14 @@
 use globset::{Glob, GlobMatcher};
 use path_clean::PathClean;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::message::BuiltinToolInput;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
     Allow,
     Ask,

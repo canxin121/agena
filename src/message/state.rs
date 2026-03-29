@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use super::{
-    ExecutionStatus, Message, MessageStateTransitionError, MessageStatus, MessageUsage,
-    PartContent, PartKind, PartStateTransitionError, MessagePart,
+    ExecutionStatus, Message, MessagePart, MessageStateTransitionError, MessageStatus,
+    MessageUsage, PartContent, PartKind, PartStateTransitionError,
 };
 
 #[derive(Debug, Clone)]
@@ -30,11 +30,7 @@ impl MessageEntry {
         message.parts = self
             .part_order
             .iter()
-            .filter_map(|part_id| {
-                self.parts
-                    .get(part_id)
-                    .map(MessagePart::without_detail)
-            })
+            .filter_map(|part_id| self.parts.get(part_id).map(MessagePart::without_detail))
             .collect();
         message
     }

@@ -1,5 +1,40 @@
 # Agena
 
+## Config / Mode（新增）
+
+现在提供完整的强类型配置体系：
+
+- 默认配置路径：`~/.agena/config.toml`
+- 可用 `AGENA_CONFIG` 指定配置文件
+- 可用 `mode` / `AGENA_MODE` / `--mode` 切换配置 mode
+- 配置优先级：**默认值 < 配置文件 < mode 叠加 < 环境变量 < CLI 覆盖**
+- `ResolvedConfig::build_provider_registry()` 可直接把配置转成 provider registry
+
+### CLI
+
+```bash
+agena config resolve --format toml
+agena config validate
+agena config mode --list
+agena --mode prod -c providers.openai.default_model=gpt-5 config resolve --format json
+```
+
+### 支持的 provider config kind
+
+- `openai`
+- `openai_compatible`
+- `anthropic`
+- `gemini`
+- `codex`
+- `gitlab`
+- `copilot`
+- `amazon_bedrock`
+- `google_vertex`
+- `cloudflare_ai_gateway`
+- `alias`
+
+示例见仓库根目录 `config.example.toml`。
+
 ## Provider / Model（显式注册）
 
 当前 provider 架构改为：**仅显式注册**。

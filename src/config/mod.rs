@@ -1,0 +1,30 @@
+mod error;
+mod loader;
+mod overrides;
+mod raw;
+mod registry;
+mod types;
+
+#[cfg(test)]
+mod tests;
+
+pub use error::ConfigError;
+pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvironment};
+pub use overrides::ConfigOverride;
+pub use types::{
+    AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, AuthConfig,
+    BedrockAuthConfig, CloudflareAiGatewayProviderOptions, CodexProviderOptions, ConfigModeName,
+    ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource,
+    CopilotProviderOptions, GitlabProviderOptions, GoogleVertexAuthConfig,
+    GoogleVertexProviderOptions, HttpProviderConfig, OpenAiApiModeConfig,
+    OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PermissionConfig, ProviderAliasConfig,
+    ProviderDefinition, ProviderHttpConfig, RequestRetryConfig, ResolvedConfig,
+    ResolvedProviderConfig, RuntimeConfig, SimpleHttpProviderOptions, StreamReplayConfig,
+    StreamTransportMode, TracingConfig,
+};
+
+pub(crate) use error::{parse_numeric, parse_permission_mode};
+pub(crate) use raw::{
+    RawAuthConfig, RawConfig, RawConfigFile, RawPermissionConfig, RawProviderHttpConfig,
+    RawRequestRetryConfig, RawRuntimeConfig, RawStreamReplayConfig, RawTracingConfig,
+};

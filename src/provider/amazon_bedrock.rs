@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::{
     error::AppError,
-    message::{MessageUsage, Message},
+    message::{Message, MessageUsage},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, OpenAiCompatibleProvider,
@@ -1218,10 +1218,7 @@ data: [DONE]\n\n";
         CompletionRequest {
             model: "anthropic.claude-3-7-sonnet-20250219-v1:0".to_owned(),
             system: None,
-            messages: vec![crate::message::Message::prompt_text(
-                Role::User,
-                "hello",
-            )],
+            messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
             temperature: None,
             max_output_tokens: None,
         }

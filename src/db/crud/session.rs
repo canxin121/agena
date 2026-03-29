@@ -1,8 +1,55 @@
+use chrono::Utc;
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
+    QueryFilter, QueryOrder, QuerySelect,
 };
 
 use crate::db::{crud::workspace, entities};
+
+pub async fn create_session(
+    db: &DatabaseConnection,
+    workspace_id: i64,
+    parent_id: Option<i64>,
+    title: impl Into<String>,
+) -> Result<entities::session::Model, DbErr> {
+    let now_ms = Utc::now().timestamp_millis();
+    entities::session::ActiveModel {
+        parent_id: Set(parent_id),
+        workspace_id: Set(workspace_id),
+        title: Set(title.into()),
+        created_at_ms: Set(now_ms),
+        updated_at_ms: Set(now_ms),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+}
+
+pub async fn get_session_by_id(
+    db: &DatabaseConnection,
+    session_id: i64,
+) -> Result<Option<entities::session::Model>, DbErr> {
+    entities::session::Entity::find_by_id(session_id).one(db).await
+}
+
+pub async fn touch_session_updated_at(
+    db: &DatabaseConnection,
+    session_id: i64,
+) -> Result<Option<entities::session::Model>, DbErr> {
+    let Some(existing) = get_session_by_id(db, session_id).await? else {
+        return Ok(None);
+    };
+    let mut active: entities::session::ActiveModel = existing.into();
+    active.updated_at_ms = Set(Utc::now().timestamp_millis());
+    active.update(db).await.map(Some)
+}
+
+pub async fn delete_session_by_id(db: &DatabaseConnection, session_id: i64) -> Result<u64, DbErr> {
+    let deleted = entities::session::Entity::delete_by_id(session_id)
+        .exec(db)
+        .await?;
+    Ok(deleted.rows_affected)
+}
 
 pub async fn list_child_session_ids(
     db: &DatabaseConnection,

@@ -1,4 +1,5 @@
 mod m20260322_000001_initial;
+mod m20260330_000002_runtime;
 mod migrator;
 
 use sea_orm::{DatabaseConnection, DbErr};

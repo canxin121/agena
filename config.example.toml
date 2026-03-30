@@ -21,6 +21,12 @@ default_read = "allow"
 default_write = "deny"
 default_external_directory = "deny"
 
+[plugins]
+enabled = true
+# Relative paths resolve from the directory containing this config file.
+# If `paths` is omitted, Agena will scan `plugins/` next to the config file.
+paths = ["plugins"]
+
 [providers.openai]
 kind = "openai"
 base_url = "https://api.openai.com/v1"

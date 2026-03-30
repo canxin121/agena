@@ -1,6 +1,7 @@
 mod apply_patch;
 mod bash;
 mod catalog;
+mod definition;
 mod edit;
 mod glob;
 mod grep;
@@ -17,7 +18,14 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::agent::Agent;
-use crate::message::{BuiltinToolInput, BuiltinToolOutput};
+use crate::message::{
+    BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, StructuredObject, ToolInvocation,
+    ToolOutput,
+};
+use crate::plugin::{
+    PluginAfterToolRequest, PluginBeforeToolRequest, PluginManager, PluginShellEnvRequest,
+    PluginToolCallRequest,
+};
 use crate::permission::{
     AccessKind, PermissionAction, PermissionDecision, PermissionRuleStore, PermissionRuntime,
     PermissionRuntimeDecision,
@@ -29,7 +37,8 @@ use procwarden::{
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
-pub use result::{BuiltinExecution, ToolExecutionView};
+pub use definition::{ToolBehavior, ToolDefinition, ToolSource};
+pub use result::{BuiltinExecution, ToolExecutionView, ToolInvocationExecution};
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,10 +47,22 @@ pub struct ToolPermissionCheck {
     pub decision: PermissionDecision,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedToolInvocation {
+    pub invocation: ToolInvocation,
+    pub title_override: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionExecutionMode {
     Enforced,
     Bypassed,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct BuiltinExecutionContext {
+    pub session_id: Option<i64>,
+    pub call_id: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -68,8 +89,12 @@ pub enum ToolError {
     Sandbox(#[from] SandboxError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("unsupported builtin tool in executor: {0}")]
-    UnsupportedBuiltin(&'static str),
+    #[error("plugin error: {0}")]
+    Plugin(String),
+    #[error("unknown tool: {0}")]
+    UnknownTool(String),
+    #[error("unsupported tool invocation in executor: {0}")]
+    UnsupportedInvocation(String),
 }
 
 #[derive(Clone)]
@@ -81,6 +106,7 @@ pub struct ToolExecutor {
     truncator: ToolOutputTruncator,
     sandbox_policy: SandboxPolicy,
     sandbox_manager: SandboxManager,
+    plugins: Arc<PluginManager>,
     permission_mode: PermissionExecutionMode,
 }
 
@@ -106,6 +132,7 @@ impl ToolExecutor {
             truncator: ToolOutputTruncator::default(),
             sandbox_policy,
             sandbox_manager: SandboxManager::new(),
+            plugins: Arc::new(PluginManager::default()),
             permission_mode: PermissionExecutionMode::Enforced,
         }
     }
@@ -117,6 +144,11 @@ impl ToolExecutor {
 
     pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
         self.model_id = Some(model_id.into());
+        self
+    }
+
+    pub fn with_plugin_manager(mut self, manager: Arc<PluginManager>) -> Self {
+        self.plugins = manager;
         self
     }
 
@@ -139,6 +171,10 @@ impl ToolExecutor {
 
     pub fn subtask_manager(&self) -> &Arc<dyn SubtaskSessionManager> {
         &self.subtask_manager
+    }
+
+    pub fn plugin_manager(&self) -> &Arc<PluginManager> {
+        &self.plugins
     }
 
     pub fn tool_catalog(&self) -> ToolCatalog {
@@ -194,9 +230,53 @@ impl ToolExecutor {
         .collect()
     }
 
+    pub fn available_tools(&self) -> Vec<ToolDefinition> {
+        let catalog = self.tool_catalog();
+        let mut definitions = self
+            .plugins
+            .plugins()
+            .iter()
+            .flat_map(|plugin| {
+                plugin.tools.iter().filter_map(|descriptor| {
+                    catalog
+                        .is_behavior_enabled(descriptor.behavior)
+                        .then(|| {
+                            ToolDefinition::plugin(
+                                descriptor.name.clone(),
+                                descriptor.description.clone(),
+                                descriptor.input_schema.clone(),
+                                descriptor.behavior,
+                                plugin.metadata.name.clone(),
+                            )
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let plugin_names = definitions
+            .iter()
+            .map(|definition| definition.name.clone())
+            .collect::<std::collections::HashSet<_>>();
+        definitions.extend(
+            catalog
+                .builtin_definitions()
+                .into_iter()
+                .filter(|definition| !plugin_names.contains(definition.name.as_str())),
+        );
+        definitions
+    }
+
     pub fn execute_builtin_detailed(
         &self,
         input: &BuiltinToolInput,
+    ) -> Result<BuiltinExecution, ToolError> {
+        self.execute_builtin_detailed_with_context(input, BuiltinExecutionContext::default())
+    }
+
+    fn execute_builtin_detailed_with_context(
+        &self,
+        input: &BuiltinToolInput,
+        context: BuiltinExecutionContext,
     ) -> Result<BuiltinExecution, ToolError> {
         self.ensure_builtin_enabled(input)?;
 
@@ -210,7 +290,7 @@ impl ToolExecutor {
             }
         }
 
-        let execution = orchestrator::execute_builtin(self, input)?;
+        let execution = orchestrator::execute_builtin(self, input, context)?;
         Ok(self.truncator.apply(execution))
     }
 
@@ -276,13 +356,153 @@ impl ToolExecutor {
         Ok(checks)
     }
 
-    pub(crate) fn execute_builtin_unchecked(
+    pub fn prepare_invocation(
         &self,
-        input: &BuiltinToolInput,
-    ) -> Result<BuiltinExecution, ToolError> {
-        let mut unchecked = self.clone();
-        unchecked.permission_mode = PermissionExecutionMode::Bypassed;
-        unchecked.execute_builtin_detailed(input)
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+    ) -> Result<PreparedToolInvocation, ToolError> {
+        let tool_name = invocation_name(invocation).to_owned();
+        let source = invocation_source(invocation, self.plugins.as_ref());
+        let input_json = invocation_input_json(invocation)?;
+
+        let hook = self
+            .plugins
+            .apply_before_tool_hooks(PluginBeforeToolRequest {
+                tool_name: tool_name.clone(),
+                source: source.clone(),
+                session_id,
+                call_id,
+                input_json,
+            })
+            .map_err(|err| ToolError::Plugin(err.message))?;
+
+        Ok(PreparedToolInvocation {
+            invocation: parse_invocation_from_json(
+                tool_name.as_str(),
+                hook.input_json.as_str(),
+                &source,
+            )?,
+            title_override: hook.title_override,
+        })
+    }
+
+    pub fn collect_permission_checks_for_invocation(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
+        match invocation {
+            ToolInvocation::Builtin { input } => self.collect_permission_checks(input),
+            ToolInvocation::Custom { name, .. } => {
+                let descriptor = self
+                    .plugins
+                    .custom_tool(name.as_str())
+                    .ok_or_else(|| ToolError::UnknownTool(name.clone()))?
+                    .1;
+
+                if !self.tool_catalog().is_behavior_enabled(descriptor.behavior) {
+                    return Err(ToolError::PermissionDenied(format!(
+                        "tool '{name}' disabled for current model profile"
+                    )));
+                }
+
+                Ok(vec![ToolPermissionCheck {
+                    action: PermissionAction::BuiltinTool {
+                        tool_name: name.clone(),
+                    },
+                    decision: self.agent.authorize_tool_name(name.as_str()),
+                }])
+            }
+            ToolInvocation::Mcp { server, tool, .. } => Err(ToolError::UnsupportedInvocation(
+                format!("mcp:{server}:{tool}"),
+            )),
+        }
+    }
+
+    pub fn execute_invocation_detailed(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+    ) -> Result<ToolInvocationExecution, ToolError> {
+        match invocation {
+            ToolInvocation::Builtin { input } => {
+                let mut execution: ToolInvocationExecution = self
+                    .execute_builtin_detailed_with_context(
+                        input,
+                        BuiltinExecutionContext {
+                            session_id: Some(session_id),
+                            call_id: Some(call_id),
+                        },
+                    )?
+                    .into();
+                self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
+                Ok(execution)
+            }
+            ToolInvocation::Custom { name, input } => {
+                let (plugin, _descriptor) = self
+                    .plugins
+                    .custom_tool(name.as_str())
+                    .ok_or_else(|| ToolError::UnknownTool(name.clone()))?;
+
+                let payload_json = serde_json::to_string(&serde_json::Value::from(input.clone()))
+                    .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
+                let response = plugin
+                    .invoke_tool(PluginToolCallRequest {
+                        tool_name: name.clone(),
+                        session_id,
+                        call_id,
+                        workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                        input_json: payload_json,
+                    })
+                    .map_err(|err| ToolError::Plugin(err.message))?;
+
+                let payload = response
+                    .payload_json
+                    .as_deref()
+                    .map(parse_custom_payload)
+                    .transpose()?
+                    .unwrap_or_default();
+                let mut execution = ToolInvocationExecution::new(
+                    ToolOutput::Custom {
+                        output: CustomToolOutput {
+                            name: name.clone(),
+                            payload,
+                        },
+                    },
+                    ToolExecutionView {
+                        title: response.title.clone(),
+                        output_text: response.output_text.clone(),
+                        metadata: response.metadata.into_iter().collect(),
+                        attachments: Vec::new(),
+                    },
+                );
+                self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
+                Ok(execution)
+            }
+            ToolInvocation::Mcp { server, tool, .. } => Err(ToolError::UnsupportedInvocation(
+                format!("mcp:{server}:{tool}"),
+            )),
+        }
+    }
+
+    pub fn shell_env_overrides(
+        &self,
+        cwd: &Path,
+        session_id: Option<i64>,
+        call_id: Option<i64>,
+    ) -> Result<std::collections::HashMap<String, String>, ToolError> {
+        Ok(self
+            .plugins
+            .shell_env(PluginShellEnvRequest {
+                cwd: cwd.to_string_lossy().to_string(),
+                session_id,
+                call_id,
+            })
+            .map_err(|err| ToolError::Plugin(err.message))?
+            .env
+            .into_iter()
+            .collect())
     }
 
     fn ensure_builtin_enabled(&self, input: &BuiltinToolInput) -> Result<(), ToolError> {
@@ -290,7 +510,9 @@ impl ToolExecutor {
             .tool_catalog()
             .availability_for_input(&self.agent, input);
         if !availability.enabled {
-            return Err(ToolError::UnsupportedBuiltin(availability.tool_name));
+            return Err(ToolError::UnsupportedInvocation(
+                availability.tool_name.to_string(),
+            ));
         }
         Ok(())
     }
@@ -331,6 +553,57 @@ impl ToolExecutor {
     ) -> Result<(BuiltinToolOutput, Option<ApplyPatchExecution>), ToolError> {
         let execution = self.execute_builtin_detailed(input)?;
         Ok((execution.output, execution.apply_patch))
+    }
+
+    fn apply_after_hooks(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+        execution: &mut ToolInvocationExecution,
+    ) -> Result<(), ToolError> {
+        let tool_name = invocation_name(invocation).to_owned();
+        let source = invocation_source(invocation, self.plugins.as_ref());
+        let mut payload_json = match &execution.output {
+            ToolOutput::Custom { output } => Some(
+                serde_json::to_string(&serde_json::Value::from(output.payload.clone()))
+                    .map_err(|err| ToolError::InvalidInput(err.to_string()))?,
+            ),
+            _ => None,
+        };
+
+        let hook = self
+            .plugins
+            .apply_after_tool_hooks(PluginAfterToolRequest {
+                tool_name,
+                source,
+                session_id,
+                call_id,
+                title: execution.view.title.clone(),
+                output_text: execution.view.output_text.clone(),
+                payload_json: payload_json.clone(),
+                metadata: execution.view.metadata.clone().into_iter().collect(),
+            })
+            .map_err(|err| ToolError::Plugin(err.message))?;
+
+        if let Some(title) = hook.title {
+            execution.view.title = title;
+        }
+        if let Some(output_text) = hook.output_text {
+            execution.view.output_text = output_text;
+        }
+        if let Some(next_payload_json) = hook.payload_json {
+            payload_json = Some(next_payload_json);
+        }
+        execution.view.metadata.extend(hook.metadata);
+
+        if let (Some(payload_json), ToolOutput::Custom { output }) =
+            (payload_json, &mut execution.output)
+        {
+            output.payload = parse_custom_payload(payload_json.as_str())?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn resolve_target_path(&self, raw_path: &str) -> PathBuf {
@@ -445,21 +718,136 @@ fn access_kind_name(access: AccessKind) -> &'static str {
     }
 }
 
+fn invocation_name(invocation: &ToolInvocation) -> &str {
+    match invocation {
+        ToolInvocation::Builtin { input } => crate::permission::builtin_name(input),
+        ToolInvocation::Custom { name, .. } => name.as_str(),
+        ToolInvocation::Mcp { tool, .. } => tool.as_str(),
+    }
+}
+
+fn invocation_source(invocation: &ToolInvocation, plugins: &PluginManager) -> ToolSource {
+    match invocation {
+        ToolInvocation::Builtin { .. } => ToolSource::Builtin,
+        ToolInvocation::Custom { name, .. } => plugins
+            .custom_tool(name.as_str())
+            .map(|(plugin, _)| ToolSource::Plugin {
+                plugin_name: plugin.metadata.name.clone(),
+            })
+            .unwrap_or_else(|| ToolSource::Plugin {
+                plugin_name: "custom".to_string(),
+            }),
+        ToolInvocation::Mcp { server, .. } => ToolSource::Plugin {
+            plugin_name: format!("mcp:{server}"),
+        },
+    }
+}
+
+fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolError> {
+    match invocation {
+        ToolInvocation::Builtin { input } => match input {
+            BuiltinToolInput::Bash(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::Read(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::Write(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::Edit(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::ApplyPatch(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::Glob(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::Grep(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::Task(payload) => serde_json::to_string(payload),
+        }
+        .map_err(|err| ToolError::InvalidInput(err.to_string())),
+        ToolInvocation::Custom { input, .. } => {
+            serde_json::to_string(&serde_json::Value::from(input.clone()))
+                .map_err(|err| ToolError::InvalidInput(err.to_string()))
+        }
+        ToolInvocation::Mcp { input, .. } => serde_json::to_string(input)
+            .map_err(|err| ToolError::InvalidInput(err.to_string())),
+    }
+}
+
+fn parse_invocation_from_json(
+    tool_name: &str,
+    input_json: &str,
+    source: &ToolSource,
+) -> Result<ToolInvocation, ToolError> {
+    match source {
+        ToolSource::Builtin => Ok(ToolInvocation::Builtin {
+            input: parse_builtin_input(tool_name, input_json)?,
+        }),
+        ToolSource::Plugin { .. } => {
+            let value = if input_json.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str(input_json)
+                    .map_err(|err| ToolError::InvalidInput(err.to_string()))?
+            };
+            let input = StructuredObject::try_from(value)
+                .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
+            Ok(ToolInvocation::Custom {
+                name: tool_name.to_string(),
+                input,
+            })
+        }
+    }
+}
+
+fn parse_builtin_input(tool_name: &str, input_json: &str) -> Result<BuiltinToolInput, ToolError> {
+    fn parse<T>(value: &str) -> Result<T, ToolError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let payload = if value.trim().is_empty() { "{}" } else { value };
+        serde_json::from_str(payload).map_err(|err| ToolError::InvalidInput(err.to_string()))
+    }
+
+    match tool_name {
+        "bash" => Ok(BuiltinToolInput::Bash(parse(input_json)?)),
+        "read" => Ok(BuiltinToolInput::Read(parse(input_json)?)),
+        "write" => Ok(BuiltinToolInput::Write(parse(input_json)?)),
+        "edit" => Ok(BuiltinToolInput::Edit(parse(input_json)?)),
+        "apply_patch" => Ok(BuiltinToolInput::ApplyPatch(parse(input_json)?)),
+        "glob" => Ok(BuiltinToolInput::Glob(parse(input_json)?)),
+        "grep" => Ok(BuiltinToolInput::Grep(parse(input_json)?)),
+        "task" => Ok(BuiltinToolInput::Task(parse(input_json)?)),
+        other => Err(ToolError::UnknownTool(other.to_string())),
+    }
+}
+
+fn parse_custom_payload(payload_json: &str) -> Result<StructuredObject, ToolError> {
+    let value = if payload_json.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(payload_json)
+            .map_err(|err| ToolError::InvalidInput(err.to_string()))?
+    };
+    StructuredObject::try_from(value).map_err(|err| ToolError::InvalidInput(err.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
+    use serde_json::json;
     use uuid::Uuid;
 
     use crate::message::{
         BashToolInput, BuiltinToolInput, BuiltinToolOutput, EditToolInput, GlobToolInput,
-        GrepToolInput, ReadToolInput, TaskToolInput, WriteToolInput,
+        GrepToolInput, ReadToolInput, StructuredObject, TaskToolInput, ToolInvocation,
+        ToolOutput, WriteToolInput,
+    };
+    use crate::plugin::{
+        AgenaPlugin, PluginAfterToolRequest, PluginAfterToolResponse, PluginBeforeToolRequest,
+        PluginBeforeToolResponse, PluginError, PluginManager, PluginMetadata,
+        PluginShellEnvRequest, PluginShellEnvResponse, PluginToolCallRequest,
+        PluginToolCallResponse, PluginToolDescriptor,
     };
     use crate::permission::PermissionPolicy;
     use procwarden::SandboxPolicy;
 
-    use super::ToolExecutor;
+    use super::{ToolBehavior, ToolExecutor, ToolSource};
 
     #[derive(Debug)]
     struct TempWorkspace {
@@ -488,6 +876,119 @@ mod tests {
     fn build_executor_with_policy(root: &Path, policy: SandboxPolicy) -> ToolExecutor {
         let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
         ToolExecutor::with_sandbox_policy(root, agent, policy)
+    }
+
+    #[derive(Debug)]
+    struct FixturePlugin;
+
+    impl AgenaPlugin for FixturePlugin {
+        fn metadata(&self) -> PluginMetadata {
+            PluginMetadata {
+                name: "fixture".to_string(),
+                version: "0.1.0".to_string(),
+                description: "fixture plugin".to_string(),
+            }
+        }
+
+        fn tools(&self) -> Vec<PluginToolDescriptor> {
+            vec![PluginToolDescriptor {
+                name: "plugin_echo".to_string(),
+                description: "Echo a message from the plugin.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string" }
+                    },
+                    "required": ["message"]
+                }),
+                behavior: ToolBehavior::ReadOnly,
+            }]
+        }
+
+        fn invoke_tool(
+            &self,
+            request: PluginToolCallRequest,
+        ) -> Result<PluginToolCallResponse, PluginError> {
+            let input: serde_json::Value = serde_json::from_str(request.input_json.as_str())
+                .map_err(|err| PluginError::new(err.to_string()))?;
+            let message = input
+                .get("message")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| PluginError::new("missing message"))?
+                .to_string();
+
+            Ok(PluginToolCallResponse {
+                title: "Plugin echo".to_string(),
+                output_text: message.clone(),
+                payload_json: Some(json!({ "echoed": message }).to_string()),
+                metadata: BTreeMap::from([("plugin".to_string(), "fixture".to_string())]),
+            })
+        }
+
+        fn before_tool(
+            &self,
+            request: PluginBeforeToolRequest,
+        ) -> Result<PluginBeforeToolResponse, PluginError> {
+            if request.tool_name != "plugin_echo" {
+                return Ok(PluginBeforeToolResponse::passthrough(request.input_json));
+            }
+
+            let mut input: serde_json::Value = serde_json::from_str(request.input_json.as_str())
+                .map_err(|err| PluginError::new(err.to_string()))?;
+            let message = input
+                .get("message")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            input["message"] = serde_json::Value::String(format!("{message} prepared"));
+
+            Ok(PluginBeforeToolResponse {
+                input_json: input.to_string(),
+                title_override: Some("Prepared plugin echo".to_string()),
+                metadata: BTreeMap::new(),
+            })
+        }
+
+        fn after_tool(
+            &self,
+            request: PluginAfterToolRequest,
+        ) -> Result<PluginAfterToolResponse, PluginError> {
+            if request.tool_name != "plugin_echo" {
+                return Ok(PluginAfterToolResponse::default());
+            }
+
+            let mut payload = request
+                .payload_json
+                .as_deref()
+                .map(|raw| serde_json::from_str::<serde_json::Value>(raw))
+                .transpose()
+                .map_err(|err| PluginError::new(err.to_string()))?
+                .unwrap_or_else(|| json!({}));
+            payload["after"] = serde_json::Value::Bool(true);
+
+            Ok(PluginAfterToolResponse {
+                title: Some(format!("{} after", request.title)),
+                output_text: Some(format!("{} after", request.output_text)),
+                payload_json: Some(payload.to_string()),
+                metadata: BTreeMap::from([("after_hook".to_string(), "applied".to_string())]),
+            })
+        }
+
+        fn shell_env(
+            &self,
+            _request: PluginShellEnvRequest,
+        ) -> Result<PluginShellEnvResponse, PluginError> {
+            Ok(PluginShellEnvResponse {
+                env: BTreeMap::from([("PLUGIN_FLAG".to_string(), "from_plugin".to_string())]),
+            })
+        }
+    }
+
+    fn build_plugin_manager() -> Arc<PluginManager> {
+        let mut manager = PluginManager::new();
+        manager
+            .register_static(FixturePlugin)
+            .expect("fixture plugin should register");
+        Arc::new(manager)
     }
 
     #[test]
@@ -670,5 +1171,106 @@ mod tests {
         assert!(find("read"));
         assert!(!find("write"));
         assert!(!find("task"));
+    }
+
+    #[test]
+    fn plugin_custom_tool_hooks_prepare_and_mutate_execution() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root).with_plugin_manager(build_plugin_manager());
+
+        assert!(executor.available_tools().iter().any(|tool| {
+            tool.name == "plugin_echo"
+                && matches!(
+                    tool.source,
+                    ToolSource::Plugin { ref plugin_name } if plugin_name == "fixture"
+                )
+        }));
+
+        let invocation = ToolInvocation::Custom {
+            name: "plugin_echo".to_string(),
+            input: StructuredObject::try_from(json!({ "message": "hello" }))
+                .expect("structured object should build"),
+        };
+
+        let prepared = executor
+            .prepare_invocation(&invocation, 7, 9)
+            .expect("prepare should succeed");
+        assert_eq!(
+            prepared.title_override.as_deref(),
+            Some("Prepared plugin echo")
+        );
+
+        let prepared_value = match &prepared.invocation {
+            ToolInvocation::Custom { input, .. } => serde_json::Value::from(input.clone()),
+            other => panic!("expected custom invocation, got {other:?}"),
+        };
+        assert_eq!(prepared_value["message"], "hello prepared");
+
+        let execution = executor
+            .execute_invocation_detailed(&prepared.invocation, 7, 9)
+            .expect("plugin execution should succeed");
+
+        match execution.output {
+            ToolOutput::Custom { output } => {
+                let payload = serde_json::Value::from(output.payload);
+                assert_eq!(output.name, "plugin_echo");
+                assert_eq!(payload["echoed"], "hello prepared");
+                assert_eq!(payload["after"], true);
+            }
+            other => panic!("expected custom output, got {other:?}"),
+        }
+
+        assert_eq!(execution.view.title, "Plugin echo after");
+        assert_eq!(execution.view.output_text, "hello prepared after");
+        assert_eq!(
+            execution
+                .view
+                .metadata
+                .get("after_hook")
+                .map(String::as_str),
+            Some("applied")
+        );
+    }
+
+    #[test]
+    fn bash_invocation_applies_plugin_shell_env_overrides() {
+        if cfg!(windows) {
+            return;
+        }
+
+        let workspace = TempWorkspace::new();
+        let executor = build_executor_with_policy(
+            &workspace.root,
+            SandboxPolicy::new_read_only_policy().with_world_writable_audit(false),
+        )
+        .with_plugin_manager(build_plugin_manager());
+
+        let execution = executor
+            .execute_invocation_detailed(
+                &ToolInvocation::Builtin {
+                    input: BuiltinToolInput::Bash(BashToolInput {
+                        command: "printf %s \"$PLUGIN_FLAG\"".to_string(),
+                        description: "print plugin env".to_string(),
+                        timeout_ms: Some(30_000),
+                        workdir: None,
+                    }),
+                },
+                10,
+                11,
+            )
+            .expect("bash invocation should succeed");
+
+        match execution.output {
+            ToolOutput::Builtin {
+                output:
+                    BuiltinToolOutput::Bash {
+                        output,
+                        description: _,
+                    },
+            } => {
+                assert_eq!(output.as_deref(), Some("from_plugin"));
+            }
+            other => panic!("expected bash output, got {other:?}"),
+        }
     }
 }

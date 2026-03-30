@@ -219,6 +219,7 @@ impl OpenAiProvider {
         let body = OpenAiChatCompletionRequest {
             model: model.clone(),
             messages: Self::to_chat_messages(request),
+            tools: (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice())),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
             stream: false,
@@ -291,6 +292,7 @@ impl OpenAiProvider {
         let body = OpenAiChatCompletionRequest {
             model: model.clone(),
             messages: Self::to_chat_messages(request),
+            tools: (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice())),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
             stream: true,
@@ -458,6 +460,10 @@ impl OpenAiProvider {
         let provider_id = PROVIDER_ID.to_owned();
         let model_name = model;
         let input_text = build_realtime_input_text(request.messages.as_slice());
+        let response_tools = (!request.tools.is_empty()).then(|| {
+            serde_json::to_value(Self::responses_tools(request.tools.as_slice()))
+                .expect("realtime tool definitions should serialize")
+        });
         let system = request.system.clone();
         let temperature = request.temperature;
         let max_output_tokens = request.max_output_tokens;
@@ -513,6 +519,9 @@ impl OpenAiProvider {
             }
             if let Some(max_tokens) = max_output_tokens {
                 response["max_output_tokens"] = serde_json::json!(max_tokens);
+            }
+            if let Some(tools) = response_tools.as_ref() {
+                response["tools"] = tools.clone();
             }
 
             let create_event = serde_json::json!({
@@ -763,6 +772,32 @@ impl OpenAiProvider {
             }
             .into()
         })
+    }
+
+    fn responses_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<OpenAiResponsesTool> {
+        tools
+            .iter()
+            .map(|tool| OpenAiResponsesTool {
+                kind: "function",
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.input_schema.clone(),
+            })
+            .collect()
+    }
+
+    fn chat_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<OpenAiChatToolDefinition> {
+        tools
+            .iter()
+            .map(|tool| OpenAiChatToolDefinition {
+                kind: "function".to_string(),
+                function: OpenAiChatFunctionDefinition {
+                    name: tool.name.clone(),
+                    description: tool.description.clone(),
+                    parameters: tool.input_schema.clone(),
+                },
+            })
+            .collect()
     }
 
     fn to_chat_messages(request: &CompletionRequest) -> Vec<OpenAiChatMessage> {
@@ -1196,6 +1231,7 @@ impl ModelProvider for OpenAiProvider {
         let body = OpenAiResponsesRequest {
             model: model.clone(),
             input,
+            tools: Self::responses_tools(request.tools.as_slice()),
             max_output_tokens: request.max_output_tokens,
             temperature: request.temperature,
             stream: false,
@@ -1262,6 +1298,7 @@ impl ModelProvider for OpenAiProvider {
         let body = OpenAiResponsesRequest {
             model: model.clone(),
             input,
+            tools: Self::responses_tools(request.tools.as_slice()),
             max_output_tokens: request.max_output_tokens,
             temperature: request.temperature,
             stream: true,
@@ -1472,11 +1509,22 @@ impl ModelProvider for OpenAiProvider {
 struct OpenAiResponsesRequest {
     model: String,
     input: Vec<OpenAiResponsesInputItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OpenAiResponsesTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     stream: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiResponsesTool {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -1606,6 +1654,8 @@ struct OpenAiChatCompletionRequest {
     model: String,
     messages: Vec<OpenAiChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<OpenAiChatToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
@@ -1651,6 +1701,20 @@ struct OpenAiChatFunctionCall {
     name: Option<String>,
     #[serde(default)]
     arguments: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiChatToolDefinition {
+    #[serde(rename = "type")]
+    kind: String,
+    function: OpenAiChatFunctionDefinition,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiChatFunctionDefinition {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1744,6 +1808,23 @@ mod tests {
     use tokio::net::TcpListener;
 
     use crate::message::Message;
+    use crate::tool::{ToolBehavior, ToolDefinition};
+
+    fn sample_tool_definition() -> ToolDefinition {
+        ToolDefinition::plugin(
+            "project_search",
+            "Search project files.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }),
+            ToolBehavior::ReadOnly,
+            "fixture",
+        )
+    }
 
     #[tokio::test]
     async fn complete_falls_back_to_chat_when_responses_unsupported() {
@@ -1788,6 +1869,7 @@ mod tests {
                 model: "gpt-5".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1834,6 +1916,7 @@ mod tests {
                 model: "text-davinci-003".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1876,6 +1959,7 @@ mod tests {
                 model: "gpt-5".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1930,6 +2014,7 @@ mod tests {
                 model: "gpt-4.1-mini".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1988,6 +2073,7 @@ mod tests {
                 model: "gpt-5".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_tool_result("call_1", "{\"ok\":true}")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -2026,6 +2112,7 @@ mod tests {
                 model: "gpt-5".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(64),
             })
@@ -2143,6 +2230,11 @@ mod tests {
                 let value: serde_json::Value =
                     serde_json::from_str(text.as_str()).expect("request event should be json");
                 if value.get("type").and_then(|v| v.as_str()) == Some("response.create") {
+                    assert_eq!(value["response"]["tools"][0]["name"], "project_search");
+                    assert_eq!(
+                        value["response"]["tools"][0]["parameters"]["properties"]["query"]["type"],
+                        "string"
+                    );
                     saw_response_create = true;
                     break;
                 }
@@ -2225,6 +2317,7 @@ mod tests {
                 model: "gpt-4o-realtime-preview".to_owned(),
                 system: Some("you are helpful".to_owned()),
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: vec![sample_tool_definition()],
                 temperature: Some(0.2),
                 max_output_tokens: Some(64),
             })

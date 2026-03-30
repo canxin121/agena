@@ -1,5 +1,10 @@
 use crate::agent::Agent;
-use crate::message::BuiltinToolInput;
+use crate::message::{
+    ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
+    GrepToolInput, ReadToolInput, TaskToolInput, WriteToolInput,
+};
+
+use super::{ToolBehavior, ToolDefinition};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelToolProfile {
@@ -61,6 +66,61 @@ impl ToolCatalog {
             tool_name,
             enabled: enabled && !agent.disable,
             reason,
+        }
+    }
+
+    pub fn builtin_definitions(&self) -> Vec<ToolDefinition> {
+        let mut definitions = vec![
+            ToolDefinition::builtin::<BashToolInput>(
+                "bash",
+                "Execute a shell command inside the sandboxed workspace.",
+                ToolBehavior::Mutating,
+            ),
+            ToolDefinition::builtin::<ReadToolInput>(
+                "read",
+                "Read a UTF-8 text file or list a directory with optional pagination.",
+                ToolBehavior::ReadOnly,
+            ),
+            ToolDefinition::builtin::<WriteToolInput>(
+                "write",
+                "Create or overwrite a file inside the workspace.",
+                ToolBehavior::Mutating,
+            ),
+            ToolDefinition::builtin::<EditToolInput>(
+                "edit",
+                "Replace an exact string inside a file, optionally for all matches.",
+                ToolBehavior::Mutating,
+            ),
+            ToolDefinition::builtin::<ApplyPatchToolInput>(
+                "apply_patch",
+                "Apply a structured patch that can add, update, move, or delete files.",
+                ToolBehavior::Mutating,
+            ),
+            ToolDefinition::builtin::<GlobToolInput>(
+                "glob",
+                "Search files by glob pattern from the workspace or a subdirectory.",
+                ToolBehavior::ReadOnly,
+            ),
+            ToolDefinition::builtin::<GrepToolInput>(
+                "grep",
+                "Search file contents by regex pattern with optional include glob.",
+                ToolBehavior::ReadOnly,
+            ),
+            ToolDefinition::builtin::<TaskToolInput>(
+                "task",
+                "Create or resume a subagent task session for delegated work.",
+                ToolBehavior::Task,
+            ),
+        ];
+        definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
+        definitions
+    }
+
+    pub fn is_behavior_enabled(&self, behavior: ToolBehavior) -> bool {
+        match self.profile {
+            ModelToolProfile::Full => true,
+            ModelToolProfile::ReadOnly => behavior == ToolBehavior::ReadOnly,
+            ModelToolProfile::NoTask => behavior != ToolBehavior::Task,
         }
     }
 

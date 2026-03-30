@@ -6,6 +6,7 @@ pub mod db;
 pub mod error;
 pub mod event;
 pub mod message;
+pub mod plugin;
 pub mod permission;
 pub mod provider;
 pub mod role;

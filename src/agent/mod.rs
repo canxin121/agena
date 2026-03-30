@@ -54,6 +54,15 @@ impl Agent {
         self.tool_policy.check_builtin(input)
     }
 
+    pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
+        if self.disable {
+            return PermissionDecision::Deny {
+                reason: format!("agent '{}' is disabled", self.name),
+            };
+        }
+        self.tool_policy.check_tool_name(tool_name)
+    }
+
     pub fn authorize_path_access(
         &self,
         access: AccessKind,

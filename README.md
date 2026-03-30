@@ -35,6 +35,49 @@ agena --mode prod -c providers.openai.default_model=gpt-5 config resolve --forma
 
 示例见仓库根目录 `config.example.toml`。
 
+## Plugin System（新增）
+
+现在 `agena` 已经支持基于 `abi_stable` 的 dynamic plugin：
+
+- 稳定 ABI 边界：`abi_stable`
+- tool input schema：`schemars`
+- 生命周期 hook：
+  - `before_tool`
+  - `after_tool`
+  - `shell_env`
+- 自定义 tool 会和内建 tool 一起下发给模型 provider
+
+### 配置
+
+```toml
+[plugins]
+enabled = true
+paths = ["plugins"]
+```
+
+说明：
+
+- `paths` 可填目录，也可直接填某个动态库文件。
+- 相对路径相对配置文件目录解析。
+- 如果省略 `paths`，默认会扫描配置文件同目录下的 `plugins/`。
+
+### Sample Plugin
+
+仓库里提供了一个完整样例：
+
+- [examples/echo_plugin/Cargo.toml](/home/canxin/Git/ai/agena/examples/echo_plugin/Cargo.toml)
+- [examples/echo_plugin/src/lib.rs](/home/canxin/Git/ai/agena/examples/echo_plugin/src/lib.rs)
+- [examples/echo_plugin/README.md](/home/canxin/Git/ai/agena/examples/echo_plugin/README.md)
+
+构建：
+
+```bash
+cd examples/echo_plugin
+cargo build --release
+```
+
+然后把 `target/release/` 或生成出的动态库路径加入 `[plugins].paths` 即可。
+
 ## Provider / Model（显式注册）
 
 当前 provider 架构改为：**仅显式注册**。

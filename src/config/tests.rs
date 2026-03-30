@@ -168,6 +168,69 @@ fn example_config_parses_successfully() {
     assert!(resolution.config.providers.contains_key("prod-openai"));
 }
 
+#[test]
+fn build_plugin_manager_uses_config_relative_plugin_directory() {
+    let dir = temp_dir("plugins-relative");
+    let plugins_dir = dir.join("plugins");
+    fs::create_dir_all(&plugins_dir).expect("plugins dir should be created");
+    let path = dir.join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+"#,
+    )
+    .expect("config should be written");
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let plugins = resolution
+        .build_plugin_manager()
+        .expect("empty plugin directory should be accepted");
+    assert!(plugins.is_empty());
+}
+
+#[test]
+fn build_plugin_manager_rejects_missing_explicit_path() {
+    let dir = temp_dir("plugins-missing");
+    let path = dir.join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[plugins]
+paths = ["missing-plugins"]
+
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+"#,
+    )
+    .expect("config should be written");
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let err = resolution
+        .build_plugin_manager()
+        .expect_err("missing explicit plugin path should fail");
+    assert!(matches!(err, ConfigError::Validation(message) if message.contains("plugin path does not exist")));
+}
+
 fn write_temp_config(content: &str) -> PathBuf {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -175,5 +238,15 @@ fn write_temp_config(content: &str) -> PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("agena-config-{suffix}.toml"));
     fs::write(&path, content).expect("temp config should be written");
+    path
+}
+
+fn temp_dir(label: &str) -> PathBuf {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should move forward")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("agena-{label}-{suffix}"));
+    fs::create_dir_all(&path).expect("temp dir should be created");
     path
 }

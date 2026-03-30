@@ -9,11 +9,12 @@ use crate::event::{AgentEvent, AiStreamEvent, ErrorInfo, MessageReducer, StreamE
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
     GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource, MessageStateStore,
-    MessageUpdate, PartContent, ReadToolInput, TaskToolInput, TimeRange, ToolExecutionPart,
-    ToolInvocation, WriteToolInput,
+    MessageUpdate, PartContent, ReadToolInput, StructuredObject, TaskToolInput, TimeRange,
+    ToolExecutionPart, ToolInvocation, WriteToolInput,
 };
 use crate::provider::{CompletionRequest, CompletionStreamEvent, ProviderRegistry};
 use crate::role::Role;
+use crate::tool::{ToolDefinition, ToolSource};
 
 use super::context_governor::ContextGovernor;
 
@@ -258,8 +259,11 @@ impl SessionProcessor {
     ) -> Result<(), AppError> {
         for pending in pending_calls.into_values() {
             let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
-            let invocation =
-                parse_tool_invocation(tool_name.as_str(), pending.arguments_json.as_str())?;
+            let invocation = parse_tool_invocation(
+                tool_name.as_str(),
+                pending.arguments_json.as_str(),
+                run.completion.tools.as_slice(),
+            )?;
 
             let part_id = run.next_part_id;
             run.next_part_id += 1;
@@ -308,7 +312,19 @@ struct PendingToolCall {
 pub(crate) fn parse_tool_invocation(
     name: &str,
     arguments_json: &str,
+    available_tools: &[ToolDefinition],
 ) -> Result<ToolInvocation, AppError> {
+    if let Some(tool) = available_tools
+        .iter()
+        .find(|tool| tool.name == name.trim() && !matches!(tool.source, ToolSource::Builtin))
+    {
+        let parsed = parse_custom_input(arguments_json)?;
+        return Ok(ToolInvocation::Custom {
+            name: tool.name.clone(),
+            input: parsed,
+        });
+    }
+
     let input = match name.trim() {
         "bash" => BuiltinToolInput::Bash(parse_input::<BashToolInput>(arguments_json)?),
         "read" => BuiltinToolInput::Read(parse_input::<ReadToolInput>(arguments_json)?),
@@ -330,6 +346,16 @@ pub(crate) fn parse_tool_invocation(
     Ok(ToolInvocation::Builtin { input })
 }
 
+fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {
+    let value = if arguments_json.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(arguments_json)?
+    };
+    StructuredObject::try_from(value)
+        .map_err(|err| AppError::Internal(format!("invalid custom tool input: {err}")))
+}
+
 pub(crate) fn parse_input<T>(arguments_json: &str) -> Result<T, AppError>
 where
     T: serde::de::DeserializeOwned,
@@ -340,4 +366,45 @@ where
         arguments_json
     };
     serde_json::from_str::<T>(body).map_err(AppError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::tool::{ToolBehavior, ToolDefinition};
+
+    #[test]
+    fn parse_tool_invocation_recognizes_plugin_tools() {
+        let tools = vec![ToolDefinition::plugin(
+            "plugin_echo",
+            "Echo a message from a plugin.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string" }
+                },
+                "required": ["message"]
+            }),
+            ToolBehavior::ReadOnly,
+            "fixture",
+        )];
+
+        let invocation = parse_tool_invocation(
+            "plugin_echo",
+            "{\"message\":\"hello\"}",
+            tools.as_slice(),
+        )
+        .expect("custom tool call should parse");
+
+        match invocation {
+            ToolInvocation::Custom { name, input } => {
+                assert_eq!(name, "plugin_echo");
+                let payload = serde_json::Value::from(input);
+                assert_eq!(payload["message"], "hello");
+            }
+            other => panic!("expected custom tool invocation, got {other:?}"),
+        }
+    }
 }

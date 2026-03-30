@@ -102,6 +102,7 @@ pub struct ResolvedConfig {
     pub auth: AuthConfig,
     pub runtime: RuntimeConfig,
     pub permission: PermissionConfig,
+    pub plugins: PluginConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
 }
 
@@ -178,6 +179,12 @@ pub struct PermissionConfig {
     pub default_read: PermissionMode,
     pub default_write: PermissionMode,
     pub default_external_directory: PermissionMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PluginConfig {
+    pub enabled: bool,
+    pub paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
@@ -12,7 +13,7 @@ pub struct ToolAttachment {
     pub mime: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct BashToolInput {
     pub command: String,
     #[serde(default)]
@@ -23,7 +24,7 @@ pub struct BashToolInput {
     pub workdir: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ReadToolInput {
     pub file_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -32,13 +33,13 @@ pub struct ReadToolInput {
     pub limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct WriteToolInput {
     pub file_path: String,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct EditToolInput {
     pub file_path: String,
     pub old_string: String,
@@ -47,14 +48,14 @@ pub struct EditToolInput {
     pub replace_all: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct GlobToolInput {
     pub pattern: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct GrepToolInput {
     pub pattern: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,7 +64,7 @@ pub struct GrepToolInput {
     pub include: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct TaskToolInput {
     pub description: String,
     pub prompt: String,
@@ -74,7 +75,7 @@ pub struct TaskToolInput {
     pub command: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ApplyPatchToolInput {
     pub patch: String,
 }

@@ -209,6 +209,18 @@ impl CodexProvider {
         input
     }
 
+    fn responses_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<OpenAiResponsesTool> {
+        tools
+            .iter()
+            .map(|tool| OpenAiResponsesTool {
+                kind: "function",
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.input_schema.clone(),
+            })
+            .collect()
+    }
+
     fn push_responses_text_message(
         input: &mut Vec<OpenAiResponsesInputItem>,
         role: &str,
@@ -414,6 +426,7 @@ impl ModelProvider for CodexProvider {
         let body = OpenAiResponsesRequest::new(
             model.clone(),
             input,
+            request.tools.as_slice(),
             request.max_output_tokens,
             request.temperature,
             false,
@@ -478,6 +491,7 @@ impl ModelProvider for CodexProvider {
         let body = OpenAiResponsesRequest::new(
             model.clone(),
             input,
+            request.tools.as_slice(),
             request.max_output_tokens,
             request.temperature,
             true,
@@ -674,6 +688,8 @@ struct ResponsesToolState {
 struct OpenAiResponsesRequest {
     model: String,
     input: Vec<OpenAiResponsesInputItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OpenAiResponsesTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -685,6 +701,7 @@ impl OpenAiResponsesRequest {
     fn new(
         model: String,
         input: Vec<OpenAiResponsesInputItem>,
+        tools: &[crate::tool::ToolDefinition],
         max_output_tokens: Option<u32>,
         temperature: Option<f32>,
         stream: bool,
@@ -692,11 +709,21 @@ impl OpenAiResponsesRequest {
         Self {
             model,
             input,
+            tools: CodexProvider::responses_tools(tools),
             max_output_tokens,
             temperature,
             stream,
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiResponsesTool {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -813,4 +840,45 @@ fn map_openai_usage(u: OpenAiUsage) -> CompletionUsage {
         total_cost: 0.0,
     }
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool::{ToolBehavior, ToolDefinition};
+
+    fn sample_tool_definition() -> ToolDefinition {
+        ToolDefinition::plugin(
+            "project_search",
+            "Search project files.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }),
+            ToolBehavior::ReadOnly,
+            "fixture",
+        )
+    }
+
+    #[test]
+    fn responses_request_serializes_tools() {
+        let request = OpenAiResponsesRequest::new(
+            "gpt-5.3-codex".to_string(),
+            Vec::new(),
+            &[sample_tool_definition()],
+            Some(128),
+            None,
+            false,
+        );
+
+        let json = serde_json::to_value(request).expect("request should serialize");
+        assert_eq!(json["tools"][0]["name"], "project_search");
+        assert_eq!(
+            json["tools"][0]["parameters"]["properties"]["query"]["type"],
+            "string"
+        );
+    }
 }

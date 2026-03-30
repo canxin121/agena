@@ -229,6 +229,32 @@ impl OpenAiCompatibleProvider {
             .collect())
     }
 
+    fn chat_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<ChatToolDefinition> {
+        tools
+            .iter()
+            .map(|tool| ChatToolDefinition {
+                kind: "function".to_owned(),
+                function: ChatFunctionDefinition {
+                    name: tool.name.clone(),
+                    description: tool.description.clone(),
+                    parameters: tool.input_schema.clone(),
+                },
+            })
+            .collect()
+    }
+
+    fn realtime_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<RealtimeToolDefinition> {
+        tools
+            .iter()
+            .map(|tool| RealtimeToolDefinition {
+                kind: "function".to_owned(),
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.input_schema.clone(),
+            })
+            .collect()
+    }
+
     fn convert_messages(system: Option<String>, messages: Vec<Message>) -> Vec<ChatMessage> {
         let mut result = Vec::new();
 
@@ -379,6 +405,10 @@ impl OpenAiCompatibleProvider {
         let provider_id = self.id.clone();
         let model_name = model;
         let input_text = build_realtime_input_text(request.messages.as_slice());
+        let response_tools = (!request.tools.is_empty()).then(|| {
+            serde_json::to_value(Self::realtime_tools(request.tools.as_slice()))
+                .expect("realtime tool definitions should serialize")
+        });
         let system = request.system;
         let temperature = request.temperature;
         let max_output_tokens = request.max_output_tokens;
@@ -437,6 +467,9 @@ impl OpenAiCompatibleProvider {
             }
             if let Some(max_tokens) = max_output_tokens {
                 response["max_output_tokens"] = serde_json::json!(max_tokens);
+            }
+            if let Some(tools) = response_tools.as_ref() {
+                response["tools"] = tools.clone();
             }
 
             let create_event = serde_json::json!({
@@ -847,11 +880,13 @@ impl ModelProvider for OpenAiCompatibleProvider {
             request.model.clone()
         };
 
+        let tools = (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice()));
         let messages = Self::convert_messages(request.system, request.messages);
 
         let body = ChatCompletionRequest {
             model,
             messages,
+            tools,
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
             stream: false,
@@ -889,11 +924,13 @@ impl ModelProvider for OpenAiCompatibleProvider {
             request.model.clone()
         };
 
+        let tools = (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice()));
         let messages = Self::convert_messages(request.system, request.messages);
 
         let body = ChatCompletionRequest {
             model: model.clone(),
             messages,
+            tools,
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
             stream: true,
@@ -1053,6 +1090,8 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ChatToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
@@ -1090,6 +1129,29 @@ struct ChatToolCallRequest {
 struct ChatFunctionCallRequest {
     name: String,
     arguments: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatToolDefinition {
+    #[serde(rename = "type")]
+    kind: String,
+    function: ChatFunctionDefinition,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatFunctionDefinition {
+    name: String,
+    description: String,
+    parameters: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct RealtimeToolDefinition {
+    #[serde(rename = "type")]
+    kind: String,
+    name: String,
+    description: String,
+    parameters: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1189,7 +1251,24 @@ mod tests {
 
     use super::*;
     use crate::message::Message;
+    use crate::tool::{ToolBehavior, ToolDefinition};
     use tokio::net::TcpListener;
+
+    fn sample_tool_definition() -> ToolDefinition {
+        ToolDefinition::plugin(
+            "project_search",
+            "Search project files.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }),
+            ToolBehavior::ReadOnly,
+            "fixture",
+        )
+    }
 
     #[tokio::test]
     async fn complete_parses_text_tool_calls_usage() {
@@ -1237,6 +1316,7 @@ mod tests {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(128),
             })
@@ -1263,6 +1343,58 @@ mod tests {
         let usage = response.usage.expect("usage should be present");
         assert_eq!(usage.input_tokens, 11);
         assert_eq!(usage.output_tokens, 7);
+    }
+
+    #[tokio::test]
+    async fn complete_includes_tool_definitions_in_chat_request() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"name\\\":\\\"project_search\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"description\\\":\\\"Search project files\\.\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"query\\\":\\{\\\"type\\\":\\\"string\\\"\\}".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "message": { "content": "ok" },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "mock-provider",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "gpt-4o-mini",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: "gpt-4o-mini".to_owned(),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: vec![sample_tool_definition()],
+                temperature: None,
+                max_output_tokens: Some(32),
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
     }
 
     #[tokio::test]
@@ -1330,6 +1462,7 @@ mod tests {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(64),
             })
@@ -1535,6 +1668,7 @@ mod tests {
                 model: "gpt-4o-mini".to_owned(),
                 system: Some("you are helpful".to_owned()),
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: Some(0.2),
                 max_output_tokens: Some(64),
             })
@@ -1626,6 +1760,7 @@ mod tests {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1679,6 +1814,7 @@ mod tests {
                 model: "text-davinci-003".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1722,6 +1858,7 @@ mod tests {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1772,6 +1909,7 @@ mod tests {
                 model: "gpt-4o-mini".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })

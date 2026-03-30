@@ -1219,6 +1219,7 @@ data: [DONE]\n\n";
             model: "anthropic.claude-3-7-sonnet-20250219-v1:0".to_owned(),
             system: None,
             messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
+            tools: Vec::new(),
             temperature: None,
             max_output_tokens: None,
         }

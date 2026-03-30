@@ -14,7 +14,7 @@ pub use overrides::ConfigOverride;
 pub use types::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, AuthConfig,
     BedrockAuthConfig, CloudflareAiGatewayProviderOptions, CodexProviderOptions, ConfigModeName,
-    ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource,
+    ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource, PluginConfig,
     CopilotProviderOptions, GitlabProviderOptions, GoogleVertexAuthConfig,
     GoogleVertexProviderOptions, HttpProviderConfig, OpenAiApiModeConfig,
     OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PermissionConfig, ProviderAliasConfig,

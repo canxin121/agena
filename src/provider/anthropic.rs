@@ -124,6 +124,17 @@ impl AnthropicProvider {
         blocks
     }
 
+    fn tools(tools: &[crate::tool::ToolDefinition]) -> Vec<AnthropicToolDefinition> {
+        tools
+            .iter()
+            .map(|tool| AnthropicToolDefinition {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                input_schema: tool.input_schema.clone(),
+            })
+            .collect()
+    }
+
     async fn send_json<R>(&self, endpoint: String, body: &impl Serialize) -> Result<R, AppError>
     where
         R: for<'de> Deserialize<'de>,
@@ -194,6 +205,7 @@ impl ModelProvider for AnthropicProvider {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(system.clone());
         }
+        let tools = (!request.tools.is_empty()).then(|| Self::tools(request.tools.as_slice()));
 
         let mut messages = Vec::new();
         for msg in request.messages {
@@ -215,6 +227,7 @@ impl ModelProvider for AnthropicProvider {
             max_tokens: request.max_output_tokens.unwrap_or(4096),
             system: (!system_chunks.is_empty()).then(|| system_chunks.join("\n\n")),
             messages,
+            tools,
             temperature: request.temperature,
             stream: None,
         };
@@ -290,6 +303,7 @@ impl ModelProvider for AnthropicProvider {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(system.clone());
         }
+        let tools = (!request.tools.is_empty()).then(|| Self::tools(request.tools.as_slice()));
 
         let mut messages = Vec::new();
         for msg in request.messages {
@@ -311,6 +325,7 @@ impl ModelProvider for AnthropicProvider {
             max_tokens: request.max_output_tokens.unwrap_or(4096),
             system: (!system_chunks.is_empty()).then(|| system_chunks.join("\n\n")),
             messages,
+            tools,
             temperature: request.temperature,
             stream: Some(true),
         };
@@ -510,9 +525,18 @@ struct AnthropicMessagesRequest {
     system: Option<String>,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<AnthropicToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct AnthropicToolDefinition {
+    name: String,
+    description: String,
+    input_schema: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -728,8 +752,24 @@ mod tests {
 
     use super::*;
     use crate::message::Message;
-
     use crate::provider::CompletionRequest;
+    use crate::tool::{ToolBehavior, ToolDefinition};
+
+    fn sample_tool_definition() -> ToolDefinition {
+        ToolDefinition::plugin(
+            "project_search",
+            "Search project files.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }),
+            ToolBehavior::ReadOnly,
+            "fixture",
+        )
+    }
 
     #[tokio::test]
     async fn complete_parses_tool_use_object_input() {
@@ -776,6 +816,7 @@ mod tests {
                 model: "claude-3-7-sonnet-latest".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(128),
             })
@@ -798,6 +839,62 @@ mod tests {
             response.finish_reason,
             Some(CompletionFinishReason::ToolCalls)
         ));
+    }
+
+    #[tokio::test]
+    async fn complete_includes_tools_in_messages_request() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/messages")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"name\\\":\\\"project_search\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"description\\\":\\\"Search project files\\.\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"query\\\":\\{\\\"type\\\":\\\"string\\\"\\}".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "claude-3-7-sonnet-latest",
+                    "stop_reason": "end_turn",
+                    "content": [{
+                        "type": "text",
+                        "text": "ok"
+                    }],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = AnthropicProvider::new(
+            reqwest::Client::new(),
+            "ak-test",
+            server.url(),
+            "claude-3-7-sonnet-latest",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: "claude-3-7-sonnet-latest".to_owned(),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: vec![sample_tool_definition()],
+                temperature: None,
+                max_output_tokens: Some(128),
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
     }
 
     #[tokio::test]
@@ -830,6 +927,7 @@ mod tests {
                 model: "claude-3-7-sonnet-latest".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(64),
             })
@@ -895,6 +993,7 @@ mod tests {
                 model: "claude-3-7-sonnet-latest".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(64),
             })

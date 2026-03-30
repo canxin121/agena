@@ -798,6 +798,20 @@ fn build_chat_messages(request: &CompletionRequest) -> Vec<ChatMessage> {
     messages
 }
 
+fn chat_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<ChatToolDefinition> {
+    tools
+        .iter()
+        .map(|tool| ChatToolDefinition {
+            kind: "function".to_owned(),
+            function: ChatFunctionDefinition {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.input_schema.clone(),
+            },
+        })
+        .collect()
+}
+
 fn assistant_chat_content_and_tool_calls(
     message: &crate::message::Message,
     projected_parts: &[utils::ProjectedSessionPart],
@@ -873,6 +887,18 @@ fn build_responses_input(request: &CompletionRequest) -> Vec<OpenAiResponsesInpu
     }
 
     input
+}
+
+fn responses_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<OpenAiResponsesTool> {
+    tools
+        .iter()
+        .map(|tool| OpenAiResponsesTool {
+            kind: "function",
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            parameters: tool.input_schema.clone(),
+        })
+        .collect()
 }
 
 fn push_responses_text_message(
@@ -1017,6 +1043,8 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ChatToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
@@ -1038,6 +1066,7 @@ impl ChatCompletionRequest {
         Self {
             model,
             messages,
+            tools: (!request.tools.is_empty()).then(|| chat_tools(request.tools.as_slice())),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
             stream: false,
@@ -1077,6 +1106,20 @@ struct ChatToolCallRequest {
 struct ChatFunctionCallRequest {
     name: String,
     arguments: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatToolDefinition {
+    #[serde(rename = "type")]
+    kind: String,
+    function: ChatFunctionDefinition,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatFunctionDefinition {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1137,6 +1180,8 @@ struct ChatUsage {
 struct OpenAiResponsesRequest {
     model: String,
     input: Vec<OpenAiResponsesInputItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OpenAiResponsesTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1151,6 +1196,7 @@ impl OpenAiResponsesRequest {
         Self {
             model,
             input,
+            tools: responses_tools(request.tools.as_slice()),
             max_output_tokens: request.max_output_tokens,
             temperature: request.temperature,
             stream: false,
@@ -1161,6 +1207,15 @@ impl OpenAiResponsesRequest {
         self.stream = stream;
         self
     }
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiResponsesTool {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -1518,6 +1573,7 @@ mod tests {
                 model: "gpt-5".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1564,6 +1620,7 @@ mod tests {
                 model: "gpt-5".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1613,6 +1670,7 @@ mod tests {
                 model: "gpt-4o".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })
@@ -1667,6 +1725,7 @@ mod tests {
                 model: "gpt-5".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(64),
             })

@@ -53,14 +53,14 @@ pub enum PermissionDecision {
 #[derive(Debug, Clone)]
 pub struct ToolPermissionPolicy {
     default_mode: PermissionMode,
-    builtin_modes: HashMap<&'static str, PermissionMode>,
+    tool_modes: HashMap<String, PermissionMode>,
 }
 
 impl ToolPermissionPolicy {
     pub fn new(default_mode: PermissionMode) -> Self {
         Self {
             default_mode,
-            builtin_modes: HashMap::new(),
+            tool_modes: HashMap::new(),
         }
     }
 
@@ -69,14 +69,22 @@ impl ToolPermissionPolicy {
     }
 
     pub fn with_builtin_mode(mut self, builtin_name: &'static str, mode: PermissionMode) -> Self {
-        self.builtin_modes.insert(builtin_name, mode);
+        self.tool_modes.insert(builtin_name.to_string(), mode);
+        self
+    }
+
+    pub fn with_tool_mode(mut self, tool_name: impl Into<String>, mode: PermissionMode) -> Self {
+        self.tool_modes.insert(tool_name.into(), mode);
         self
     }
 
     pub fn check_builtin(&self, input: &BuiltinToolInput) -> PermissionDecision {
-        let name = builtin_name(input);
+        self.check_tool_name(builtin_name(input))
+    }
+
+    pub fn check_tool_name(&self, name: &str) -> PermissionDecision {
         let mode = self
-            .builtin_modes
+            .tool_modes
             .get(name)
             .copied()
             .unwrap_or(self.default_mode);

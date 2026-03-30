@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::message::{BuiltinToolOutput, ToolAttachment};
+use crate::message::{BuiltinToolOutput, ToolAttachment, ToolOutput};
 
 use super::ApplyPatchExecution;
 
@@ -42,5 +42,39 @@ impl BuiltinExecution {
     pub fn with_apply_patch(mut self, execution: ApplyPatchExecution) -> Self {
         self.apply_patch = Some(execution);
         self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolInvocationExecution {
+    pub output: ToolOutput,
+    pub view: ToolExecutionView,
+    pub apply_patch: Option<ApplyPatchExecution>,
+}
+
+impl ToolInvocationExecution {
+    pub fn new(output: ToolOutput, view: ToolExecutionView) -> Self {
+        Self {
+            output,
+            view,
+            apply_patch: None,
+        }
+    }
+
+    pub fn with_apply_patch(mut self, execution: ApplyPatchExecution) -> Self {
+        self.apply_patch = Some(execution);
+        self
+    }
+}
+
+impl From<BuiltinExecution> for ToolInvocationExecution {
+    fn from(value: BuiltinExecution) -> Self {
+        Self {
+            output: ToolOutput::Builtin {
+                output: value.output,
+            },
+            view: value.view,
+            apply_patch: value.apply_patch,
+        }
     }
 }

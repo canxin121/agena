@@ -5,7 +5,9 @@ use procwarden::SandboxCommandRequest;
 
 use crate::message::{BashToolInput, BuiltinToolOutput};
 
-use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{
+    BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
+};
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -14,6 +16,7 @@ const MAX_OUTPUT_LINES: usize = 2_000;
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &BashToolInput,
+    context: BuiltinExecutionContext,
 ) -> Result<BuiltinExecution, ToolError> {
     if input.command.trim().is_empty() {
         return Err(ToolError::InvalidInput(
@@ -28,10 +31,17 @@ pub(super) fn execute(
         .unwrap_or_else(|| executor.workspace_root().to_path_buf());
     executor.ensure_read_permission(&cwd)?;
 
+    let mut env = inherited_environment();
+    env.extend(executor.shell_env_overrides(
+        &cwd,
+        context.session_id,
+        context.call_id,
+    )?);
+
     let request = SandboxCommandRequest {
         command: shell_command_for_platform(&input.command),
         cwd,
-        env: inherited_environment(),
+        env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS)),
     };
 

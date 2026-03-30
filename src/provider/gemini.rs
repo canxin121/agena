@@ -494,6 +494,7 @@ mod tests {
                 model: "gemini-2.5-flash".to_owned(),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(64),
             })

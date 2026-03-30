@@ -1,9 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use aws_credential_types::Credentials;
 
 use crate::{
     auth::{AuthData, AuthStore},
+    plugin::PluginManager,
     provider::{
         AmazonBedrockProvider, AnthropicProvider, CloudflareAiGatewayProvider, CodexProvider,
         CopilotProvider, CopilotProviderOptions as RuntimeCopilotProviderOptions, GeminiProvider,
@@ -58,6 +63,63 @@ impl ResolvedConfig {
 
         register_aliases(&mut registry, aliases)?;
         Ok(registry)
+    }
+}
+
+impl super::ConfigResolution {
+    pub fn build_plugin_manager(&self) -> Result<PluginManager, ConfigError> {
+        let mut manager = PluginManager::new();
+        if !self.config.plugins.enabled {
+            return Ok(manager);
+        }
+
+        let explicit_paths = !self.config.plugins.paths.is_empty();
+        let base_dir = self
+            .meta
+            .config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        let paths = if explicit_paths {
+            self.config.plugins.paths.clone()
+        } else {
+            vec![PathBuf::from("plugins")]
+        };
+
+        for raw_path in paths {
+            let path = if raw_path.is_absolute() {
+                raw_path
+            } else {
+                base_dir.join(raw_path)
+            };
+
+            if !path.exists() {
+                if explicit_paths {
+                    return Err(ConfigError::Validation(format!(
+                        "plugin path does not exist: {}",
+                        path.display()
+                    )));
+                }
+                continue;
+            }
+
+            if path.is_dir() {
+                manager.discover_directory(&path).map_err(|err| {
+                    ConfigError::Validation(format!(
+                        "failed to discover plugins in {}: {err}",
+                        path.display()
+                    ))
+                })?;
+            } else {
+                manager.load_dynamic(&path).map_err(|err| {
+                    ConfigError::Validation(format!(
+                        "failed to load plugin {}: {err}",
+                        path.display()
+                    ))
+                })?;
+            }
+        }
+
+        Ok(manager)
     }
 }
 

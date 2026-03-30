@@ -11,8 +11,8 @@ use crate::{auth::FileAuthStore, permission::PermissionMode};
 
 use super::{
     AuthConfig, ConfigEnvironment, ConfigError, OpenAiApiModeConfig, PermissionConfig,
-    ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig,
-    StreamTransportMode, TracingConfig,
+    PluginConfig, ProviderAliasConfig, ProviderDefinition, ResolvedConfig,
+    ResolvedProviderConfig, RuntimeConfig, StreamTransportMode, TracingConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -95,6 +95,7 @@ pub(crate) struct RawConfig {
     pub(crate) auth: Option<RawAuthConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
+    pub(crate) plugins: Option<RawPluginConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
     pub(crate) modes: BTreeMap<String, RawModeConfig>,
 }
@@ -106,6 +107,7 @@ impl RawConfig {
         merge_option_struct(&mut self.auth, overlay.auth);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
+        merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_map(&mut self.providers, overlay.providers);
         merge_map(&mut self.modes, overlay.modes);
     }
@@ -115,6 +117,7 @@ impl RawConfig {
         merge_option_struct(&mut self.auth, overlay.auth);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
+        merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_map(&mut self.providers, overlay.providers);
     }
 
@@ -124,6 +127,7 @@ impl RawConfig {
             && self.auth.is_none()
             && self.runtime.is_none()
             && self.permission.is_none()
+            && self.plugins.is_none()
             && self.providers.is_empty()
             && self.modes.is_empty()
     }
@@ -146,6 +150,18 @@ impl RawConfig {
                 .tracing
                 .get_or_insert_with(RawTracingConfig::default)
                 .filter = Some(filter);
+        }
+        if let Some(enabled) = env.var("AGENA_PLUGIN_ENABLED") {
+            config
+                .plugins
+                .get_or_insert_with(RawPluginConfig::default)
+                .enabled = Some(parse_bool("AGENA_PLUGIN_ENABLED", enabled.as_str())?);
+        }
+        if let Some(paths) = env.var("AGENA_PLUGIN_PATHS") {
+            config
+                .plugins
+                .get_or_insert_with(RawPluginConfig::default)
+                .paths = Some(std::env::split_paths(paths.as_str()).collect());
         }
 
         apply_env_number(env, "AGENA_PROVIDER_HTTP_TIMEOUT_SECS", |value| {
@@ -273,6 +289,7 @@ impl RawConfig {
 
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
         let permission = PermissionConfig::from_raw(self.permission.unwrap_or_default());
+        let plugins = PluginConfig::from_raw(self.plugins.unwrap_or_default());
 
         let providers = self
             .providers
@@ -285,6 +302,7 @@ impl RawConfig {
             auth,
             runtime,
             permission,
+            plugins,
             providers,
         })
     }
@@ -298,6 +316,7 @@ pub(crate) struct RawModeConfig {
     pub(crate) auth: Option<RawAuthConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
+    pub(crate) plugins: Option<RawPluginConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
 }
 
@@ -308,7 +327,22 @@ impl RawModeConfig {
         merge_option_struct(&mut self.auth, overlay.auth);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
+        merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_map(&mut self.providers, overlay.providers);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct RawPluginConfig {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) paths: Option<Vec<PathBuf>>,
+}
+
+impl Merge for RawPluginConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.enabled, overlay.enabled);
+        merge_option(&mut self.paths, overlay.paths);
     }
 }
 
@@ -470,6 +504,15 @@ impl PermissionConfig {
             default_external_directory: raw
                 .default_external_directory
                 .unwrap_or(PermissionMode::Deny),
+        }
+    }
+}
+
+impl PluginConfig {
+    pub(crate) fn from_raw(raw: RawPluginConfig) -> Self {
+        Self {
+            enabled: raw.enabled.unwrap_or(true),
+            paths: raw.paths.unwrap_or_default(),
         }
     }
 }

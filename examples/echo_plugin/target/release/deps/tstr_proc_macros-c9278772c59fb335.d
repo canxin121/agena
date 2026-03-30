@@ -1,0 +1,9 @@
+/home/canxin/Git/ai/agena/examples/echo_plugin/target/release/deps/tstr_proc_macros-c9278772c59fb335.d: /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/lib.rs /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/non_syn_parsing.rs /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/nested_tuple_compute.rs /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/utils.rs /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/no_const_generics.rs
+
+/home/canxin/Git/ai/agena/examples/echo_plugin/target/release/deps/libtstr_proc_macros-c9278772c59fb335.so: /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/lib.rs /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/non_syn_parsing.rs /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/nested_tuple_compute.rs /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/utils.rs /home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/no_const_generics.rs
+
+/home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/lib.rs:
+/home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/non_syn_parsing.rs:
+/home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/nested_tuple_compute.rs:
+/home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/utils.rs:
+/home/canxin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tstr_proc_macros-0.2.2/src/no_const_generics.rs:

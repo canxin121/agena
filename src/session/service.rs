@@ -13,16 +13,16 @@ use crate::event::{
     AgentEvent, ErrorInfo, MessagePartUpdatedEvent, ThreadFailedEvent, ThreadStartedEvent,
 };
 use crate::message::{
-    BuiltinToolInput, ErrorPart, ExecutionStatus, Message, MessageMetadata, MessagePart,
-    MessageSource, MessageStatus, PartContent, TimeRange, ToolExecutionPart, ToolInvocation,
-    ToolOutput, ToolResultBlock,
+    ErrorPart, ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource,
+    MessageStatus, PartContent, TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
+    ToolResultBlock,
 };
 use crate::permission::{
     PermissionAction, PermissionDecision, PermissionMode, PermissionReply, PermissionReplyKind,
     PermissionRequest, decide_from_mode,
 };
 use crate::role::Role;
-use crate::tool::{BuiltinExecution, ToolError, ToolExecutor, ToolPermissionCheck};
+use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissionCheck};
 
 use super::{Session, SessionProcessor, SessionRunRequest, SessionSnapshot};
 
@@ -64,11 +64,16 @@ pub struct SessionRunOptions {
 }
 
 impl SessionRunOptions {
-    fn completion_request(&self, messages: Vec<Message>) -> crate::provider::CompletionRequest {
+    fn completion_request(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<crate::tool::ToolDefinition>,
+    ) -> crate::provider::CompletionRequest {
         crate::provider::CompletionRequest {
             model: self.model.clone(),
             system: self.system.clone(),
             messages,
+            tools,
             temperature: self.temperature,
             max_output_tokens: self.max_output_tokens,
         }
@@ -276,7 +281,7 @@ impl SessionService {
 
         match request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
-                let execution = self.execute_pending_tool(&pending.tool)?;
+                let execution = self.execute_pending_tool(state.session.id, &pending.tool)?;
                 state = self
                     .apply_tool_success(
                         state,
@@ -339,7 +344,10 @@ impl SessionService {
         let run = SessionRunRequest {
             session_id: state.session.id,
             provider_id: options.provider_id.clone(),
-            completion: options.completion_request(state.messages.clone()),
+            completion: options.completion_request(
+                state.messages.clone(),
+                self.tool_executor.available_tools(),
+            ),
             next_message_id: processor_ids.message_id,
             next_part_id: processor_ids.first_part_id,
             next_call_id: state.next_call_id(),
@@ -376,24 +384,39 @@ impl SessionService {
 
     async fn resolve_pending_tool(
         &self,
-        state: LoadedSessionState,
-        pending_tool: PendingToolTarget,
+        mut state: LoadedSessionState,
+        mut pending_tool: PendingToolTarget,
     ) -> Result<LoadedSessionState, AppError> {
-        let ToolInvocation::Builtin { input } = pending_tool.invocation.clone() else {
-            return self
-                .apply_tool_failure(
-                    state,
-                    &pending_tool,
-                    "unsupported non-builtin tool invocation".to_string(),
-                    None,
-                    None,
-                )
-                .await;
-        };
+        let prepared = self
+            .tool_executor
+            .prepare_invocation(&pending_tool.invocation, state.session.id, pending_tool.call_id)
+            .map_err(tool_error_to_app_error)?;
+        if prepared.invocation != pending_tool.invocation || prepared.title_override.is_some() {
+            let current_title = match state.messages[pending_tool.message_index].parts
+                [pending_tool.part_index]
+                .content
+                .as_ref()
+            {
+                Some(PartContent::ToolExecution(ToolExecutionPart::Pending { title, .. })) => {
+                    title.clone()
+                }
+                _ => format!("Tool {}", tool_name(&pending_tool.invocation)),
+            };
+
+            pending_tool.invocation = prepared.invocation.clone();
+            let tool_part =
+                &mut state.messages[pending_tool.message_index].parts[pending_tool.part_index];
+            tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
+                call_id: pending_tool.call_id,
+                invocation: prepared.invocation,
+                title: prepared.title_override.unwrap_or(current_title),
+                lifecycle: pending_tool.lifecycle.clone(),
+            }));
+        }
 
         for check in self
             .tool_executor
-            .collect_permission_checks(&input)
+            .collect_permission_checks_for_invocation(&pending_tool.invocation)
             .map_err(tool_error_to_app_error)?
         {
             let decision = self.resolve_permission_decision(&check).await?;
@@ -412,7 +435,7 @@ impl SessionService {
             }
         }
 
-        let execution = self.execute_builtin_unchecked(&input)?;
+        let execution = self.execute_pending_tool(state.session.id, &pending_tool)?;
         self.apply_tool_success(state, &pending_tool, execution, None, None)
             .await
     }
@@ -489,13 +512,11 @@ impl SessionService {
         &self,
         mut state: LoadedSessionState,
         pending_tool: &PendingToolTarget,
-        execution: BuiltinExecution,
+        execution: ToolInvocationExecution,
         persisted_action_key: Option<String>,
         persisted_mode: Option<PermissionMode>,
     ) -> Result<LoadedSessionState, AppError> {
-        let tool_output = ToolOutput::Builtin {
-            output: execution.output.clone(),
-        };
+        let tool_output = execution.output.clone();
         let output_text = execution.view.output_text.clone();
         let lifecycle = completed_lifecycle(&pending_tool.lifecycle);
         let blocks = text_result_blocks(output_text.as_str());
@@ -727,22 +748,11 @@ impl SessionService {
 
     fn execute_pending_tool(
         &self,
+        session_id: i64,
         pending_tool: &PendingToolTarget,
-    ) -> Result<BuiltinExecution, AppError> {
-        let ToolInvocation::Builtin { input } = pending_tool.invocation.clone() else {
-            return Err(AppError::Internal(
-                "permission reply attempted on non-builtin invocation".to_string(),
-            ));
-        };
-        self.execute_builtin_unchecked(&input)
-    }
-
-    fn execute_builtin_unchecked(
-        &self,
-        input: &BuiltinToolInput,
-    ) -> Result<BuiltinExecution, AppError> {
+    ) -> Result<ToolInvocationExecution, AppError> {
         self.tool_executor
-            .execute_builtin_unchecked(input)
+            .execute_invocation_detailed(&pending_tool.invocation, session_id, pending_tool.call_id)
             .map_err(tool_error_to_app_error)
     }
 
@@ -1243,6 +1253,14 @@ fn completed_lifecycle(lifecycle: &TimeRange) -> TimeRange {
     TimeRange {
         start_ms: lifecycle.start_ms,
         end_ms: Some(Utc::now().timestamp_millis()),
+    }
+}
+
+fn tool_name(invocation: &ToolInvocation) -> String {
+    match invocation {
+        ToolInvocation::Builtin { input } => input.to_string(),
+        ToolInvocation::Mcp { server, tool, .. } => format!("{server}:{tool}"),
+        ToolInvocation::Custom { name, .. } => name.clone(),
     }
 }
 

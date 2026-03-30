@@ -561,6 +561,7 @@ mod tests {
                     crate::role::Role::User,
                     "hello",
                 )],
+                tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
             })

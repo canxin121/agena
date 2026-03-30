@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::message::{Message, MessageUsage};
+use crate::{
+    message::{Message, MessageUsage},
+    tool::ToolDefinition,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderModel {
@@ -15,6 +18,8 @@ pub struct CompletionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
     pub messages: Vec<Message>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolDefinition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

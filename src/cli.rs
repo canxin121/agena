@@ -67,6 +67,7 @@ impl AgenaCli {
     fn run_default(self, loader: ConfigLoader<ProcessEnvironment>) -> Result<(), AppError> {
         let resolution = loader.load(&self.load_request())?;
         let registry = resolution.config.build_provider_registry()?;
+        let plugins = resolution.build_plugin_manager()?;
         let mode = resolution
             .meta
             .active_mode
@@ -76,6 +77,7 @@ impl AgenaCli {
         tracing::info!(
             mode,
             providers = registry.provider_ids().len(),
+            plugins = plugins.plugins().len(),
             "Agena started with resolved configuration"
         );
         Ok(())

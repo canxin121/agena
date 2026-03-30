@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
     QueryFilter, QueryOrder,
 };
 
@@ -9,6 +9,7 @@ use crate::message::{Message, MessageMetadata, MessagePart, MessageSource};
 
 #[derive(Debug, Clone)]
 pub struct NewMessageRecord {
+    pub id: Option<i64>,
     pub session_id: i64,
     pub role: crate::role::Role,
     pub status: crate::message::MessageStatus,
@@ -18,12 +19,15 @@ pub struct NewMessageRecord {
     pub created_at: DateTime<Utc>,
 }
 
-pub async fn create_message(
-    db: &DatabaseConnection,
+pub async fn create_message<C>(
+    db: &C,
     input: NewMessageRecord,
-) -> Result<entities::message::Model, DbErr> {
+) -> Result<entities::message::Model, DbErr>
+where
+    C: ConnectionTrait,
+{
     let ts_ms = input.created_at.timestamp_millis();
-    entities::message::ActiveModel {
+    let mut active = entities::message::ActiveModel {
         session_id: Set(input.session_id),
         role: Set(input.role),
         status: Set(input.status),
@@ -37,19 +41,25 @@ pub async fn create_message(
         created_at_ms: Set(ts_ms),
         updated_at_ms: Set(ts_ms),
         ..Default::default()
+    };
+    if let Some(id) = input.id {
+        active.id = Set(id);
     }
-    .insert(db)
-    .await
+    active.insert(db).await
 }
 
-pub async fn insert_message_with_parts(
-    db: &DatabaseConnection,
+pub async fn insert_message_with_parts<C>(
+    db: &C,
     session_id: i64,
     message: &Message,
-) -> Result<Message, DbErr> {
+) -> Result<Message, DbErr>
+where
+    C: ConnectionTrait,
+{
     let created = create_message(
         db,
         NewMessageRecord {
+            id: explicit_id(message.id),
             session_id,
             role: message.role,
             status: message.state,
@@ -85,10 +95,56 @@ pub async fn insert_message_with_parts(
     })
 }
 
-pub async fn list_messages_with_parts(
-    db: &DatabaseConnection,
+pub async fn upsert_message_with_parts<C>(
+    db: &C,
     session_id: i64,
-) -> Result<Vec<Message>, DbErr> {
+    message: &Message,
+) -> Result<Message, DbErr>
+where
+    C: ConnectionTrait,
+{
+    if let Some(existing) = entities::message::Entity::find_by_id(message.id)
+        .one(db)
+        .await?
+    {
+        let ts_ms = Utc::now().timestamp_millis();
+        let mut active: entities::message::ActiveModel = existing.into();
+        active.session_id = Set(session_id);
+        active.role = Set(message.role);
+        active.status = Set(message.state);
+        active.source = Set(message.metadata.source);
+        active.parent_message_id = Set(message.metadata.parent_message_id);
+        active.generated_by_call_id = Set(message.metadata.generated_by_call_id);
+        active.model_provider_id = Set(message.metadata.model_provider_id.clone());
+        active.model_id = Set(message.metadata.model_id.clone());
+        active.usage = Set(message.usage.clone());
+        active.finish = Set(message.finish.clone());
+        active.updated_at_ms = Set(ts_ms);
+        active.update(db).await?;
+        delete_parts_by_message_id(db, message.id).await?;
+        let mut persisted_parts = Vec::with_capacity(message.parts.len());
+        for (idx, part) in message.parts.iter().enumerate() {
+            persisted_parts.push(insert_part(db, message.id, idx as i32, part).await?);
+        }
+        return Ok(Message {
+            id: message.id,
+            role: message.role,
+            state: message.state,
+            parts: persisted_parts,
+            created_at: message.created_at,
+            metadata: message.metadata.clone(),
+            usage: message.usage.clone(),
+            finish: message.finish.clone(),
+        });
+    }
+
+    insert_message_with_parts(db, session_id, message).await
+}
+
+pub async fn list_messages_with_parts<C>(db: &C, session_id: i64) -> Result<Vec<Message>, DbErr>
+where
+    C: ConnectionTrait,
+{
     let message_rows = entities::message::Entity::find()
         .filter(entities::message::Column::SessionId.eq(session_id))
         .order_by_asc(entities::message::Column::CreatedAtMs)
@@ -154,10 +210,10 @@ pub async fn list_messages_with_parts(
     Ok(result)
 }
 
-pub async fn delete_messages_by_session_id(
-    db: &DatabaseConnection,
-    session_id: i64,
-) -> Result<u64, DbErr> {
+pub async fn delete_messages_by_session_id<C>(db: &C, session_id: i64) -> Result<u64, DbErr>
+where
+    C: ConnectionTrait,
+{
     let deleted = entities::message::Entity::delete_many()
         .filter(entities::message::Column::SessionId.eq(session_id))
         .exec(db)
@@ -166,13 +222,13 @@ pub async fn delete_messages_by_session_id(
 }
 
 async fn insert_part(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     message_id: i64,
     part_index: i32,
     part: &MessagePart,
 ) -> Result<MessagePart, DbErr> {
     let created_at_ms = part.created_at.timestamp_millis();
-    let part_row = entities::message_part::ActiveModel {
+    let mut active = entities::message_part::ActiveModel {
         message_id: Set(message_id),
         part_index: Set(part_index),
         kind: Set(part.kind),
@@ -185,9 +241,11 @@ async fn insert_part(
         created_at_ms: Set(created_at_ms),
         updated_at_ms: Set(created_at_ms),
         ..Default::default()
+    };
+    if let Some(id) = explicit_id(part.id) {
+        active.id = Set(id);
     }
-    .insert(db)
-    .await?;
+    let part_row = active.insert(db).await?;
 
     if let Some(content) = part.content.clone()
         && part.has_detail
@@ -216,6 +274,17 @@ async fn insert_part(
     })
 }
 
+async fn delete_parts_by_message_id(
+    db: &impl ConnectionTrait,
+    message_id: i64,
+) -> Result<u64, DbErr> {
+    let deleted = entities::message_part::Entity::delete_many()
+        .filter(entities::message_part::Column::MessageId.eq(message_id))
+        .exec(db)
+        .await?;
+    Ok(deleted.rows_affected)
+}
+
 fn extract_call_id(part: &MessagePart) -> Option<i64> {
     part.content.as_ref().and_then(|content| match content {
         crate::message::PartContent::ToolExecution(tool) => match tool {
@@ -231,6 +300,10 @@ fn extract_call_id(part: &MessagePart) -> Option<i64> {
 fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, DbErr> {
     DateTime::from_timestamp_millis(timestamp_ms)
         .ok_or_else(|| DbErr::Custom(format!("invalid timestamp millis: {timestamp_ms}")))
+}
+
+fn explicit_id(id: i64) -> Option<i64> {
+    (id > 0).then_some(id)
 }
 
 #[allow(dead_code)]

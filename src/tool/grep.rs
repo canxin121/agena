@@ -7,7 +7,7 @@ use walkdir::WalkDir;
 use crate::message::{BuiltinToolOutput, GrepToolInput};
 
 use super::{
-    normalize_path_for_display, BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor,
+    BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor, normalize_path_for_display,
 };
 
 const MAX_MATCHES: usize = 500;

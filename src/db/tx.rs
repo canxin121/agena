@@ -25,13 +25,12 @@ impl DbTxEffects {
     }
 }
 
-pub async fn with_transaction_and_effects<T, O, Fut>(
-    db: &DatabaseConnection,
-    op: O,
-) -> Result<T, DbErr>
+pub async fn with_transaction_and_effects<T, O>(db: &DatabaseConnection, op: O) -> Result<T, DbErr>
 where
-    O: FnOnce(&DatabaseTransaction, &mut DbTxEffects) -> Fut,
-    Fut: Future<Output = Result<T, DbErr>>,
+    O: for<'a> FnOnce(
+        &'a DatabaseTransaction,
+        &'a mut DbTxEffects,
+    ) -> Pin<Box<dyn Future<Output = Result<T, DbErr>> + Send + 'a>>,
 {
     let txn = db.begin().await?;
     let mut effects = DbTxEffects::default();

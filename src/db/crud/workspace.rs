@@ -1,17 +1,17 @@
 use chrono::Utc;
 use path_clean::PathClean;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
     QueryFilter, QuerySelect,
 };
 use std::path::Path;
 
 use crate::db::entities;
 
-pub async fn get_workspace_id_by_path(
-    db: &DatabaseConnection,
-    workspace_path: &str,
-) -> Result<Option<i64>, DbErr> {
+pub async fn get_workspace_id_by_path<C>(db: &C, workspace_path: &str) -> Result<Option<i64>, DbErr>
+where
+    C: ConnectionTrait,
+{
     let normalized = normalized_workspace_path(workspace_path)?;
 
     entities::workspace::Entity::find()
@@ -23,10 +23,10 @@ pub async fn get_workspace_id_by_path(
         .await
 }
 
-pub async fn ensure_workspace_id(
-    db: &DatabaseConnection,
-    workspace_path: &str,
-) -> Result<i64, DbErr> {
+pub async fn ensure_workspace_id<C>(db: &C, workspace_path: &str) -> Result<i64, DbErr>
+where
+    C: ConnectionTrait,
+{
     if let Some(existing_id) = get_workspace_id_by_path(db, workspace_path).await? {
         return Ok(existing_id);
     }

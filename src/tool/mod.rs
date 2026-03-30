@@ -32,6 +32,18 @@ pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use result::{BuiltinExecution, ToolExecutionView};
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolPermissionCheck {
+    pub action: PermissionAction,
+    pub decision: PermissionDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionExecutionMode {
+    Enforced,
+    Bypassed,
+}
+
 #[derive(Debug)]
 pub enum PermissionedBuiltinExecution {
     Executed(BuiltinExecution),
@@ -60,6 +72,7 @@ pub enum ToolError {
     UnsupportedBuiltin(&'static str),
 }
 
+#[derive(Clone)]
 pub struct ToolExecutor {
     workspace_root: PathBuf,
     agent: Agent,
@@ -68,6 +81,7 @@ pub struct ToolExecutor {
     truncator: ToolOutputTruncator,
     sandbox_policy: SandboxPolicy,
     sandbox_manager: SandboxManager,
+    permission_mode: PermissionExecutionMode,
 }
 
 impl ToolExecutor {
@@ -92,6 +106,7 @@ impl ToolExecutor {
             truncator: ToolOutputTruncator::default(),
             sandbox_policy,
             sandbox_manager: SandboxManager::new(),
+            permission_mode: PermissionExecutionMode::Enforced,
         }
     }
 
@@ -183,18 +198,15 @@ impl ToolExecutor {
         &self,
         input: &BuiltinToolInput,
     ) -> Result<BuiltinExecution, ToolError> {
-        let availability = self
-            .tool_catalog()
-            .availability_for_input(&self.agent, input);
-        if !availability.enabled {
-            return Err(ToolError::UnsupportedBuiltin(availability.tool_name));
-        }
+        self.ensure_builtin_enabled(input)?;
 
-        match self.agent.authorize_builtin_tool(input) {
-            PermissionDecision::Allow => {}
-            PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
-            PermissionDecision::Deny { reason } => {
-                return Err(ToolError::PermissionDenied(reason));
+        if self.permission_mode == PermissionExecutionMode::Enforced {
+            match self.agent.authorize_builtin_tool(input) {
+                PermissionDecision::Allow => {}
+                PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
+                PermissionDecision::Deny { reason } => {
+                    return Err(ToolError::PermissionDenied(reason));
+                }
             }
         }
 
@@ -202,12 +214,85 @@ impl ToolExecutor {
         Ok(self.truncator.apply(execution))
     }
 
+    pub fn collect_permission_checks(
+        &self,
+        input: &BuiltinToolInput,
+    ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
+        self.ensure_builtin_enabled(input)?;
+
+        let mut checks = vec![ToolPermissionCheck {
+            action: PermissionAction::BuiltinTool {
+                tool_name: crate::permission::builtin_name(input).to_string(),
+            },
+            decision: self.agent.authorize_builtin_tool(input),
+        }];
+
+        match input {
+            BuiltinToolInput::Bash(payload) => {
+                let cwd = payload
+                    .workdir
+                    .as_deref()
+                    .map(|workdir| self.resolve_target_path(workdir))
+                    .unwrap_or_else(|| self.workspace_root().to_path_buf());
+                self.push_path_checks(&mut checks, AccessKind::Read, &cwd);
+            }
+            BuiltinToolInput::Read(payload) => {
+                let target = self.resolve_target_path(&payload.file_path);
+                self.push_path_checks(&mut checks, AccessKind::Read, &target);
+            }
+            BuiltinToolInput::Write(payload) => {
+                let target = self.resolve_target_path(&payload.file_path);
+                self.push_path_checks(&mut checks, AccessKind::Write, &target);
+            }
+            BuiltinToolInput::Edit(payload) => {
+                let target = self.resolve_target_path(&payload.file_path);
+                self.push_path_checks(&mut checks, AccessKind::Write, &target);
+            }
+            BuiltinToolInput::ApplyPatch(payload) => {
+                for path in apply_patch::planned_paths(&payload.patch)? {
+                    let target = self.resolve_target_path(&path);
+                    self.push_path_checks(&mut checks, AccessKind::Write, &target);
+                }
+            }
+            BuiltinToolInput::Glob(payload) => {
+                let base_path = payload
+                    .path
+                    .as_deref()
+                    .map(|path| self.resolve_target_path(path))
+                    .unwrap_or_else(|| self.workspace_root().to_path_buf());
+                self.push_path_checks(&mut checks, AccessKind::Read, &base_path);
+            }
+            BuiltinToolInput::Grep(payload) => {
+                let base_path = payload
+                    .path
+                    .as_deref()
+                    .map(|path| self.resolve_target_path(path))
+                    .unwrap_or_else(|| self.workspace_root().to_path_buf());
+                self.push_path_checks(&mut checks, AccessKind::Read, &base_path);
+            }
+            BuiltinToolInput::Task(_) => {}
+        }
+
+        Ok(checks)
+    }
+
     pub(crate) fn execute_builtin_unchecked(
         &self,
         input: &BuiltinToolInput,
     ) -> Result<BuiltinExecution, ToolError> {
-        let execution = orchestrator::execute_builtin(self, input)?;
-        Ok(self.truncator.apply(execution))
+        let mut unchecked = self.clone();
+        unchecked.permission_mode = PermissionExecutionMode::Bypassed;
+        unchecked.execute_builtin_detailed(input)
+    }
+
+    fn ensure_builtin_enabled(&self, input: &BuiltinToolInput) -> Result<(), ToolError> {
+        let availability = self
+            .tool_catalog()
+            .availability_for_input(&self.agent, input);
+        if !availability.enabled {
+            return Err(ToolError::UnsupportedBuiltin(availability.tool_name));
+        }
+        Ok(())
     }
 
     pub fn execute_builtin_with_permission_runtime<S>(
@@ -290,6 +375,10 @@ impl ToolExecutor {
         access: AccessKind,
         target_path: &Path,
     ) -> Result<(), ToolError> {
+        if self.permission_mode == PermissionExecutionMode::Bypassed {
+            return Ok(());
+        }
+
         match self.agent.authorize_path_access(
             AccessKind::ExternalDirectory,
             self.workspace_root(),
@@ -309,10 +398,51 @@ impl ToolExecutor {
             PermissionDecision::Deny { reason } => Err(ToolError::PermissionDenied(reason)),
         }
     }
+
+    fn push_path_checks(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        access: AccessKind,
+        target_path: &Path,
+    ) {
+        let workspace_root = normalize_path_for_display(self.workspace_root());
+        let target = normalize_path_for_display(target_path);
+
+        checks.push(ToolPermissionCheck {
+            action: PermissionAction::PathAccess {
+                access_kind: access_kind_name(AccessKind::ExternalDirectory).to_string(),
+                workspace_root: workspace_root.clone(),
+                target_path: target.clone(),
+            },
+            decision: self.agent.authorize_path_access(
+                AccessKind::ExternalDirectory,
+                self.workspace_root(),
+                target_path,
+            ),
+        });
+        checks.push(ToolPermissionCheck {
+            action: PermissionAction::PathAccess {
+                access_kind: access_kind_name(access).to_string(),
+                workspace_root,
+                target_path: target,
+            },
+            decision: self
+                .agent
+                .authorize_path_access(access, self.workspace_root(), target_path),
+        });
+    }
 }
 
 pub(crate) fn normalize_path_for_display(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn access_kind_name(access: AccessKind) -> &'static str {
+    match access {
+        AccessKind::Read => "read",
+        AccessKind::Write => "write",
+        AccessKind::ExternalDirectory => "external_directory",
+    }
 }
 
 #[cfg(test)]

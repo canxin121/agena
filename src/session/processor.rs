@@ -8,12 +8,12 @@ use crate::error::AppError;
 use crate::event::{AgentEvent, AiStreamEvent, ErrorInfo, MessageReducer, StreamErrorEvent};
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
-    GrepToolInput, Message, MessageStateStore, ReadToolInput, TaskToolInput, TimeRange,
-    ToolAttachment, ToolInvocation, ToolOutput, ToolResultBlock, WriteToolInput,
+    GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource, MessageStateStore,
+    MessageUpdate, PartContent, ReadToolInput, TaskToolInput, TimeRange, ToolExecutionPart,
+    ToolInvocation, WriteToolInput,
 };
 use crate::provider::{CompletionRequest, CompletionStreamEvent, ProviderRegistry};
 use crate::role::Role;
-use crate::tool::ToolExecutor;
 
 use super::context_governor::ContextGovernor;
 
@@ -36,7 +36,6 @@ pub struct SessionRunResult {
 
 pub struct SessionProcessor {
     provider_registry: Arc<ProviderRegistry>,
-    tool_executor: Arc<ToolExecutor>,
     context_governor: ContextGovernor,
     reducer: MessageReducer,
 }
@@ -44,12 +43,10 @@ pub struct SessionProcessor {
 impl SessionProcessor {
     pub fn new(
         provider_registry: Arc<ProviderRegistry>,
-        tool_executor: Arc<ToolExecutor>,
         context_governor: ContextGovernor,
     ) -> Self {
         Self {
             provider_registry,
-            tool_executor,
             context_governor,
             reducer: MessageReducer,
         }
@@ -61,7 +58,9 @@ impl SessionProcessor {
         let mut compacted_rounds = 0_u8;
 
         loop {
-            let prepared = self.context_governor.prepare_messages(&run.completion.messages);
+            let prepared = self
+                .context_governor
+                .prepare_messages(&run.completion.messages);
             let completion_request = CompletionRequest {
                 messages: prepared,
                 ..run.completion.clone()
@@ -73,13 +72,15 @@ impl SessionProcessor {
                 .await
             {
                 Ok(stream) => stream,
-                Err(err) if self
-                    .context_governor
-                    .should_retry_with_compaction(&err, compacted_rounds) =>
+                Err(err)
+                    if self
+                        .context_governor
+                        .should_retry_with_compaction(&err, compacted_rounds) =>
                 {
                     compacted_rounds += 1;
-                    run.completion.messages =
-                        self.context_governor.compact_messages(&run.completion.messages);
+                    run.completion.messages = self
+                        .context_governor
+                        .compact_messages(&run.completion.messages);
                     continue;
                 }
                 Err(err) => return Err(err),
@@ -88,16 +89,28 @@ impl SessionProcessor {
             let assistant_message_id = run.next_message_id;
             run.next_message_id += 1;
 
-            self.reducer.apply_to_store(
-                &mut store,
-                AiStreamEvent::MessageStarted {
-                    message_id: assistant_message_id,
-                    role: Role::Assistant,
-                    created_at: Utc::now(),
-                    metadata: None,
-                },
-            )
-            .map_err(|err| AppError::Internal(err.to_string()))?;
+            self.reducer
+                .apply_to_store(
+                    &mut store,
+                    AiStreamEvent::MessageStarted {
+                        message_id: assistant_message_id,
+                        role: Role::Assistant,
+                        created_at: Utc::now(),
+                        metadata: Some(MessageMetadata {
+                            source: MessageSource::Assistant,
+                            parent_message_id: run
+                                .completion
+                                .messages
+                                .last()
+                                .map(|message| message.id),
+                            generated_by_call_id: None,
+                            model_provider_id: run.provider_id.clone(),
+                            model_id: run.completion.model.clone(),
+                            tags: Vec::new(),
+                        }),
+                    },
+                )
+                .map_err(|err| AppError::Internal(err.to_string()))?;
 
             let mut active_text_part: Option<i64> = None;
             let mut pending_calls: BTreeMap<String, PendingToolCall> = BTreeMap::new();
@@ -162,8 +175,9 @@ impl SessionProcessor {
                             .should_retry_with_compaction(&err, compacted_rounds) =>
                     {
                         compacted_rounds += 1;
-                        run.completion.messages =
-                            self.context_governor.compact_messages(&run.completion.messages);
+                        run.completion.messages = self
+                            .context_governor
+                            .compact_messages(&run.completion.messages);
                         provider_err = Some(err);
                         break;
                     }
@@ -180,14 +194,14 @@ impl SessionProcessor {
                     .map_err(|err| AppError::Internal(err.to_string()))?;
             }
 
-            if provider_err
-                .as_ref()
-                .is_some_and(|err| self.context_governor.should_retry_with_compaction(err, compacted_rounds.saturating_sub(1)))
-            {
+            if provider_err.as_ref().is_some_and(|err| {
+                self.context_governor
+                    .should_retry_with_compaction(err, compacted_rounds.saturating_sub(1))
+            }) {
                 continue;
             }
 
-            self.execute_pending_tool_calls(
+            self.append_pending_tool_calls(
                 &mut run,
                 &mut store,
                 assistant_message_id,
@@ -235,7 +249,7 @@ impl SessionProcessor {
         }
     }
 
-    fn execute_pending_tool_calls(
+    fn append_pending_tool_calls(
         &self,
         run: &mut SessionRunRequest,
         store: &mut MessageStateStore,
@@ -244,7 +258,8 @@ impl SessionProcessor {
     ) -> Result<(), AppError> {
         for pending in pending_calls.into_values() {
             let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
-            let invocation = to_tool_invocation(tool_name.as_str(), pending.arguments_json.as_str())?;
+            let invocation =
+                parse_tool_invocation(tool_name.as_str(), pending.arguments_json.as_str())?;
 
             let part_id = run.next_part_id;
             run.next_part_id += 1;
@@ -252,85 +267,31 @@ impl SessionProcessor {
             run.next_call_id += 1;
             let start = Utc::now();
 
-            self.reducer
-                .apply_to_store(
-                    store,
-                    AiStreamEvent::ToolExecutionStarted {
-                        message_id: assistant_message_id,
-                        part_id,
-                        created_at: start,
-                        call_id,
-                        invocation: invocation.clone(),
-                        title: format!("Tool {tool_name}"),
+            let mut part = MessagePart::with_content(
+                part_id,
+                assistant_message_id,
+                start,
+                crate::message::ExecutionStatus::Pending,
+                PartContent::ToolExecution(ToolExecutionPart::Pending {
+                    call_id,
+                    invocation,
+                    title: format!("Tool {tool_name}"),
+                    lifecycle: TimeRange {
+                        start_ms: start.timestamp_millis(),
+                        end_ms: None,
                     },
-                )
-                .map_err(|err| AppError::Internal(err.to_string()))?;
-
-            let lifecycle = TimeRange {
-                start_ms: start.timestamp_millis(),
-                end_ms: Some(Utc::now().timestamp_millis()),
-            };
-
-            match &invocation {
-                ToolInvocation::Builtin { input } => match self.tool_executor.execute_builtin_detailed(input)
-                {
-                    Ok(execution) => {
-                        self.reducer
-                            .apply_to_store(
-                                store,
-                                AiStreamEvent::ToolExecutionCompleted {
-                                    part_id,
-                                    call_id,
-                                    invocation,
-                                    output_text: execution.view.output_text,
-                                    blocks: Vec::<ToolResultBlock>::new(),
-                                    attachments: Vec::<ToolAttachment>::new(),
-                                    details: ToolOutput::Builtin {
-                                        output: execution.output,
-                                    },
-                                    lifecycle,
-                                },
-                            )
-                            .map_err(|err| AppError::Internal(err.to_string()))?;
-                    }
-                    Err(err) => {
-                        self.reducer
-                            .apply_to_store(
-                                store,
-                                AiStreamEvent::ToolExecutionFailed {
-                                    part_id,
-                                    call_id,
-                                    invocation,
-                                    error_message: err.to_string(),
-                                    output_text: String::new(),
-                                    blocks: Vec::<ToolResultBlock>::new(),
-                                    attachments: Vec::<ToolAttachment>::new(),
-                                    details: ToolOutput::None,
-                                    lifecycle,
-                                },
-                            )
-                            .map_err(|inner| AppError::Internal(inner.to_string()))?;
-                    }
-                },
-                ToolInvocation::Mcp { .. } | ToolInvocation::Custom { .. } => {
-                    self.reducer
-                        .apply_to_store(
-                            store,
-                            AiStreamEvent::ToolExecutionFailed {
-                                part_id,
-                                call_id,
-                                invocation,
-                                error_message: "unsupported tool invocation source".to_string(),
-                                output_text: String::new(),
-                                blocks: Vec::<ToolResultBlock>::new(),
-                                attachments: Vec::<ToolAttachment>::new(),
-                                details: ToolOutput::None,
-                                lifecycle,
-                            },
-                        )
-                        .map_err(|inner| AppError::Internal(inner.to_string()))?;
-                }
+                }),
+            );
+            if let Some(operation_id) = pending.id.filter(|id| !id.trim().is_empty()) {
+                part.operation_id = Some(operation_id);
             }
+
+            store
+                .apply(MessageUpdate::InsertPart {
+                    message_id: assistant_message_id,
+                    part,
+                })
+                .map_err(|err| AppError::Internal(err.to_string()))?;
         }
 
         Ok(())
@@ -344,7 +305,10 @@ struct PendingToolCall {
     arguments_json: String,
 }
 
-fn to_tool_invocation(name: &str, arguments_json: &str) -> Result<ToolInvocation, AppError> {
+pub(crate) fn parse_tool_invocation(
+    name: &str,
+    arguments_json: &str,
+) -> Result<ToolInvocation, AppError> {
     let input = match name.trim() {
         "bash" => BuiltinToolInput::Bash(parse_input::<BashToolInput>(arguments_json)?),
         "read" => BuiltinToolInput::Read(parse_input::<ReadToolInput>(arguments_json)?),
@@ -366,7 +330,7 @@ fn to_tool_invocation(name: &str, arguments_json: &str) -> Result<ToolInvocation
     Ok(ToolInvocation::Builtin { input })
 }
 
-fn parse_input<T>(arguments_json: &str) -> Result<T, AppError>
+pub(crate) fn parse_input<T>(arguments_json: &str) -> Result<T, AppError>
 where
     T: serde::de::DeserializeOwned,
 {

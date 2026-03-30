@@ -17,7 +17,7 @@ pub use request::{
 };
 pub use runtime::{PermissionRuntime, PermissionRuntimeDecision, PermissionRuntimeError};
 pub use store::{
-    decide_from_mode, InMemoryPermissionRuleStore, PermissionRuleStore, PermissionStoreError,
+    InMemoryPermissionRuleStore, PermissionRuleStore, PermissionStoreError, decide_from_mode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -453,8 +453,8 @@ mod tests {
     use crate::message::{BuiltinToolInput, ReadToolInput, WriteToolInput};
 
     use super::{
-        normalize_path_string, AccessKind, AccessSelector, PermissionDecision, PermissionMode,
-        PermissionPolicy, ToolPermissionPolicy,
+        AccessKind, AccessSelector, PermissionDecision, PermissionMode, PermissionPolicy,
+        ToolPermissionPolicy, normalize_path_string,
     };
 
     #[test]

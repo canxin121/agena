@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
     QueryFilter, QueryOrder,
 };
 
@@ -8,13 +8,16 @@ use crate::db::entities;
 use crate::event::AgentEvent;
 use crate::session::{SessionCheckpoint, SessionEventRecord, SessionEventType, SessionSnapshot};
 
-pub async fn append_session_event(
-    db: &DatabaseConnection,
+pub async fn append_session_event<C>(
+    db: &C,
     session_id: i64,
     seq: i64,
     payload: AgentEvent,
     now: DateTime<Utc>,
-) -> Result<entities::session_event::Model, DbErr> {
+) -> Result<entities::session_event::Model, DbErr>
+where
+    C: ConnectionTrait,
+{
     let model = entities::session_event::ActiveModel {
         session_id: Set(session_id),
         seq: Set(seq),
@@ -30,10 +33,13 @@ pub async fn append_session_event(
     Ok(model)
 }
 
-pub async fn list_session_events(
-    db: &DatabaseConnection,
+pub async fn list_session_events<C>(
+    db: &C,
     session_id: i64,
-) -> Result<Vec<SessionEventRecord>, DbErr> {
+) -> Result<Vec<SessionEventRecord>, DbErr>
+where
+    C: ConnectionTrait,
+{
     let rows = entities::session_event::Entity::find()
         .filter(entities::session_event::Column::SessionId.eq(session_id))
         .order_by_asc(entities::session_event::Column::Seq)
@@ -44,14 +50,17 @@ pub async fn list_session_events(
     rows.into_iter().map(to_session_event_record).collect()
 }
 
-pub async fn save_checkpoint(
-    db: &DatabaseConnection,
+pub async fn save_checkpoint<C>(
+    db: &C,
     session_id: i64,
     upto_seq: i64,
     snapshot: SessionSnapshot,
     state_hash: Option<String>,
     now: DateTime<Utc>,
-) -> Result<entities::session_checkpoint::Model, DbErr> {
+) -> Result<entities::session_checkpoint::Model, DbErr>
+where
+    C: ConnectionTrait,
+{
     entities::session_checkpoint::ActiveModel {
         session_id: Set(session_id),
         upto_seq: Set(upto_seq),
@@ -64,10 +73,13 @@ pub async fn save_checkpoint(
     .await
 }
 
-pub async fn latest_checkpoint(
-    db: &DatabaseConnection,
+pub async fn latest_checkpoint<C>(
+    db: &C,
     session_id: i64,
-) -> Result<Option<SessionCheckpoint>, DbErr> {
+) -> Result<Option<SessionCheckpoint>, DbErr>
+where
+    C: ConnectionTrait,
+{
     let row = entities::session_checkpoint::Entity::find()
         .filter(entities::session_checkpoint::Column::SessionId.eq(session_id))
         .order_by_desc(entities::session_checkpoint::Column::UptoSeq)
@@ -78,7 +90,9 @@ pub async fn latest_checkpoint(
     row.map(to_session_checkpoint).transpose()
 }
 
-fn to_session_event_record(row: entities::session_event::Model) -> Result<SessionEventRecord, DbErr> {
+fn to_session_event_record(
+    row: entities::session_event::Model,
+) -> Result<SessionEventRecord, DbErr> {
     Ok(SessionEventRecord {
         event_id: Some(row.id),
         session_id: row.session_id,
@@ -91,7 +105,9 @@ fn to_session_event_record(row: entities::session_event::Model) -> Result<Sessio
     })
 }
 
-fn to_session_checkpoint(row: entities::session_checkpoint::Model) -> Result<SessionCheckpoint, DbErr> {
+fn to_session_checkpoint(
+    row: entities::session_checkpoint::Model,
+) -> Result<SessionCheckpoint, DbErr> {
     Ok(SessionCheckpoint {
         id: row.id,
         session_id: row.session_id,

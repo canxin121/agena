@@ -144,6 +144,18 @@ pub fn execute(
     })
 }
 
+pub(crate) fn planned_paths(text: &str) -> Result<Vec<String>, ToolError> {
+    let ops = parse_patch(text)?;
+    Ok(ops
+        .into_iter()
+        .map(|op| match op {
+            PatchOp::Add { path, .. } | PatchOp::Delete { path } | PatchOp::Update { path, .. } => {
+                path
+            }
+        })
+        .collect())
+}
+
 fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
     let lines = text.lines().collect::<Vec<_>>();
     if lines.is_empty() {

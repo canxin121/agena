@@ -64,11 +64,49 @@ pub struct GrepToolInput {
     pub include: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum TaskSubagentType {
+    Explore,
+    Implement,
+    Verify,
+}
+
+impl TaskSubagentType {
+    pub const fn guidance(self) -> &'static str {
+        match self {
+            Self::Explore => {
+                "Focus on understanding the codebase, collecting evidence, and reporting findings without making edits."
+            }
+            Self::Implement => {
+                "Own the requested code changes, adapt to concurrent edits, and avoid reverting unrelated work."
+            }
+            Self::Verify => {
+                "Validate behavior with targeted checks, look for regressions, and summarize remaining risks."
+            }
+        }
+    }
+
+    pub fn apply_prompt_guidance(self, prompt: &str) -> String {
+        let trimmed = prompt.trim();
+        if trimmed.is_empty() {
+            format!("Profile guidance: {}", self.guidance())
+        } else {
+            format!(
+                "Profile guidance: {}\n\nDelegated task:\n{}",
+                self.guidance(),
+                trimmed
+            )
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct TaskToolInput {
     pub description: String,
     pub prompt: String,
-    pub subagent_type: String,
+    pub subagent_type: TaskSubagentType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -363,5 +401,25 @@ impl ToolExecutionPart {
                 true
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_subagent_type_guidance_wraps_prompt() {
+        let prompt = TaskSubagentType::Verify.apply_prompt_guidance("run focused checks");
+
+        assert!(prompt.contains("Validate behavior with targeted checks"));
+        assert!(prompt.contains("run focused checks"));
+    }
+
+    #[test]
+    fn task_subagent_type_serializes_as_snake_case() {
+        let value = serde_json::to_string(&TaskSubagentType::Implement)
+            .expect("task subagent type should serialize");
+        assert_eq!(value, "\"implement\"");
     }
 }

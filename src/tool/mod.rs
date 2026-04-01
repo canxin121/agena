@@ -222,7 +222,7 @@ impl ToolExecutor {
             BuiltinToolInput::Task(crate::message::TaskToolInput {
                 description: String::new(),
                 prompt: String::new(),
-                subagent_type: String::new(),
+                subagent_type: crate::message::TaskSubagentType::Explore,
                 task_id: None,
                 command: None,
             }),
@@ -889,9 +889,9 @@ mod tests {
 
     use crate::message::{
         BashToolInput, BuiltinToolInput, BuiltinToolOutput, EditToolInput, GlobToolInput,
-        GrepToolInput, Message, PartContent, ReadToolInput, StructuredObject, TaskToolInput,
-        TimeRange, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart,
-        ToolInvocation, ToolOutput, ToolSearchToolInput, WriteToolInput,
+        GrepToolInput, Message, PartContent, ReadToolInput, StructuredObject, TaskSubagentType,
+        TaskToolInput, TimeRange, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
+        ToolExecutionPart, ToolInvocation, ToolOutput, ToolSearchToolInput, WriteToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::{
@@ -1201,11 +1201,28 @@ mod tests {
             .execute_builtin_detailed(&BuiltinToolInput::Task(TaskToolInput {
                 description: "inspect code".to_string(),
                 prompt: "find modules".to_string(),
-                subagent_type: "explore".to_string(),
+                subagent_type: TaskSubagentType::Explore,
                 task_id: None,
                 command: None,
             }))
             .expect("task should succeed");
+
+        assert_eq!(
+            result
+                .view
+                .metadata
+                .get("subagent_type")
+                .map(String::as_str),
+            Some("explore")
+        );
+        assert_eq!(
+            result
+                .view
+                .metadata
+                .get("profile_guidance")
+                .map(String::as_str),
+            Some(TaskSubagentType::Explore.guidance())
+        );
 
         match result.output {
             BuiltinToolOutput::Task { session_id, .. } => {

@@ -76,6 +76,16 @@ pub struct TaskToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct ToolSearchToolInput {
+    #[serde(default)]
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub load: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ApplyPatchToolInput {
     pub patch: String,
 }
@@ -92,6 +102,7 @@ pub enum BuiltinToolInput {
     Glob(GlobToolInput),
     Grep(GrepToolInput),
     Task(TaskToolInput),
+    ToolSearch(ToolSearchToolInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -169,6 +180,12 @@ pub enum BuiltinToolOutput {
         model_provider_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model_id: Option<String>,
+    },
+    ToolSearch {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        results: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        loaded_tools: Vec<String>,
     },
 }
 

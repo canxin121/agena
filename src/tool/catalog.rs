@@ -1,7 +1,7 @@
 use crate::agent::Agent;
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
-    GrepToolInput, ReadToolInput, TaskToolInput, WriteToolInput,
+    GrepToolInput, ReadToolInput, TaskToolInput, ToolSearchToolInput, WriteToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -127,6 +127,13 @@ impl ToolCatalog {
             )
             .with_search_terms(["delegate", "subagent", "parallel work"])
             .with_deferred_loading(),
+            ToolDefinition::builtin::<ToolSearchToolInput>(
+                "tool_search",
+                "Search the tool catalog and optionally load deferred tools for later turns.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["discover tools", "load tools", "find capability"])
+            .with_always_load(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions
@@ -144,7 +151,7 @@ impl ToolCatalog {
         match self.profile {
             ModelToolProfile::Full => true,
             ModelToolProfile::ReadOnly => {
-                matches!(tool_name, "read" | "glob" | "grep")
+                matches!(tool_name, "read" | "glob" | "grep" | "tool_search")
             }
             ModelToolProfile::NoTask => tool_name != "task",
         }

@@ -19,5 +19,6 @@ pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput, CustomToolOutput,
     EditToolInput, GlobToolInput, GrepToolInput, McpToolOutput, ReadToolInput, TaskToolInput,
-    ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock, WriteToolInput,
+    ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock,
+    ToolSearchToolInput, WriteToolInput,
 };

@@ -9,6 +9,7 @@ mod orchestrator;
 mod read;
 mod result;
 mod task;
+mod tool_search;
 mod truncation;
 mod write;
 
@@ -19,8 +20,8 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, StructuredObject, ToolInvocation,
-    ToolOutput,
+    BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, Message, PartContent, StructuredObject,
+    ToolExecutionPart, ToolInvocation, ToolOutput,
 };
 use crate::permission::{
     AccessKind, PermissionAction, PermissionDecision, PermissionRuleStore, PermissionRuntime,
@@ -224,13 +225,18 @@ impl ToolExecutor {
                 task_id: None,
                 command: None,
             }),
+            BuiltinToolInput::ToolSearch(crate::message::ToolSearchToolInput {
+                query: String::new(),
+                load: Vec::new(),
+                limit: None,
+            }),
         ]
         .into_iter()
         .map(|input| catalog.availability_for_input(&self.agent, &input))
         .collect()
     }
 
-    pub fn available_tools(&self) -> Vec<ToolDefinition> {
+    fn catalogued_tools(&self) -> Vec<ToolDefinition> {
         let catalog = self.tool_catalog();
         let mut definitions = self
             .plugins
@@ -262,6 +268,28 @@ impl ToolExecutor {
                 .filter(|definition| !plugin_names.contains(definition.name.as_str())),
         );
         definitions
+    }
+
+    pub fn searchable_tools(&self) -> Vec<ToolDefinition> {
+        self.catalogued_tools()
+    }
+
+    pub fn available_tools(&self) -> Vec<ToolDefinition> {
+        self.catalogued_tools()
+            .into_iter()
+            .filter(ToolDefinition::should_load_by_default)
+            .collect()
+    }
+
+    pub fn available_tools_for_messages(&self, messages: &[Message]) -> Vec<ToolDefinition> {
+        let loaded_tools = collect_loaded_tool_names(messages);
+        self.catalogued_tools()
+            .into_iter()
+            .filter(|definition| {
+                definition.should_load_by_default()
+                    || loaded_tools.contains(definition.name.as_str())
+            })
+            .collect()
     }
 
     pub fn execute_builtin_detailed(
@@ -348,6 +376,7 @@ impl ToolExecutor {
                     .unwrap_or_else(|| self.workspace_root().to_path_buf());
                 self.push_path_checks(&mut checks, AccessKind::Read, &base_path);
             }
+            BuiltinToolInput::ToolSearch(_) => {}
             BuiltinToolInput::Task(_) => {}
         }
 
@@ -752,6 +781,7 @@ fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolErro
             BuiltinToolInput::Glob(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Grep(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Task(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::ToolSearch(payload) => serde_json::to_string(payload),
         }
         .map_err(|err| ToolError::InvalidInput(err.to_string())),
         ToolInvocation::Custom { input, .. } => {
@@ -808,8 +838,27 @@ fn parse_builtin_input(tool_name: &str, input_json: &str) -> Result<BuiltinToolI
         "glob" => Ok(BuiltinToolInput::Glob(parse(input_json)?)),
         "grep" => Ok(BuiltinToolInput::Grep(parse(input_json)?)),
         "task" => Ok(BuiltinToolInput::Task(parse(input_json)?)),
+        "tool_search" => Ok(BuiltinToolInput::ToolSearch(parse(input_json)?)),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
+}
+
+fn collect_loaded_tool_names(messages: &[Message]) -> std::collections::HashSet<String> {
+    messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .filter_map(|part| match part.content.as_ref() {
+            Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                details:
+                    ToolOutput::Builtin {
+                        output: BuiltinToolOutput::ToolSearch { loaded_tools, .. },
+                    },
+                ..
+            })) => Some(loaded_tools.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 fn parse_custom_payload(payload_json: &str) -> Result<StructuredObject, ToolError> {
@@ -829,12 +878,14 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
+    use chrono::Utc;
     use serde_json::json;
     use uuid::Uuid;
 
     use crate::message::{
         BashToolInput, BuiltinToolInput, BuiltinToolOutput, EditToolInput, GlobToolInput,
-        GrepToolInput, ReadToolInput, StructuredObject, TaskToolInput, ToolInvocation, ToolOutput,
+        GrepToolInput, Message, PartContent, ReadToolInput, StructuredObject, TaskToolInput,
+        TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput, ToolSearchToolInput,
         WriteToolInput,
     };
     use crate::permission::PermissionPolicy;
@@ -844,6 +895,7 @@ mod tests {
         PluginShellEnvRequest, PluginShellEnvResponse, PluginToolCallRequest,
         PluginToolCallResponse, PluginToolDescriptor,
     };
+    use crate::role::Role;
     use procwarden::SandboxPolicy;
 
     use super::{ToolBehavior, ToolExecutor, ToolSource};
@@ -990,6 +1042,47 @@ mod tests {
         Arc::new(manager)
     }
 
+    fn loaded_tool_search_message(loaded_tools: &[&str]) -> Message {
+        Message {
+            id: 99,
+            role: Role::Tool,
+            state: crate::message::MessageStatus::Completed,
+            parts: vec![crate::message::MessagePart::with_content(
+                1,
+                99,
+                Utc::now(),
+                crate::message::ExecutionStatus::Completed,
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 1,
+                    invocation: ToolInvocation::Builtin {
+                        input: BuiltinToolInput::ToolSearch(ToolSearchToolInput {
+                            query: "load mutating tools".to_string(),
+                            load: loaded_tools.iter().map(|name| name.to_string()).collect(),
+                            limit: None,
+                        }),
+                    },
+                    output_text: "loaded deferred tools".to_string(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: ToolOutput::Builtin {
+                        output: BuiltinToolOutput::ToolSearch {
+                            results: Vec::new(),
+                            loaded_tools: loaded_tools
+                                .iter()
+                                .map(|name| name.to_string())
+                                .collect(),
+                        },
+                    },
+                    lifecycle: TimeRange::default(),
+                }),
+            )],
+            created_at: Utc::now(),
+            metadata: crate::message::MessageMetadata::default(),
+            usage: None,
+            finish: None,
+        }
+    }
+
     #[test]
     fn read_builtin_returns_line_numbered_preview() {
         let workspace = TempWorkspace::new();
@@ -1115,6 +1208,50 @@ mod tests {
             }
             other => panic!("expected task output, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn tool_search_builtin_discovers_and_loads_deferred_tools() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let result = executor
+            .execute_builtin_detailed(&BuiltinToolInput::ToolSearch(ToolSearchToolInput {
+                query: "patch files".to_string(),
+                load: vec!["apply_patch".to_string()],
+                limit: None,
+            }))
+            .expect("tool_search should succeed");
+
+        match result.output {
+            BuiltinToolOutput::ToolSearch {
+                results,
+                loaded_tools,
+            } => {
+                assert!(results.iter().any(|name| name == "apply_patch"));
+                assert_eq!(loaded_tools, vec!["apply_patch".to_string()]);
+            }
+            other => panic!("expected tool_search output, got {other:?}"),
+        }
+
+        assert!(result.view.output_text.contains("Loaded deferred tools"));
+    }
+
+    #[test]
+    fn tool_search_messages_expose_deferred_tools_in_later_turns() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let initial = executor.available_tools();
+        assert!(initial.iter().any(|tool| tool.name == "tool_search"));
+        assert!(!initial.iter().any(|tool| tool.name == "bash"));
+        assert!(!initial.iter().any(|tool| tool.name == "task"));
+
+        let messages = vec![loaded_tool_search_message(&["bash", "task"])];
+        let available = executor.available_tools_for_messages(messages.as_slice());
+
+        assert!(available.iter().any(|tool| tool.name == "bash"));
+        assert!(available.iter().any(|tool| tool.name == "task"));
     }
 
     #[test]

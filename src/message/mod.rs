@@ -14,7 +14,7 @@ pub use part::{
     PartKind, PartStateTransitionError, ReadToolInput, ReasoningPart, StructuredField,
     StructuredObject, StructuredValue, TaskToolInput, TextPart, TimeRange, TodoItem, TodoListPart,
     TodoPriority, TodoStatus, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput,
-    ToolResultBlock, WebSearchPart, WebSearchResult, WriteToolInput,
+    ToolResultBlock, ToolSearchToolInput, WebSearchPart, WebSearchResult, WriteToolInput,
 };
 pub use state::{MessageStateStore, MessageStateStoreError, MessageUpdate};
 pub use usage::MessageUsage;

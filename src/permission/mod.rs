@@ -110,6 +110,7 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
         BuiltinToolInput::Glob(_) => "glob",
         BuiltinToolInput::Grep(_) => "grep",
         BuiltinToolInput::Task(_) => "task",
+        BuiltinToolInput::ToolSearch(_) => "tool_search",
     }
 }
 

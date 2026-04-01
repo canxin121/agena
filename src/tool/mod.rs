@@ -516,6 +516,17 @@ impl ToolExecutor {
         }
     }
 
+    pub fn execute_invocation_detailed_bypassing_permissions(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+    ) -> Result<ToolInvocationExecution, ToolError> {
+        let mut trusted = self.clone();
+        trusted.permission_mode = PermissionExecutionMode::Bypassed;
+        trusted.execute_invocation_detailed(invocation, session_id, call_id)
+    }
+
     pub fn shell_env_overrides(
         &self,
         cwd: &Path,

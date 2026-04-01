@@ -123,7 +123,7 @@ impl ToolCatalog {
             .with_always_load(),
             ToolDefinition::builtin::<TaskToolInput>(
                 "task",
-                "Create or resume a subagent task session for delegated work.",
+                "Create or resume a typed subagent task session for explore, implement, or verify delegated work.",
                 ToolBehavior::Task,
             )
             .with_search_terms(["delegate", "subagent", "parallel work"])

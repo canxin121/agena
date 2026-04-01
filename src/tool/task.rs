@@ -12,8 +12,8 @@ pub(super) fn execute(
         .create_or_resume(SubtaskSessionRequest {
             requested_task_id: input.task_id.clone(),
             description: input.description.clone(),
-            prompt: input.prompt.clone(),
-            subagent_type: input.subagent_type.clone(),
+            prompt: input.subagent_type.apply_prompt_guidance(&input.prompt),
+            subagent_type: input.subagent_type,
             command: input.command.clone(),
         })
         .map_err(|err| super::ToolError::InvalidInput(err.to_string()))?;
@@ -25,9 +25,9 @@ pub(super) fn execute(
     };
 
     let mut view = ToolExecutionView::simple(
-        format!("Task {}", input.description),
+        format!("Task {} ({})", input.description, input.subagent_type),
         format!(
-            "Created/resumed subagent task session {} for type '{}' in workspace {}.",
+            "Created/resumed subagent task session {} for profile '{}' in workspace {}.",
             session.session_id,
             input.subagent_type,
             executor.display_path(executor.workspace_root())
@@ -36,7 +36,11 @@ pub(super) fn execute(
     view.metadata
         .insert("description".to_string(), input.description.clone());
     view.metadata
-        .insert("subagent_type".to_string(), input.subagent_type.clone());
+        .insert("subagent_type".to_string(), input.subagent_type.to_string());
+    view.metadata.insert(
+        "profile_guidance".to_string(),
+        input.subagent_type.guidance().to_string(),
+    );
     view.metadata
         .insert("session_id".to_string(), session.session_id);
     if let Some(command) = &input.command {

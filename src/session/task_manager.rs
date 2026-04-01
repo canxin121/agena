@@ -6,12 +6,14 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::message::TaskSubagentType;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubtaskSession {
     pub session_id: String,
     pub description: String,
     pub prompt: String,
-    pub subagent_type: String,
+    pub subagent_type: TaskSubagentType,
     pub command: Option<String>,
     pub model_provider_id: Option<String>,
     pub model_id: Option<String>,
@@ -24,7 +26,7 @@ pub struct SubtaskSessionRequest {
     pub requested_task_id: Option<String>,
     pub description: String,
     pub prompt: String,
-    pub subagent_type: String,
+    pub subagent_type: TaskSubagentType,
     pub command: Option<String>,
 }
 

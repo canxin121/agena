@@ -903,7 +903,7 @@ mod tests {
     use crate::role::Role;
     use procwarden::SandboxPolicy;
 
-    use super::{ToolBehavior, ToolExecutor, ToolSource};
+    use super::{ToolBehavior, ToolError, ToolExecutor, ToolSource};
 
     #[derive(Debug)]
     struct TempWorkspace {
@@ -1325,16 +1325,145 @@ mod tests {
             }))
             .expect("bash builtin should succeed");
 
+        match &result.output {
+            BuiltinToolOutput::Bash {
+                output,
+                description,
+            } => {
+                let output = output
+                    .as_deref()
+                    .expect("output should exist")
+                    .to_ascii_lowercase();
+                assert!(output.contains("hello_agena"));
+                assert!(description.is_some());
+            }
+            other => panic!("expected bash output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bash_builtin_explains_no_match_exit_codes() {
+        if cfg!(windows) {
+            return;
+        }
+
+        let workspace = TempWorkspace::new();
+        fs::write(workspace.root.join("notes.txt"), "alpha\nbeta\n")
+            .expect("failed to seed notes file");
+        let executor = build_executor_with_policy(
+            &workspace.root,
+            SandboxPolicy::new_read_only_policy().with_world_writable_audit(false),
+        );
+
+        let result = executor
+            .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
+                command: "grep missing notes.txt".to_string(),
+                description: "search missing text".to_string(),
+                timeout_ms: Some(30_000),
+                workdir: None,
+            }))
+            .expect("bash builtin should succeed");
+
         match result.output {
             BuiltinToolOutput::Bash {
                 output,
                 description,
             } => {
-                let output = output.expect("output should exist").to_ascii_lowercase();
-                assert!(output.contains("hello_agena"));
-                assert!(description.is_some());
+                assert!(
+                    output
+                        .as_deref()
+                        .is_some_and(|text| text.contains("no matches"))
+                );
+                assert!(
+                    description
+                        .as_deref()
+                        .is_some_and(|text| text.contains("no matches"))
+                );
             }
             other => panic!("expected bash output, got {other:?}"),
+        }
+
+        assert_eq!(
+            result
+                .view
+                .metadata
+                .get("exit_interpretation")
+                .map(String::as_str),
+            Some("no_matches")
+        );
+    }
+
+    #[test]
+    fn bash_builtin_explains_diff_exit_codes() {
+        if cfg!(windows) {
+            return;
+        }
+
+        let workspace = TempWorkspace::new();
+        fs::write(workspace.root.join("left.txt"), "alpha\n").expect("failed to write left file");
+        fs::write(workspace.root.join("right.txt"), "beta\n").expect("failed to write right file");
+        let executor = build_executor_with_policy(
+            &workspace.root,
+            SandboxPolicy::new_read_only_policy().with_world_writable_audit(false),
+        );
+
+        let result = executor
+            .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
+                command: "diff left.txt right.txt".to_string(),
+                description: "compare files".to_string(),
+                timeout_ms: Some(30_000),
+                workdir: None,
+            }))
+            .expect("bash builtin should succeed");
+
+        match &result.output {
+            BuiltinToolOutput::Bash { description, .. } => {
+                assert!(
+                    description
+                        .as_deref()
+                        .is_some_and(|text| text.contains("found differences"))
+                );
+            }
+            other => panic!("expected bash output, got {other:?}"),
+        }
+
+        assert_eq!(
+            result
+                .view
+                .metadata
+                .get("exit_interpretation")
+                .map(String::as_str),
+            Some("differences_found")
+        );
+    }
+
+    #[test]
+    fn bash_builtin_blocks_obvious_write_commands_in_read_only_policy() {
+        if cfg!(windows) {
+            return;
+        }
+
+        let workspace = TempWorkspace::new();
+        let executor = build_executor_with_policy(
+            &workspace.root,
+            SandboxPolicy::new_read_only_policy().with_world_writable_audit(false),
+        );
+
+        let err = executor
+            .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
+                command: "echo hi > created.txt".to_string(),
+                description: "attempt write".to_string(),
+                timeout_ms: Some(30_000),
+                workdir: None,
+            }))
+            .expect_err("write command should be rejected before execution");
+
+        match err {
+            ToolError::PermissionDenied(message) => {
+                assert!(message.contains("read-only sandbox"));
+                assert!(message.contains("output redirection"));
+            }
+            other => panic!("expected permission denial, got {other:?}"),
         }
     }
 

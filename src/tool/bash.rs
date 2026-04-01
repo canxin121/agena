@@ -1,7 +1,7 @@
 use std::cmp::min;
 use std::collections::HashMap;
 
-use procwarden::SandboxCommandRequest;
+use procwarden::{SandboxCommandRequest, SandboxPolicy};
 
 use crate::message::{BashToolInput, BuiltinToolOutput};
 
@@ -24,6 +24,15 @@ pub(super) fn execute(
         ));
     }
 
+    let analysis = analyze_command(input.command.as_str());
+    if matches!(executor.sandbox_policy(), SandboxPolicy::ReadOnly)
+        && let CommandClassification::Mutating { reason } = &analysis.classification
+    {
+        return Err(ToolError::PermissionDenied(format!(
+            "bash command appears to modify files under a read-only sandbox: {reason}"
+        )));
+    }
+
     let cwd = input
         .workdir
         .as_deref()
@@ -32,11 +41,7 @@ pub(super) fn execute(
     executor.ensure_read_permission(&cwd)?;
 
     let mut env = inherited_environment();
-    env.extend(executor.shell_env_overrides(
-        &cwd,
-        context.session_id,
-        context.call_id,
-    )?);
+    env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
 
     let request = SandboxCommandRequest {
         command: shell_command_for_platform(&input.command),
@@ -47,12 +52,26 @@ pub(super) fn execute(
 
     let execution = executor.execute_sandboxed_command(&request)?;
     let (trimmed_output, truncated) = truncate_output(&execution.aggregated_output);
+    let exit_interpretation =
+        interpret_exit_code(&analysis, execution.exit_code, execution.timed_out);
 
     let status_text = if execution.timed_out {
         format!(
             "Command timed out after {} ms (exit_code={}).",
             request.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
             execution.exit_code
+        )
+    } else if matches!(exit_interpretation, ExitInterpretation::NoMatches) {
+        format!(
+            "Command completed with no matches (exit_code={}) in {} ms.",
+            execution.exit_code,
+            execution.duration.as_millis()
+        )
+    } else if matches!(exit_interpretation, ExitInterpretation::DifferencesFound) {
+        format!(
+            "Command completed and found differences (exit_code={}) in {} ms.",
+            execution.exit_code,
+            execution.duration.as_millis()
         )
     } else {
         format!(
@@ -61,9 +80,14 @@ pub(super) fn execute(
             execution.duration.as_millis()
         )
     };
+    let display_output = if trimmed_output.trim().is_empty() {
+        status_text.clone()
+    } else {
+        trimmed_output.clone()
+    };
 
     let output = BuiltinToolOutput::Bash {
-        output: Some(trimmed_output.clone()),
+        output: Some(display_output.clone()),
         description: Some(status_text.clone()),
     };
 
@@ -73,7 +97,7 @@ pub(super) fn execute(
         format!("Bash {}", input.description)
     };
 
-    let mut view = ToolExecutionView::simple(title, trimmed_output);
+    let mut view = ToolExecutionView::simple(title, display_output);
     view.metadata
         .insert("exit_code".to_string(), execution.exit_code.to_string());
     view.metadata.insert(
@@ -84,6 +108,18 @@ pub(super) fn execute(
         .insert("timed_out".to_string(), execution.timed_out.to_string());
     view.metadata
         .insert("truncated".to_string(), truncated.to_string());
+    view.metadata.insert(
+        "command_classification".to_string(),
+        analysis.classification.label().to_string(),
+    );
+    view.metadata.insert(
+        "exit_interpretation".to_string(),
+        exit_interpretation.label().to_string(),
+    );
+    if let Some(primary_command) = analysis.primary_command.as_deref() {
+        view.metadata
+            .insert("primary_command".to_string(), primary_command.to_string());
+    }
     view.metadata.insert(
         "sandbox_mode".to_string(),
         format!("{:?}", executor.sandbox_policy()),
@@ -96,6 +132,50 @@ pub(super) fn execute(
     }
 
     Ok(BuiltinExecution::new(output, view))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandAnalysis {
+    primary_command: Option<String>,
+    subcommand: Option<String>,
+    args: Vec<String>,
+    classification: CommandClassification,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CommandClassification {
+    ReadOnly,
+    Mutating { reason: String },
+    Unknown,
+}
+
+impl CommandClassification {
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::Mutating { .. } => "mutating",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitInterpretation {
+    Success,
+    NoMatches,
+    DifferencesFound,
+    Error,
+}
+
+impl ExitInterpretation {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::NoMatches => "no_matches",
+            Self::DifferencesFound => "differences_found",
+            Self::Error => "error",
+        }
+    }
 }
 
 fn inherited_environment() -> HashMap<String, String> {
@@ -148,4 +228,340 @@ fn truncate_output(output: &str) -> (String, bool) {
     } else {
         (clipped, false)
     }
+}
+
+fn analyze_command(command: &str) -> CommandAnalysis {
+    let tokens = shell_tokens(command);
+    let (primary_command, subcommand, args) = first_command(tokens.as_slice());
+    let classification = classify_command(command, tokens.as_slice());
+
+    CommandAnalysis {
+        primary_command,
+        subcommand,
+        args,
+        classification,
+    }
+}
+
+fn classify_command(command: &str, tokens: &[String]) -> CommandClassification {
+    if contains_write_redirection(command) {
+        return CommandClassification::Mutating {
+            reason: "uses shell output redirection".to_string(),
+        };
+    }
+
+    let segments = command_segments(tokens);
+    if segments.is_empty() {
+        return CommandClassification::Unknown;
+    }
+
+    let mut saw_unknown = false;
+    for segment in segments {
+        match classify_segment(segment) {
+            CommandClassification::Mutating { reason } => {
+                return CommandClassification::Mutating { reason };
+            }
+            CommandClassification::Unknown => saw_unknown = true,
+            CommandClassification::ReadOnly => {}
+        }
+    }
+
+    if saw_unknown {
+        CommandClassification::Unknown
+    } else {
+        CommandClassification::ReadOnly
+    }
+}
+
+fn classify_segment(tokens: &[String]) -> CommandClassification {
+    let (Some(primary), subcommand, args) = first_command(tokens) else {
+        return CommandClassification::Unknown;
+    };
+
+    if is_obvious_write_command(primary.as_str(), subcommand.as_deref(), args.as_slice()) {
+        return CommandClassification::Mutating {
+            reason: format!("invokes mutating command '{primary}'"),
+        };
+    }
+
+    if is_known_read_only_command(primary.as_str(), subcommand.as_deref(), args.as_slice()) {
+        return CommandClassification::ReadOnly;
+    }
+
+    CommandClassification::Unknown
+}
+
+fn interpret_exit_code(
+    analysis: &CommandAnalysis,
+    exit_code: i32,
+    timed_out: bool,
+) -> ExitInterpretation {
+    if timed_out {
+        return ExitInterpretation::Error;
+    }
+    if exit_code == 0 {
+        return ExitInterpretation::Success;
+    }
+
+    match (
+        analysis.primary_command.as_deref(),
+        analysis.subcommand.as_deref(),
+        exit_code,
+    ) {
+        (Some("grep" | "rg"), _, 1) | (Some("git"), Some("grep"), 1) => {
+            ExitInterpretation::NoMatches
+        }
+        (Some("diff" | "cmp"), _, 1) => ExitInterpretation::DifferencesFound,
+        (Some("git"), Some("diff"), 1)
+            if analysis
+                .args
+                .iter()
+                .any(|arg| arg == "--exit-code" || arg == "--quiet") =>
+        {
+            ExitInterpretation::DifferencesFound
+        }
+        _ => ExitInterpretation::Error,
+    }
+}
+
+fn first_command(tokens: &[String]) -> (Option<String>, Option<String>, Vec<String>) {
+    let Some(segment) = command_segments(tokens).into_iter().next() else {
+        return (None, None, Vec::new());
+    };
+
+    let mut index = 0;
+    while index < segment.len() && is_assignment(segment[index].as_str()) {
+        index += 1;
+    }
+    while index < segment.len() && is_command_wrapper(segment[index].as_str()) {
+        index += 1;
+    }
+    let Some(primary) = segment.get(index).cloned() else {
+        return (None, None, Vec::new());
+    };
+
+    let args = segment.iter().skip(index + 1).cloned().collect::<Vec<_>>();
+    let subcommand = if primary == "git" {
+        args.iter().find(|arg| !arg.starts_with('-')).cloned()
+    } else {
+        None
+    };
+
+    (Some(primary), subcommand, args)
+}
+
+fn command_segments(tokens: &[String]) -> Vec<&[String]> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    for (index, token) in tokens.iter().enumerate() {
+        if is_separator(token.as_str()) {
+            if start < index {
+                segments.push(&tokens[start..index]);
+            }
+            start = index + 1;
+        }
+    }
+    if start < tokens.len() {
+        segments.push(&tokens[start..]);
+    }
+    segments
+}
+
+fn shell_tokens(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut single_quote = false;
+    let mut double_quote = false;
+    let mut escape = false;
+
+    for ch in command.chars() {
+        if escape {
+            current.push(ch);
+            escape = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if !single_quote => {
+                escape = true;
+            }
+            '\'' if !double_quote => {
+                single_quote = !single_quote;
+            }
+            '"' if !single_quote => {
+                double_quote = !double_quote;
+            }
+            c if c.is_whitespace() && !single_quote && !double_quote => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            ';' | '|' | '&' if !single_quote && !double_quote => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                tokens.push(ch.to_string());
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+fn contains_write_redirection(command: &str) -> bool {
+    let mut single_quote = false;
+    let mut double_quote = false;
+    let mut escape = false;
+    let mut chars = command.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if escape {
+            escape = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if !single_quote => {
+                escape = true;
+            }
+            '\'' if !double_quote => {
+                single_quote = !single_quote;
+            }
+            '"' if !single_quote => {
+                double_quote = !double_quote;
+            }
+            '>' if !single_quote && !double_quote => {
+                if chars.peek() == Some(&'&') {
+                    continue;
+                }
+                return true;
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+fn is_known_read_only_command(primary: &str, subcommand: Option<&str>, args: &[String]) -> bool {
+    if matches!(
+        primary,
+        "cat"
+            | "pwd"
+            | "ls"
+            | "find"
+            | "grep"
+            | "rg"
+            | "diff"
+            | "cmp"
+            | "head"
+            | "tail"
+            | "sed"
+            | "awk"
+            | "sort"
+            | "uniq"
+            | "wc"
+            | "stat"
+            | "file"
+            | "basename"
+            | "dirname"
+            | "realpath"
+            | "echo"
+            | "printf"
+            | "env"
+            | "which"
+            | "type"
+            | "du"
+            | "ps"
+    ) {
+        return !matches!(primary, "sed") || !args.iter().any(|arg| is_in_place_flag(arg));
+    }
+
+    if primary == "git" {
+        return matches!(
+            subcommand,
+            Some("status" | "diff" | "grep" | "show" | "log" | "rev-parse")
+        );
+    }
+
+    false
+}
+
+fn is_obvious_write_command(primary: &str, subcommand: Option<&str>, args: &[String]) -> bool {
+    if matches!(
+        primary,
+        "touch"
+            | "mkdir"
+            | "rmdir"
+            | "rm"
+            | "mv"
+            | "cp"
+            | "install"
+            | "chmod"
+            | "chown"
+            | "ln"
+            | "tee"
+            | "dd"
+            | "truncate"
+    ) {
+        return true;
+    }
+
+    if matches!(primary, "sed" | "perl") && args.iter().any(|arg| is_in_place_flag(arg)) {
+        return true;
+    }
+
+    if primary == "git" {
+        return matches!(
+            subcommand,
+            Some(
+                "apply"
+                    | "am"
+                    | "add"
+                    | "checkout"
+                    | "switch"
+                    | "restore"
+                    | "commit"
+                    | "merge"
+                    | "rebase"
+                    | "cherry-pick"
+                    | "revert"
+                    | "clean"
+                    | "stash"
+            )
+        );
+    }
+
+    false
+}
+
+fn is_in_place_flag(arg: &str) -> bool {
+    arg == "-i" || (arg.starts_with("-i") && arg.len() > 2)
+}
+
+fn is_separator(token: &str) -> bool {
+    matches!(token, ";" | "|" | "&")
+}
+
+fn is_assignment(token: &str) -> bool {
+    let Some((name, _value)) = token.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .next()
+            .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+}
+
+fn is_command_wrapper(token: &str) -> bool {
+    matches!(token, "env" | "command" | "builtin" | "nohup")
 }

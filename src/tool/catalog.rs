@@ -1,7 +1,8 @@
 use crate::agent::Agent;
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
-    GrepToolInput, ReadToolInput, TaskToolInput, ToolSearchToolInput, WriteToolInput,
+    GrepToolInput, ReadToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput,
+    WriteToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -134,6 +135,13 @@ impl ToolCatalog {
             )
             .with_search_terms(["discover tools", "load tools", "find capability"])
             .with_always_load(),
+            ToolDefinition::builtin::<TodoWriteToolInput>(
+                "todo_write",
+                "Replace the session todo list with a short execution plan and updated statuses.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["plan", "todo", "track progress"])
+            .with_always_load(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions
@@ -151,7 +159,10 @@ impl ToolCatalog {
         match self.profile {
             ModelToolProfile::Full => true,
             ModelToolProfile::ReadOnly => {
-                matches!(tool_name, "read" | "glob" | "grep" | "tool_search")
+                matches!(
+                    tool_name,
+                    "read" | "glob" | "grep" | "tool_search" | "todo_write"
+                )
             }
             ModelToolProfile::NoTask => tool_name != "task",
         }

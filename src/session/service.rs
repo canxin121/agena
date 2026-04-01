@@ -13,9 +13,9 @@ use crate::event::{
     AgentEvent, ErrorInfo, MessagePartUpdatedEvent, ThreadFailedEvent, ThreadStartedEvent,
 };
 use crate::message::{
-    ErrorPart, ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource,
-    MessageStatus, PartContent, TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
-    ToolResultBlock,
+    BuiltinToolOutput, ErrorPart, ExecutionStatus, Message, MessageMetadata, MessagePart,
+    MessageSource, MessageStatus, PartContent, TimeRange, TodoListPart, ToolExecutionPart,
+    ToolInvocation, ToolOutput, ToolResultBlock,
 };
 use crate::permission::{
     PermissionAction, PermissionDecision, PermissionMode, PermissionReply, PermissionReplyKind,
@@ -542,7 +542,8 @@ impl SessionService {
         }
 
         let tool_message = build_tool_message(
-            self.reserve_message_ids(1).await?,
+            self.reserve_message_ids(tool_message_part_count(&tool_output))
+                .await?,
             pending_tool,
             execution.view.attachments,
             output_text,
@@ -1176,6 +1177,12 @@ fn build_tool_message(
     } else {
         MessageStatus::Completed
     };
+    let extra_parts = extra_tool_message_parts(
+        ids.part_ids.as_slice(),
+        ids.message_id,
+        created_at,
+        &details,
+    );
     let content = match error_message {
         Some(error_message) => PartContent::ToolExecution(ToolExecutionPart::Failed {
             call_id: pending_tool.call_id,
@@ -1211,11 +1218,14 @@ fn build_tool_message(
     part.operation_id = Some(pending_tool.operation_id.clone());
     part.part_index = 0;
 
+    let mut parts = vec![part];
+    parts.extend(extra_parts);
+
     Message {
         id: ids.message_id,
         role: Role::Tool,
         state: message_state,
-        parts: vec![part],
+        parts,
         created_at,
         metadata: MessageMetadata {
             source: MessageSource::Tool,
@@ -1227,6 +1237,44 @@ fn build_tool_message(
         },
         usage: None,
         finish: None,
+    }
+}
+
+fn tool_message_part_count(details: &ToolOutput) -> usize {
+    1 + usize::from(matches!(
+        details,
+        ToolOutput::Builtin {
+            output: BuiltinToolOutput::TodoWrite { .. }
+        }
+    ))
+}
+
+fn extra_tool_message_parts(
+    part_ids: &[i64],
+    message_id: i64,
+    created_at: chrono::DateTime<Utc>,
+    details: &ToolOutput,
+) -> Vec<MessagePart> {
+    match details {
+        ToolOutput::Builtin {
+            output: BuiltinToolOutput::TodoWrite { items },
+        } => {
+            let Some(part_id) = part_ids.get(1) else {
+                return Vec::new();
+            };
+            let mut part = MessagePart::with_content(
+                *part_id,
+                message_id,
+                created_at,
+                ExecutionStatus::Completed,
+                PartContent::TodoList(TodoListPart {
+                    items: items.clone(),
+                }),
+            );
+            part.part_index = 1;
+            vec![part]
+        }
+        _ => Vec::new(),
     }
 }
 

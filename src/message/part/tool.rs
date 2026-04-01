@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-use super::{ExecutionStatus, StructuredObject, TimeRange};
+use super::{ExecutionStatus, StructuredObject, TimeRange, TodoItem};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ToolAttachment {
@@ -86,6 +86,12 @@ pub struct ToolSearchToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct TodoWriteToolInput {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<TodoItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ApplyPatchToolInput {
     pub patch: String,
 }
@@ -103,6 +109,7 @@ pub enum BuiltinToolInput {
     Grep(GrepToolInput),
     Task(TaskToolInput),
     ToolSearch(ToolSearchToolInput),
+    TodoWrite(TodoWriteToolInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -186,6 +193,10 @@ pub enum BuiltinToolOutput {
         results: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         loaded_tools: Vec<String>,
+    },
+    TodoWrite {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        items: Vec<TodoItem>,
     },
 }
 

@@ -9,6 +9,7 @@ mod orchestrator;
 mod read;
 mod result;
 mod task;
+mod todo_write;
 mod tool_search;
 mod truncation;
 mod write;
@@ -230,6 +231,7 @@ impl ToolExecutor {
                 load: Vec::new(),
                 limit: None,
             }),
+            BuiltinToolInput::TodoWrite(crate::message::TodoWriteToolInput { items: Vec::new() }),
         ]
         .into_iter()
         .map(|input| catalog.availability_for_input(&self.agent, &input))
@@ -377,6 +379,7 @@ impl ToolExecutor {
                 self.push_path_checks(&mut checks, AccessKind::Read, &base_path);
             }
             BuiltinToolInput::ToolSearch(_) => {}
+            BuiltinToolInput::TodoWrite(_) => {}
             BuiltinToolInput::Task(_) => {}
         }
 
@@ -782,6 +785,7 @@ fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolErro
             BuiltinToolInput::Grep(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Task(payload) => serde_json::to_string(payload),
             BuiltinToolInput::ToolSearch(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::TodoWrite(payload) => serde_json::to_string(payload),
         }
         .map_err(|err| ToolError::InvalidInput(err.to_string())),
         ToolInvocation::Custom { input, .. } => {
@@ -839,6 +843,7 @@ fn parse_builtin_input(tool_name: &str, input_json: &str) -> Result<BuiltinToolI
         "grep" => Ok(BuiltinToolInput::Grep(parse(input_json)?)),
         "task" => Ok(BuiltinToolInput::Task(parse(input_json)?)),
         "tool_search" => Ok(BuiltinToolInput::ToolSearch(parse(input_json)?)),
+        "todo_write" => Ok(BuiltinToolInput::TodoWrite(parse(input_json)?)),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
 }
@@ -885,8 +890,8 @@ mod tests {
     use crate::message::{
         BashToolInput, BuiltinToolInput, BuiltinToolOutput, EditToolInput, GlobToolInput,
         GrepToolInput, Message, PartContent, ReadToolInput, StructuredObject, TaskToolInput,
-        TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput, ToolSearchToolInput,
-        WriteToolInput,
+        TimeRange, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart,
+        ToolInvocation, ToolOutput, ToolSearchToolInput, WriteToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::{
@@ -1244,6 +1249,7 @@ mod tests {
 
         let initial = executor.available_tools();
         assert!(initial.iter().any(|tool| tool.name == "tool_search"));
+        assert!(initial.iter().any(|tool| tool.name == "todo_write"));
         assert!(!initial.iter().any(|tool| tool.name == "bash"));
         assert!(!initial.iter().any(|tool| tool.name == "task"));
 
@@ -1252,6 +1258,31 @@ mod tests {
 
         assert!(available.iter().any(|tool| tool.name == "bash"));
         assert!(available.iter().any(|tool| tool.name == "task"));
+    }
+
+    #[test]
+    fn todo_write_builtin_returns_items_for_session_state() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let result = executor
+            .execute_builtin_detailed(&BuiltinToolInput::TodoWrite(TodoWriteToolInput {
+                items: vec![TodoItem {
+                    content: "Implement tool_search".to_string(),
+                    status: TodoStatus::InProgress,
+                    priority: TodoPriority::High,
+                }],
+            }))
+            .expect("todo_write should succeed");
+
+        match result.output {
+            BuiltinToolOutput::TodoWrite { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].content, "Implement tool_search");
+                assert_eq!(items[0].status, TodoStatus::InProgress);
+            }
+            other => panic!("expected todo_write output, got {other:?}"),
+        }
     }
 
     #[test]

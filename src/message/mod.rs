@@ -13,8 +13,9 @@ pub use part::{
     GlobToolInput, GrepToolInput, McpToolOutput, MessagePart, MessagePartSummary, PartContent,
     PartKind, PartStateTransitionError, ReadToolInput, ReasoningPart, StructuredField,
     StructuredObject, StructuredValue, TaskToolInput, TextPart, TimeRange, TodoItem, TodoListPart,
-    TodoPriority, TodoStatus, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput,
-    ToolResultBlock, ToolSearchToolInput, WebSearchPart, WebSearchResult, WriteToolInput,
+    TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
+    ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput, WebSearchPart,
+    WebSearchResult, WriteToolInput,
 };
 pub use state::{MessageStateStore, MessageStateStoreError, MessageUpdate};
 pub use usage::MessageUsage;

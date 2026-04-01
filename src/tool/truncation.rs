@@ -65,7 +65,8 @@ impl ToolOutputTruncator {
             | BuiltinToolOutput::Glob { .. }
             | BuiltinToolOutput::Grep { .. }
             | BuiltinToolOutput::Task { .. }
-            | BuiltinToolOutput::ToolSearch { .. } => {}
+            | BuiltinToolOutput::ToolSearch { .. }
+            | BuiltinToolOutput::TodoWrite { .. } => {}
         }
 
         execution

@@ -281,7 +281,8 @@ impl SessionService {
 
         match request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
-                let execution = self.execute_pending_tool(state.session.id, &pending.tool)?;
+                let execution =
+                    self.execute_pending_tool_after_approval(state.session.id, &pending.tool)?;
                 state = self
                     .apply_tool_success(
                         state,
@@ -759,6 +760,20 @@ impl SessionService {
     ) -> Result<ToolInvocationExecution, AppError> {
         self.tool_executor
             .execute_invocation_detailed(&pending_tool.invocation, session_id, pending_tool.call_id)
+            .map_err(tool_error_to_app_error)
+    }
+
+    fn execute_pending_tool_after_approval(
+        &self,
+        session_id: i64,
+        pending_tool: &PendingToolTarget,
+    ) -> Result<ToolInvocationExecution, AppError> {
+        self.tool_executor
+            .execute_invocation_detailed_bypassing_permissions(
+                &pending_tool.invocation,
+                session_id,
+                pending_tool.call_id,
+            )
             .map_err(tool_error_to_app_error)
     }
 
@@ -1414,7 +1429,9 @@ mod tests {
 
     use crate::agent::Agent;
     use crate::db::init_schema;
-    use crate::message::{ToolExecutionPart, WriteToolInput};
+    use crate::message::{
+        BuiltinToolOutput, ToolExecutionPart, ToolOutput, ToolSearchToolInput, WriteToolInput,
+    };
     use crate::permission::{PermissionMode, PermissionPolicy};
     use crate::provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
@@ -1513,8 +1530,48 @@ mod tests {
                     }
                 })
             });
+            let write_tool_loaded = request.messages.iter().any(|message| {
+                message.parts.iter().any(|part| {
+                    matches!(
+                        part.content.as_ref(),
+                        Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                            details:
+                                ToolOutput::Builtin {
+                                    output: BuiltinToolOutput::ToolSearch { loaded_tools, .. },
+                                },
+                            ..
+                        })) if loaded_tools.iter().any(|tool| tool == "write")
+                    )
+                })
+            });
 
-            let events = if last_user_text.contains("write") && tool_result.is_none() {
+            let events = if last_user_text.contains("write")
+                && tool_result.is_none()
+                && !write_tool_loaded
+            {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: "scripted".to_string(),
+                        model: "scripted-model".to_string(),
+                        stream_key: "call_tool_search_1".to_string(),
+                        id: Some("call_tool_search_1".to_string()),
+                        name: Some("tool_search".to_string()),
+                        arguments_delta: serde_json::to_string(&ToolSearchToolInput {
+                            query: "write file".to_string(),
+                            load: vec!["write".to_string()],
+                            limit: None,
+                        })
+                        .expect("serialize tool search input"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: "scripted".to_string(),
+                        model: "scripted-model".to_string(),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if last_user_text.contains("write") && tool_result.is_none() {
                 vec![
                     Ok(CompletionStreamEvent::ToolCallDelta {
                         provider_id: "scripted".to_string(),

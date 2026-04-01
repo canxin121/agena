@@ -75,42 +75,58 @@ impl ToolCatalog {
                 "bash",
                 "Execute a shell command inside the sandboxed workspace.",
                 ToolBehavior::Mutating,
-            ),
+            )
+            .with_search_terms(["shell", "terminal", "command", "script"])
+            .with_deferred_loading(),
             ToolDefinition::builtin::<ReadToolInput>(
                 "read",
                 "Read a UTF-8 text file or list a directory with optional pagination.",
                 ToolBehavior::ReadOnly,
-            ),
+            )
+            .with_search_terms(["open file", "view file", "cat", "inspect"])
+            .with_always_load(),
             ToolDefinition::builtin::<WriteToolInput>(
                 "write",
                 "Create or overwrite a file inside the workspace.",
                 ToolBehavior::Mutating,
-            ),
+            )
+            .with_search_terms(["create file", "overwrite", "save file"])
+            .with_deferred_loading(),
             ToolDefinition::builtin::<EditToolInput>(
                 "edit",
                 "Replace an exact string inside a file, optionally for all matches.",
                 ToolBehavior::Mutating,
-            ),
+            )
+            .with_search_terms(["replace text", "update file", "string replace"])
+            .with_deferred_loading(),
             ToolDefinition::builtin::<ApplyPatchToolInput>(
                 "apply_patch",
                 "Apply a structured patch that can add, update, move, or delete files.",
                 ToolBehavior::Mutating,
-            ),
+            )
+            .with_search_terms(["patch", "diff", "multi-file edit"])
+            .with_deferred_loading(),
             ToolDefinition::builtin::<GlobToolInput>(
                 "glob",
                 "Search files by glob pattern from the workspace or a subdirectory.",
                 ToolBehavior::ReadOnly,
-            ),
+            )
+            .with_search_terms(["find files", "list files", "pattern search"])
+            .with_always_load(),
             ToolDefinition::builtin::<GrepToolInput>(
                 "grep",
                 "Search file contents by regex pattern with optional include glob.",
                 ToolBehavior::ReadOnly,
-            ),
+            )
+            .with_search_terms(["search text", "regex search", "ripgrep"])
+            .with_always_load(),
             ToolDefinition::builtin::<TaskToolInput>(
                 "task",
                 "Create or resume a subagent task session for delegated work.",
                 ToolBehavior::Task,
-            ),
+            )
+            .with_search_terms(["delegate", "subagent", "parallel work"])
+            .with_deferred_loading(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions
@@ -131,6 +147,45 @@ impl ToolCatalog {
                 matches!(tool_name, "read" | "glob" | "grep")
             }
             ModelToolProfile::NoTask => tool_name != "task",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_catalog_marks_read_tools_as_always_loaded() {
+        let catalog = ToolCatalog::for_model(None);
+        let definitions = catalog.builtin_definitions();
+
+        let read = definitions
+            .iter()
+            .find(|tool| tool.name == "read")
+            .expect("read builtin should exist");
+        let grep = definitions
+            .iter()
+            .find(|tool| tool.name == "grep")
+            .expect("grep builtin should exist");
+
+        assert!(read.read_only);
+        assert!(read.concurrency_safe);
+        assert!(!read.is_deferred());
+        assert!(grep.should_load_by_default());
+    }
+
+    #[test]
+    fn builtin_catalog_defers_mutating_and_task_tools() {
+        let catalog = ToolCatalog::for_model(None);
+        let definitions = catalog.builtin_definitions();
+
+        for tool_name in ["bash", "write", "edit", "apply_patch", "task"] {
+            let definition = definitions
+                .iter()
+                .find(|tool| tool.name == tool_name)
+                .unwrap_or_else(|| panic!("missing builtin definition for {tool_name}"));
+            assert!(definition.is_deferred(), "{tool_name} should be deferred");
         }
     }
 }

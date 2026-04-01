@@ -22,13 +22,13 @@ use crate::message::{
     BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, StructuredObject, ToolInvocation,
     ToolOutput,
 };
-use crate::plugin::{
-    PluginAfterToolRequest, PluginBeforeToolRequest, PluginManager, PluginShellEnvRequest,
-    PluginToolCallRequest,
-};
 use crate::permission::{
     AccessKind, PermissionAction, PermissionDecision, PermissionRuleStore, PermissionRuntime,
     PermissionRuntimeDecision,
+};
+use crate::plugin::{
+    PluginAfterToolRequest, PluginBeforeToolRequest, PluginManager, PluginShellEnvRequest,
+    PluginToolCallRequest,
 };
 use crate::session::{InMemorySubtaskSessionManager, SubtaskSessionManager};
 use procwarden::{
@@ -37,7 +37,7 @@ use procwarden::{
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
-pub use definition::{ToolBehavior, ToolDefinition, ToolSource};
+pub use definition::{ToolBehavior, ToolDefinition, ToolLoadPriority, ToolSource};
 pub use result::{BuiltinExecution, ToolExecutionView, ToolInvocationExecution};
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 
@@ -238,17 +238,15 @@ impl ToolExecutor {
             .iter()
             .flat_map(|plugin| {
                 plugin.tools.iter().filter_map(|descriptor| {
-                    catalog
-                        .is_behavior_enabled(descriptor.behavior)
-                        .then(|| {
-                            ToolDefinition::plugin(
-                                descriptor.name.clone(),
-                                descriptor.description.clone(),
-                                descriptor.input_schema.clone(),
-                                descriptor.behavior,
-                                plugin.metadata.name.clone(),
-                            )
-                        })
+                    catalog.is_behavior_enabled(descriptor.behavior).then(|| {
+                        ToolDefinition::plugin(
+                            descriptor.name.clone(),
+                            descriptor.description.clone(),
+                            descriptor.input_schema.clone(),
+                            descriptor.behavior,
+                            plugin.metadata.name.clone(),
+                        )
+                    })
                 })
             })
             .collect::<Vec<_>>();
@@ -760,8 +758,9 @@ fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolErro
             serde_json::to_string(&serde_json::Value::from(input.clone()))
                 .map_err(|err| ToolError::InvalidInput(err.to_string()))
         }
-        ToolInvocation::Mcp { input, .. } => serde_json::to_string(input)
-            .map_err(|err| ToolError::InvalidInput(err.to_string())),
+        ToolInvocation::Mcp { input, .. } => {
+            serde_json::to_string(input).map_err(|err| ToolError::InvalidInput(err.to_string()))
+        }
     }
 }
 
@@ -835,16 +834,16 @@ mod tests {
 
     use crate::message::{
         BashToolInput, BuiltinToolInput, BuiltinToolOutput, EditToolInput, GlobToolInput,
-        GrepToolInput, ReadToolInput, StructuredObject, TaskToolInput, ToolInvocation,
-        ToolOutput, WriteToolInput,
+        GrepToolInput, ReadToolInput, StructuredObject, TaskToolInput, ToolInvocation, ToolOutput,
+        WriteToolInput,
     };
+    use crate::permission::PermissionPolicy;
     use crate::plugin::{
         AgenaPlugin, PluginAfterToolRequest, PluginAfterToolResponse, PluginBeforeToolRequest,
         PluginBeforeToolResponse, PluginError, PluginManager, PluginMetadata,
         PluginShellEnvRequest, PluginShellEnvResponse, PluginToolCallRequest,
         PluginToolCallResponse, PluginToolDescriptor,
     };
-    use crate::permission::PermissionPolicy;
     use procwarden::SandboxPolicy;
 
     use super::{ToolBehavior, ToolExecutor, ToolSource};

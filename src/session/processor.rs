@@ -10,7 +10,7 @@ use crate::message::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
     GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource, MessageStateStore,
     MessageUpdate, PartContent, ReadToolInput, StructuredObject, TaskToolInput, TimeRange,
-    ToolExecutionPart, ToolInvocation, ToolSearchToolInput, WriteToolInput,
+    TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput, WriteToolInput,
 };
 use crate::provider::{CompletionRequest, CompletionStreamEvent, ProviderRegistry};
 use crate::role::Role;
@@ -343,6 +343,9 @@ pub(crate) fn parse_tool_invocation(
         "task" => BuiltinToolInput::Task(parse_input::<TaskToolInput>(arguments_json)?),
         "tool_search" => {
             BuiltinToolInput::ToolSearch(parse_input::<ToolSearchToolInput>(arguments_json)?)
+        }
+        "todo_write" => {
+            BuiltinToolInput::TodoWrite(parse_input::<TodoWriteToolInput>(arguments_json)?)
         }
         other => {
             return Err(AppError::Provider(format!(

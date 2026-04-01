@@ -4,7 +4,10 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::error::{AppError, ProviderErrorKind};
-use crate::message::{AttachmentSource, Message, PartContent, ToolExecutionPart, ToolInvocation};
+use crate::message::{
+    AttachmentSource, Message, PartContent, TodoListPart, TodoPriority, TodoStatus,
+    ToolExecutionPart, ToolInvocation,
+};
 use crate::role::Role;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +62,12 @@ pub fn project_session_parts(message: &Message) -> Vec<ProjectedSessionPart> {
                     }
                 }
             }
+            PartContent::TodoList(todo) if message.role != Role::Tool => {
+                parts.push(ProjectedSessionPart::Text {
+                    text: render_todo_list(todo),
+                });
+            }
+            PartContent::TodoList(_) => {}
             PartContent::ToolExecution(exec) => {
                 let call_id = part.operation_id.clone().unwrap_or_else(|| match exec {
                     ToolExecutionPart::Pending { call_id, .. }
@@ -146,6 +155,40 @@ fn project_tool_invocation(invocation: &ToolInvocation) -> (String, String) {
             name.clone(),
             serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
         ),
+    }
+}
+
+fn render_todo_list(todo: &TodoListPart) -> String {
+    if todo.items.is_empty() {
+        return "Todo list is empty.".to_string();
+    }
+
+    let mut lines = vec!["Todo list:".to_string()];
+    for item in &todo.items {
+        lines.push(format!(
+            "- [{}][{}] {}",
+            todo_status_label(item.status),
+            todo_priority_label(item.priority),
+            item.content
+        ));
+    }
+    lines.join("\n")
+}
+
+fn todo_status_label(status: TodoStatus) -> &'static str {
+    match status {
+        TodoStatus::Pending => "pending",
+        TodoStatus::InProgress => "in_progress",
+        TodoStatus::Completed => "completed",
+        TodoStatus::Cancelled => "cancelled",
+    }
+}
+
+fn todo_priority_label(priority: TodoPriority) -> &'static str {
+    match priority {
+        TodoPriority::High => "high",
+        TodoPriority::Medium => "medium",
+        TodoPriority::Low => "low",
     }
 }
 
@@ -258,6 +301,99 @@ fn is_context_overflow_message(message: &str) -> bool {
         .any(|pattern| normalized.contains(pattern))
         || ((normalized.starts_with("400") || normalized.starts_with("413"))
             && normalized.contains("(no body)"))
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use chrono::Utc;
+
+    use super::*;
+    use crate::message::{
+        ExecutionStatus, MessageMetadata, MessagePart, MessageStatus, TodoItem, ToolOutput,
+    };
+
+    #[test]
+    fn project_session_parts_renders_non_tool_todo_lists_as_text() {
+        let message = Message {
+            id: 7,
+            role: Role::Assistant,
+            state: MessageStatus::Completed,
+            parts: vec![MessagePart::with_content(
+                1,
+                7,
+                Utc::now(),
+                ExecutionStatus::Completed,
+                PartContent::TodoList(TodoListPart {
+                    items: vec![TodoItem {
+                        content: "Inspect tool behavior".to_string(),
+                        status: TodoStatus::InProgress,
+                        priority: TodoPriority::High,
+                    }],
+                }),
+            )],
+            created_at: Utc::now(),
+            metadata: MessageMetadata::default(),
+            usage: None,
+            finish: None,
+        };
+
+        let parts = project_session_parts(&message);
+        assert_eq!(
+            parts,
+            vec![ProjectedSessionPart::Text {
+                text: "Todo list:\n- [in_progress][high] Inspect tool behavior".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn project_session_parts_keeps_tool_results_without_duplicate_todo_text() {
+        let message = Message {
+            id: 8,
+            role: Role::Tool,
+            state: MessageStatus::Completed,
+            parts: vec![
+                MessagePart::with_content(
+                    1,
+                    8,
+                    Utc::now(),
+                    ExecutionStatus::Completed,
+                    PartContent::ToolExecution(ToolExecutionPart::Completed {
+                        call_id: 3,
+                        invocation: ToolInvocation::Builtin {
+                            input: crate::message::BuiltinToolInput::ToolSearch(
+                                crate::message::ToolSearchToolInput {
+                                    query: "edit".to_string(),
+                                    load: vec!["edit".to_string()],
+                                    limit: None,
+                                },
+                            ),
+                        },
+                        output_text: "Loaded deferred tools.".to_string(),
+                        blocks: Vec::new(),
+                        attachments: Vec::new(),
+                        details: ToolOutput::default(),
+                        lifecycle: crate::message::TimeRange::default(),
+                    }),
+                ),
+                MessagePart::with_content(
+                    2,
+                    8,
+                    Utc::now(),
+                    ExecutionStatus::Completed,
+                    PartContent::TodoList(TodoListPart { items: Vec::new() }),
+                ),
+            ],
+            created_at: Utc::now(),
+            metadata: MessageMetadata::default(),
+            usage: None,
+            finish: None,
+        };
+
+        let parts = project_session_parts(&message);
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(parts[0], ProjectedSessionPart::ToolResult { .. }));
+    }
 }
 
 fn classify_http_error(

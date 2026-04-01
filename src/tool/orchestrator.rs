@@ -2,7 +2,7 @@ use crate::message::{BuiltinToolInput, BuiltinToolOutput};
 
 use super::{
     BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
-    apply_patch, bash, edit, glob, grep, read, task, tool_search, write,
+    apply_patch, bash, edit, glob, grep, read, task, todo_write, tool_search, write,
 };
 
 pub(super) fn execute_builtin(
@@ -47,6 +47,7 @@ pub(super) fn execute_builtin(
         BuiltinToolInput::Grep(payload) => grep::execute(executor, payload),
         BuiltinToolInput::Task(payload) => task::execute(executor, payload),
         BuiltinToolInput::ToolSearch(payload) => tool_search::execute(executor, payload),
+        BuiltinToolInput::TodoWrite(payload) => Ok(todo_write::execute(payload)),
         BuiltinToolInput::Bash(payload) => bash::execute(executor, payload, context),
     }
 }

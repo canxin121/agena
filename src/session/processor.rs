@@ -10,7 +10,7 @@ use crate::message::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
     GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource, MessageStateStore,
     MessageUpdate, PartContent, ReadToolInput, StructuredObject, TaskToolInput, TimeRange,
-    ToolExecutionPart, ToolInvocation, WriteToolInput,
+    ToolExecutionPart, ToolInvocation, ToolSearchToolInput, WriteToolInput,
 };
 use crate::provider::{CompletionRequest, CompletionStreamEvent, ProviderRegistry};
 use crate::role::Role;
@@ -314,10 +314,15 @@ pub(crate) fn parse_tool_invocation(
     arguments_json: &str,
     available_tools: &[ToolDefinition],
 ) -> Result<ToolInvocation, AppError> {
-    if let Some(tool) = available_tools
+    let trimmed_name = name.trim();
+    let tool = available_tools
         .iter()
-        .find(|tool| tool.name == name.trim() && !matches!(tool.source, ToolSource::Builtin))
-    {
+        .find(|tool| tool.name == trimmed_name)
+        .ok_or_else(|| {
+            AppError::Provider(format!("unsupported tool call from model: {trimmed_name}"))
+        })?;
+
+    if !matches!(tool.source, ToolSource::Builtin) {
         let parsed = parse_custom_input(arguments_json)?;
         return Ok(ToolInvocation::Custom {
             name: tool.name.clone(),
@@ -325,7 +330,7 @@ pub(crate) fn parse_tool_invocation(
         });
     }
 
-    let input = match name.trim() {
+    let input = match trimmed_name {
         "bash" => BuiltinToolInput::Bash(parse_input::<BashToolInput>(arguments_json)?),
         "read" => BuiltinToolInput::Read(parse_input::<ReadToolInput>(arguments_json)?),
         "write" => BuiltinToolInput::Write(parse_input::<WriteToolInput>(arguments_json)?),
@@ -336,6 +341,9 @@ pub(crate) fn parse_tool_invocation(
         "glob" => BuiltinToolInput::Glob(parse_input::<GlobToolInput>(arguments_json)?),
         "grep" => BuiltinToolInput::Grep(parse_input::<GrepToolInput>(arguments_json)?),
         "task" => BuiltinToolInput::Task(parse_input::<TaskToolInput>(arguments_json)?),
+        "tool_search" => {
+            BuiltinToolInput::ToolSearch(parse_input::<ToolSearchToolInput>(arguments_json)?)
+        }
         other => {
             return Err(AppError::Provider(format!(
                 "unsupported builtin tool call from model: {other}"
@@ -391,12 +399,9 @@ mod tests {
             "fixture",
         )];
 
-        let invocation = parse_tool_invocation(
-            "plugin_echo",
-            "{\"message\":\"hello\"}",
-            tools.as_slice(),
-        )
-        .expect("custom tool call should parse");
+        let invocation =
+            parse_tool_invocation("plugin_echo", "{\"message\":\"hello\"}", tools.as_slice())
+                .expect("custom tool call should parse");
 
         match invocation {
             ToolInvocation::Custom { name, input } => {
@@ -406,5 +411,19 @@ mod tests {
             }
             other => panic!("expected custom tool invocation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_tool_invocation_rejects_unloaded_builtin_tools() {
+        let tools = vec![ToolDefinition::builtin::<ReadToolInput>(
+            "read",
+            "Read a file.",
+            ToolBehavior::ReadOnly,
+        )];
+
+        let err = parse_tool_invocation("bash", "{\"command\":\"pwd\"}", tools.as_slice())
+            .expect_err("unexpected builtin should be rejected");
+
+        assert!(err.to_string().contains("unsupported tool call from model"));
     }
 }

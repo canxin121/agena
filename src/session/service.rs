@@ -346,7 +346,8 @@ impl SessionService {
             provider_id: options.provider_id.clone(),
             completion: options.completion_request(
                 state.messages.clone(),
-                self.tool_executor.available_tools(),
+                self.tool_executor
+                    .available_tools_for_messages(state.messages.as_slice()),
             ),
             next_message_id: processor_ids.message_id,
             next_part_id: processor_ids.first_part_id,
@@ -389,7 +390,11 @@ impl SessionService {
     ) -> Result<LoadedSessionState, AppError> {
         let prepared = self
             .tool_executor
-            .prepare_invocation(&pending_tool.invocation, state.session.id, pending_tool.call_id)
+            .prepare_invocation(
+                &pending_tool.invocation,
+                state.session.id,
+                pending_tool.call_id,
+            )
             .map_err(tool_error_to_app_error)?;
         if prepared.invocation != pending_tool.invocation || prepared.title_override.is_some() {
             let current_title = match state.messages[pending_tool.message_index].parts

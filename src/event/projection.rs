@@ -9,7 +9,7 @@ use crate::message::{
 use crate::role::Role;
 
 #[derive(Debug, Clone)]
-pub enum AiStreamEvent {
+pub enum MessageProjectionEvent {
     MessageStarted {
         message_id: i64,
         role: Role,
@@ -125,13 +125,16 @@ pub enum AiStreamEvent {
     },
 }
 
+/// Internal projection utility that converts provider/tool stream events into
+/// message store mutations. This is backend-only logic and is intentionally
+/// separate from the frontend-facing session event protocol.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct MessageReducer;
+pub struct MessageProjector;
 
-impl MessageReducer {
-    pub fn reduce(&self, event: AiStreamEvent) -> Vec<MessageUpdate> {
+impl MessageProjector {
+    pub fn reduce(&self, event: MessageProjectionEvent) -> Vec<MessageUpdate> {
         match event {
-            AiStreamEvent::MessageStarted {
+            MessageProjectionEvent::MessageStarted {
                 message_id,
                 role,
                 created_at,
@@ -151,7 +154,7 @@ impl MessageReducer {
                     },
                 }]
             }
-            AiStreamEvent::MessageCompleted {
+            MessageProjectionEvent::MessageCompleted {
                 message_id,
                 finish,
                 usage,
@@ -168,7 +171,7 @@ impl MessageReducer {
                 }
                 updates
             }
-            AiStreamEvent::MessageFailed { message_id, finish } => {
+            MessageProjectionEvent::MessageFailed { message_id, finish } => {
                 let mut updates = vec![MessageUpdate::TransitionMessage {
                     message_id,
                     to: MessageStatus::Failed,
@@ -179,7 +182,7 @@ impl MessageReducer {
                 updates
             }
 
-            AiStreamEvent::TextPartStarted {
+            MessageProjectionEvent::TextPartStarted {
                 message_id,
                 part_id,
                 created_at,
@@ -201,15 +204,17 @@ impl MessageReducer {
                     ),
                 }]
             }
-            AiStreamEvent::TextDelta { part_id, delta } => {
+            MessageProjectionEvent::TextDelta { part_id, delta } => {
                 vec![MessageUpdate::AppendTextDelta { part_id, delta }]
             }
-            AiStreamEvent::TextCompleted { part_id } => vec![MessageUpdate::TransitionPart {
-                part_id,
-                to: ExecutionStatus::Completed,
-            }],
+            MessageProjectionEvent::TextCompleted { part_id } => {
+                vec![MessageUpdate::TransitionPart {
+                    part_id,
+                    to: ExecutionStatus::Completed,
+                }]
+            }
 
-            AiStreamEvent::ReasoningPartStarted {
+            MessageProjectionEvent::ReasoningPartStarted {
                 message_id,
                 part_id,
                 created_at,
@@ -225,18 +230,20 @@ impl MessageReducer {
                     ),
                 }]
             }
-            AiStreamEvent::ReasoningSummaryDelta { part_id, delta } => {
+            MessageProjectionEvent::ReasoningSummaryDelta { part_id, delta } => {
                 vec![MessageUpdate::AppendReasoningSummaryDelta { part_id, delta }]
             }
-            AiStreamEvent::ReasoningRawDelta { part_id, delta } => {
+            MessageProjectionEvent::ReasoningRawDelta { part_id, delta } => {
                 vec![MessageUpdate::AppendReasoningRawDelta { part_id, delta }]
             }
-            AiStreamEvent::ReasoningCompleted { part_id } => vec![MessageUpdate::TransitionPart {
-                part_id,
-                to: ExecutionStatus::Completed,
-            }],
+            MessageProjectionEvent::ReasoningCompleted { part_id } => {
+                vec![MessageUpdate::TransitionPart {
+                    part_id,
+                    to: ExecutionStatus::Completed,
+                }]
+            }
 
-            AiStreamEvent::AttachmentPartAdded {
+            MessageProjectionEvent::AttachmentPartAdded {
                 message_id,
                 part_id,
                 created_at,
@@ -254,7 +261,7 @@ impl MessageReducer {
                 }]
             }
 
-            AiStreamEvent::ToolExecutionStarted {
+            MessageProjectionEvent::ToolExecutionStarted {
                 message_id,
                 part_id,
                 created_at,
@@ -281,10 +288,10 @@ impl MessageReducer {
                     ),
                 }]
             }
-            AiStreamEvent::ToolOutputDelta { part_id, delta } => {
+            MessageProjectionEvent::ToolOutputDelta { part_id, delta } => {
                 vec![MessageUpdate::AppendToolOutputDelta { part_id, delta }]
             }
-            AiStreamEvent::ToolExecutionCompleted {
+            MessageProjectionEvent::ToolExecutionCompleted {
                 part_id,
                 call_id,
                 invocation,
@@ -293,25 +300,27 @@ impl MessageReducer {
                 attachments,
                 details,
                 lifecycle,
-            } => vec![
-                MessageUpdate::ReplacePartContent {
-                    part_id,
-                    content: PartContent::ToolExecution(ToolExecutionPart::Completed {
-                        call_id,
-                        invocation,
-                        output_text,
-                        blocks,
-                        attachments,
-                        details,
-                        lifecycle,
-                    }),
-                },
-                MessageUpdate::TransitionPart {
-                    part_id,
-                    to: ExecutionStatus::Completed,
-                },
-            ],
-            AiStreamEvent::ToolExecutionFailed {
+            } => {
+                vec![
+                    MessageUpdate::ReplacePartContent {
+                        part_id,
+                        content: PartContent::ToolExecution(ToolExecutionPart::Completed {
+                            call_id,
+                            invocation,
+                            output_text,
+                            blocks,
+                            attachments,
+                            details,
+                            lifecycle,
+                        }),
+                    },
+                    MessageUpdate::TransitionPart {
+                        part_id,
+                        to: ExecutionStatus::Completed,
+                    },
+                ]
+            }
+            MessageProjectionEvent::ToolExecutionFailed {
                 part_id,
                 call_id,
                 invocation,
@@ -321,27 +330,29 @@ impl MessageReducer {
                 attachments,
                 details,
                 lifecycle,
-            } => vec![
-                MessageUpdate::ReplacePartContent {
-                    part_id,
-                    content: PartContent::ToolExecution(ToolExecutionPart::Failed {
-                        call_id,
-                        invocation,
-                        error_message,
-                        output_text,
-                        blocks,
-                        attachments,
-                        details,
-                        lifecycle,
-                    }),
-                },
-                MessageUpdate::TransitionPart {
-                    part_id,
-                    to: ExecutionStatus::Failed,
-                },
-            ],
+            } => {
+                vec![
+                    MessageUpdate::ReplacePartContent {
+                        part_id,
+                        content: PartContent::ToolExecution(ToolExecutionPart::Failed {
+                            call_id,
+                            invocation,
+                            error_message,
+                            output_text,
+                            blocks,
+                            attachments,
+                            details,
+                            lifecycle,
+                        }),
+                    },
+                    MessageUpdate::TransitionPart {
+                        part_id,
+                        to: ExecutionStatus::Failed,
+                    },
+                ]
+            }
 
-            AiStreamEvent::CommandExecutionStarted {
+            MessageProjectionEvent::CommandExecutionStarted {
                 message_id,
                 part_id,
                 created_at,
@@ -367,68 +378,72 @@ impl MessageReducer {
                     ),
                 }]
             }
-            AiStreamEvent::CommandOutputDelta { part_id, delta } => {
+            MessageProjectionEvent::CommandOutputDelta { part_id, delta } => {
                 vec![MessageUpdate::AppendCommandOutputDelta { part_id, delta }]
             }
-            AiStreamEvent::CommandExecutionCompleted {
+            MessageProjectionEvent::CommandExecutionCompleted {
                 part_id,
                 command,
                 exit_code,
                 output,
                 lifecycle,
-            } => vec![
-                MessageUpdate::ReplacePartContent {
-                    part_id,
-                    content: PartContent::CommandExecution(CommandExecutionPart {
-                        command,
-                        status: ExecutionStatus::Completed,
-                        lifecycle,
-                        exit_code: Some(exit_code),
-                        output: if output.is_empty() {
-                            None
-                        } else {
-                            Some(output)
-                        },
-                    }),
-                },
-                MessageUpdate::TransitionPart {
-                    part_id,
-                    to: ExecutionStatus::Completed,
-                },
-            ],
-            AiStreamEvent::CommandExecutionFailed {
+            } => {
+                vec![
+                    MessageUpdate::ReplacePartContent {
+                        part_id,
+                        content: PartContent::CommandExecution(CommandExecutionPart {
+                            command,
+                            status: ExecutionStatus::Completed,
+                            lifecycle,
+                            exit_code: Some(exit_code),
+                            output: if output.is_empty() {
+                                None
+                            } else {
+                                Some(output)
+                            },
+                        }),
+                    },
+                    MessageUpdate::TransitionPart {
+                        part_id,
+                        to: ExecutionStatus::Completed,
+                    },
+                ]
+            }
+            MessageProjectionEvent::CommandExecutionFailed {
                 part_id,
                 command,
                 exit_code,
                 output,
                 lifecycle,
-            } => vec![
-                MessageUpdate::ReplacePartContent {
-                    part_id,
-                    content: PartContent::CommandExecution(CommandExecutionPart {
-                        command,
-                        status: ExecutionStatus::Failed,
-                        lifecycle,
-                        exit_code,
-                        output: if output.is_empty() {
-                            None
-                        } else {
-                            Some(output)
-                        },
-                    }),
-                },
-                MessageUpdate::TransitionPart {
-                    part_id,
-                    to: ExecutionStatus::Failed,
-                },
-            ],
+            } => {
+                vec![
+                    MessageUpdate::ReplacePartContent {
+                        part_id,
+                        content: PartContent::CommandExecution(CommandExecutionPart {
+                            command,
+                            status: ExecutionStatus::Failed,
+                            lifecycle,
+                            exit_code,
+                            output: if output.is_empty() {
+                                None
+                            } else {
+                                Some(output)
+                            },
+                        }),
+                    },
+                    MessageUpdate::TransitionPart {
+                        part_id,
+                        to: ExecutionStatus::Failed,
+                    },
+                ]
+            }
         }
     }
 
     pub fn apply_to_store(
         &self,
         store: &mut MessageStateStore,
-        event: AiStreamEvent,
+        event: MessageProjectionEvent,
     ) -> Result<(), MessageStateStoreError> {
         for update in self.reduce(event) {
             store.apply(update)?;
@@ -460,8 +475,8 @@ mod tests {
 
     #[test]
     fn attachment_part_added_event_creates_attachment_content() {
-        let reducer = MessageReducer;
-        let updates = reducer.reduce(AiStreamEvent::AttachmentPartAdded {
+        let projector = MessageProjector;
+        let updates = projector.reduce(MessageProjectionEvent::AttachmentPartAdded {
             message_id: 7,
             part_id: 9,
             created_at: Utc::now(),

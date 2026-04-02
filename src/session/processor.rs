@@ -5,7 +5,9 @@ use chrono::Utc;
 use futures_util::StreamExt;
 
 use crate::error::AppError;
-use crate::event::{AgentEvent, AiStreamEvent, ErrorInfo, MessageReducer, StreamErrorEvent};
+use crate::event::{
+    ErrorInfo, MessageProjectionEvent, MessageProjector, SessionEvent, StreamErrorEvent,
+};
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
     GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource, MessageStateStore,
@@ -32,13 +34,13 @@ pub struct SessionRunRequest {
 pub struct SessionRunResult {
     pub assistant_message_id: i64,
     pub state: Vec<Message>,
-    pub events: Vec<AgentEvent>,
+    pub client_events: Vec<SessionEvent>,
 }
 
 pub struct SessionProcessor {
     provider_registry: Arc<ProviderRegistry>,
     context_governor: ContextGovernor,
-    reducer: MessageReducer,
+    projector: MessageProjector,
 }
 
 impl SessionProcessor {
@@ -49,13 +51,13 @@ impl SessionProcessor {
         Self {
             provider_registry,
             context_governor,
-            reducer: MessageReducer,
+            projector: MessageProjector,
         }
     }
 
     pub async fn run_turn(&self, mut run: SessionRunRequest) -> Result<SessionRunResult, AppError> {
         let mut store = MessageStateStore::default();
-        let mut events = Vec::new();
+        let mut client_events = Vec::new();
         let mut compacted_rounds = 0_u8;
 
         loop {
@@ -90,10 +92,10 @@ impl SessionProcessor {
             let assistant_message_id = run.next_message_id;
             run.next_message_id += 1;
 
-            self.reducer
+            self.projector
                 .apply_to_store(
                     &mut store,
-                    AiStreamEvent::MessageStarted {
+                    MessageProjectionEvent::MessageStarted {
                         message_id: assistant_message_id,
                         role: Role::Assistant,
                         created_at: Utc::now(),
@@ -127,10 +129,10 @@ impl SessionProcessor {
                         } else {
                             let part_id = run.next_part_id;
                             run.next_part_id += 1;
-                            self.reducer
+                            self.projector
                                 .apply_to_store(
                                     &mut store,
-                                    AiStreamEvent::TextPartStarted {
+                                    MessageProjectionEvent::TextPartStarted {
                                         message_id: assistant_message_id,
                                         part_id,
                                         created_at: Utc::now(),
@@ -142,8 +144,11 @@ impl SessionProcessor {
                             active_text_part = Some(part_id);
                             part_id
                         };
-                        self.reducer
-                            .apply_to_store(&mut store, AiStreamEvent::TextDelta { part_id, delta })
+                        self.projector
+                            .apply_to_store(
+                                &mut store,
+                                MessageProjectionEvent::TextDelta { part_id, delta },
+                            )
                             .map_err(|err| AppError::Internal(err.to_string()))?;
                     }
                     Ok(CompletionStreamEvent::ToolCallDelta {
@@ -190,8 +195,11 @@ impl SessionProcessor {
             }
 
             if let Some(part_id) = active_text_part {
-                self.reducer
-                    .apply_to_store(&mut store, AiStreamEvent::TextCompleted { part_id })
+                self.projector
+                    .apply_to_store(
+                        &mut store,
+                        MessageProjectionEvent::TextCompleted { part_id },
+                    )
                     .map_err(|err| AppError::Internal(err.to_string()))?;
             }
 
@@ -210,18 +218,18 @@ impl SessionProcessor {
             )?;
 
             if let Some(err) = provider_err {
-                self.reducer
+                self.projector
                     .apply_to_store(
                         &mut store,
-                        AiStreamEvent::MessageFailed {
+                        MessageProjectionEvent::MessageFailed {
                             message_id: assistant_message_id,
                             finish: Some(err.to_string()),
                         },
                     )
                     .map_err(|inner| AppError::Internal(inner.to_string()))?;
 
-                events.push(AgentEvent::StreamError(StreamErrorEvent {
-                    thread_id: run.session_id,
+                client_events.push(SessionEvent::StreamError(StreamErrorEvent {
+                    session_id: run.session_id,
                     error: ErrorInfo {
                         code: "provider_stream_error".to_string(),
                         message: err.to_string(),
@@ -231,10 +239,10 @@ impl SessionProcessor {
                 return Err(err);
             }
 
-            self.reducer
+            self.projector
                 .apply_to_store(
                     &mut store,
-                    AiStreamEvent::MessageCompleted {
+                    MessageProjectionEvent::MessageCompleted {
                         message_id: assistant_message_id,
                         finish,
                         usage,
@@ -245,7 +253,7 @@ impl SessionProcessor {
             return Ok(SessionRunResult {
                 assistant_message_id,
                 state: store.list_message_snapshots(),
-                events,
+                client_events,
             });
         }
     }

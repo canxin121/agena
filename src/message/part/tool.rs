@@ -2,7 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-use super::{ExecutionStatus, StructuredObject, TimeRange, TodoItem};
+use super::{
+    AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, FileChangeEntry,
+    StructuredObject, TimeRange, TodoItem,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ToolAttachment {
@@ -11,6 +14,27 @@ pub struct ToolAttachment {
     pub filename: String,
     #[serde(default)]
     pub mime: String,
+}
+
+impl ToolAttachment {
+    pub fn to_attachment_item(&self) -> Option<AttachmentItem> {
+        let source = attachment_source_from_location(self.url.as_str())?;
+        let hint = first_non_empty([self.filename.as_str(), self.url.as_str()]);
+
+        Some(AttachmentItem {
+            kind: AttachmentKind::detect(self.mime.as_str(), hint),
+            mime: self.mime.clone(),
+            source,
+            filename: non_empty(self.filename.as_str()),
+            title: None,
+            size_bytes: None,
+            sha256: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -31,21 +55,6 @@ pub struct ReadToolInput {
     pub offset: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct WriteToolInput {
-    pub file_path: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct EditToolInput {
-    pub file_path: String,
-    pub old_string: String,
-    pub new_string: String,
-    #[serde(default)]
-    pub replace_all: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -140,8 +149,6 @@ pub struct ApplyPatchToolInput {
 pub enum BuiltinToolInput {
     Bash(BashToolInput),
     Read(ReadToolInput),
-    Write(WriteToolInput),
-    Edit(EditToolInput),
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
     Grep(GrepToolInput),
@@ -186,24 +193,10 @@ pub enum BuiltinToolOutput {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         loaded_paths: Vec<String>,
     },
-    Write {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        files: Vec<String>,
-    },
-    Edit {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        diagnostics: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        diff: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_diff: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        files: Vec<String>,
-    },
     ApplyPatch {
         operation_id: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        files: Vec<String>,
+        changes: Vec<FileChangeEntry>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_hash: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -270,6 +263,82 @@ pub enum ToolResultBlock {
         filename: String,
         mime: String,
     },
+}
+
+impl ToolResultBlock {
+    pub fn to_attachment_item(&self) -> Option<AttachmentItem> {
+        match self {
+            Self::Text { .. } => None,
+            Self::Image { mime, url } | Self::Audio { mime, url } => Some(AttachmentItem {
+                kind: AttachmentKind::detect(mime.as_str(), Some(url.as_str())),
+                mime: mime.clone(),
+                source: attachment_source_from_location(url.as_str())?,
+                filename: filename_hint(url.as_str()),
+                title: None,
+                size_bytes: None,
+                sha256: None,
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            }),
+            Self::ResourceLink { uri, title } => Some(AttachmentItem {
+                kind: AttachmentKind::detect("", Some(uri.as_str())),
+                mime: String::new(),
+                source: attachment_source_from_location(uri.as_str())?,
+                filename: filename_hint(uri.as_str()),
+                title: title.clone(),
+                size_bytes: None,
+                sha256: None,
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            }),
+            Self::EmbeddedResource {
+                uri, mime, base64, ..
+            } => {
+                let source = if let Some(base64) = base64.as_ref() {
+                    AttachmentSource::Base64 {
+                        data: base64.clone(),
+                    }
+                } else {
+                    attachment_source_from_location(uri.as_str())?
+                };
+
+                Some(AttachmentItem {
+                    kind: AttachmentKind::detect(mime.as_str(), Some(uri.as_str())),
+                    mime: mime.clone(),
+                    source,
+                    filename: filename_hint(uri.as_str()),
+                    title: None,
+                    size_bytes: None,
+                    sha256: None,
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: None,
+                })
+            }
+            Self::File {
+                url,
+                filename,
+                mime,
+            } => Some(AttachmentItem {
+                kind: AttachmentKind::detect(mime.as_str(), Some(filename.as_str())),
+                mime: mime.clone(),
+                source: attachment_source_from_location(url.as_str())?,
+                filename: non_empty(filename.as_str()),
+                title: None,
+                size_bytes: None,
+                sha256: None,
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -404,6 +473,65 @@ impl ToolExecutionPart {
     }
 }
 
+fn non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+fn first_non_empty<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    values
+        .into_iter()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+}
+
+fn filename_hint(value: &str) -> Option<String> {
+    value
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn attachment_source_from_location(value: &str) -> Option<AttachmentSource> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.starts_with("data:") {
+        return Some(AttachmentSource::DataUrl {
+            url: trimmed.to_owned(),
+        });
+    }
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(AttachmentSource::Url {
+            url: trimmed.to_owned(),
+        });
+    }
+
+    if trimmed.starts_with("file://")
+        || trimmed.starts_with('/')
+        || trimmed.starts_with("./")
+        || trimmed.starts_with("../")
+    {
+        return Some(AttachmentSource::LocalPath {
+            path: trimmed.to_owned(),
+        });
+    }
+
+    Some(AttachmentSource::Url {
+        url: trimmed.to_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +549,40 @@ mod tests {
         let value = serde_json::to_string(&TaskSubagentType::Implement)
             .expect("task subagent type should serialize");
         assert_eq!(value, "\"implement\"");
+    }
+
+    #[test]
+    fn tool_result_block_converts_resource_links_into_attachments() {
+        let block = ToolResultBlock::ResourceLink {
+            uri: "https://example.com/report.pdf".to_string(),
+            title: Some("report".to_string()),
+        };
+
+        let attachment = block
+            .to_attachment_item()
+            .expect("resource link should become attachment");
+        assert_eq!(attachment.kind, AttachmentKind::Pdf);
+        assert_eq!(attachment.title.as_deref(), Some("report"));
+        assert_eq!(
+            attachment.source,
+            AttachmentSource::Url {
+                url: "https://example.com/report.pdf".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn tool_attachment_converts_to_attachment_item() {
+        let attachment = ToolAttachment {
+            url: "https://example.com/image.png".to_string(),
+            filename: "image.png".to_string(),
+            mime: "image/png".to_string(),
+        };
+
+        let item = attachment
+            .to_attachment_item()
+            .expect("tool attachment should convert");
+        assert_eq!(item.kind, AttachmentKind::Image);
+        assert_eq!(item.filename.as_deref(), Some("image.png"));
     }
 }

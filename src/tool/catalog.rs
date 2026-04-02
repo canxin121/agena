@@ -1,8 +1,7 @@
 use crate::agent::Agent;
 use crate::message::{
-    ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
-    GrepToolInput, ReadToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput,
-    WriteToolInput,
+    ApplyPatchToolInput, BashToolInput, BuiltinToolInput, GlobToolInput, GrepToolInput,
+    ReadToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -86,20 +85,6 @@ impl ToolCatalog {
             )
             .with_search_terms(["open file", "view file", "cat", "inspect"])
             .with_always_load(),
-            ToolDefinition::builtin::<WriteToolInput>(
-                "write",
-                "Create or overwrite a file inside the workspace.",
-                ToolBehavior::Mutating,
-            )
-            .with_search_terms(["create file", "overwrite", "save file"])
-            .with_deferred_loading(),
-            ToolDefinition::builtin::<EditToolInput>(
-                "edit",
-                "Replace an exact string inside a file, optionally for all matches.",
-                ToolBehavior::Mutating,
-            )
-            .with_search_terms(["replace text", "update file", "string replace"])
-            .with_deferred_loading(),
             ToolDefinition::builtin::<ApplyPatchToolInput>(
                 "apply_patch",
                 "Apply a structured patch that can add, update, move, or delete files.",
@@ -198,7 +183,7 @@ mod tests {
         let catalog = ToolCatalog::for_model(None);
         let definitions = catalog.builtin_definitions();
 
-        for tool_name in ["bash", "write", "edit", "apply_patch", "task"] {
+        for tool_name in ["bash", "apply_patch", "task"] {
             let definition = definitions
                 .iter()
                 .find(|tool| tool.name == tool_name)

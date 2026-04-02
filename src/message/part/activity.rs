@@ -45,15 +45,13 @@ pub struct CommandExecutionPart {
     pub output: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileChangePart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<FileChangeEntry>,
-    #[serde(default = "default_execution_pending")]
-    pub status: ExecutionStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileChangeEntry {
     pub path: String,
     pub kind: FileChangeKind,

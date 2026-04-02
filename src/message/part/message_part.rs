@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::{
-    AttachmentPart, ExecutionStatus, PartContent, PartKind, ToolExecutionPart, ToolInvocation,
+    AttachmentPart, ExecutionStatus, FileChangeEntry, FileChangeKind, FileChangePart, PartContent,
+    PartKind, ToolExecutionPart, ToolInvocation,
 };
 
 #[derive(Debug, Error)]
@@ -310,9 +311,7 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
             }
         },
         PartContent::CommandExecution(command) => truncate_summary(&command.command),
-        PartContent::FileChange(change) => {
-            truncate_summary(&format!("{} file change(s)", change.changes.len()))
-        }
+        PartContent::FileChange(change) => file_change_part_summary(change),
         PartContent::WebSearch(search) => truncate_summary(&search.query),
         PartContent::TodoList(todo) => {
             truncate_summary(&format!("{} todo item(s)", todo.items.len()))
@@ -343,6 +342,37 @@ fn attachment_part_summary(part: &AttachmentPart) -> Option<String> {
         truncate_summary(&format!("1 attachment: {first}"))
     } else {
         truncate_summary(&format!("{count} attachments (first: {first})"))
+    }
+}
+
+fn file_change_part_summary(part: &FileChangePart) -> Option<String> {
+    let count = part.changes.len();
+    if count == 0 {
+        return Some("0 file changes".to_string());
+    }
+
+    let first = part
+        .changes
+        .first()
+        .map(file_change_entry_summary)
+        .unwrap_or_else(|| "file change".to_string());
+
+    if count == 1 {
+        truncate_summary(&format!("1 file change: {first}"))
+    } else {
+        truncate_summary(&format!("{count} file changes (first: {first})"))
+    }
+}
+
+fn file_change_entry_summary(change: &FileChangeEntry) -> String {
+    format!("{} ({})", change.path, file_change_kind_label(change.kind))
+}
+
+const fn file_change_kind_label(kind: FileChangeKind) -> &'static str {
+    match kind {
+        FileChangeKind::Added => "added",
+        FileChangeKind::Updated => "updated",
+        FileChangeKind::Deleted => "deleted",
     }
 }
 
@@ -467,9 +497,9 @@ mod tests {
                     request_id: "req_1".to_string(),
                     session_id: Some(2),
                     action: PermissionAction::BuiltinTool {
-                        tool_name: "write".to_string(),
+                        tool_name: "apply_patch".to_string(),
                     },
-                    reason: "tool 'write' requires confirmation by policy".to_string(),
+                    reason: "tool 'apply_patch' requires confirmation by policy".to_string(),
                     created_at: Utc::now(),
                 },
             )),
@@ -479,7 +509,30 @@ mod tests {
         assert_eq!(part.name.as_deref(), Some("permission_request"));
         assert_eq!(
             part.summary.as_deref(),
-            Some("Awaiting permission: tool 'write' requires confirmation by policy")
+            Some("Awaiting permission: tool 'apply_patch' requires confirmation by policy")
+        );
+    }
+
+    #[test]
+    fn file_change_part_sets_summary_from_first_change() {
+        let part = MessagePart::with_content(
+            12,
+            3,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::FileChange(FileChangePart {
+                changes: vec![crate::message::FileChangeEntry {
+                    path: "result.txt".to_string(),
+                    kind: FileChangeKind::Added,
+                }],
+            }),
+        );
+
+        assert_eq!(part.kind, PartKind::FileChange);
+        assert_eq!(part.name.as_deref(), Some("file_change"));
+        assert_eq!(
+            part.summary.as_deref(),
+            Some("1 file change: result.txt (added)")
         );
     }
 }

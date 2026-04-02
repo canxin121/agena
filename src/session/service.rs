@@ -14,9 +14,9 @@ use crate::event::{
     ErrorInfo, MessagePartUpdatedEvent, RunFailedEvent, RunStartedEvent, SessionEvent,
 };
 use crate::message::{
-    BuiltinToolOutput, ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource,
-    MessageStatus, PartContent, PermissionRequestPart, TimeRange, TodoListPart, ToolExecutionPart,
-    ToolInvocation, ToolOutput, ToolResultBlock,
+    AttachmentItem, BuiltinToolOutput, ExecutionStatus, FileChangePart, Message, MessageMetadata,
+    MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart, TimeRange,
+    TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock,
 };
 use crate::permission::{
     PermissionAction, PermissionDecision, PermissionMode, PermissionReply, PermissionReplyKind,
@@ -526,6 +526,11 @@ impl SessionService {
         let output_text = execution.view.output_text.clone();
         let lifecycle = completed_lifecycle(&pending_tool.lifecycle);
         let blocks = text_result_blocks(output_text.as_str());
+        let extra_part_contents = tool_message_extra_part_contents(
+            &tool_output,
+            execution.view.attachments.as_slice(),
+            blocks.as_slice(),
+        );
 
         {
             let tool_part =
@@ -543,7 +548,7 @@ impl SessionService {
         }
 
         let tool_message = build_tool_message(
-            self.reserve_message_ids(tool_message_part_count(&tool_output))
+            self.reserve_message_ids(1 + extra_part_contents.len())
                 .await?,
             pending_tool,
             execution.view.attachments,
@@ -552,6 +557,7 @@ impl SessionService {
             tool_output,
             lifecycle,
             None,
+            extra_part_contents,
         );
         state.messages.push(tool_message.clone());
 
@@ -601,6 +607,7 @@ impl SessionService {
             ToolOutput::None,
             lifecycle,
             Some(reason),
+            Vec::new(),
         );
         state.messages.push(tool_message.clone());
 
@@ -1201,14 +1208,14 @@ fn build_message(
         finish: None,
     };
 
-    for (index, content) in parts.into_iter().enumerate() {
-        let status = match &content {
-            PartContent::ToolExecution(tool) => tool.status(),
-            PartContent::PermissionRequest(permission) => permission.status(),
-            _ => ExecutionStatus::Completed,
-        };
-        let mut part =
-            MessagePart::with_content(ids.part_ids[index], message.id, created_at, status, content);
+    for content in parts {
+        let mut part = MessagePart::with_content(
+            ids.part_ids[message.parts.len()],
+            message.id,
+            created_at,
+            part_status(&content),
+            content,
+        );
         part.part_index = message.parts.len() as i32;
         message.parts.push(part);
     }
@@ -1219,12 +1226,13 @@ fn build_message(
 fn build_tool_message(
     ids: ReservedMessageIds,
     pending_tool: &PendingToolTarget,
-    attachments: Vec<crate::message::ToolAttachment>,
+    attachments: Vec<ToolAttachment>,
     output_text: String,
     blocks: Vec<ToolResultBlock>,
     details: ToolOutput,
     lifecycle: TimeRange,
     error_message: Option<String>,
+    extra_part_contents: Vec<PartContent>,
 ) -> Message {
     let created_at = Utc::now();
     let message_state = if error_message.is_some() {
@@ -1232,12 +1240,6 @@ fn build_tool_message(
     } else {
         MessageStatus::Completed
     };
-    let extra_parts = extra_tool_message_parts(
-        ids.part_ids.as_slice(),
-        ids.message_id,
-        created_at,
-        &details,
-    );
     let content = match error_message {
         Some(error_message) => PartContent::ToolExecution(ToolExecutionPart::Failed {
             call_id: pending_tool.call_id,
@@ -1264,17 +1266,19 @@ fn build_tool_message(
         ids.part_ids[0],
         ids.message_id,
         created_at,
-        match &content {
-            PartContent::ToolExecution(tool) => tool.status(),
-            _ => ExecutionStatus::Completed,
-        },
+        part_status(&content),
         content,
     );
     part.operation_id = Some(pending_tool.operation_id.clone());
     part.part_index = 0;
 
     let mut parts = vec![part];
-    parts.extend(extra_parts);
+    parts.extend(build_extra_message_parts(
+        ids.part_ids[1..].iter().copied(),
+        ids.message_id,
+        created_at,
+        extra_part_contents,
+    ));
 
     Message {
         id: ids.message_id,
@@ -1295,41 +1299,113 @@ fn build_tool_message(
     }
 }
 
-fn tool_message_part_count(details: &ToolOutput) -> usize {
-    1 + usize::from(matches!(
-        details,
-        ToolOutput::Builtin {
-            output: BuiltinToolOutput::TodoWrite { .. }
-        }
-    ))
-}
-
-fn extra_tool_message_parts(
-    part_ids: &[i64],
+fn build_extra_message_parts(
+    part_ids: impl IntoIterator<Item = i64>,
     message_id: i64,
     created_at: chrono::DateTime<Utc>,
-    details: &ToolOutput,
+    contents: Vec<PartContent>,
 ) -> Vec<MessagePart> {
+    contents
+        .into_iter()
+        .zip(part_ids)
+        .enumerate()
+        .map(|(index, (content, part_id))| {
+            let mut part = MessagePart::with_content(
+                part_id,
+                message_id,
+                created_at,
+                part_status(&content),
+                content,
+            );
+            part.part_index = index as i32 + 1;
+            part
+        })
+        .collect()
+}
+
+fn tool_message_extra_part_contents(
+    details: &ToolOutput,
+    attachments: &[ToolAttachment],
+    blocks: &[ToolResultBlock],
+) -> Vec<PartContent> {
+    let mut contents = Vec::new();
+
+    if let Some(file_change) = file_change_part_from_tool_output(details) {
+        contents.push(PartContent::FileChange(file_change));
+    }
+
+    if let Some(todo) = todo_part_from_tool_output(details) {
+        contents.push(PartContent::TodoList(todo));
+    }
+
+    let attachment_items = attachment_items_from_tool_output(details, attachments, blocks);
+    if !attachment_items.is_empty() {
+        contents.push(PartContent::attachments(attachment_items));
+    }
+
+    contents
+}
+
+fn file_change_part_from_tool_output(details: &ToolOutput) -> Option<FileChangePart> {
+    match details {
+        ToolOutput::Builtin {
+            output: BuiltinToolOutput::ApplyPatch { changes, .. },
+        } if !changes.is_empty() => Some(FileChangePart {
+            changes: changes.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn todo_part_from_tool_output(details: &ToolOutput) -> Option<TodoListPart> {
     match details {
         ToolOutput::Builtin {
             output: BuiltinToolOutput::TodoWrite { items },
-        } => {
-            let Some(part_id) = part_ids.get(1) else {
-                return Vec::new();
-            };
-            let mut part = MessagePart::with_content(
-                *part_id,
-                message_id,
-                created_at,
-                ExecutionStatus::Completed,
-                PartContent::TodoList(TodoListPart {
-                    items: items.clone(),
-                }),
-            );
-            part.part_index = 1;
-            vec![part]
+        } => Some(TodoListPart {
+            items: items.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn attachment_items_from_tool_output(
+    details: &ToolOutput,
+    attachments: &[ToolAttachment],
+    blocks: &[ToolResultBlock],
+) -> Vec<AttachmentItem> {
+    let mut items = Vec::new();
+
+    for attachment in attachments {
+        if let Some(item) = attachment.to_attachment_item() {
+            push_unique_attachment_item(&mut items, item);
         }
-        _ => Vec::new(),
+    }
+
+    let block_source = match details {
+        ToolOutput::Mcp { output } => output.content_blocks.as_slice(),
+        _ => blocks,
+    };
+
+    for block in block_source {
+        if let Some(item) = block.to_attachment_item() {
+            push_unique_attachment_item(&mut items, item);
+        }
+    }
+
+    items
+}
+
+fn push_unique_attachment_item(items: &mut Vec<AttachmentItem>, item: AttachmentItem) {
+    if !items.contains(&item) {
+        items.push(item);
+    }
+}
+
+fn part_status(content: &PartContent) -> ExecutionStatus {
+    match content {
+        PartContent::ToolExecution(tool) => tool.status(),
+        PartContent::PermissionRequest(permission) => permission.status(),
+        _ => ExecutionStatus::Completed,
     }
 }
 
@@ -1463,7 +1539,8 @@ mod tests {
     use crate::agent::Agent;
     use crate::db::init_schema;
     use crate::message::{
-        BuiltinToolOutput, ToolExecutionPart, ToolOutput, ToolSearchToolInput, WriteToolInput,
+        ApplyPatchToolInput, AttachmentSource, BuiltinToolOutput, FileChangeKind, McpToolOutput,
+        ToolAttachment, ToolExecutionPart, ToolOutput, ToolResultBlock, ToolSearchToolInput,
     };
     use crate::permission::{PermissionMode, PermissionPolicy};
     use crate::provider::{
@@ -1547,7 +1624,7 @@ mod tests {
                     return None;
                 }
                 message.parts.iter().find_map(|part| {
-                    if part.operation_id.as_deref() != Some("call_write_1") {
+                    if part.operation_id.as_deref() != Some("call_apply_patch_1") {
                         return None;
                     }
                     match part.content.as_ref() {
@@ -1563,24 +1640,24 @@ mod tests {
                     }
                 })
             });
-            let write_tool_loaded = request.messages.iter().any(|message| {
+            let apply_patch_tool_loaded = request.messages.iter().any(|message| {
                 message.parts.iter().any(|part| {
                     matches!(
                         part.content.as_ref(),
                         Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
                             details:
                                 ToolOutput::Builtin {
-                                    output: BuiltinToolOutput::ToolSearch { loaded_tools, .. },
+                                output: BuiltinToolOutput::ToolSearch { loaded_tools, .. },
                                 },
                             ..
-                        })) if loaded_tools.iter().any(|tool| tool == "write")
+                        })) if loaded_tools.iter().any(|tool| tool == "apply_patch")
                     )
                 })
             });
 
-            let events = if last_user_text.contains("write")
+            let events = if last_user_text.contains("patch")
                 && tool_result.is_none()
-                && !write_tool_loaded
+                && !apply_patch_tool_loaded
             {
                 vec![
                     Ok(CompletionStreamEvent::ToolCallDelta {
@@ -1590,8 +1667,8 @@ mod tests {
                         id: Some("call_tool_search_1".to_string()),
                         name: Some("tool_search".to_string()),
                         arguments_delta: serde_json::to_string(&ToolSearchToolInput {
-                            query: "write file".to_string(),
-                            load: vec!["write".to_string()],
+                            query: "patch file".to_string(),
+                            load: vec!["apply_patch".to_string()],
                             limit: None,
                         })
                         .expect("serialize tool search input"),
@@ -1604,17 +1681,17 @@ mod tests {
                         provider_metadata: None,
                     }),
                 ]
-            } else if last_user_text.contains("write") && tool_result.is_none() {
+            } else if last_user_text.contains("patch") && tool_result.is_none() {
                 vec![
                     Ok(CompletionStreamEvent::ToolCallDelta {
                         provider_id: "scripted".to_string(),
                         model: "scripted-model".to_string(),
-                        stream_key: "call_write_1".to_string(),
-                        id: Some("call_write_1".to_string()),
-                        name: Some("write".to_string()),
-                        arguments_delta: serde_json::to_string(&WriteToolInput {
-                            file_path: "result.txt".to_string(),
-                            content: "approved\n".to_string(),
+                        stream_key: "call_apply_patch_1".to_string(),
+                        id: Some("call_apply_patch_1".to_string()),
+                        name: Some("apply_patch".to_string()),
+                        arguments_delta: serde_json::to_string(&ApplyPatchToolInput {
+                            patch: "*** Begin Patch\n*** Add File: result.txt\n+approved\n*** End Patch"
+                                .to_string(),
                         })
                         .expect("serialize tool input"),
                     }),
@@ -1628,8 +1705,8 @@ mod tests {
                 ]
             } else if let Some(tool_result) = tool_result {
                 let delta = match tool_result {
-                    Ok(_) => "write done".to_string(),
-                    Err(_) => "write denied".to_string(),
+                    Ok(_) => "patch done".to_string(),
+                    Err(_) => "patch denied".to_string(),
                 };
                 vec![
                     Ok(CompletionStreamEvent::TextDelta {
@@ -1704,6 +1781,65 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tool_message_extra_part_contents_materialize_mcp_resources_as_attachments() {
+        let contents = tool_message_extra_part_contents(
+            &ToolOutput::Mcp {
+                output: McpToolOutput {
+                    server: "fixtures".to_string(),
+                    tool: "resource_tool".to_string(),
+                    content_blocks: vec![
+                        ToolResultBlock::Image {
+                            mime: "image/png".to_string(),
+                            url: "https://example.com/chart.png".to_string(),
+                        },
+                        ToolResultBlock::ResourceLink {
+                            uri: "https://example.com/report.pdf".to_string(),
+                            title: Some("report".to_string()),
+                        },
+                    ],
+                    structured_content: None,
+                },
+            },
+            &[ToolAttachment {
+                url: "https://example.com/audio.mp3".to_string(),
+                filename: "audio.mp3".to_string(),
+                mime: "audio/mpeg".to_string(),
+            }],
+            &[],
+        );
+
+        assert_eq!(contents.len(), 1);
+        let Some(PartContent::Attachment(part)) = contents.first() else {
+            panic!("expected attachment part");
+        };
+        assert_eq!(part.attachments.len(), 3);
+        assert!(part.attachments.iter().any(|item| {
+            item.kind == crate::message::AttachmentKind::Image
+                && matches!(
+                    item.source,
+                    AttachmentSource::Url { ref url }
+                        if url == "https://example.com/chart.png"
+                )
+        }));
+        assert!(part.attachments.iter().any(|item| {
+            item.kind == crate::message::AttachmentKind::Pdf
+                && matches!(
+                    item.source,
+                    AttachmentSource::Url { ref url }
+                        if url == "https://example.com/report.pdf"
+                )
+        }));
+        assert!(part.attachments.iter().any(|item| {
+            item.kind == crate::message::AttachmentKind::Audio
+                && matches!(
+                    item.source,
+                    AttachmentSource::Url { ref url }
+                        if url == "https://example.com/audio.mp3"
+                )
+        }));
+    }
+
     #[tokio::test]
     async fn permission_allow_reply_resumes_and_executes_tool() {
         let workspace = TempWorkspace::new();
@@ -1726,7 +1862,7 @@ mod tests {
             .submit_user_turn(SessionUserTurnRequest {
                 session_id: created.session.id,
                 options: run_options(),
-                parts: vec![PartContent::text("please write a file")],
+                parts: vec![PartContent::text("please patch a file")],
             })
             .await
             .expect("submit turn");
@@ -1737,7 +1873,7 @@ mod tests {
                     part.content.as_ref(),
                     Some(PartContent::PermissionRequest(permission))
                         if permission.reply.is_none()
-                            && permission.request.request_id == "call_write_1"
+                            && permission.request.request_id == "call_apply_patch_1"
                 )
             })
         }));
@@ -1747,7 +1883,7 @@ mod tests {
                 session_id: created.session.id,
                 options: run_options(),
                 reply: PermissionReply {
-                    request_id: "call_write_1".to_string(),
+                    request_id: "call_apply_patch_1".to_string(),
                     kind: PermissionReplyKind::AllowOnce,
                     reason: None,
                     scope: None,
@@ -1772,13 +1908,24 @@ mod tests {
                 )
             })
         }));
+        assert!(resumed.messages.iter().any(|message| {
+            message.parts.iter().any(|part| {
+                matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::FileChange(change))
+                        if change.changes.iter().any(|entry| {
+                            entry.path == "result.txt" && entry.kind == FileChangeKind::Added
+                        })
+                )
+            })
+        }));
         assert_eq!(
             resumed
                 .messages
                 .last()
                 .expect("assistant message should exist")
                 .as_text_lossy(),
-            "write done"
+            "patch done"
         );
     }
 
@@ -1804,7 +1951,7 @@ mod tests {
             .submit_user_turn(SessionUserTurnRequest {
                 session_id: created.session.id,
                 options: run_options(),
-                parts: vec![PartContent::text("please write a file")],
+                parts: vec![PartContent::text("please patch a file")],
             })
             .await
             .expect("submit turn");
@@ -1815,7 +1962,7 @@ mod tests {
                 session_id: created.session.id,
                 options: run_options(),
                 reply: PermissionReply {
-                    request_id: "call_write_1".to_string(),
+                    request_id: "call_apply_patch_1".to_string(),
                     kind: PermissionReplyKind::DenyOnce,
                     reason: Some("operator denied".to_string()),
                     scope: None,
@@ -1832,7 +1979,7 @@ mod tests {
                 .last()
                 .expect("assistant message should exist")
                 .as_text_lossy(),
-            "write denied"
+            "patch denied"
         );
         assert!(
             resumed

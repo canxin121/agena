@@ -119,15 +119,17 @@ impl From<StructuredValue> for serde_json::Value {
             StructuredValue::Null => serde_json::Value::Null,
             StructuredValue::Boolean { value } => serde_json::Value::Bool(value),
             StructuredValue::Integer { value } => serde_json::json!(value),
-            StructuredValue::Number { value } => serde_json::from_str::<serde_json::Value>(
-                value.as_str(),
-            )
-            .ok()
-            .and_then(|parsed| match parsed {
-                serde_json::Value::Number(number) => Some(serde_json::Value::Number(number)),
-                _ => None,
-            })
-            .unwrap_or_else(|| serde_json::Value::String(value)),
+            StructuredValue::Number { value } => {
+                serde_json::from_str::<serde_json::Value>(value.as_str())
+                    .ok()
+                    .and_then(|parsed| match parsed {
+                        serde_json::Value::Number(number) => {
+                            Some(serde_json::Value::Number(number))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| serde_json::Value::String(value))
+            }
             StructuredValue::Text { value } => serde_json::Value::String(value),
             StructuredValue::Array { items } => {
                 serde_json::Value::Array(items.into_iter().map(Into::into).collect())

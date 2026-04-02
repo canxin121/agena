@@ -55,13 +55,14 @@ pub fn project_session_parts(message: &Message) -> Vec<ProjectedSessionPart> {
                     });
                 }
             }
-            PartContent::Attachment(attachment) => {
+            PartContent::Attachment(attachment) if message.role != Role::Tool => {
                 for item in &attachment.attachments {
                     if let AttachmentSource::Url { url } = &item.source {
                         parts.push(ProjectedSessionPart::ImageUrl { url: url.clone() });
                     }
                 }
             }
+            PartContent::Attachment(_) => {}
             PartContent::TodoList(todo) if message.role != Role::Tool => {
                 parts.push(ProjectedSessionPart::Text {
                     text: render_todo_list(todo),
@@ -309,7 +310,8 @@ mod projection_tests {
 
     use super::*;
     use crate::message::{
-        ExecutionStatus, MessageMetadata, MessagePart, MessageStatus, TodoItem, ToolOutput,
+        AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, MessageMetadata,
+        MessagePart, MessageStatus, TodoItem, ToolOutput,
     };
 
     #[test]
@@ -363,8 +365,8 @@ mod projection_tests {
                         invocation: ToolInvocation::Builtin {
                             input: crate::message::BuiltinToolInput::ToolSearch(
                                 crate::message::ToolSearchToolInput {
-                                    query: "edit".to_string(),
-                                    load: vec!["edit".to_string()],
+                                    query: "patch".to_string(),
+                                    load: vec!["apply_patch".to_string()],
                                     limit: None,
                                 },
                             ),
@@ -382,6 +384,64 @@ mod projection_tests {
                     Utc::now(),
                     ExecutionStatus::Completed,
                     PartContent::TodoList(TodoListPart { items: Vec::new() }),
+                ),
+            ],
+            created_at: Utc::now(),
+            metadata: MessageMetadata::default(),
+            usage: None,
+            finish: None,
+        };
+
+        let parts = project_session_parts(&message);
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(parts[0], ProjectedSessionPart::ToolResult { .. }));
+    }
+
+    #[test]
+    fn project_session_parts_ignores_tool_attachment_parts() {
+        let message = Message {
+            id: 9,
+            role: Role::Tool,
+            state: MessageStatus::Completed,
+            parts: vec![
+                MessagePart::with_content(
+                    1,
+                    9,
+                    Utc::now(),
+                    ExecutionStatus::Completed,
+                    PartContent::ToolExecution(ToolExecutionPart::Completed {
+                        call_id: 4,
+                        invocation: ToolInvocation::Custom {
+                            name: "resource_tool".to_string(),
+                            input: crate::message::StructuredObject::default(),
+                        },
+                        output_text: "resource ready".to_string(),
+                        blocks: Vec::new(),
+                        attachments: Vec::new(),
+                        details: ToolOutput::default(),
+                        lifecycle: crate::message::TimeRange::default(),
+                    }),
+                ),
+                MessagePart::with_content(
+                    2,
+                    9,
+                    Utc::now(),
+                    ExecutionStatus::Completed,
+                    PartContent::attachments(vec![AttachmentItem {
+                        kind: AttachmentKind::Image,
+                        mime: "image/png".to_string(),
+                        source: AttachmentSource::Url {
+                            url: "https://example.com/image.png".to_string(),
+                        },
+                        filename: Some("image.png".to_string()),
+                        title: None,
+                        size_bytes: None,
+                        sha256: None,
+                        width: None,
+                        height: None,
+                        duration_ms: None,
+                        page_count: None,
+                    }]),
                 ),
             ],
             created_at: Utc::now(),

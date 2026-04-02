@@ -9,10 +9,10 @@ use crate::event::{
     ErrorInfo, MessageProjectionEvent, MessageProjector, SessionEvent, StreamErrorEvent,
 };
 use crate::message::{
-    ApplyPatchToolInput, BashToolInput, BuiltinToolInput, EditToolInput, GlobToolInput,
-    GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource, MessageStateStore,
-    MessageUpdate, PartContent, ReadToolInput, StructuredObject, TaskToolInput, TimeRange,
-    TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput, WriteToolInput,
+    ApplyPatchToolInput, BashToolInput, BuiltinToolInput, GlobToolInput, GrepToolInput, Message,
+    MessageMetadata, MessagePart, MessageSource, MessageStateStore, MessageUpdate, PartContent,
+    ReadToolInput, StructuredObject, TaskToolInput, TimeRange, TodoWriteToolInput,
+    ToolExecutionPart, ToolInvocation, ToolSearchToolInput,
 };
 use crate::provider::{CompletionRequest, CompletionStreamEvent, ProviderRegistry};
 use crate::role::Role;
@@ -341,8 +341,6 @@ pub(crate) fn parse_tool_invocation(
     let input = match trimmed_name {
         "bash" => BuiltinToolInput::Bash(parse_input::<BashToolInput>(arguments_json)?),
         "read" => BuiltinToolInput::Read(parse_input::<ReadToolInput>(arguments_json)?),
-        "write" => BuiltinToolInput::Write(parse_input::<WriteToolInput>(arguments_json)?),
-        "edit" => BuiltinToolInput::Edit(parse_input::<EditToolInput>(arguments_json)?),
         "apply_patch" => {
             BuiltinToolInput::ApplyPatch(parse_input::<ApplyPatchToolInput>(arguments_json)?)
         }

@@ -77,4 +77,6 @@ pub enum PartKind {
     Error,
     #[sea_orm(num_value = 9)]
     Attachment,
+    #[sea_orm(num_value = 10)]
+    PermissionRequest,
 }

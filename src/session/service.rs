@@ -14,8 +14,8 @@ use crate::event::{
     ErrorInfo, MessagePartUpdatedEvent, RunFailedEvent, RunStartedEvent, SessionEvent,
 };
 use crate::message::{
-    BuiltinToolOutput, ErrorPart, ExecutionStatus, Message, MessageMetadata, MessagePart,
-    MessageSource, MessageStatus, PartContent, TimeRange, TodoListPart, ToolExecutionPart,
+    BuiltinToolOutput, ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource,
+    MessageStatus, PartContent, PermissionRequestPart, TimeRange, TodoListPart, ToolExecutionPart,
     ToolInvocation, ToolOutput, ToolResultBlock,
 };
 use crate::permission::{
@@ -27,9 +27,6 @@ use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissi
 
 use super::{Session, SessionEventRecord, SessionProcessor, SessionRunRequest, SessionSnapshot};
 
-const PERMISSION_REQUIRED_CODE: &str = "permission_required";
-const PERMISSION_APPROVED_CODE: &str = "permission_approved";
-const PERMISSION_DENIED_CODE: &str = "permission_denied";
 const PROCESSOR_PART_ID_BLOCK: i64 = 1024;
 
 #[derive(Debug, Clone)]
@@ -264,7 +261,6 @@ impl SessionService {
                 ))
             })?;
 
-        let reply_json = serde_json::to_string(&request.reply)?;
         let reply_reason = request
             .reply
             .reason
@@ -274,19 +270,11 @@ impl SessionService {
         {
             let permission_part = &mut state.messages[pending.permission_message_index].parts
                 [pending.permission_part_index];
-            permission_part.set_content(PartContent::Error(ErrorPart {
-                code: if matches!(
-                    request.reply.kind,
-                    PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways
-                ) {
-                    PERMISSION_APPROVED_CODE.to_string()
-                } else {
-                    PERMISSION_DENIED_CODE.to_string()
-                },
-                message: reply_json,
-            }));
+            permission_part.set_content(PartContent::PermissionRequest(
+                PermissionRequestPart::pending(pending.request.clone())
+                    .with_reply(request.reply.clone()),
+            ));
             permission_part.status = ExecutionStatus::Completed;
-            permission_part.summary = Some(reply_reason.clone());
         }
 
         let persisted_mode = persisted_mode_for_reply(request.reply.kind);
@@ -515,10 +503,7 @@ impl SessionService {
             permission_part_id,
             state.messages[pending_tool.message_index].id,
             pending_tool.operation_id.as_str(),
-            PERMISSION_REQUIRED_CODE,
-            serde_json::to_string(&request)?,
-            reason,
-            ExecutionStatus::Pending,
+            PermissionRequestPart::pending(request),
         );
         state.messages[pending_tool.message_index]
             .parts
@@ -953,11 +938,9 @@ impl LoadedSessionState {
                     continue;
                 };
 
-                if let Some((permission_part_index, request)) = self.find_permission_part(
-                    message_index,
-                    operation_id,
-                    PERMISSION_REQUIRED_CODE,
-                )? {
+                if let Some((permission_part_index, request)) =
+                    self.find_permission_part(message_index, operation_id)?
+                {
                     return Ok(Some(PendingPermissionTarget {
                         permission_message_index: message_index,
                         permission_part_index,
@@ -1012,7 +995,7 @@ impl LoadedSessionState {
                 };
 
                 if self
-                    .find_permission_part(message_index, operation_id, PERMISSION_REQUIRED_CODE)?
+                    .find_permission_part(message_index, operation_id)?
                     .is_some()
                 {
                     continue;
@@ -1052,7 +1035,6 @@ impl LoadedSessionState {
         &self,
         message_index: usize,
         operation_id: &str,
-        code: &str,
     ) -> Result<Option<(usize, PermissionRequest)>, AppError> {
         let message = &self.messages[message_index];
         for (part_index, part) in message.parts.iter().enumerate() {
@@ -1061,14 +1043,10 @@ impl LoadedSessionState {
             {
                 continue;
             }
-            let Some(PartContent::Error(error)) = part.content.as_ref() else {
+            let Some(PartContent::PermissionRequest(permission)) = part.content.as_ref() else {
                 continue;
             };
-            if error.code != code {
-                continue;
-            }
-            let request = serde_json::from_str::<PermissionRequest>(error.message.as_str())?;
-            return Ok(Some((part_index, request)));
+            return Ok(Some((part_index, permission.request.clone())));
         }
         Ok(None)
     }
@@ -1226,6 +1204,7 @@ fn build_message(
     for (index, content) in parts.into_iter().enumerate() {
         let status = match &content {
             PartContent::ToolExecution(tool) => tool.status(),
+            PartContent::PermissionRequest(permission) => permission.status(),
             _ => ExecutionStatus::Completed,
         };
         let mut part =
@@ -1358,23 +1337,16 @@ fn build_permission_part(
     part_id: i64,
     message_id: i64,
     operation_id: &str,
-    code: &str,
-    payload: String,
-    summary: String,
-    status: ExecutionStatus,
+    permission: PermissionRequestPart,
 ) -> MessagePart {
     let mut part = MessagePart::with_content(
         part_id,
         message_id,
         Utc::now(),
-        status,
-        PartContent::Error(ErrorPart {
-            code: code.to_string(),
-            message: payload,
-        }),
+        permission.status(),
+        PartContent::PermissionRequest(permission),
     );
     part.operation_id = Some(operation_id.to_string());
-    part.summary = Some(summary);
     part
 }
 
@@ -1759,6 +1731,16 @@ mod tests {
             .await
             .expect("submit turn");
         assert!(blocked.blocked);
+        assert!(blocked.messages.iter().any(|message| {
+            message.parts.iter().any(|part| {
+                matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::PermissionRequest(permission))
+                        if permission.reply.is_none()
+                            && permission.request.request_id == "call_write_1"
+                )
+            })
+        }));
 
         let resumed = service
             .reply_permission(SessionPermissionReplyRequest {
@@ -1778,6 +1760,18 @@ mod tests {
         let file_text = fs::read_to_string(workspace.root.join("result.txt"))
             .expect("tool should create result file");
         assert_eq!(file_text, "approved\n");
+        assert!(resumed.messages.iter().any(|message| {
+            message.parts.iter().any(|part| {
+                matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::PermissionRequest(permission))
+                        if matches!(
+                            permission.reply.as_ref().map(|reply| reply.kind),
+                            Some(PermissionReplyKind::AllowOnce)
+                        )
+                )
+            })
+        }));
         assert_eq!(
             resumed
                 .messages

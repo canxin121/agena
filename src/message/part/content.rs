@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AttachmentItem, AttachmentPart, CommandExecutionPart, ErrorPart, ExecutionStatus,
-    FileChangePart, PartKind, ReasoningPart, TextPart, TodoListPart, ToolExecutionPart,
-    WebSearchPart,
+    FileChangePart, PartKind, PermissionRequestPart, ReasoningPart, TextPart, TodoListPart,
+    ToolExecutionPart, WebSearchPart,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
@@ -19,6 +19,7 @@ pub enum PartContent {
     TodoList(TodoListPart),
     Error(ErrorPart),
     Attachment(AttachmentPart),
+    PermissionRequest(PermissionRequestPart),
 }
 
 impl PartContent {
@@ -53,6 +54,7 @@ impl PartContent {
             Self::TodoList(_) => PartKind::TodoList,
             Self::Error(_) => PartKind::Error,
             Self::Attachment(_) => PartKind::Attachment,
+            Self::PermissionRequest(_) => PartKind::PermissionRequest,
         }
     }
 

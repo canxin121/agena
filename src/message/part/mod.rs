@@ -8,8 +8,8 @@ mod tool;
 
 pub use activity::{
     CommandExecutionPart, ErrorPart, FileChangeEntry, FileChangeKind, FileChangePart,
-    ReasoningPart, TextPart, TodoItem, TodoListPart, TodoPriority, TodoStatus, WebSearchPart,
-    WebSearchResult,
+    PermissionRequestPart, ReasoningPart, TextPart, TodoItem, TodoListPart, TodoPriority,
+    TodoStatus, WebSearchPart, WebSearchResult,
 };
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use common::{ExecutionStatus, PartKind, TimeRange};

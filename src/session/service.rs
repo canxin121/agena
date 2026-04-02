@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryOrder};
+use serde::Serialize;
 
 use crate::AppError;
 use crate::db::crud::{message, permission_rule, session, session_runtime, workspace};
@@ -35,6 +36,7 @@ const PROCESSOR_PART_ID_BLOCK: i64 = 1024;
 pub struct SessionServiceConfig {
     pub cache_max_sessions: usize,
     pub cache_ttl: Duration,
+    pub cache_max_bytes: usize,
     pub max_turn_loops: usize,
 }
 
@@ -43,6 +45,7 @@ impl Default for SessionServiceConfig {
         Self {
             cache_max_sessions: 128,
             cache_ttl: Duration::from_secs(15 * 60),
+            cache_max_bytes: 64 * 1024 * 1024,
             max_turn_loops: 16,
         }
     }
@@ -140,7 +143,7 @@ impl SessionService {
     pub fn prune_cache(&self) {
         if let Ok(mut cache) = self.cache.write() {
             cache.prune(self.config.cache_ttl);
-            cache.enforce_limit(self.config.cache_max_sessions);
+            cache.enforce_limit(self.config.cache_max_sessions, self.config.cache_max_bytes);
         }
     }
 
@@ -183,7 +186,12 @@ impl SessionService {
                 let state_for_cache = state.clone();
                 effects.push(async move {
                     if let Ok(mut guard) = cache.write() {
-                        guard.insert(state_for_cache, config.cache_max_sessions, config.cache_ttl);
+                        guard.insert(
+                            state_for_cache,
+                            config.cache_max_sessions,
+                            config.cache_max_bytes,
+                            config.cache_ttl,
+                        );
                     }
                 });
 
@@ -689,7 +697,12 @@ impl SessionService {
                 state.session = updated_session.clone();
                 effects.push(async move {
                     if let Ok(mut guard) = cache.write() {
-                        guard.insert(state, config.cache_max_sessions, config.cache_ttl);
+                        guard.insert(
+                            state,
+                            config.cache_max_sessions,
+                            config.cache_max_bytes,
+                            config.cache_ttl,
+                        );
                     }
                 });
 
@@ -736,6 +749,7 @@ impl SessionService {
             cache.insert(
                 state.clone(),
                 self.config.cache_max_sessions,
+                self.config.cache_max_bytes,
                 self.config.cache_ttl,
             );
         }
@@ -867,13 +881,25 @@ impl SessionService {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct LoadedSessionState {
     session: Session,
     messages: Vec<Message>,
 }
 
 impl LoadedSessionState {
+    fn approx_bytes(&self) -> usize {
+        serde_json::to_vec(self)
+            .map(|bytes| bytes.len())
+            .unwrap_or_else(|_| {
+                self.messages
+                    .iter()
+                    .map(Message::as_text_lossy)
+                    .map(|text| text.len())
+                    .sum()
+            })
+    }
+
     fn next_call_id(&self) -> i64 {
         self.messages
             .iter()
@@ -1060,6 +1086,7 @@ struct PendingPermissionTarget {
 struct CachedSessionEntry {
     state: LoadedSessionState,
     last_accessed: Instant,
+    approx_bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -1085,6 +1112,7 @@ struct ReservedProcessorIds {
 struct SessionCache {
     entries: HashMap<i64, CachedSessionEntry>,
     access_order: VecDeque<i64>,
+    total_bytes: usize,
 }
 
 impl SessionCache {
@@ -1099,18 +1127,32 @@ impl SessionCache {
         Some(state)
     }
 
-    fn insert(&mut self, state: LoadedSessionState, max_sessions: usize, ttl: Duration) {
+    fn insert(
+        &mut self,
+        state: LoadedSessionState,
+        max_sessions: usize,
+        max_bytes: usize,
+        ttl: Duration,
+    ) {
         self.prune(ttl);
         let session_id = state.session.id;
+        self.remove(session_id);
+        let approx_bytes = state.approx_bytes();
+        if approx_bytes > max_bytes.max(1) {
+            return;
+        }
+
         self.entries.insert(
             session_id,
             CachedSessionEntry {
                 state,
                 last_accessed: Instant::now(),
+                approx_bytes,
             },
         );
+        self.total_bytes = self.total_bytes.saturating_add(approx_bytes);
         self.bump(session_id);
-        self.enforce_limit(max_sessions);
+        self.enforce_limit(max_sessions, max_bytes);
     }
 
     fn prune(&mut self, ttl: Duration) {
@@ -1123,23 +1165,31 @@ impl SessionCache {
             })
             .collect::<Vec<_>>();
         for session_id in expired {
-            self.entries.remove(&session_id);
-            self.access_order.retain(|item| *item != session_id);
+            self.remove(session_id);
         }
     }
 
-    fn enforce_limit(&mut self, max_sessions: usize) {
-        while self.entries.len() > max_sessions.max(1) {
+    fn enforce_limit(&mut self, max_sessions: usize, max_bytes: usize) {
+        while self.entries.len() > max_sessions.max(1) || self.total_bytes > max_bytes.max(1) {
             let Some(session_id) = self.access_order.pop_front() else {
                 break;
             };
-            self.entries.remove(&session_id);
+            if let Some(entry) = self.entries.remove(&session_id) {
+                self.total_bytes = self.total_bytes.saturating_sub(entry.approx_bytes);
+            }
         }
     }
 
     fn bump(&mut self, session_id: i64) {
         self.access_order.retain(|item| *item != session_id);
         self.access_order.push_back(session_id);
+    }
+
+    fn remove(&mut self, session_id: i64) {
+        if let Some(entry) = self.entries.remove(&session_id) {
+            self.total_bytes = self.total_bytes.saturating_sub(entry.approx_bytes);
+        }
+        self.access_order.retain(|item| *item != session_id);
     }
 }
 
@@ -1664,6 +1714,13 @@ mod tests {
         }
     }
 
+    fn cache_state(session_id: i64, text: impl Into<String>) -> LoadedSessionState {
+        LoadedSessionState {
+            session: Session::new(session_id, 1, format!("session-{session_id}"), Utc::now()),
+            messages: vec![Message::prompt_text(Role::User, text.into())],
+        }
+    }
+
     #[tokio::test]
     async fn permission_allow_reply_resumes_and_executes_tool() {
         let workspace = TempWorkspace::new();
@@ -1790,6 +1847,7 @@ mod tests {
             SessionServiceConfig {
                 cache_max_sessions: 1,
                 cache_ttl: Duration::from_secs(60),
+                cache_max_bytes: usize::MAX,
                 max_turn_loops: 16,
             },
         )
@@ -1850,5 +1908,47 @@ mod tests {
                 .filter(|message| message.role == Role::User)
                 .any(|message| message.as_text_lossy() == "hello again")
         );
+    }
+
+    #[test]
+    fn cache_skips_entries_larger_than_byte_budget() {
+        let state = cache_state(1, "x".repeat(256));
+        let mut cache = SessionCache::default();
+        let max_bytes = state.approx_bytes().saturating_sub(1).max(1);
+
+        cache.insert(state.clone(), 8, max_bytes, Duration::from_secs(60));
+
+        assert!(
+            cache
+                .get(state.session.id, Duration::from_secs(60))
+                .is_none()
+        );
+        assert_eq!(cache.total_bytes, 0);
+    }
+
+    #[test]
+    fn cache_evicts_lru_entries_when_byte_budget_is_exceeded() {
+        let first = cache_state(1, "alpha");
+        let second = cache_state(2, "beta beta beta");
+        let mut cache = SessionCache::default();
+        let max_bytes = first
+            .approx_bytes()
+            .saturating_add(second.approx_bytes())
+            .saturating_sub(1);
+
+        cache.insert(first.clone(), 8, max_bytes, Duration::from_secs(60));
+        cache.insert(second.clone(), 8, max_bytes, Duration::from_secs(60));
+
+        assert!(
+            cache
+                .get(first.session.id, Duration::from_secs(60))
+                .is_none()
+        );
+        assert!(
+            cache
+                .get(second.session.id, Duration::from_secs(60))
+                .is_some()
+        );
+        assert!(cache.total_bytes <= max_bytes);
     }
 }

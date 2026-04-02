@@ -14,12 +14,13 @@ pub use overrides::ConfigOverride;
 pub use types::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, AuthConfig,
     BedrockAuthConfig, CloudflareAiGatewayProviderOptions, CodexProviderOptions, ConfigModeName,
-    ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource, PluginConfig,
+    ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource,
     CopilotProviderOptions, GitlabProviderOptions, GoogleVertexAuthConfig,
     GoogleVertexProviderOptions, HttpProviderConfig, OpenAiApiModeConfig,
-    OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PermissionConfig, ProviderAliasConfig,
-    ProviderDefinition, ProviderHttpConfig, RequestRetryConfig, ResolvedConfig,
-    ResolvedProviderConfig, RuntimeConfig, SimpleHttpProviderOptions, StreamReplayConfig,
+    OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PermissionConfig, PluginConfig,
+    ProviderAliasConfig, ProviderDefinition, ProviderHttpConfig, RequestRetryConfig,
+    ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeJanitorConfig,
+    RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions, StreamReplayConfig,
     StreamTransportMode, TracingConfig,
 };
 

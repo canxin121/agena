@@ -32,7 +32,7 @@ futures-util = "0.3.31"
 sha2 = "0.10.9"
 strum = { version = "0.27.2", features = ["derive"] }
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 toml = "0.9.8"
 tracing = "0.1.44"

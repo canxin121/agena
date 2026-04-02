@@ -382,6 +382,9 @@ pub(crate) struct RawRuntimeConfig {
     pub(crate) provider_http: Option<RawProviderHttpConfig>,
     pub(crate) request_retry: Option<RawRequestRetryConfig>,
     pub(crate) stream_replay: Option<RawStreamReplayConfig>,
+    pub(crate) reload: Option<RawRuntimeReloadConfig>,
+    pub(crate) janitor: Option<RawRuntimeJanitorConfig>,
+    pub(crate) session_cache: Option<RawSessionCacheConfig>,
 }
 
 impl Merge for RawRuntimeConfig {
@@ -389,6 +392,9 @@ impl Merge for RawRuntimeConfig {
         merge_option_struct(&mut self.provider_http, overlay.provider_http);
         merge_option_struct(&mut self.request_retry, overlay.request_retry);
         merge_option_struct(&mut self.stream_replay, overlay.stream_replay);
+        merge_option_struct(&mut self.reload, overlay.reload);
+        merge_option_struct(&mut self.janitor, overlay.janitor);
+        merge_option_struct(&mut self.session_cache, overlay.session_cache);
     }
 }
 
@@ -397,6 +403,9 @@ impl RuntimeConfig {
         let provider_http = raw.provider_http.unwrap_or_default();
         let request_retry = raw.request_retry.unwrap_or_default();
         let stream_replay = raw.stream_replay.unwrap_or_default();
+        let reload = raw.reload.unwrap_or_default();
+        let janitor = raw.janitor.unwrap_or_default();
+        let session_cache = raw.session_cache.unwrap_or_default();
 
         let timeout_secs = provider_http.timeout_secs.unwrap_or(120);
         let connect_timeout_secs = provider_http.connect_timeout_secs.unwrap_or(15);
@@ -411,6 +420,37 @@ impl RuntimeConfig {
             .max_delay_ms
             .unwrap_or(2_000)
             .max(base_delay_ms);
+        let reload_poll_interval_secs = reload.poll_interval_secs.unwrap_or(2);
+        let janitor_interval_secs = janitor.interval_secs.unwrap_or(30);
+        let session_cache_ttl_secs = session_cache.ttl_secs.unwrap_or(15 * 60);
+        let session_cache_max_sessions = session_cache.max_sessions.unwrap_or(128);
+        let session_cache_max_bytes = session_cache.max_bytes.unwrap_or(64 * 1024 * 1024);
+
+        if reload_poll_interval_secs == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.reload.poll_interval_secs must be greater than 0".to_owned(),
+            ));
+        }
+        if janitor_interval_secs == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.janitor.interval_secs must be greater than 0".to_owned(),
+            ));
+        }
+        if session_cache_ttl_secs == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.session_cache.ttl_secs must be greater than 0".to_owned(),
+            ));
+        }
+        if session_cache_max_sessions == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.session_cache.max_sessions must be greater than 0".to_owned(),
+            ));
+        }
+        if session_cache_max_bytes == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.session_cache.max_bytes must be greater than 0".to_owned(),
+            ));
+        }
 
         Ok(Self {
             provider_http: super::ProviderHttpConfig {
@@ -425,6 +465,19 @@ impl RuntimeConfig {
             stream_replay: super::StreamReplayConfig {
                 max_retries_after_output: stream_replay.max_retries_after_output.unwrap_or(1),
                 max_tracked_events: stream_replay.max_tracked_events.unwrap_or(2_048),
+            },
+            reload: super::RuntimeReloadConfig {
+                enabled: reload.enabled.unwrap_or(true),
+                poll_interval_secs: reload_poll_interval_secs,
+            },
+            janitor: super::RuntimeJanitorConfig {
+                enabled: janitor.enabled.unwrap_or(true),
+                interval_secs: janitor_interval_secs,
+            },
+            session_cache: super::SessionCacheConfig {
+                max_sessions: session_cache_max_sessions,
+                ttl_secs: session_cache_ttl_secs,
+                max_bytes: session_cache_max_bytes,
             },
         })
     }
@@ -474,6 +527,50 @@ impl Merge for RawStreamReplayConfig {
             overlay.max_retries_after_output,
         );
         merge_option(&mut self.max_tracked_events, overlay.max_tracked_events);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct RawRuntimeReloadConfig {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) poll_interval_secs: Option<u64>,
+}
+
+impl Merge for RawRuntimeReloadConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.enabled, overlay.enabled);
+        merge_option(&mut self.poll_interval_secs, overlay.poll_interval_secs);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct RawRuntimeJanitorConfig {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) interval_secs: Option<u64>,
+}
+
+impl Merge for RawRuntimeJanitorConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.enabled, overlay.enabled);
+        merge_option(&mut self.interval_secs, overlay.interval_secs);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct RawSessionCacheConfig {
+    pub(crate) max_sessions: Option<usize>,
+    pub(crate) ttl_secs: Option<u64>,
+    pub(crate) max_bytes: Option<usize>,
+}
+
+impl Merge for RawSessionCacheConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.max_sessions, overlay.max_sessions);
+        merge_option(&mut self.ttl_secs, overlay.ttl_secs);
+        merge_option(&mut self.max_bytes, overlay.max_bytes);
     }
 }
 

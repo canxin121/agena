@@ -153,6 +153,9 @@ pub struct RuntimeConfig {
     pub provider_http: ProviderHttpConfig,
     pub request_retry: RequestRetryConfig,
     pub stream_replay: StreamReplayConfig,
+    pub reload: RuntimeReloadConfig,
+    pub janitor: RuntimeJanitorConfig,
+    pub session_cache: SessionCacheConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -172,6 +175,25 @@ pub struct RequestRetryConfig {
 pub struct StreamReplayConfig {
     pub max_retries_after_output: u32,
     pub max_tracked_events: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeReloadConfig {
+    pub enabled: bool,
+    pub poll_interval_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeJanitorConfig {
+    pub enabled: bool,
+    pub interval_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionCacheConfig {
+    pub max_sessions: usize,
+    pub ttl_secs: u64,
+    pub max_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

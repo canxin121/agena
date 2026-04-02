@@ -11,7 +11,7 @@ use crate::db::crud::{message, permission_rule, session, session_runtime, worksp
 use crate::db::entities;
 use crate::db::tx::with_transaction_and_effects;
 use crate::event::{
-    AgentEvent, ErrorInfo, MessagePartUpdatedEvent, ThreadFailedEvent, ThreadStartedEvent,
+    ErrorInfo, MessagePartUpdatedEvent, RunFailedEvent, RunStartedEvent, SessionEvent,
 };
 use crate::message::{
     BuiltinToolOutput, ErrorPart, ExecutionStatus, Message, MessageMetadata, MessagePart,
@@ -25,7 +25,7 @@ use crate::permission::{
 use crate::role::Role;
 use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissionCheck};
 
-use super::{Session, SessionProcessor, SessionRunRequest, SessionSnapshot};
+use super::{Session, SessionEventRecord, SessionProcessor, SessionRunRequest, SessionSnapshot};
 
 const PERMISSION_REQUIRED_CODE: &str = "permission_required";
 const PERMISSION_APPROVED_CODE: &str = "permission_approved";
@@ -207,6 +207,13 @@ impl SessionService {
         self.build_response(self.load_state(session_id).await?)
     }
 
+    pub async fn list_session_events(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<SessionEventRecord>, AppError> {
+        Ok(session_runtime::list_session_events(&self.db, session_id).await?)
+    }
+
     pub async fn submit_user_turn(
         &self,
         request: SessionUserTurnRequest,
@@ -375,17 +382,17 @@ impl SessionService {
                             result.assistant_message_id
                         ))
                     })?;
-                let mut events = vec![AgentEvent::ThreadStarted(ThreadStartedEvent {
-                    thread_id: state.session.id,
+                let mut client_events = vec![SessionEvent::RunStarted(RunStartedEvent {
+                    session_id: state.session.id,
                     ts_ms: Utc::now().timestamp_millis(),
                 })];
-                events.extend(result.events);
+                client_events.extend(result.client_events);
                 state.messages.push(assistant_message.clone());
-                self.persist_state_changes(state, vec![assistant_message], events, None)
+                self.persist_state_changes(state, vec![assistant_message], client_events, None)
                     .await
             }
             Err(err) => {
-                self.persist_thread_failed(state.session.id, err.to_string())
+                self.persist_run_failed_event(state.session.id, err.to_string())
                     .await?;
                 Err(err)
             }
@@ -626,7 +633,7 @@ impl SessionService {
         &self,
         mut state: LoadedSessionState,
         touched_messages: Vec<Message>,
-        mut extra_events: Vec<AgentEvent>,
+        mut client_events: Vec<SessionEvent>,
         persisted_rule: Option<(String, PermissionMode)>,
     ) -> Result<LoadedSessionState, AppError> {
         let session_id = state.session.id;
@@ -639,8 +646,8 @@ impl SessionService {
         let ts_ms = now.timestamp_millis();
         for message in &touched_messages {
             for part in &message.parts {
-                extra_events.push(AgentEvent::MessagePartUpdated(MessagePartUpdatedEvent {
-                    thread_id: session_id,
+                client_events.push(SessionEvent::MessagePartUpdated(MessagePartUpdatedEvent {
+                    session_id,
                     message_id: message.id,
                     part: part.clone(),
                     ts_ms,
@@ -653,7 +660,7 @@ impl SessionService {
         let state_for_cache = state.clone();
         let updated_session = with_transaction_and_effects(&self.db, move |txn, effects| {
             let touched_messages = touched_messages.clone();
-            let extra_events = extra_events.clone();
+            let client_events = client_events.clone();
             let persisted_rule = persisted_rule.clone();
             let cache = Arc::clone(&cache);
             let config = config.clone();
@@ -676,7 +683,7 @@ impl SessionService {
                     .await?
                     .map(|checkpoint| checkpoint.upto_seq)
                     .unwrap_or(0);
-                for event in extra_events {
+                for event in client_events {
                     next_seq += 1;
                     session_runtime::append_session_event(txn, session_id, next_seq, event, now)
                         .await?;
@@ -715,9 +722,13 @@ impl SessionService {
         Ok(state)
     }
 
-    async fn persist_thread_failed(&self, session_id: i64, reason: String) -> Result<(), AppError> {
-        let event = AgentEvent::ThreadFailed(ThreadFailedEvent {
-            thread_id: session_id,
+    async fn persist_run_failed_event(
+        &self,
+        session_id: i64,
+        reason: String,
+    ) -> Result<(), AppError> {
+        let event = SessionEvent::RunFailed(RunFailedEvent {
+            session_id,
             error: ErrorInfo {
                 code: "session_run_failed".to_string(),
                 message: reason,

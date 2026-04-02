@@ -11,7 +11,7 @@ pub struct Model {
     pub seq: i64,
     pub event_type: crate::session::SessionEventType,
     #[sea_orm(column_name = "payload_json", column_type = "JsonBinary")]
-    pub payload: crate::event::AgentEvent,
+    pub payload: crate::event::SessionEvent,
     pub causation_id: Option<i64>,
     pub correlation_id: Option<i64>,
     pub created_at_ms: i64,

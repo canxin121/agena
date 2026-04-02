@@ -4,7 +4,7 @@ use sea_orm::entity::prelude::{DeriveActiveEnum, EnumIter};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumString};
 
-use crate::event::AgentEvent;
+use crate::event::SessionEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Session {
@@ -51,9 +51,9 @@ impl Session {
 #[sea_orm(rs_type = "i8", db_type = "TinyInteger")]
 pub enum SessionEventType {
     #[sea_orm(num_value = 1)]
-    ThreadStarted,
+    RunStarted,
     #[sea_orm(num_value = 2)]
-    ThreadFailed,
+    RunFailed,
     #[sea_orm(num_value = 3)]
     MessagePartUpdated,
     #[sea_orm(num_value = 4)]
@@ -68,17 +68,17 @@ pub enum SessionEventType {
     StreamError,
 }
 
-impl From<&AgentEvent> for SessionEventType {
-    fn from(value: &AgentEvent) -> Self {
+impl From<&SessionEvent> for SessionEventType {
+    fn from(value: &SessionEvent) -> Self {
         match value {
-            AgentEvent::ThreadStarted(_) => Self::ThreadStarted,
-            AgentEvent::ThreadFailed(_) => Self::ThreadFailed,
-            AgentEvent::MessagePartUpdated(_) => Self::MessagePartUpdated,
-            AgentEvent::MessagePartDelta(_) => Self::MessagePartDelta,
-            AgentEvent::CommandBegin(_) => Self::CommandBegin,
-            AgentEvent::CommandOutputDelta(_) => Self::CommandOutputDelta,
-            AgentEvent::CommandEnd(_) => Self::CommandEnd,
-            AgentEvent::StreamError(_) => Self::StreamError,
+            SessionEvent::RunStarted(_) => Self::RunStarted,
+            SessionEvent::RunFailed(_) => Self::RunFailed,
+            SessionEvent::MessagePartUpdated(_) => Self::MessagePartUpdated,
+            SessionEvent::MessagePartDelta(_) => Self::MessagePartDelta,
+            SessionEvent::CommandBegin(_) => Self::CommandBegin,
+            SessionEvent::CommandOutputDelta(_) => Self::CommandOutputDelta,
+            SessionEvent::CommandEnd(_) => Self::CommandEnd,
+            SessionEvent::StreamError(_) => Self::StreamError,
         }
     }
 }
@@ -89,14 +89,19 @@ pub struct SessionEventRecord {
     pub session_id: i64,
     pub seq: i64,
     pub event_type: SessionEventType,
-    pub payload: AgentEvent,
+    pub payload: SessionEvent,
     pub causation_id: Option<i64>,
     pub correlation_id: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
 
 impl SessionEventRecord {
-    pub fn new(session_id: i64, seq: i64, payload: AgentEvent, created_at: DateTime<Utc>) -> Self {
+    pub fn new(
+        session_id: i64,
+        seq: i64,
+        payload: SessionEvent,
+        created_at: DateTime<Utc>,
+    ) -> Self {
         let event_type = SessionEventType::from(&payload);
         Self {
             event_id: None,

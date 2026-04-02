@@ -5,14 +5,14 @@ use sea_orm::{
 };
 
 use crate::db::entities;
-use crate::event::AgentEvent;
+use crate::event::SessionEvent;
 use crate::session::{SessionCheckpoint, SessionEventRecord, SessionEventType, SessionSnapshot};
 
 pub async fn append_session_event<C>(
     db: &C,
     session_id: i64,
     seq: i64,
-    payload: AgentEvent,
+    payload: SessionEvent,
     now: DateTime<Utc>,
 ) -> Result<entities::session_event::Model, DbErr>
 where

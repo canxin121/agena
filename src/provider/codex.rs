@@ -5,12 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    auth::{AuthData, AuthStore, refresh_openai_token},
     error::AppError,
     message::MessageUsage,
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse, utils,
+        CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy,
+        auth::{AuthData, AuthStore, refresh_openai_token},
+        sse, utils,
     },
     role::Role,
 };

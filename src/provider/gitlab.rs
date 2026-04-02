@@ -9,11 +9,11 @@ use std::{
 };
 
 use crate::{
-    auth::AuthData,
     error::AppError,
     provider::{
         AnthropicProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ModelProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderModel, utils,
+        ModelProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderModel, auth::AuthData,
+        utils,
     },
 };
 

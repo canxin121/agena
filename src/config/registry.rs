@@ -7,13 +7,13 @@ use std::{
 use aws_credential_types::Credentials;
 
 use crate::{
-    auth::{AuthData, AuthStore},
     plugin::PluginManager,
     provider::{
         AmazonBedrockProvider, AnthropicProvider, CloudflareAiGatewayProvider, CodexProvider,
         CopilotProvider, CopilotProviderOptions as RuntimeCopilotProviderOptions, GeminiProvider,
         GitlabProvider, GitlabProviderConfig, GoogleVertexProvider, ModelProvider, NamedProvider,
         OpenAiCompatibleProvider, OpenAiProvider, ProviderRegistry,
+        auth::{AuthData, AuthStore},
     },
 };
 

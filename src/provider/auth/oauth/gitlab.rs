@@ -3,10 +3,9 @@ use oauth2::{
     RedirectUrl, Scope, TokenResponse, TokenUrl, basic::BasicClient,
 };
 
-use crate::{
-    auth::{OAuthAuthorizeStart, OAuthTokenResponse},
-    error::AppError,
-};
+use crate::error::AppError;
+
+use super::super::{OAuthAuthorizeStart, OAuthTokenResponse};
 
 pub fn start_gitlab_oauth(
     instance_url: &str,

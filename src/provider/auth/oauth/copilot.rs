@@ -1,10 +1,8 @@
 use serde::Deserialize;
 
-use crate::{
-    auth::{DeviceCodeStart, OAuthTokenResponse},
-    error::{AppError, ProviderErrorKind},
-};
+use crate::error::{AppError, ProviderErrorKind};
 
+use super::super::{DeviceCodeStart, OAuthTokenResponse};
 use super::shared::{COPILOT_CLIENT_ID, normalize_domain};
 
 pub async fn start_copilot_device_code(domain: &str) -> Result<DeviceCodeStart, AppError> {

@@ -159,7 +159,7 @@ registry.register_alias(
 
 ## 鉴权（OAuth / API Key）
 
-新增 `agena::auth` 模块：
+鉴权能力现在收敛在 `agena::provider::auth` 模块：
 
 - `AuthManager<FileAuthStore>`：统一管理 API key / OAuth token
 - `FileAuthStore`：默认存储在 `~/.agena/auth.json`（可用 `AGENA_AUTH_FILE` 覆盖）
@@ -180,7 +180,7 @@ registry.register_alias(
 示例（Rust）：
 
 ```rust
-use agena::auth::{AuthManager, FileAuthStore};
+use agena::provider::auth::{AuthManager, FileAuthStore};
 
 let mgr = AuthManager::new(FileAuthStore::new(FileAuthStore::default_path()));
 mgr.set_anthropic_api_key("sk-ant-...")?;
@@ -200,7 +200,7 @@ OpenAI Browser OAuth（自动 callback 等待，接近 opencode 行为）：
 
 ```rust
 use std::time::Duration;
-use agena::auth::wait_for_oauth_callback;
+use agena::provider::auth::wait_for_oauth_callback;
 
 let redirect = "http://localhost:1455/auth/callback";
 let start = mgr.start_openai_browser_login(redirect)?;
@@ -222,7 +222,7 @@ let (url, _auth) = mgr
 Copilot Device Code（轮询）：
 
 ```rust
-use agena::auth::CopilotDeployment;
+use agena::provider::auth::CopilotDeployment;
 
 let s = mgr.start_copilot_login(CopilotDeployment::GitHubCom).await?;
 // 用户在 s.verification_url 输入 s.user_code，随后循环 poll:

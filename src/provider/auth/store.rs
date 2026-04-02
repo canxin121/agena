@@ -6,7 +6,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{auth::AuthData, error::AppError};
+use crate::error::AppError;
+
+use super::AuthData;
 
 pub trait AuthStore: Send + Sync {
     fn all(&self) -> Result<HashMap<String, AuthData>, AppError>;

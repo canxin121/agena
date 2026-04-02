@@ -4,12 +4,12 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    auth::AuthData,
     error::AppError,
     message::MessageUsage,
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse, utils,
+        CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, auth::AuthData, sse,
+        utils,
     },
     role::Role,
 };

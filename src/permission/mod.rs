@@ -104,8 +104,6 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
     match input {
         BuiltinToolInput::Bash(_) => "bash",
         BuiltinToolInput::Read(_) => "read",
-        BuiltinToolInput::Write(_) => "write",
-        BuiltinToolInput::Edit(_) => "edit",
         BuiltinToolInput::ApplyPatch(_) => "apply_patch",
         BuiltinToolInput::Glob(_) => "glob",
         BuiltinToolInput::Grep(_) => "grep",
@@ -460,7 +458,7 @@ fn normalize_path_string(path: &Path) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::message::{BuiltinToolInput, ReadToolInput, WriteToolInput};
+    use crate::message::{ApplyPatchToolInput, BuiltinToolInput, ReadToolInput};
 
     use super::{
         AccessKind, AccessSelector, PermissionDecision, PermissionMode, PermissionPolicy,
@@ -580,23 +578,22 @@ mod tests {
     fn tool_permission_policy_supports_per_tool_overrides() {
         let policy = ToolPermissionPolicy::new(PermissionMode::Deny)
             .with_builtin_mode("read", PermissionMode::Allow)
-            .with_builtin_mode("write", PermissionMode::Ask);
+            .with_builtin_mode("apply_patch", PermissionMode::Ask);
 
         let read = BuiltinToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
-        let write = BuiltinToolInput::Write(WriteToolInput {
-            file_path: "README.md".to_string(),
-            content: "hello".to_string(),
+        let apply_patch = BuiltinToolInput::ApplyPatch(ApplyPatchToolInput {
+            patch: "*** Begin Patch\n*** Add File: README.md\n+hello\n*** End Patch".to_string(),
         });
 
         assert_eq!(policy.check_builtin(&read), PermissionDecision::Allow);
 
-        match policy.check_builtin(&write) {
+        match policy.check_builtin(&apply_patch) {
             PermissionDecision::Ask { reason } => {
-                assert!(reason.contains("write"));
+                assert!(reason.contains("apply_patch"));
             }
             other => panic!("expected ask decision, got {other:?}"),
         }

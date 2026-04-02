@@ -48,21 +48,10 @@ impl ToolOutputTruncator {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
             }
-            BuiltinToolOutput::Edit {
-                diff, file_diff, ..
-            } => {
-                if let Some(text) = diff.as_mut() {
-                    *text = truncate_text(text, self.policy.max_chars);
-                }
-                if let Some(text) = file_diff.as_mut() {
-                    *text = truncate_text(text, self.policy.max_chars);
-                }
-            }
             BuiltinToolOutput::ApplyPatch { inverse_patch, .. } => {
                 *inverse_patch = truncate_text(inverse_patch, self.policy.max_chars);
             }
-            BuiltinToolOutput::Write { .. }
-            | BuiltinToolOutput::Glob { .. }
+            BuiltinToolOutput::Glob { .. }
             | BuiltinToolOutput::Grep { .. }
             | BuiltinToolOutput::Task { .. }
             | BuiltinToolOutput::ToolSearch { .. }

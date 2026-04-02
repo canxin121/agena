@@ -1,8 +1,8 @@
-use crate::message::{BuiltinToolInput, BuiltinToolOutput};
+use crate::message::{BuiltinToolInput, BuiltinToolOutput, FileChangeEntry, FileChangeKind};
 
 use super::{
     BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
-    apply_patch, bash, edit, glob, grep, read, task, todo_write, tool_search, write,
+    apply_patch, bash, glob, grep, read, task, todo_write, tool_search,
 };
 
 pub(super) fn execute_builtin(
@@ -15,11 +15,18 @@ pub(super) fn execute_builtin(
             let result = apply_patch::execute(executor, payload)?;
             let output = BuiltinToolOutput::ApplyPatch {
                 operation_id: result.operation_id.clone(),
-                files: result
+                changes: result
                     .files
                     .iter()
-                    .map(|f| f.path.clone())
-                    .collect::<Vec<_>>(),
+                    .map(|f| FileChangeEntry {
+                        path: f.path.clone(),
+                        kind: match f.kind {
+                            super::apply_patch::PatchOpKind::Add => FileChangeKind::Added,
+                            super::apply_patch::PatchOpKind::Update => FileChangeKind::Updated,
+                            super::apply_patch::PatchOpKind::Delete => FileChangeKind::Deleted,
+                        },
+                    })
+                    .collect(),
                 before_hash: Some(result.before_hash.clone()),
                 after_hash: Some(result.after_hash.clone()),
                 inverse_patch: result.inverse_patch.clone(),
@@ -41,8 +48,6 @@ pub(super) fn execute_builtin(
             Ok(BuiltinExecution::new(output, view).with_apply_patch(result))
         }
         BuiltinToolInput::Read(payload) => read::execute(executor, payload),
-        BuiltinToolInput::Write(payload) => write::execute(executor, payload),
-        BuiltinToolInput::Edit(payload) => edit::execute(executor, payload),
         BuiltinToolInput::Glob(payload) => glob::execute(executor, payload),
         BuiltinToolInput::Grep(payload) => grep::execute(executor, payload),
         BuiltinToolInput::Task(payload) => task::execute(executor, payload),

@@ -50,8 +50,7 @@ impl DynamicPluginRuntime {
             }
         })?;
         let metadata = module.metadata()().into();
-        let tools = module
-            .tools()()
+        let tools = module.tools()()
             .into_iter()
             .map(Into::into)
             .collect::<Vec<_>>();
@@ -78,8 +77,7 @@ impl PluginRuntime for DynamicPluginRuntime {
         &self,
         request: PluginToolCallRequest,
     ) -> Result<PluginToolCallResponse, PluginError> {
-        self.module
-            .invoke_tool()(request.into())
+        self.module.invoke_tool()(request.into())
             .into_result()
             .map(Into::into)
             .map_err(Into::into)
@@ -89,8 +87,7 @@ impl PluginRuntime for DynamicPluginRuntime {
         &self,
         request: PluginBeforeToolRequest,
     ) -> Result<PluginBeforeToolResponse, PluginError> {
-        self.module
-            .before_tool()(request.into())
+        self.module.before_tool()(request.into())
             .into_result()
             .map(Into::into)
             .map_err(Into::into)
@@ -100,8 +97,7 @@ impl PluginRuntime for DynamicPluginRuntime {
         &self,
         request: PluginAfterToolRequest,
     ) -> Result<PluginAfterToolResponse, PluginError> {
-        self.module
-            .after_tool()(request.into())
+        self.module.after_tool()(request.into())
             .into_result()
             .map(Into::into)
             .map_err(Into::into)
@@ -111,8 +107,7 @@ impl PluginRuntime for DynamicPluginRuntime {
         &self,
         request: PluginShellEnvRequest,
     ) -> Result<PluginShellEnvResponse, PluginError> {
-        self.module
-            .shell_env()(request.into())
+        self.module.shell_env()(request.into())
             .into_result()
             .map(Into::into)
             .map_err(Into::into)

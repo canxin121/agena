@@ -2,7 +2,6 @@ mod apply_patch;
 mod bash;
 mod catalog;
 mod definition;
-mod edit;
 mod glob;
 mod grep;
 mod orchestrator;
@@ -12,7 +11,6 @@ mod task;
 mod todo_write;
 mod tool_search;
 mod truncation;
-mod write;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -197,16 +195,6 @@ impl ToolExecutor {
                 offset: None,
                 limit: None,
             }),
-            BuiltinToolInput::Write(crate::message::WriteToolInput {
-                file_path: String::new(),
-                content: String::new(),
-            }),
-            BuiltinToolInput::Edit(crate::message::EditToolInput {
-                file_path: String::new(),
-                old_string: String::new(),
-                new_string: String::new(),
-                replace_all: false,
-            }),
             BuiltinToolInput::ApplyPatch(crate::message::ApplyPatchToolInput {
                 patch: String::new(),
             }),
@@ -347,14 +335,6 @@ impl ToolExecutor {
             BuiltinToolInput::Read(payload) => {
                 let target = self.resolve_target_path(&payload.file_path);
                 self.push_path_checks(&mut checks, AccessKind::Read, &target);
-            }
-            BuiltinToolInput::Write(payload) => {
-                let target = self.resolve_target_path(&payload.file_path);
-                self.push_path_checks(&mut checks, AccessKind::Write, &target);
-            }
-            BuiltinToolInput::Edit(payload) => {
-                let target = self.resolve_target_path(&payload.file_path);
-                self.push_path_checks(&mut checks, AccessKind::Write, &target);
             }
             BuiltinToolInput::ApplyPatch(payload) => {
                 for path in apply_patch::planned_paths(&payload.patch)? {
@@ -789,8 +769,6 @@ fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolErro
         ToolInvocation::Builtin { input } => match input {
             BuiltinToolInput::Bash(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Read(payload) => serde_json::to_string(payload),
-            BuiltinToolInput::Write(payload) => serde_json::to_string(payload),
-            BuiltinToolInput::Edit(payload) => serde_json::to_string(payload),
             BuiltinToolInput::ApplyPatch(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Glob(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Grep(payload) => serde_json::to_string(payload),
@@ -847,8 +825,6 @@ fn parse_builtin_input(tool_name: &str, input_json: &str) -> Result<BuiltinToolI
     match tool_name {
         "bash" => Ok(BuiltinToolInput::Bash(parse(input_json)?)),
         "read" => Ok(BuiltinToolInput::Read(parse(input_json)?)),
-        "write" => Ok(BuiltinToolInput::Write(parse(input_json)?)),
-        "edit" => Ok(BuiltinToolInput::Edit(parse(input_json)?)),
         "apply_patch" => Ok(BuiltinToolInput::ApplyPatch(parse(input_json)?)),
         "glob" => Ok(BuiltinToolInput::Glob(parse(input_json)?)),
         "grep" => Ok(BuiltinToolInput::Grep(parse(input_json)?)),
@@ -899,10 +875,10 @@ mod tests {
     use uuid::Uuid;
 
     use crate::message::{
-        BashToolInput, BuiltinToolInput, BuiltinToolOutput, EditToolInput, GlobToolInput,
-        GrepToolInput, Message, PartContent, ReadToolInput, StructuredObject, TaskSubagentType,
-        TaskToolInput, TimeRange, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
-        ToolExecutionPart, ToolInvocation, ToolOutput, ToolSearchToolInput, WriteToolInput,
+        ApplyPatchToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput, FileChangeKind,
+        GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput, StructuredObject,
+        TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority, TodoStatus,
+        TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput, ToolSearchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::{
@@ -1131,29 +1107,44 @@ mod tests {
     }
 
     #[test]
-    fn write_and_edit_builtins_update_file_content() {
+    fn apply_patch_builtin_reports_typed_file_changes() {
         let workspace = TempWorkspace::new();
+        fs::write(workspace.root.join("keep.txt"), "before\n").expect("failed to seed keep.txt");
+        fs::write(workspace.root.join("remove.txt"), "delete me\n")
+            .expect("failed to seed remove.txt");
         let executor = build_executor(&workspace.root);
 
-        executor
-            .execute_builtin_detailed(&BuiltinToolInput::Write(WriteToolInput {
-                file_path: "src/app.txt".to_string(),
-                content: "hello world\n".to_string(),
+        let result = executor
+            .execute_builtin_detailed(&BuiltinToolInput::ApplyPatch(ApplyPatchToolInput {
+                patch: "\
+*** Begin Patch
+*** Add File: added.txt
++created
+*** Update File: keep.txt
+@@
+-before
++after
+*** Delete File: remove.txt
+*** End Patch"
+                    .to_string(),
             }))
-            .expect("write builtin should succeed");
+            .expect("apply_patch should succeed");
 
-        executor
-            .execute_builtin_detailed(&BuiltinToolInput::Edit(EditToolInput {
-                file_path: "src/app.txt".to_string(),
-                old_string: "world".to_string(),
-                new_string: "agena".to_string(),
-                replace_all: false,
-            }))
-            .expect("edit builtin should succeed");
-
-        let current = fs::read_to_string(workspace.root.join("src/app.txt"))
-            .expect("failed to read edited file");
-        assert_eq!(current, "hello agena\n");
+        match result.output {
+            BuiltinToolOutput::ApplyPatch { changes, .. } => {
+                assert_eq!(changes.len(), 3);
+                assert!(changes.iter().any(|change| {
+                    change.path == "added.txt" && change.kind == FileChangeKind::Added
+                }));
+                assert!(changes.iter().any(|change| {
+                    change.path == "keep.txt" && change.kind == FileChangeKind::Updated
+                }));
+                assert!(changes.iter().any(|change| {
+                    change.path == "remove.txt" && change.kind == FileChangeKind::Deleted
+                }));
+            }
+            other => panic!("expected apply_patch output, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1479,7 +1470,7 @@ mod tests {
     }
 
     #[test]
-    fn readonly_model_profile_disables_write_and_task_tools() {
+    fn readonly_model_profile_disables_apply_patch_and_task_tools() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root).with_model_id("gpt-readonly");
 
@@ -1493,7 +1484,7 @@ mod tests {
         };
 
         assert!(find("read"));
-        assert!(!find("write"));
+        assert!(!find("apply_patch"));
         assert!(!find("task"));
     }
 

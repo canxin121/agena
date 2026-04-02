@@ -225,9 +225,7 @@ pub struct PluginToolCallResponseAbi {
 #[derive(Debug, Clone, PartialEq, Eq, StableAbi)]
 pub enum PluginToolSourceAbi {
     Builtin,
-    Plugin {
-        plugin_name: RString,
-    },
+    Plugin { plugin_name: RString },
 }
 
 #[repr(C)]
@@ -575,15 +573,19 @@ fn kv_vec_to_map(entries: RVec<PluginKeyValueAbi>) -> BTreeMap<String, String> {
 pub struct AgenaPluginModule {
     pub metadata: extern "C" fn() -> PluginMetadataAbi,
     pub tools: extern "C" fn() -> RVec<PluginToolDescriptorAbi>,
-    pub invoke_tool:
-        extern "C" fn(PluginToolCallRequestAbi) -> RResult<PluginToolCallResponseAbi, PluginErrorAbi>,
-    pub before_tool:
-        extern "C" fn(PluginBeforeToolRequestAbi) -> RResult<PluginBeforeToolResponseAbi, PluginErrorAbi>,
-    pub after_tool:
-        extern "C" fn(PluginAfterToolRequestAbi) -> RResult<PluginAfterToolResponseAbi, PluginErrorAbi>,
+    pub invoke_tool: extern "C" fn(
+        PluginToolCallRequestAbi,
+    ) -> RResult<PluginToolCallResponseAbi, PluginErrorAbi>,
+    pub before_tool: extern "C" fn(
+        PluginBeforeToolRequestAbi,
+    ) -> RResult<PluginBeforeToolResponseAbi, PluginErrorAbi>,
+    pub after_tool: extern "C" fn(
+        PluginAfterToolRequestAbi,
+    ) -> RResult<PluginAfterToolResponseAbi, PluginErrorAbi>,
     #[sabi(last_prefix_field)]
-    pub shell_env:
-        extern "C" fn(PluginShellEnvRequestAbi) -> RResult<PluginShellEnvResponseAbi, PluginErrorAbi>,
+    pub shell_env: extern "C" fn(
+        PluginShellEnvRequestAbi,
+    ) -> RResult<PluginShellEnvResponseAbi, PluginErrorAbi>,
 }
 
 impl RootModule for AgenaPluginModuleRef {
@@ -601,15 +603,17 @@ macro_rules! export_agena_plugin {
             static INSTANCE: ::std::sync::OnceLock<
                 ::std::boxed::Box<dyn $crate::plugin::AgenaPlugin>,
             > = ::std::sync::OnceLock::new();
-            INSTANCE.get_or_init(|| ::std::boxed::Box::new($constructor)).as_ref()
+            INSTANCE
+                .get_or_init(|| ::std::boxed::Box::new($constructor))
+                .as_ref()
         }
 
         extern "C" fn __agena_plugin_metadata() -> $crate::plugin::api::PluginMetadataAbi {
             $crate::plugin::api::PluginMetadataAbi::from(__agena_plugin_instance().metadata())
         }
 
-        extern "C" fn __agena_plugin_tools(
-        ) -> ::abi_stable::std_types::RVec<$crate::plugin::api::PluginToolDescriptorAbi> {
+        extern "C" fn __agena_plugin_tools()
+        -> ::abi_stable::std_types::RVec<$crate::plugin::api::PluginToolDescriptorAbi> {
             __agena_plugin_instance()
                 .tools()
                 .into_iter()
@@ -686,12 +690,12 @@ macro_rules! export_agena_plugin {
         pub fn agena_plugin_root_module() -> $crate::plugin::api::AgenaPluginModuleRef {
             ::abi_stable::prefix_type::PrefixTypeTrait::leak_into_prefix(
                 $crate::plugin::api::AgenaPluginModule {
-                metadata: __agena_plugin_metadata,
-                tools: __agena_plugin_tools,
-                invoke_tool: __agena_plugin_invoke_tool,
-                before_tool: __agena_plugin_before_tool,
-                after_tool: __agena_plugin_after_tool,
-                shell_env: __agena_plugin_shell_env,
+                    metadata: __agena_plugin_metadata,
+                    tools: __agena_plugin_tools,
+                    invoke_tool: __agena_plugin_invoke_tool,
+                    before_tool: __agena_plugin_before_tool,
+                    after_tool: __agena_plugin_after_tool,
+                    shell_env: __agena_plugin_shell_env,
                 },
             )
         }

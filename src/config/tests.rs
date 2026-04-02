@@ -228,7 +228,9 @@ default_model = "gpt-4.1-mini"
     let err = resolution
         .build_plugin_manager()
         .expect_err("missing explicit plugin path should fail");
-    assert!(matches!(err, ConfigError::Validation(message) if message.contains("plugin path does not exist")));
+    assert!(
+        matches!(err, ConfigError::Validation(message) if message.contains("plugin path does not exist"))
+    );
 }
 
 fn write_temp_config(content: &str) -> PathBuf {

@@ -20,6 +20,60 @@ impl AttachmentKind {
             Self::File => "file",
         }
     }
+
+    pub fn detect(mime: &str, hint: Option<&str>) -> Self {
+        let normalized_mime = mime.trim().to_ascii_lowercase();
+        if normalized_mime.starts_with("image/") {
+            return Self::Image;
+        }
+        if normalized_mime.starts_with("audio/") {
+            return Self::Audio;
+        }
+        if normalized_mime.starts_with("video/") {
+            return Self::Video;
+        }
+        if normalized_mime == "application/pdf" {
+            return Self::Pdf;
+        }
+
+        let normalized_hint = hint
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| {
+                value
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            })
+            .map(str::to_ascii_lowercase);
+
+        if let Some(hint) = normalized_hint.as_deref() {
+            if [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"]
+                .iter()
+                .any(|suffix| hint.ends_with(suffix))
+            {
+                return Self::Image;
+            }
+            if [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
+                .iter()
+                .any(|suffix| hint.ends_with(suffix))
+            {
+                return Self::Audio;
+            }
+            if [".mp4", ".mov", ".webm", ".avi", ".mkv"]
+                .iter()
+                .any(|suffix| hint.ends_with(suffix))
+            {
+                return Self::Video;
+            }
+            if hint.ends_with(".pdf") {
+                return Self::Pdf;
+            }
+        }
+
+        Self::File
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -170,5 +224,33 @@ mod tests {
         };
 
         assert_eq!(attachment.summary_label(), "pdf");
+    }
+
+    #[test]
+    fn attachment_kind_detects_known_mime_and_filename_hints() {
+        assert_eq!(
+            AttachmentKind::detect("image/png", None),
+            AttachmentKind::Image
+        );
+        assert_eq!(
+            AttachmentKind::detect("audio/mpeg", None),
+            AttachmentKind::Audio
+        );
+        assert_eq!(
+            AttachmentKind::detect("video/mp4", None),
+            AttachmentKind::Video
+        );
+        assert_eq!(
+            AttachmentKind::detect("application/pdf", None),
+            AttachmentKind::Pdf
+        );
+        assert_eq!(
+            AttachmentKind::detect("", Some("https://example.com/report.pdf")),
+            AttachmentKind::Pdf
+        );
+        assert_eq!(
+            AttachmentKind::detect("", Some("/tmp/voice.mp3")),
+            AttachmentKind::Audio
+        );
     }
 }

@@ -1,5 +1,6 @@
 use agena::{cli::AgenaCli, config::ConfigLoader};
 use clap::Parser;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<(), agena::AppError> {
@@ -9,14 +10,16 @@ async fn main() -> Result<(), agena::AppError> {
         .map(|resolution| resolution.config.tracing.filter)
         .unwrap_or_else(|_| "info".to_owned());
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_new(filter)
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+    let initial_filter = EnvFilter::try_new(filter).unwrap_or_else(|_| EnvFilter::new("info"));
+    let (filter_layer, filter_handle) = tracing_subscriber::reload::Layer::new(initial_filter);
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .compact(),
         )
-        .with_target(false)
-        .compact()
         .init();
 
-    cli.run().await
+    cli.run(Some(filter_handle)).await
 }

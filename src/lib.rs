@@ -9,6 +9,7 @@ pub mod permission;
 pub mod plugin;
 pub mod provider;
 pub mod role;
+pub mod runtime;
 pub mod session;
 pub mod tool;
 

@@ -8,6 +8,7 @@ use crate::{
         ProcessEnvironment,
     },
     error::AppError,
+    runtime::{AgenaRuntime, TracingFilterReloadHandle},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -55,19 +56,30 @@ pub struct ConfigModeArgs {
 }
 
 impl AgenaCli {
-    pub async fn run(self) -> Result<(), AppError> {
+    pub async fn run(
+        self,
+        tracing_reload_handle: Option<TracingFilterReloadHandle>,
+    ) -> Result<(), AppError> {
         let loader = ConfigLoader::new(ProcessEnvironment);
 
         match self.command.clone() {
             Some(AgenaCommand::Config(command)) => self.run_config(loader, command),
-            None => self.run_default(loader),
+            None => self.run_default(loader, tracing_reload_handle).await,
         }
     }
 
-    fn run_default(self, loader: ConfigLoader<ProcessEnvironment>) -> Result<(), AppError> {
+    async fn run_default(
+        self,
+        loader: ConfigLoader<ProcessEnvironment>,
+        tracing_reload_handle: Option<TracingFilterReloadHandle>,
+    ) -> Result<(), AppError> {
         let resolution = loader.load(&self.load_request())?;
-        let registry = resolution.config.build_provider_registry()?;
-        let plugins = resolution.build_plugin_manager()?;
+        let mut builder = AgenaRuntime::builder().with_load_request(self.load_request());
+        if let Some(handle) = tracing_reload_handle {
+            builder = builder.with_tracing_reload_handle(handle);
+        }
+        let runtime = builder.build().await?;
+        let snapshot = runtime.current_snapshot();
         let mode = resolution
             .meta
             .active_mode
@@ -76,8 +88,10 @@ impl AgenaCli {
             .unwrap_or_else(|| "default".to_owned());
         tracing::info!(
             mode,
-            providers = registry.provider_ids().len(),
-            plugins = plugins.plugins().len(),
+            generation = snapshot.generation(),
+            providers = snapshot.provider_registry().provider_ids().len(),
+            plugins = snapshot.plugin_manager().plugins().len(),
+            sessions = snapshot.session_service().is_some(),
             "Agena started with resolved configuration"
         );
         Ok(())

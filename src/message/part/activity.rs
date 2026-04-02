@@ -1,6 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::permission::{PermissionReply, PermissionReplyKind, PermissionRequest};
+
 use super::{ExecutionStatus, TimeRange};
 
 fn default_execution_pending() -> ExecutionStatus {
@@ -114,4 +116,52 @@ pub enum TodoPriority {
 pub struct ErrorPart {
     pub code: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionRequestPart {
+    pub request: PermissionRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<PermissionReply>,
+}
+
+impl PermissionRequestPart {
+    pub fn pending(request: PermissionRequest) -> Self {
+        Self {
+            request,
+            reply: None,
+        }
+    }
+
+    pub fn with_reply(mut self, reply: PermissionReply) -> Self {
+        self.reply = Some(reply);
+        self
+    }
+
+    pub const fn status(&self) -> ExecutionStatus {
+        if self.reply.is_some() {
+            ExecutionStatus::Completed
+        } else {
+            ExecutionStatus::Pending
+        }
+    }
+
+    pub fn summary_text(&self) -> String {
+        match self.reply.as_ref() {
+            None => format!("Awaiting permission: {}", self.request.reason),
+            Some(reply) => {
+                let reason = reply
+                    .reason
+                    .as_deref()
+                    .unwrap_or(self.request.reason.as_str());
+                let prefix = match reply.kind {
+                    PermissionReplyKind::AllowOnce => "Permission allowed once",
+                    PermissionReplyKind::AllowAlways => "Permission allowed always",
+                    PermissionReplyKind::DenyOnce => "Permission denied once",
+                    PermissionReplyKind::DenyAlways => "Permission denied always",
+                };
+                format!("{prefix}: {reason}")
+            }
+        }
+    }
 }

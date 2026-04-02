@@ -256,6 +256,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
             }
         }
         PartContent::Attachment(_) => Some("attachment".to_string()),
+        PartContent::PermissionRequest(_) => Some("permission_request".to_string()),
     }
 }
 
@@ -320,6 +321,9 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
             truncate_summary(&format!("{}: {}", error.code.trim(), error.message.trim()))
         }
         PartContent::Attachment(attachment) => attachment_part_summary(attachment),
+        PartContent::PermissionRequest(permission) => {
+            truncate_summary(permission.summary_text().as_str())
+        }
     }
 }
 
@@ -380,6 +384,7 @@ mod tests {
 
     use super::*;
     use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource};
+    use crate::permission::{PermissionAction, PermissionRequest};
 
     #[test]
     fn attachment_part_sets_kind_name_and_summary() {
@@ -448,5 +453,33 @@ mod tests {
         });
 
         assert_eq!(summary.as_deref(), Some("2 attachments (first: a.png)"));
+    }
+
+    #[test]
+    fn permission_request_part_sets_kind_name_and_summary() {
+        let part = MessagePart::with_content(
+            11,
+            2,
+            Utc::now(),
+            ExecutionStatus::Pending,
+            PartContent::PermissionRequest(crate::message::PermissionRequestPart::pending(
+                PermissionRequest {
+                    request_id: "req_1".to_string(),
+                    session_id: Some(2),
+                    action: PermissionAction::BuiltinTool {
+                        tool_name: "write".to_string(),
+                    },
+                    reason: "tool 'write' requires confirmation by policy".to_string(),
+                    created_at: Utc::now(),
+                },
+            )),
+        );
+
+        assert_eq!(part.kind, PartKind::PermissionRequest);
+        assert_eq!(part.name.as_deref(), Some("permission_request"));
+        assert_eq!(
+            part.summary.as_deref(),
+            Some("Awaiting permission: tool 'write' requires confirmation by policy")
+        );
     }
 }

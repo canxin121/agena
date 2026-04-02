@@ -4,11 +4,11 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    auth::FileAuthStore,
     permission::{PermissionMode, PermissionPolicy},
     provider::{
         OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode, ProviderHttpClientConfig,
         ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
+        auth::FileAuthStore,
     },
 };
 

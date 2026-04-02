@@ -1,3 +1,5 @@
+pub mod auth;
+
 mod amazon_bedrock;
 mod anthropic;
 mod cloudflare_ai_gateway;

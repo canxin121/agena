@@ -7,12 +7,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{auth::FileAuthStore, permission::PermissionMode};
+use crate::{permission::PermissionMode, provider::auth::FileAuthStore};
 
 use super::{
     AuthConfig, ConfigEnvironment, ConfigError, OpenAiApiModeConfig, PermissionConfig,
-    PluginConfig, ProviderAliasConfig, ProviderDefinition, ResolvedConfig,
-    ResolvedProviderConfig, RuntimeConfig, StreamTransportMode, TracingConfig,
+    PluginConfig, ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig,
+    RuntimeConfig, StreamTransportMode, TracingConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";

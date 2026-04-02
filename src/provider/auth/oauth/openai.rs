@@ -4,11 +4,9 @@ use oauth2::{
 };
 use serde::Deserialize;
 
-use crate::{
-    auth::{DeviceCodeStart, OAuthAuthorizeStart, OAuthTokenResponse},
-    error::{AppError, ProviderErrorKind},
-};
+use crate::error::{AppError, ProviderErrorKind};
 
+use super::super::{DeviceCodeStart, OAuthAuthorizeStart, OAuthTokenResponse};
 use super::shared::{
     OPENAI_CLIENT_ID, OPENAI_ISSUER, extract_openai_account_id, parse_device_auth_interval,
 };

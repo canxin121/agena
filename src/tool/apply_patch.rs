@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::checkpoint::{self, FilesystemCheckpointCapture};
 use crate::message::ApplyPatchToolInput;
 
 use super::{ToolError, ToolExecutor};
@@ -21,6 +22,7 @@ pub struct ApplyPatchExecution {
     pub before_hash: String,
     pub after_hash: String,
     pub inverse_patch: String,
+    pub filesystem_checkpoint: FilesystemCheckpointCapture,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +55,9 @@ pub fn execute(
             "no operations in patch".to_string(),
         ));
     }
+    let filesystem_checkpoint =
+        checkpoint::capture_for_paths(executor.workspace_root(), ops.iter().map(PatchOp::path))
+            .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
 
     let mut before_state = String::new();
     let mut after_state = String::new();
@@ -141,7 +146,18 @@ pub fn execute(
         before_hash: sha256_hex(&before_state),
         after_hash: sha256_hex(&after_state),
         inverse_patch,
+        filesystem_checkpoint,
     })
+}
+
+impl PatchOp {
+    fn path(&self) -> &str {
+        match self {
+            Self::Add { path, .. } | Self::Delete { path } | Self::Update { path, .. } => {
+                path.as_str()
+            }
+        }
+    }
 }
 
 pub(crate) fn planned_paths(text: &str) -> Result<Vec<String>, ToolError> {

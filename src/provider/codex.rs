@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     error::AppError,
-    message::MessageUsage,
+    message::{AttachmentItem, AttachmentKind, AttachmentSource, MessageUsage},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy,
@@ -222,6 +222,63 @@ impl CodexProvider {
             .collect()
     }
 
+    fn attachment_upload_name(item: &AttachmentItem) -> String {
+        utils::attachment_filename(item)
+            .map(str::to_owned)
+            .unwrap_or_else(|| item.summary_label())
+    }
+
+    fn responses_file_content(item: &AttachmentItem) -> Option<OpenAiInputContent> {
+        let filename = Some(Self::attachment_upload_name(item));
+        match &item.source {
+            AttachmentSource::Base64 { .. } | AttachmentSource::DataUrl { .. } => {
+                utils::attachment_data_url(item).map(|file_data| OpenAiInputContent::File {
+                    file_data: Some(file_data),
+                    file_id: None,
+                    file_url: None,
+                    filename,
+                })
+            }
+            AttachmentSource::FileId { file_id } => {
+                let file_id = file_id.trim();
+                (!file_id.is_empty()).then(|| OpenAiInputContent::File {
+                    file_data: None,
+                    file_id: Some(file_id.to_owned()),
+                    file_url: None,
+                    filename,
+                })
+            }
+            AttachmentSource::Url { url } => {
+                let file_url = url.trim();
+                (!file_url.is_empty()).then(|| OpenAiInputContent::File {
+                    file_data: None,
+                    file_id: None,
+                    file_url: Some(file_url.to_owned()),
+                    filename,
+                })
+            }
+            AttachmentSource::LocalPath { .. } => None,
+        }
+    }
+
+    fn responses_content_from_attachment(item: &AttachmentItem) -> OpenAiInputContent {
+        match item.kind {
+            AttachmentKind::Image => utils::attachment_media_url(item)
+                .map(|image_url| OpenAiInputContent::Image { image_url })
+                .unwrap_or_else(|| OpenAiInputContent::Text {
+                    text: utils::attachment_hint_text(item),
+                }),
+            AttachmentKind::Audio
+            | AttachmentKind::Video
+            | AttachmentKind::Pdf
+            | AttachmentKind::File => {
+                Self::responses_file_content(item).unwrap_or_else(|| OpenAiInputContent::Text {
+                    text: utils::attachment_hint_text(item),
+                })
+            }
+        }
+    }
+
     fn push_responses_text_message(
         input: &mut Vec<OpenAiResponsesInputItem>,
         role: &str,
@@ -233,10 +290,23 @@ impl CodexProvider {
 
         input.push(OpenAiResponsesInputItem::Message(OpenAiInputMessage {
             role: role.to_owned(),
-            content: vec![OpenAiInputContent {
-                kind: "input_text".to_owned(),
-                text,
-            }],
+            content: vec![OpenAiInputContent::Text { text }],
+        }));
+    }
+
+    fn push_responses_message_from_parts(
+        input: &mut Vec<OpenAiResponsesInputItem>,
+        role: &str,
+        parts: &[utils::ProjectedSessionPart],
+    ) {
+        let content = Self::responses_input_contents_from_parts(parts);
+        if content.is_empty() {
+            return;
+        }
+
+        input.push(OpenAiResponsesInputItem::Message(OpenAiInputMessage {
+            role: role.to_owned(),
+            content,
         }));
     }
 
@@ -252,11 +322,17 @@ impl CodexProvider {
                 "system",
                 session_text_lossy(message, projected_parts.as_slice()),
             ),
-            Role::User => Self::push_responses_text_message(
-                input,
-                "user",
-                session_text_lossy(message, projected_parts.as_slice()),
-            ),
+            Role::User => {
+                if projected_parts.is_empty() {
+                    Self::push_responses_text_message(input, "user", message.as_text_lossy());
+                } else {
+                    Self::push_responses_message_from_parts(
+                        input,
+                        "user",
+                        projected_parts.as_slice(),
+                    );
+                }
+            }
             Role::Assistant => {
                 if projected_parts.is_empty() {
                     Self::push_responses_text_message(input, "assistant", message.as_text_lossy());
@@ -265,8 +341,8 @@ impl CodexProvider {
                     for part in projected_parts {
                         match part {
                             utils::ProjectedSessionPart::Text { text } => text_chunks.push(text),
-                            utils::ProjectedSessionPart::ImageUrl { url } => {
-                                text_chunks.push(format!("[image:{url}]"));
+                            utils::ProjectedSessionPart::Attachment { item } => {
+                                text_chunks.push(utils::attachment_hint_text(&item));
                             }
                             utils::ProjectedSessionPart::ToolCall {
                                 id,
@@ -293,7 +369,7 @@ impl CodexProvider {
                                         OpenAiFunctionCallOutputItem {
                                             kind: "function_call_output",
                                             call_id: tool_call_id,
-                                            output: output_json,
+                                            output: serde_json::Value::String(output_json),
                                         },
                                     ));
                                 }
@@ -310,43 +386,83 @@ impl CodexProvider {
                 if projected_parts.is_empty() {
                     Self::push_responses_text_message(input, "user", message.as_text_lossy());
                 } else {
-                    let mut fallback_text = Vec::new();
-                    let mut emitted_output = false;
-                    for part in projected_parts {
-                        match part {
-                            utils::ProjectedSessionPart::ToolResult {
-                                tool_call_id,
-                                output_json,
-                            } => {
-                                if tool_call_id.trim().is_empty() {
-                                    fallback_text.push(output_json);
-                                    continue;
-                                }
-                                emitted_output = true;
-                                input.push(OpenAiResponsesInputItem::FunctionCallOutput(
-                                    OpenAiFunctionCallOutputItem {
-                                        kind: "function_call_output",
-                                        call_id: tool_call_id,
-                                        output: output_json,
-                                    },
-                                ));
-                            }
-                            utils::ProjectedSessionPart::Text { text } => fallback_text.push(text),
-                            utils::ProjectedSessionPart::ImageUrl { url } => {
-                                fallback_text.push(format!("[image:{url}]"));
-                            }
-                            utils::ProjectedSessionPart::ToolCall { name, .. } => {
-                                fallback_text.push(format!("[tool_call:{name}]"));
-                            }
-                        }
-                    }
+                    let tool_result = utils::first_tool_result(projected_parts.as_slice());
+                    let extra_parts = utils::non_tool_result_parts(projected_parts.as_slice());
 
-                    if !emitted_output || !fallback_text.is_empty() {
-                        Self::push_responses_text_message(input, "user", fallback_text.join(""));
+                    if let Some((tool_call_id, output_json)) = tool_result {
+                        if tool_call_id.trim().is_empty() {
+                            let mut fallback_parts =
+                                vec![utils::ProjectedSessionPart::Text { text: output_json }];
+                            fallback_parts.extend(extra_parts);
+                            Self::push_responses_message_from_parts(
+                                input,
+                                "user",
+                                fallback_parts.as_slice(),
+                            );
+                        } else {
+                            input.push(OpenAiResponsesInputItem::FunctionCallOutput(
+                                OpenAiFunctionCallOutputItem {
+                                    kind: "function_call_output",
+                                    call_id: tool_call_id,
+                                    output: Self::multimodal_function_output_value(
+                                        output_json.as_str(),
+                                        extra_parts.as_slice(),
+                                    ),
+                                },
+                            ));
+                        }
+                    } else {
+                        Self::push_responses_message_from_parts(
+                            input,
+                            "user",
+                            projected_parts.as_slice(),
+                        );
                     }
                 }
             }
         }
+    }
+
+    fn responses_input_contents_from_parts(
+        parts: &[utils::ProjectedSessionPart],
+    ) -> Vec<OpenAiInputContent> {
+        parts
+            .iter()
+            .map(|part| match part {
+                utils::ProjectedSessionPart::Text { text } => {
+                    OpenAiInputContent::Text { text: text.clone() }
+                }
+                utils::ProjectedSessionPart::Attachment { item } => {
+                    Self::responses_content_from_attachment(item)
+                }
+                utils::ProjectedSessionPart::ToolCall { name, .. } => OpenAiInputContent::Text {
+                    text: format!("[tool_call:{name}]"),
+                },
+                utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                    OpenAiInputContent::Text {
+                        text: format!("[tool_result:{tool_call_id}]"),
+                    }
+                }
+            })
+            .collect()
+    }
+
+    fn multimodal_function_output_value(
+        output_json: &str,
+        extra_parts: &[utils::ProjectedSessionPart],
+    ) -> serde_json::Value {
+        if extra_parts.is_empty() {
+            return serde_json::Value::String(output_json.to_owned());
+        }
+
+        let mut content = Vec::new();
+        if !output_json.trim().is_empty() {
+            content.push(OpenAiInputContent::Text {
+                text: output_json.to_owned(),
+            });
+        }
+        content.extend(Self::responses_input_contents_from_parts(extra_parts));
+        serde_json::to_value(content).expect("codex function_call_output content should serialize")
     }
 
     fn parse_responses_tool_calls(
@@ -403,16 +519,21 @@ impl ModelProvider for CodexProvider {
         &self.default_model
     }
 
+    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+        crate::provider::default_capability_registry()
+            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model)
+    }
+
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         StreamResumePolicy::ReplaySafePrefix
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        Ok(vec![ProviderModel {
-            provider_id: PROVIDER_ID.to_owned(),
-            id: self.default_model.clone(),
-            display_name: Some("Codex OAuth model".to_owned()),
-        }])
+        Ok(vec![
+            ProviderModel::new(PROVIDER_ID, self.default_model.clone())
+                .with_display_name("Codex OAuth model")
+                .with_capabilities(self.model_capabilities(self.default_model.as_str())),
+        ])
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
@@ -734,10 +855,23 @@ struct OpenAiInputMessage {
 }
 
 #[derive(Debug, Serialize)]
-struct OpenAiInputContent {
-    #[serde(rename = "type")]
-    kind: String,
-    text: String,
+#[serde(tag = "type")]
+enum OpenAiInputContent {
+    #[serde(rename = "input_text")]
+    Text { text: String },
+    #[serde(rename = "input_image")]
+    Image { image_url: String },
+    #[serde(rename = "input_file")]
+    File {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -762,7 +896,7 @@ struct OpenAiFunctionCallOutputItem {
     #[serde(rename = "type")]
     kind: &'static str,
     call_id: String,
-    output: String,
+    output: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -846,6 +980,10 @@ fn map_openai_usage(u: OpenAiUsage) -> CompletionUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::{
+        AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, StructuredObject,
+        TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
+    };
     use crate::tool::{ToolBehavior, ToolDefinition};
 
     fn sample_tool_definition() -> ToolDefinition {
@@ -862,6 +1000,49 @@ mod tests {
             ToolBehavior::ReadOnly,
             "fixture",
         )
+    }
+
+    fn sample_png_data_url() -> &'static str {
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W7tYAAAAASUVORK5CYII="
+    }
+
+    fn tool_result_message_with_image(tool_call_id: &str) -> Message {
+        let mut message = Message::prompt_parts(
+            crate::role::Role::Tool,
+            vec![
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 0,
+                    invocation: ToolInvocation::Custom {
+                        name: "tool".to_owned(),
+                        input: StructuredObject::default(),
+                    },
+                    output_text: "{\"ok\":true}".to_owned(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: ToolOutput::default(),
+                    lifecycle: TimeRange::default(),
+                }),
+                PartContent::attachments(vec![AttachmentItem {
+                    kind: AttachmentKind::Image,
+                    mime: "image/png".to_owned(),
+                    source: AttachmentSource::DataUrl {
+                        url: sample_png_data_url().to_owned(),
+                    },
+                    filename: Some("image.png".to_owned()),
+                    title: None,
+                    size_bytes: Some(68),
+                    sha256: None,
+                    width: Some(1),
+                    height: Some(1),
+                    duration_ms: None,
+                    page_count: None,
+                }]),
+            ],
+        );
+        if let Some(part) = message.parts.first_mut() {
+            part.operation_id = Some(tool_call_id.to_owned());
+        }
+        message
     }
 
     #[test]
@@ -881,5 +1062,30 @@ mod tests {
             json["tools"][0]["parameters"]["properties"]["query"]["type"],
             "string"
         );
+    }
+
+    #[test]
+    fn responses_input_encodes_tool_result_images_as_multimodal_function_output() {
+        let request = CompletionRequest {
+            model: "gpt-5.3-codex".to_owned(),
+            system: None,
+            messages: vec![tool_result_message_with_image("call_1")],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+        };
+
+        let input = CodexProvider::to_responses_input(&request);
+        let json = serde_json::to_value(&input).expect("responses input should serialize");
+        let items = json.as_array().expect("responses input should be an array");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["type"], "function_call_output");
+        assert_eq!(items[0]["call_id"], "call_1");
+        assert!(items[0]["output"].is_array());
+        assert_eq!(items[0]["output"][0]["type"], "input_text");
+        assert_eq!(items[0]["output"][0]["text"], "{\"ok\":true}");
+        assert_eq!(items[0]["output"][1]["type"], "input_image");
+        assert_eq!(items[0]["output"][1]["image_url"], sample_png_data_url());
     }
 }

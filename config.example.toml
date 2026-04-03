@@ -70,6 +70,10 @@ kind = "alias"
 target_provider_id = "openai"
 default_model = "gpt-5"
 
+[[providers."prod-openai".capability_overrides]]
+model = "gpt-5"
+image_input = "unsupported"
+
 [providers.gitlab]
 kind = "gitlab"
 instance_url = "https://gitlab.com"

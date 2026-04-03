@@ -104,12 +104,14 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
     match input {
         BuiltinToolInput::Bash(_) => "bash",
         BuiltinToolInput::Read(_) => "read",
+        BuiltinToolInput::ViewFile(_) => "view_file",
         BuiltinToolInput::ApplyPatch(_) => "apply_patch",
         BuiltinToolInput::Glob(_) => "glob",
         BuiltinToolInput::Grep(_) => "grep",
         BuiltinToolInput::Task(_) => "task",
         BuiltinToolInput::ToolSearch(_) => "tool_search",
         BuiltinToolInput::TodoWrite(_) => "todo_write",
+        BuiltinToolInput::RequestUserInput(_) => "request_user_input",
     }
 }
 

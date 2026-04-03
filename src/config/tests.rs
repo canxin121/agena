@@ -169,6 +169,84 @@ fn example_config_parses_successfully() {
 }
 
 #[test]
+fn provider_capability_overrides_parse_and_merge_from_mode_layers() {
+    let path = write_temp_config(
+        r#"
+mode = "dev"
+
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+
+[[providers.openai.capability_overrides]]
+model = "gpt-4.1-mini"
+image_input = "unsupported"
+
+[[modes.dev.providers.openai.capability_overrides]]
+model = "gpt-5"
+match = "prefix"
+file_input = "supported"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("openai")
+        .expect("openai provider should exist");
+    assert_eq!(provider.capability_overrides.len(), 2);
+    assert_eq!(provider.capability_overrides[0].model, "gpt-4.1-mini");
+    assert_eq!(
+        provider.capability_overrides[0].capabilities.image_input,
+        Some(crate::provider::CapabilitySupport::Unsupported)
+    );
+    assert_eq!(
+        provider.capability_overrides[1].match_mode,
+        crate::provider::CapabilityOverrideMatchMode::Prefix
+    );
+    assert_eq!(
+        provider.capability_overrides[1].capabilities.file_input,
+        Some(crate::provider::CapabilitySupport::Supported)
+    );
+}
+
+#[test]
+fn provider_capability_overrides_require_model_and_capability_fields() {
+    let path = write_temp_config(
+        r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+
+[[providers.openai.capability_overrides]]
+model = "   "
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("invalid override should fail validation");
+
+    assert!(
+        matches!(err, ConfigError::Validation(message) if message.contains("capability override model matcher cannot be empty"))
+    );
+}
+
+#[test]
 fn build_plugin_manager_uses_config_relative_plugin_directory() {
     let dir = temp_dir("plugins-relative");
     let plugins_dir = dir.join("plugins");

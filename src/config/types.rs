@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     permission::{PermissionMode, PermissionPolicy},
     provider::{
-        OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode, ProviderHttpClientConfig,
-        ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
-        auth::FileAuthStore,
+        OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
+        ProviderCapabilityOverrideRule, ProviderHttpClientConfig, ProviderRequestRetryConfig,
+        ProviderRuntimeConfig, ProviderStreamReplayConfig, auth::FileAuthStore,
     },
 };
 
@@ -212,6 +212,8 @@ pub struct PluginConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderConfig {
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capability_overrides: Vec<ProviderCapabilityOverrideRule>,
     #[serde(flatten)]
     pub definition: ProviderDefinition,
 }

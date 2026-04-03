@@ -7,7 +7,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{permission::PermissionMode, provider::auth::FileAuthStore};
+use crate::{
+    permission::PermissionMode,
+    provider::{ProviderCapabilityOverrideRule, auth::FileAuthStore},
+};
 
 use super::{
     AuthConfig, ConfigEnvironment, ConfigError, OpenAiApiModeConfig, PermissionConfig,
@@ -693,6 +696,7 @@ pub(crate) struct RawProviderConfig {
     pub(crate) access_key_id: Option<String>,
     pub(crate) secret_access_key: Option<String>,
     pub(crate) session_token: Option<String>,
+    pub(crate) capability_overrides: Vec<ProviderCapabilityOverrideRule>,
 }
 
 impl Merge for RawProviderConfig {
@@ -724,6 +728,8 @@ impl Merge for RawProviderConfig {
         merge_option(&mut self.access_key_id, overlay.access_key_id);
         merge_option(&mut self.secret_access_key, overlay.secret_access_key);
         merge_option(&mut self.session_token, overlay.session_token);
+        self.capability_overrides
+            .extend(overlay.capability_overrides);
     }
 }
 
@@ -733,6 +739,8 @@ impl RawProviderConfig {
             provider_id: provider_id.clone(),
         })?;
         let enabled = self.enabled.unwrap_or(true);
+        validate_capability_overrides(provider_id.as_str(), &self.capability_overrides)?;
+        let capability_overrides = self.capability_overrides.clone();
 
         let definition = match kind {
             ProviderKind::Alias => ProviderDefinition::Alias(ProviderAliasConfig {
@@ -919,6 +927,7 @@ impl RawProviderConfig {
             provider_id,
             ResolvedProviderConfig {
                 enabled,
+                capability_overrides,
                 definition,
             },
         ))
@@ -965,6 +974,20 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
+}
+
+fn validate_capability_overrides(
+    provider_id: &str,
+    rules: &[ProviderCapabilityOverrideRule],
+) -> Result<(), ConfigError> {
+    for rule in rules {
+        if let Err(message) = rule.validate() {
+            return Err(ConfigError::Validation(format!(
+                "provider `{provider_id}` {message}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn required_string(

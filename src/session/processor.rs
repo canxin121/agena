@@ -11,8 +11,8 @@ use crate::event::{
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, GlobToolInput, GrepToolInput, Message,
     MessageMetadata, MessagePart, MessageSource, MessageStateStore, MessageUpdate, PartContent,
-    ReadToolInput, StructuredObject, TaskToolInput, TimeRange, TodoWriteToolInput,
-    ToolExecutionPart, ToolInvocation, ToolSearchToolInput,
+    ReadToolInput, RequestUserInputToolInput, StructuredObject, TaskToolInput, TimeRange,
+    TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput, ViewFileToolInput,
 };
 use crate::provider::{CompletionRequest, CompletionStreamEvent, ProviderRegistry};
 use crate::role::Role;
@@ -341,6 +341,9 @@ pub(crate) fn parse_tool_invocation(
     let input = match trimmed_name {
         "bash" => BuiltinToolInput::Bash(parse_input::<BashToolInput>(arguments_json)?),
         "read" => BuiltinToolInput::Read(parse_input::<ReadToolInput>(arguments_json)?),
+        "view_file" => {
+            BuiltinToolInput::ViewFile(parse_input::<ViewFileToolInput>(arguments_json)?)
+        }
         "apply_patch" => {
             BuiltinToolInput::ApplyPatch(parse_input::<ApplyPatchToolInput>(arguments_json)?)
         }
@@ -353,6 +356,9 @@ pub(crate) fn parse_tool_invocation(
         "todo_write" => {
             BuiltinToolInput::TodoWrite(parse_input::<TodoWriteToolInput>(arguments_json)?)
         }
+        "request_user_input" => BuiltinToolInput::RequestUserInput(parse_input::<
+            RequestUserInputToolInput,
+        >(arguments_json)?),
         other => {
             return Err(AppError::Provider(format!(
                 "unsupported builtin tool call from model: {other}"

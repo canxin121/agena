@@ -6,11 +6,13 @@ mod glob;
 mod grep;
 mod orchestrator;
 mod read;
+mod request_user_input;
 mod result;
 mod task;
 mod todo_write;
 mod tool_search;
 mod truncation;
+mod view_file;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,8 +21,8 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, Message, PartContent, StructuredObject,
-    ToolExecutionPart, ToolInvocation, ToolOutput,
+    BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, Message, PartContent,
+    RequestUserInputToolInput, StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput,
 };
 use crate::permission::{
     AccessKind, PermissionAction, PermissionDecision, PermissionRuleStore, PermissionRuntime,
@@ -77,6 +79,8 @@ pub enum ToolError {
     PermissionDenied(String),
     #[error("permission confirmation required: {0}")]
     PermissionAsk(String),
+    #[error("user input required")]
+    UserInputRequired(RequestUserInputToolInput),
     #[error("invalid patch: {0}")]
     InvalidPatch(String),
     #[error("invalid tool input: {0}")]
@@ -195,6 +199,9 @@ impl ToolExecutor {
                 offset: None,
                 limit: None,
             }),
+            BuiltinToolInput::ViewFile(crate::message::ViewFileToolInput {
+                path: String::new(),
+            }),
             BuiltinToolInput::ApplyPatch(crate::message::ApplyPatchToolInput {
                 patch: String::new(),
             }),
@@ -220,6 +227,9 @@ impl ToolExecutor {
                 limit: None,
             }),
             BuiltinToolInput::TodoWrite(crate::message::TodoWriteToolInput { items: Vec::new() }),
+            BuiltinToolInput::RequestUserInput(crate::message::RequestUserInputToolInput {
+                questions: Vec::new(),
+            }),
         ]
         .into_iter()
         .map(|input| catalog.availability_for_input(&self.agent, &input))
@@ -336,6 +346,10 @@ impl ToolExecutor {
                 let target = self.resolve_target_path(&payload.file_path);
                 self.push_path_checks(&mut checks, AccessKind::Read, &target);
             }
+            BuiltinToolInput::ViewFile(payload) => {
+                let target = self.resolve_target_path(&payload.path);
+                self.push_path_checks(&mut checks, AccessKind::Read, &target);
+            }
             BuiltinToolInput::ApplyPatch(payload) => {
                 for path in apply_patch::planned_paths(&payload.patch)? {
                     let target = self.resolve_target_path(&path);
@@ -361,6 +375,7 @@ impl ToolExecutor {
             BuiltinToolInput::ToolSearch(_) => {}
             BuiltinToolInput::TodoWrite(_) => {}
             BuiltinToolInput::Task(_) => {}
+            BuiltinToolInput::RequestUserInput(_) => {}
         }
 
         Ok(checks)
@@ -769,12 +784,14 @@ fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolErro
         ToolInvocation::Builtin { input } => match input {
             BuiltinToolInput::Bash(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Read(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::ViewFile(payload) => serde_json::to_string(payload),
             BuiltinToolInput::ApplyPatch(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Glob(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Grep(payload) => serde_json::to_string(payload),
             BuiltinToolInput::Task(payload) => serde_json::to_string(payload),
             BuiltinToolInput::ToolSearch(payload) => serde_json::to_string(payload),
             BuiltinToolInput::TodoWrite(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::RequestUserInput(payload) => serde_json::to_string(payload),
         }
         .map_err(|err| ToolError::InvalidInput(err.to_string())),
         ToolInvocation::Custom { input, .. } => {
@@ -825,12 +842,14 @@ fn parse_builtin_input(tool_name: &str, input_json: &str) -> Result<BuiltinToolI
     match tool_name {
         "bash" => Ok(BuiltinToolInput::Bash(parse(input_json)?)),
         "read" => Ok(BuiltinToolInput::Read(parse(input_json)?)),
+        "view_file" => Ok(BuiltinToolInput::ViewFile(parse(input_json)?)),
         "apply_patch" => Ok(BuiltinToolInput::ApplyPatch(parse(input_json)?)),
         "glob" => Ok(BuiltinToolInput::Glob(parse(input_json)?)),
         "grep" => Ok(BuiltinToolInput::Grep(parse(input_json)?)),
         "task" => Ok(BuiltinToolInput::Task(parse(input_json)?)),
         "tool_search" => Ok(BuiltinToolInput::ToolSearch(parse(input_json)?)),
         "todo_write" => Ok(BuiltinToolInput::TodoWrite(parse(input_json)?)),
+        "request_user_input" => Ok(BuiltinToolInput::RequestUserInput(parse(input_json)?)),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
 }
@@ -870,6 +889,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use chrono::Utc;
     use serde_json::json;
     use uuid::Uuid;
@@ -879,6 +899,7 @@ mod tests {
         GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput, StructuredObject,
         TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority, TodoStatus,
         TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput, ToolSearchToolInput,
+        ViewFileToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::{
@@ -1075,6 +1096,14 @@ mod tests {
         }
     }
 
+    fn sample_png_bytes() -> Vec<u8> {
+        STANDARD
+            .decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W7tYAAAAASUVORK5CYII=",
+            )
+            .expect("sample png should decode")
+    }
+
     #[test]
     fn read_builtin_returns_line_numbered_preview() {
         let workspace = TempWorkspace::new();
@@ -1144,6 +1173,98 @@ mod tests {
                 }));
             }
             other => panic!("expected apply_patch output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn view_file_builtin_returns_metadata_and_attachment() {
+        let workspace = TempWorkspace::new();
+        let file_path = workspace.root.join("pixel.png");
+        fs::write(&file_path, sample_png_bytes()).expect("failed to seed png");
+
+        let executor = build_executor(&workspace.root);
+        let result = executor
+            .execute_builtin_detailed(&BuiltinToolInput::ViewFile(ViewFileToolInput {
+                path: "pixel.png".to_string(),
+            }))
+            .expect("view_file should succeed");
+
+        match result.output {
+            BuiltinToolOutput::ViewFile {
+                path,
+                kind,
+                mime,
+                size_bytes,
+                filename,
+                width,
+                height,
+                duration_ms,
+                page_count,
+            } => {
+                assert_eq!(path, "pixel.png");
+                assert_eq!(kind, crate::message::AttachmentKind::Image);
+                assert_eq!(mime, "image/png");
+                assert!(size_bytes > 0);
+                assert_eq!(filename.as_deref(), Some("pixel.png"));
+                assert_eq!(width, Some(1));
+                assert_eq!(height, Some(1));
+                assert_eq!(duration_ms, None);
+                assert_eq!(page_count, None);
+            }
+            other => panic!("expected view_file output, got {other:?}"),
+        }
+
+        assert_eq!(result.view.attachments.len(), 1);
+        let attachment = &result.view.attachments[0];
+        assert_eq!(attachment.filename.as_deref(), Some("pixel.png"));
+        assert_eq!(attachment.kind, crate::message::AttachmentKind::Image);
+        assert_eq!(attachment.mime, "image/png");
+        match &attachment.source {
+            crate::message::AttachmentSource::Base64 { data } => assert!(!data.is_empty()),
+            other => panic!("expected base64 attachment source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn view_file_builtin_attaches_generic_text_file() {
+        let workspace = TempWorkspace::new();
+        let file_path = workspace.root.join("notes.txt");
+        fs::write(&file_path, "hello from agena\n").expect("failed to seed text file");
+
+        let executor = build_executor(&workspace.root);
+        let result = executor
+            .execute_builtin_detailed(&BuiltinToolInput::ViewFile(ViewFileToolInput {
+                path: "notes.txt".to_string(),
+            }))
+            .expect("view_file should succeed for text file");
+
+        match result.output {
+            BuiltinToolOutput::ViewFile {
+                path,
+                kind,
+                mime,
+                filename,
+                width,
+                height,
+                ..
+            } => {
+                assert_eq!(path, "notes.txt");
+                assert_eq!(kind, crate::message::AttachmentKind::File);
+                assert_eq!(mime, "text/plain");
+                assert_eq!(filename.as_deref(), Some("notes.txt"));
+                assert_eq!(width, None);
+                assert_eq!(height, None);
+            }
+            other => panic!("expected view_file output, got {other:?}"),
+        }
+
+        assert_eq!(result.view.attachments.len(), 1);
+        let attachment = &result.view.attachments[0];
+        assert_eq!(attachment.kind, crate::message::AttachmentKind::File);
+        assert_eq!(attachment.mime, "text/plain");
+        match &attachment.source {
+            crate::message::AttachmentSource::Base64 { data } => assert!(!data.is_empty()),
+            other => panic!("expected base64 attachment source, got {other:?}"),
         }
     }
 

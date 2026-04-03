@@ -1,41 +1,15 @@
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
 use super::{
     AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, FileChangeEntry,
-    StructuredObject, TimeRange, TodoItem,
+    StructuredObject, TimeRange, TodoItem, UserInputQuestion,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct ToolAttachment {
-    pub url: String,
-    #[serde(default)]
-    pub filename: String,
-    #[serde(default)]
-    pub mime: String,
-}
-
-impl ToolAttachment {
-    pub fn to_attachment_item(&self) -> Option<AttachmentItem> {
-        let source = attachment_source_from_location(self.url.as_str())?;
-        let hint = first_non_empty([self.filename.as_str(), self.url.as_str()]);
-
-        Some(AttachmentItem {
-            kind: AttachmentKind::detect(self.mime.as_str(), hint),
-            mime: self.mime.clone(),
-            source,
-            filename: non_empty(self.filename.as_str()),
-            title: None,
-            size_bytes: None,
-            sha256: None,
-            width: None,
-            height: None,
-            duration_ms: None,
-            page_count: None,
-        })
-    }
-}
+pub type ToolAttachment = AttachmentItem;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct BashToolInput {
@@ -55,6 +29,11 @@ pub struct ReadToolInput {
     pub offset: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct ViewFileToolInput {
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -139,6 +118,12 @@ pub struct TodoWriteToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct RequestUserInputToolInput {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<UserInputQuestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ApplyPatchToolInput {
     pub patch: String,
 }
@@ -149,12 +134,14 @@ pub struct ApplyPatchToolInput {
 pub enum BuiltinToolInput {
     Bash(BashToolInput),
     Read(ReadToolInput),
+    ViewFile(ViewFileToolInput),
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
     Grep(GrepToolInput),
     Task(TaskToolInput),
     ToolSearch(ToolSearchToolInput),
     TodoWrite(TodoWriteToolInput),
+    RequestUserInput(RequestUserInputToolInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -193,6 +180,22 @@ pub enum BuiltinToolOutput {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         loaded_paths: Vec<String>,
     },
+    ViewFile {
+        path: String,
+        kind: AttachmentKind,
+        mime: String,
+        size_bytes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page_count: Option<u32>,
+    },
     ApplyPatch {
         operation_id: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -228,6 +231,10 @@ pub enum BuiltinToolOutput {
     TodoWrite {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         items: Vec<TodoItem>,
+    },
+    RequestUserInput {
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        answers: BTreeMap<String, String>,
     },
 }
 
@@ -482,13 +489,6 @@ fn non_empty(value: &str) -> Option<String> {
     }
 }
 
-fn first_non_empty<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
-    values
-        .into_iter()
-        .map(str::trim)
-        .find(|value| !value.is_empty())
-}
-
 fn filename_hint(value: &str) -> Option<String> {
     value
         .trim()
@@ -572,17 +572,26 @@ mod tests {
     }
 
     #[test]
-    fn tool_attachment_converts_to_attachment_item() {
+    fn tool_attachment_aliases_attachment_item_shape() {
         let attachment = ToolAttachment {
-            url: "https://example.com/image.png".to_string(),
-            filename: "image.png".to_string(),
+            kind: AttachmentKind::Image,
             mime: "image/png".to_string(),
+            source: AttachmentSource::Url {
+                url: "https://example.com/image.png".to_string(),
+            },
+            filename: Some("image.png".to_string()),
+            title: None,
+            size_bytes: Some(16),
+            sha256: None,
+            width: Some(2),
+            height: Some(3),
+            duration_ms: None,
+            page_count: None,
         };
 
-        let item = attachment
-            .to_attachment_item()
-            .expect("tool attachment should convert");
-        assert_eq!(item.kind, AttachmentKind::Image);
-        assert_eq!(item.filename.as_deref(), Some("image.png"));
+        assert_eq!(attachment.kind, AttachmentKind::Image);
+        assert_eq!(attachment.filename.as_deref(), Some("image.png"));
+        assert_eq!(attachment.width, Some(2));
+        assert_eq!(attachment.height, Some(3));
     }
 }

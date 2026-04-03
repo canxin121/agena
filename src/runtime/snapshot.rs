@@ -129,6 +129,29 @@ impl RuntimeSnapshot {
         Arc::clone(&self.providers)
     }
 
+    pub async fn list_provider_models(
+        &self,
+        provider_id: &str,
+    ) -> Result<Vec<crate::provider::ProviderModel>, AppError> {
+        self.providers.list_models(provider_id).await
+    }
+
+    pub async fn provider_model(
+        &self,
+        provider_id: &str,
+        model: &str,
+    ) -> Result<crate::provider::ProviderModel, AppError> {
+        self.providers.provider_model(provider_id, model).await
+    }
+
+    pub fn model_capabilities(
+        &self,
+        provider_id: &str,
+        model: &str,
+    ) -> Result<crate::provider::ModelCapabilities, AppError> {
+        self.providers.model_capabilities(provider_id, model)
+    }
+
     pub fn plugin_manager(&self) -> Arc<PluginManager> {
         Arc::clone(&self.plugins)
     }

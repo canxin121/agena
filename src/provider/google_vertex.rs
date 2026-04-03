@@ -104,6 +104,11 @@ impl ModelProvider for GoogleVertexProvider {
         self.default_model.as_str()
     }
 
+    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+        crate::provider::default_capability_registry()
+            .capabilities_for_family(crate::provider::CapabilityFamily::Gemini, model)
+    }
+
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         StreamResumePolicy::ReplaySafePrefix
     }

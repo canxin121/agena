@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -160,6 +162,102 @@ impl PermissionRequestPart {
                 };
                 format!("{prefix}: {reason}")
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct UserInputOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct UserInputQuestion {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<UserInputOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserInputRequest {
+    pub request_id: String,
+    pub session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<UserInputQuestion>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserInputReplyKind {
+    Submit,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserInputReply {
+    pub request_id: String,
+    pub kind: UserInputReplyKind,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub answers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserInputRequestPart {
+    pub request: UserInputRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<UserInputReply>,
+}
+
+impl UserInputRequestPart {
+    pub fn pending(request: UserInputRequest) -> Self {
+        Self {
+            request,
+            reply: None,
+        }
+    }
+
+    pub fn with_reply(mut self, reply: UserInputReply) -> Self {
+        self.reply = Some(reply);
+        self
+    }
+
+    pub const fn status(&self) -> ExecutionStatus {
+        if self.reply.is_some() {
+            ExecutionStatus::Completed
+        } else {
+            ExecutionStatus::Pending
+        }
+    }
+
+    pub fn summary_text(&self) -> String {
+        match self.reply.as_ref() {
+            None => {
+                let count = self.request.questions.len();
+                if count == 0 {
+                    "Awaiting user input".to_string()
+                } else {
+                    format!("Awaiting user input for {count} question(s)")
+                }
+            }
+            Some(reply) => match reply.kind {
+                UserInputReplyKind::Submit => {
+                    format!("User input submitted: {} answer(s)", reply.answers.len())
+                }
+                UserInputReplyKind::Cancel => {
+                    let reason = reply
+                        .reason
+                        .as_deref()
+                        .filter(|reason| !reason.trim().is_empty())
+                        .unwrap_or("user declined to answer");
+                    format!("User input cancelled: {reason}")
+                }
+            },
         }
     }
 }

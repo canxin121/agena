@@ -118,7 +118,7 @@ impl AttachmentSource {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AttachmentItem {
     pub kind: AttachmentKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -169,7 +169,7 @@ impl AttachmentItem {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AttachmentPart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentItem>,

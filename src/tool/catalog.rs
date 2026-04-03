@@ -1,7 +1,8 @@
 use crate::agent::Agent;
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, GlobToolInput, GrepToolInput,
-    ReadToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput,
+    ReadToolInput, RequestUserInputToolInput, TaskToolInput, TodoWriteToolInput,
+    ToolSearchToolInput, ViewFileToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -85,6 +86,13 @@ impl ToolCatalog {
             )
             .with_search_terms(["open file", "view file", "cat", "inspect"])
             .with_always_load(),
+            ToolDefinition::builtin::<ViewFileToolInput>(
+                "view_file",
+                "Load a local file and attach it back to the conversation as inline multimodal input.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["file", "image", "pdf", "audio", "document"])
+            .with_always_load(),
             ToolDefinition::builtin::<ApplyPatchToolInput>(
                 "apply_patch",
                 "Apply a structured patch that can add, update, move, or delete files.",
@@ -127,6 +135,15 @@ impl ToolCatalog {
             )
             .with_search_terms(["plan", "todo", "track progress"])
             .with_always_load(),
+            ToolDefinition::builtin::<RequestUserInputToolInput>(
+                "request_user_input",
+                "Ask the user one to three short multiple-choice questions and wait for the response.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["ask user", "clarify requirement", "human input"])
+            .with_concurrency_safe(false)
+            .with_requires_user_interaction(true)
+            .with_always_load(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions
@@ -146,7 +163,13 @@ impl ToolCatalog {
             ModelToolProfile::ReadOnly => {
                 matches!(
                     tool_name,
-                    "read" | "glob" | "grep" | "tool_search" | "todo_write"
+                    "read"
+                        | "view_file"
+                        | "glob"
+                        | "grep"
+                        | "tool_search"
+                        | "todo_write"
+                        | "request_user_input"
                 )
             }
             ModelToolProfile::NoTask => tool_name != "task",

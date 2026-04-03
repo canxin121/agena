@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::{
     error::AppError,
-    message::{Message, MessageUsage},
+    message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse,
@@ -221,10 +221,12 @@ impl OpenAiCompatibleProvider {
 
         Ok(models
             .into_iter()
-            .map(|model| ProviderModel {
-                provider_id: self.id.clone(),
-                id: model.id,
-                display_name: model.display_name.or(model.name),
+            .map(|model| {
+                let capabilities = self.model_capabilities(model.id.as_str());
+                let mut entry =
+                    ProviderModel::new(self.id.clone(), model.id).with_capabilities(capabilities);
+                entry.display_name = model.display_name.or(model.name);
+                entry
             })
             .collect())
     }
@@ -301,6 +303,7 @@ impl OpenAiCompatibleProvider {
                 }
                 Role::Tool => {
                     let tool_messages = tool_messages_from_parts(projected_parts.as_slice());
+                    let extra_parts = utils::non_tool_result_parts(projected_parts.as_slice());
                     if tool_messages.is_empty() {
                         result.push(ChatMessage {
                             role: "tool".to_owned(),
@@ -313,6 +316,16 @@ impl OpenAiCompatibleProvider {
                         });
                     } else {
                         result.extend(tool_messages);
+                        if !extra_parts.is_empty() {
+                            result.push(ChatMessage {
+                                role: "user".to_owned(),
+                                content: Some(projected_parts_to_openai_value(
+                                    extra_parts.as_slice(),
+                                )),
+                                tool_call_id: None,
+                                tool_calls: None,
+                            });
+                        }
                     }
                 }
             }
@@ -728,16 +741,80 @@ fn provider_message_to_openai_value(
         return Value::String(message.as_text_lossy());
     }
 
+    projected_parts_to_openai_value(parts)
+}
+
+fn attachment_upload_name(item: &AttachmentItem) -> String {
+    utils::attachment_filename(item)
+        .map(str::to_owned)
+        .unwrap_or_else(|| item.summary_label())
+}
+
+fn attachment_file_content_value(item: &AttachmentItem) -> Option<Value> {
+    let filename = attachment_upload_name(item);
+    match &item.source {
+        AttachmentSource::Base64 { .. } | AttachmentSource::DataUrl { .. } => {
+            utils::attachment_data_url(item).map(|file_data| {
+                serde_json::json!({
+                    "type": "file",
+                    "file": {
+                        "file_data": file_data,
+                        "filename": filename,
+                    }
+                })
+            })
+        }
+        AttachmentSource::FileId { file_id } => {
+            let file_id = file_id.trim();
+            (!file_id.is_empty()).then(|| {
+                serde_json::json!({
+                    "type": "file",
+                    "file": {
+                        "file_id": file_id,
+                        "filename": filename,
+                    }
+                })
+            })
+        }
+        AttachmentSource::Url { .. } | AttachmentSource::LocalPath { .. } => None,
+    }
+}
+
+fn attachment_content_value(item: &AttachmentItem) -> Value {
+    match item.kind {
+        AttachmentKind::Image => utils::attachment_media_url(item)
+            .map(|url| {
+                serde_json::json!({
+                    "type": "image_url",
+                    "image_url": { "url": url }
+                })
+            })
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "type": "text",
+                    "text": utils::attachment_hint_text(item),
+                })
+            }),
+        AttachmentKind::Audio
+        | AttachmentKind::Video
+        | AttachmentKind::Pdf
+        | AttachmentKind::File => attachment_file_content_value(item).unwrap_or_else(|| {
+            serde_json::json!({
+                "type": "text",
+                "text": utils::attachment_hint_text(item),
+            })
+        }),
+    }
+}
+
+fn projected_parts_to_openai_value(parts: &[utils::ProjectedSessionPart]) -> Value {
     let items = parts
         .iter()
         .map(|part| match part {
             utils::ProjectedSessionPart::Text { text } => {
                 serde_json::json!({ "type": "text", "text": text })
             }
-            utils::ProjectedSessionPart::ImageUrl { url } => serde_json::json!({
-                "type": "image_url",
-                "image_url": { "url": url }
-            }),
+            utils::ProjectedSessionPart::Attachment { item } => attachment_content_value(item),
             utils::ProjectedSessionPart::ToolCall { name, .. } => {
                 serde_json::json!({ "type": "text", "text": format!("[tool_call:{name}]") })
             }
@@ -776,8 +853,8 @@ fn assistant_content_and_tool_calls(
                     },
                 });
             }
-            utils::ProjectedSessionPart::ImageUrl { url } => {
-                text_chunks.push(format!("[image:{url}]"));
+            utils::ProjectedSessionPart::Attachment { item } => {
+                text_chunks.push(utils::attachment_hint_text(item));
             }
             utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
                 text_chunks.push(format!("[tool_result:{tool_call_id}]"));
@@ -795,12 +872,18 @@ fn tool_messages_from_parts(parts: &[utils::ProjectedSessionPart]) -> Vec<ChatMe
             utils::ProjectedSessionPart::ToolResult {
                 tool_call_id,
                 output_json,
-            } => Some(ChatMessage {
-                role: "tool".to_owned(),
-                content: Some(Value::String(output_json.clone())),
-                tool_call_id: Some(tool_call_id.clone()),
-                tool_calls: None,
-            }),
+            } => {
+                if tool_call_id.trim().is_empty() {
+                    None
+                } else {
+                    Some(ChatMessage {
+                        role: "tool".to_owned(),
+                        content: Some(Value::String(output_json.clone())),
+                        tool_call_id: Some(tool_call_id.clone()),
+                        tool_calls: None,
+                    })
+                }
+            }
             _ => None,
         })
         .collect()
@@ -860,6 +943,11 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
     fn default_model(&self) -> &str {
         &self.default_model
+    }
+
+    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+        crate::provider::default_capability_registry()
+            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAiCompatible, model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -1250,7 +1338,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::message::Message;
+    use crate::message::{
+        AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, StructuredObject,
+        TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
+    };
     use crate::tool::{ToolBehavior, ToolDefinition};
     use tokio::net::TcpListener;
 
@@ -1268,6 +1359,49 @@ mod tests {
             ToolBehavior::ReadOnly,
             "fixture",
         )
+    }
+
+    fn sample_png_data_url() -> &'static str {
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W7tYAAAAASUVORK5CYII="
+    }
+
+    fn tool_result_message_with_image(tool_call_id: &str) -> Message {
+        let mut message = Message::prompt_parts(
+            crate::role::Role::Tool,
+            vec![
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 0,
+                    invocation: ToolInvocation::Custom {
+                        name: "tool".to_owned(),
+                        input: StructuredObject::default(),
+                    },
+                    output_text: "{\"ok\":true}".to_owned(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: ToolOutput::default(),
+                    lifecycle: TimeRange::default(),
+                }),
+                PartContent::attachments(vec![AttachmentItem {
+                    kind: AttachmentKind::Image,
+                    mime: "image/png".to_owned(),
+                    source: AttachmentSource::DataUrl {
+                        url: sample_png_data_url().to_owned(),
+                    },
+                    filename: Some("image.png".to_owned()),
+                    title: None,
+                    size_bytes: Some(68),
+                    sha256: None,
+                    width: Some(1),
+                    height: Some(1),
+                    duration_ms: None,
+                    page_count: None,
+                }]),
+            ],
+        );
+        if let Some(part) = message.parts.first_mut() {
+            part.operation_id = Some(tool_call_id.to_owned());
+        }
+        message
     }
 
     #[tokio::test]
@@ -1343,6 +1477,31 @@ mod tests {
         let usage = response.usage.expect("usage should be present");
         assert_eq!(usage.input_tokens, 11);
         assert_eq!(usage.output_tokens, 7);
+    }
+
+    #[test]
+    fn convert_messages_splits_tool_result_and_image_follow_up() {
+        let messages = OpenAiCompatibleProvider::convert_messages(
+            None,
+            vec![tool_result_message_with_image("call_1")],
+        );
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "tool");
+        assert_eq!(messages[0].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(
+            messages[0].content,
+            Some(Value::String("{\"ok\":true}".to_owned()))
+        );
+
+        assert_eq!(messages[1].role, "user");
+        assert!(messages[1].tool_call_id.is_none());
+        let content = messages[1]
+            .content
+            .as_ref()
+            .expect("follow-up user message should have content");
+        assert_eq!(content[0]["type"], "image_url");
+        assert_eq!(content[0]["image_url"]["url"], sample_png_data_url());
     }
 
     #[tokio::test]

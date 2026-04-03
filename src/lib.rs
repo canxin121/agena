@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod checkpoint;
 pub mod cli;
 pub mod config;
 pub mod db;

@@ -15,8 +15,8 @@ pub(crate) async fn run(runtime: AgenaRuntime) {
             continue;
         }
 
-        if let Some(service) = snapshot.session_service() {
-            service.prune_cache();
+        if let Some(manager) = snapshot.session_manager() {
+            manager.prune_cache();
         }
     }
 }

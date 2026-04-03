@@ -157,7 +157,7 @@ impl AgenaCli {
             generation = snapshot.generation(),
             providers = snapshot.provider_registry().provider_ids().len(),
             plugins = snapshot.plugin_manager().plugins().len(),
-            sessions = snapshot.session_service().is_some(),
+            sessions = snapshot.session_manager().is_some(),
             "Agena started with resolved configuration"
         );
         Ok(())

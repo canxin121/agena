@@ -6,18 +6,11 @@ use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryOrder};
 
 use crate::AppError;
-use crate::checkpoint::{
-    CheckpointBlob, FilesystemCheckpointCapture, SessionRestoreMode, SessionRestorePointSnapshot,
-    SessionRestoreRequest, restore_filesystem,
-};
-use crate::db::crud::{
-    message, permission_rule, session, session_restore, session_runtime, workspace,
-};
+use crate::db::crud::{message, permission_rule, session, session_runtime, workspace};
 use crate::db::entities;
 use crate::db::tx::with_transaction_and_effects;
 use crate::event::{
     ErrorInfo, MessagePartUpdatedEvent, RunFailedEvent, RunStartedEvent, SessionEvent,
-    SessionRestoredEvent,
 };
 use crate::message::{
     AttachmentItem, BuiltinToolOutput, ExecutionStatus, FileChangePart, Message, MessageMetadata,
@@ -40,14 +33,14 @@ use super::{Session, SessionEventRecord, SessionProcessor};
 const PROCESSOR_PART_ID_BLOCK: i64 = 1024;
 
 #[derive(Debug, Clone)]
-pub struct SessionServiceConfig {
+pub struct SessionManagerConfig {
     pub cache_max_sessions: usize,
     pub cache_ttl: Duration,
     pub cache_max_bytes: usize,
     pub max_turn_loops: usize,
 }
 
-impl Default for SessionServiceConfig {
+impl Default for SessionManagerConfig {
     fn default() -> Self {
         Self {
             cache_max_sessions: 128,
@@ -117,24 +110,24 @@ pub struct SessionUserInputReplyRequest {
 }
 
 #[derive(Debug, Clone)]
-struct PendingRestorePointWrite {
-    call_id: i64,
-    message_id: i64,
+struct ResolvedPendingTool {
+    pending: SessionPendingTool,
     operation_id: String,
-    snapshot: SessionRestorePointSnapshot,
-    blobs: Vec<CheckpointBlob>,
+    call_id: i64,
+    invocation: ToolInvocation,
+    lifecycle: TimeRange,
 }
 
-pub struct SessionService {
+pub struct SessionManager {
     db: DatabaseConnection,
     processor: SessionProcessor,
     tool_executor: ToolExecutor,
     cache: Arc<RwLock<SessionCache>>,
     id_allocator: Arc<RwLock<GlobalIdAllocator>>,
-    config: SessionServiceConfig,
+    config: SessionManagerConfig,
 }
 
-impl SessionService {
+impl SessionManager {
     pub fn new(
         db: DatabaseConnection,
         processor: SessionProcessor,
@@ -146,11 +139,11 @@ impl SessionService {
             tool_executor,
             cache: Arc::new(RwLock::new(SessionCache::default())),
             id_allocator: Arc::new(RwLock::new(GlobalIdAllocator::default())),
-            config: SessionServiceConfig::default(),
+            config: SessionManagerConfig::default(),
         }
     }
 
-    pub fn with_config(mut self, config: SessionServiceConfig) -> Self {
+    pub fn with_config(mut self, config: SessionManagerConfig) -> Self {
         self.config = config;
         self
     }
@@ -183,15 +176,6 @@ impl SessionService {
                 let mut session = session_from_model_db(created)?;
                 session.set_cache_source(SessionCacheSource::Fresh);
                 session.refresh_derived();
-                session_runtime::save_checkpoint(
-                    txn,
-                    session.id,
-                    0,
-                    session.clone(),
-                    None,
-                    Utc::now(),
-                )
-                .await?;
 
                 let session_for_cache = session.clone();
                 effects.push(async move {
@@ -227,57 +211,6 @@ impl SessionService {
         Ok(session_runtime::list_session_events(&self.db, session_id).await?)
     }
 
-    pub async fn restore_session(
-        &self,
-        request: SessionRestoreRequest,
-    ) -> Result<Session, AppError> {
-        let restore_point = match request.restore_point_id {
-            Some(id) => {
-                session_restore::find_restore_point(&self.db, request.session_id, id).await?
-            }
-            None => session_restore::latest_restore_point(&self.db, request.session_id).await?,
-        }
-        .ok_or_else(|| {
-            AppError::Internal(format!(
-                "restore point not found for session {}",
-                request.session_id
-            ))
-        })?;
-
-        let restored_paths = if request.mode.restores_filesystem() {
-            let blobs = self
-                .load_restore_blobs(restore_point.snapshot.filesystem.journal())
-                .await?;
-            restore_filesystem(
-                self.tool_executor.workspace_root(),
-                &restore_point.snapshot.filesystem,
-                |hash| Ok(blobs.get(hash).cloned()),
-            )
-            .map_err(|err| AppError::Internal(err.to_string()))?
-            .restored_paths
-        } else {
-            Vec::new()
-        };
-
-        let state = if request.mode.restores_conversation() {
-            self.restore_conversation_state(&restore_point, request.mode, restored_paths.clone())
-                .await?
-        } else {
-            let session = self.load_session(request.session_id).await?;
-            let event = SessionEvent::SessionRestored(SessionRestoredEvent {
-                session_id: request.session_id,
-                restore_point_id: restore_point.id,
-                mode: request.mode,
-                restored_paths,
-                ts_ms: Utc::now().timestamp_millis(),
-            });
-            self.persist_session_changes(session, Vec::new(), vec![event], None, None)
-                .await?
-        };
-
-        Ok(state)
-    }
-
     pub async fn submit_user_turn(
         &self,
         request: SessionUserTurnRequest,
@@ -300,7 +233,7 @@ impl SessionService {
         );
         session.messages.push(user_message.clone());
         session = self
-            .persist_session_changes(session, vec![user_message], Vec::new(), None, None)
+            .persist_session_changes(session, vec![user_message], Vec::new(), None)
             .await?;
 
         self.run_until_stable(session, &request.options).await
@@ -328,17 +261,30 @@ impl SessionService {
                 ))
             })?;
 
+        let permission_request = session
+            .pending_permission_request(&pending)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending permission request payload missing: {}",
+                    request.reply.request_id
+                ))
+            })?;
         let reply_reason = request
             .reply
             .reason
             .clone()
-            .unwrap_or_else(|| pending.request.reason.clone());
+            .unwrap_or_else(|| permission_request.reason.clone());
 
         {
-            let permission_part = &mut session.messages[pending.permission_message_index].parts
-                [pending.permission_part_index];
+            let permission_part = session.part_mut(&pending.request).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending permission part not found: {}",
+                    request.reply.request_id
+                ))
+            })?;
             permission_part.set_content(PartContent::PermissionRequest(
-                PermissionRequestPart::pending(pending.request.clone())
+                PermissionRequestPart::pending(permission_request.clone())
                     .with_reply(request.reply.clone()),
             ));
             permission_part.status = ExecutionStatus::Completed;
@@ -346,13 +292,14 @@ impl SessionService {
 
         let persisted_mode = persisted_mode_for_reply(request.reply.kind);
         let persisted_action_key = persisted_mode
-            .map(|_| permission_action_key(&pending.request.action))
+            .map(|_| permission_action_key(&permission_request.action))
             .transpose()?;
 
         match request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
+                let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
                 let execution = self
-                    .execute_pending_tool_after_approval(session.id, &pending.tool)
+                    .execute_pending_tool_after_approval(session.id, &resolved_tool)
                     .map_err(tool_error_to_app_error)?;
                 session = self
                     .apply_tool_success(
@@ -394,11 +341,24 @@ impl SessionService {
                 ))
             })?;
 
+        let user_input_request = session
+            .pending_user_input_request(&pending)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending user input request payload missing: {}",
+                    request.reply.request_id
+                ))
+            })?;
         {
-            let input_part =
-                &mut session.messages[pending.input_message_index].parts[pending.input_part_index];
+            let input_part = session.part_mut(&pending.request).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending user input part not found: {}",
+                    request.reply.request_id
+                ))
+            })?;
             input_part.set_content(PartContent::UserInputRequest(
-                UserInputRequestPart::pending(pending.request.clone())
+                UserInputRequestPart::pending(user_input_request.clone())
                     .with_reply(request.reply.clone()),
             ));
             input_part.status = ExecutionStatus::Completed;
@@ -406,7 +366,7 @@ impl SessionService {
 
         match request.reply.kind {
             UserInputReplyKind::Submit => {
-                let execution = user_input_execution(&pending.request, &request.reply)?;
+                let execution = user_input_execution(&user_input_request, &request.reply)?;
                 session = self
                     .apply_tool_success(session, &pending.tool, execution, None, None)
                     .await?;
@@ -432,14 +392,17 @@ impl SessionService {
     ) -> Result<Session, AppError> {
         for _ in 0..self.config.max_turn_loops {
             session.refresh_derived();
-            match session.status().clone() {
-                SessionStatus::AwaitingPermission { .. }
-                | SessionStatus::AwaitingUserInput { .. }
-                | SessionStatus::Idle => return Ok(session),
-                SessionStatus::AwaitingTool { tool } => {
-                    session = self.resolve_pending_tool(session, tool).await?;
-                    continue;
-                }
+            if session.blocked() {
+                return Ok(session);
+            }
+
+            if let Some(tool) = session.next_pending_tool() {
+                session = self.resolve_pending_tool(session, tool).await?;
+                continue;
+            }
+
+            match session.status() {
+                SessionStatus::Idle | SessionStatus::PendingOperations => return Ok(session),
                 SessionStatus::AwaitingModel => {}
             }
 
@@ -447,7 +410,7 @@ impl SessionService {
         }
 
         Err(AppError::Internal(
-            "session service exceeded max turn loop budget".to_string(),
+            "session manager exceeded max turn loop budget".to_string(),
         ))
     }
 
@@ -493,7 +456,6 @@ impl SessionService {
                     vec![assistant_message],
                     client_events,
                     None,
-                    None,
                 )
                 .await
             }
@@ -508,38 +470,41 @@ impl SessionService {
     async fn resolve_pending_tool(
         &self,
         mut session: Session,
-        mut pending_tool: SessionPendingTool,
+        pending_tool: SessionPendingTool,
     ) -> Result<Session, AppError> {
+        let mut resolved = resolve_pending_tool(&session, &pending_tool)?;
         let prepared = self
             .tool_executor
-            .prepare_invocation(&pending_tool.invocation, session.id, pending_tool.call_id)
+            .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
             .map_err(tool_error_to_app_error)?;
-        if prepared.invocation != pending_tool.invocation || prepared.title_override.is_some() {
-            let current_title = match session.messages[pending_tool.message_index].parts
-                [pending_tool.part_index]
-                .content
-                .as_ref()
-            {
+        if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
+            let current_title = match session.part(&resolved.pending.part).and_then(|part| {
+                part.content.as_ref()
+            }) {
                 Some(PartContent::ToolExecution(ToolExecutionPart::Pending { title, .. })) => {
                     title.clone()
                 }
-                _ => format!("Tool {}", tool_name(&pending_tool.invocation)),
+                _ => format!("Tool {}", tool_name(&resolved.invocation)),
             };
 
-            pending_tool.invocation = prepared.invocation.clone();
-            let tool_part =
-                &mut session.messages[pending_tool.message_index].parts[pending_tool.part_index];
+            resolved.invocation = prepared.invocation.clone();
+            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool part not found: message={}, part={}",
+                    resolved.pending.part.message_id, resolved.pending.part.part_id
+                ))
+            })?;
             tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: pending_tool.call_id,
+                call_id: resolved.call_id,
                 invocation: prepared.invocation,
                 title: prepared.title_override.unwrap_or(current_title),
-                lifecycle: pending_tool.lifecycle.clone(),
+                lifecycle: resolved.lifecycle.clone(),
             }));
         }
 
         for check in self
             .tool_executor
-            .collect_permission_checks_for_invocation(&pending_tool.invocation)
+            .collect_permission_checks_for_invocation(&resolved.invocation)
             .map_err(tool_error_to_app_error)?
         {
             let decision = self.resolve_permission_decision(&check).await?;
@@ -547,24 +512,24 @@ impl SessionService {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Ask { reason } => {
                     return self
-                        .apply_permission_request(session, &pending_tool, check.action, reason)
+                        .apply_permission_request(session, &resolved.pending, check.action, reason)
                         .await;
                 }
                 PermissionDecision::Deny { reason } => {
                     return self
-                        .apply_tool_failure(session, &pending_tool, reason, None, None)
+                        .apply_tool_failure(session, &resolved.pending, reason, None, None)
                         .await;
                 }
             }
         }
 
-        match self.execute_pending_tool(session.id, &pending_tool) {
+        match self.execute_pending_tool(session.id, &resolved) {
             Ok(execution) => {
-                self.apply_tool_success(session, &pending_tool, execution, None, None)
+                self.apply_tool_success(session, &resolved.pending, execution, None, None)
                     .await
             }
             Err(ToolError::UserInputRequired(input)) => {
-                self.apply_user_input_request(session, &pending_tool, input)
+                self.apply_user_input_request(session, &resolved.pending, input)
                     .await
             }
             Err(err) => Err(tool_error_to_app_error(err)),
@@ -599,8 +564,9 @@ impl SessionService {
         action: PermissionAction,
         reason: String,
     ) -> Result<Session, AppError> {
+        let resolved = resolve_pending_tool(&session, pending_tool)?;
         let request = PermissionRequest {
-            request_id: pending_tool.operation_id.clone(),
+            request_id: resolved.operation_id.clone(),
             session_id: Some(session.id),
             action,
             reason: reason.clone(),
@@ -608,13 +574,17 @@ impl SessionService {
         };
 
         {
-            let tool_part =
-                &mut session.messages[pending_tool.message_index].parts[pending_tool.part_index];
+            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool part not found: message={}, part={}",
+                    pending_tool.part.message_id, pending_tool.part.part_id
+                ))
+            })?;
             tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: pending_tool.call_id,
-                invocation: pending_tool.invocation.clone(),
+                call_id: resolved.call_id,
+                invocation: resolved.invocation.clone(),
                 title: format!("Awaiting permission: {reason}"),
-                lifecycle: pending_tool.lifecycle.clone(),
+                lifecycle: resolved.lifecycle.clone(),
             }));
             tool_part.status = ExecutionStatus::Pending;
             tool_part.summary = Some(reason.clone());
@@ -623,16 +593,16 @@ impl SessionService {
         let permission_part_id = self.reserve_part_id().await?;
         let permission_part = build_permission_part(
             permission_part_id,
-            session.messages[pending_tool.message_index].id,
-            pending_tool.operation_id.as_str(),
+            pending_tool.part.message_id,
+            resolved.operation_id.as_str(),
             PermissionRequestPart::pending(request),
         );
-        session.messages[pending_tool.message_index]
+        session.messages[pending_tool.part.message_index]
             .parts
             .push(permission_part.clone());
 
-        let assistant_message = session.messages[pending_tool.message_index].clone();
-        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, None)
+        let assistant_message = session.messages[pending_tool.part.message_index].clone();
+        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None)
             .await
     }
 
@@ -642,21 +612,26 @@ impl SessionService {
         pending_tool: &SessionPendingTool,
         input: crate::message::RequestUserInputToolInput,
     ) -> Result<Session, AppError> {
+        let resolved = resolve_pending_tool(&session, pending_tool)?;
         let request = UserInputRequest {
-            request_id: pending_tool.operation_id.clone(),
+            request_id: resolved.operation_id.clone(),
             session_id: Some(session.id),
             questions: input.questions,
             created_at: Utc::now(),
         };
 
         {
-            let tool_part =
-                &mut session.messages[pending_tool.message_index].parts[pending_tool.part_index];
+            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool part not found: message={}, part={}",
+                    pending_tool.part.message_id, pending_tool.part.part_id
+                ))
+            })?;
             tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: pending_tool.call_id,
-                invocation: pending_tool.invocation.clone(),
+                call_id: resolved.call_id,
+                invocation: resolved.invocation.clone(),
                 title: request_user_input_title(&request),
-                lifecycle: pending_tool.lifecycle.clone(),
+                lifecycle: resolved.lifecycle.clone(),
             }));
             tool_part.status = ExecutionStatus::Pending;
             tool_part.summary = Some(format!(
@@ -668,16 +643,16 @@ impl SessionService {
         let input_part_id = self.reserve_part_id().await?;
         let input_part = build_user_input_part(
             input_part_id,
-            session.messages[pending_tool.message_index].id,
-            pending_tool.operation_id.as_str(),
+            pending_tool.part.message_id,
+            resolved.operation_id.as_str(),
             UserInputRequestPart::pending(request),
         );
-        session.messages[pending_tool.message_index]
+        session.messages[pending_tool.part.message_index]
             .parts
             .push(input_part.clone());
 
-        let assistant_message = session.messages[pending_tool.message_index].clone();
-        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, None)
+        let assistant_message = session.messages[pending_tool.part.message_index].clone();
+        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None)
             .await
     }
 
@@ -689,14 +664,10 @@ impl SessionService {
         persisted_action_key: Option<String>,
         persisted_mode: Option<PermissionMode>,
     ) -> Result<Session, AppError> {
-        let restore_point = pending_restore_point_write(
-            &session,
-            pending_tool,
-            execution.filesystem_checkpoint.clone(),
-        );
+        let resolved = resolve_pending_tool(&session, pending_tool)?;
         let tool_output = execution.output.clone();
         let output_text = execution.view.output_text.clone();
-        let lifecycle = completed_lifecycle(&pending_tool.lifecycle);
+        let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let blocks = text_result_blocks(output_text.as_str());
         let extra_part_contents = tool_message_extra_part_contents(
             &tool_output,
@@ -705,11 +676,15 @@ impl SessionService {
         );
 
         {
-            let tool_part =
-                &mut session.messages[pending_tool.message_index].parts[pending_tool.part_index];
+            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool part not found: message={}, part={}",
+                    pending_tool.part.message_id, pending_tool.part.part_id
+                ))
+            })?;
             tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                call_id: pending_tool.call_id,
-                invocation: pending_tool.invocation.clone(),
+                call_id: resolved.call_id,
+                invocation: resolved.invocation.clone(),
                 output_text: output_text.clone(),
                 blocks: blocks.clone(),
                 attachments: execution.view.attachments.clone(),
@@ -722,7 +697,7 @@ impl SessionService {
         let tool_message = build_tool_message(
             self.reserve_message_ids(1 + extra_part_contents.len())
                 .await?,
-            pending_tool,
+            &resolved,
             execution.view.attachments,
             output_text,
             blocks,
@@ -733,13 +708,12 @@ impl SessionService {
         );
         session.messages.push(tool_message.clone());
 
-        let assistant_message = session.messages[pending_tool.message_index].clone();
+        let assistant_message = session.messages[pending_tool.part.message_index].clone();
         self.persist_session_changes(
             session,
             vec![assistant_message, tool_message],
             Vec::new(),
             persisted_rule_update(persisted_action_key, persisted_mode),
-            restore_point,
         )
         .await
     }
@@ -752,15 +726,20 @@ impl SessionService {
         persisted_action_key: Option<String>,
         persisted_mode: Option<PermissionMode>,
     ) -> Result<Session, AppError> {
-        let lifecycle = completed_lifecycle(&pending_tool.lifecycle);
+        let resolved = resolve_pending_tool(&session, pending_tool)?;
+        let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let blocks = text_result_blocks(reason.as_str());
 
         {
-            let tool_part =
-                &mut session.messages[pending_tool.message_index].parts[pending_tool.part_index];
+            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool part not found: message={}, part={}",
+                    pending_tool.part.message_id, pending_tool.part.part_id
+                ))
+            })?;
             tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Failed {
-                call_id: pending_tool.call_id,
-                invocation: pending_tool.invocation.clone(),
+                call_id: resolved.call_id,
+                invocation: resolved.invocation.clone(),
                 error_message: reason.clone(),
                 output_text: reason.clone(),
                 blocks: blocks.clone(),
@@ -773,7 +752,7 @@ impl SessionService {
 
         let tool_message = build_tool_message(
             self.reserve_message_ids(1).await?,
-            pending_tool,
+            &resolved,
             Vec::new(),
             reason.clone(),
             blocks,
@@ -784,13 +763,12 @@ impl SessionService {
         );
         session.messages.push(tool_message.clone());
 
-        let assistant_message = session.messages[pending_tool.message_index].clone();
+        let assistant_message = session.messages[pending_tool.part.message_index].clone();
         self.persist_session_changes(
             session,
             vec![assistant_message, tool_message],
             Vec::new(),
             persisted_rule_update(persisted_action_key, persisted_mode),
-            None,
         )
         .await
     }
@@ -801,7 +779,6 @@ impl SessionService {
         touched_messages: Vec<Message>,
         mut client_events: Vec<SessionEvent>,
         persisted_rule: Option<(String, PermissionMode)>,
-        restore_point: Option<PendingRestorePointWrite>,
     ) -> Result<Session, AppError> {
         let session_id = session.id;
         let mut unique_messages = HashMap::new();
@@ -829,7 +806,6 @@ impl SessionService {
             let touched_messages = touched_messages.clone();
             let client_events = client_events.clone();
             let persisted_rule = persisted_rule.clone();
-            let restore_point = restore_point.clone();
             let cache = Arc::clone(&cache);
             let config = config.clone();
             let session_for_cache = session_for_cache.clone();
@@ -847,9 +823,8 @@ impl SessionService {
                     .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
                 let updated_session = session_from_model_db(updated_session)?;
 
-                let mut next_seq = session_runtime::latest_checkpoint(txn, session_id)
+                let mut next_seq = session_runtime::latest_event_seq(txn, session_id)
                     .await?
-                    .map(|checkpoint| checkpoint.upto_seq)
                     .unwrap_or(0);
                 for event in client_events {
                     next_seq += 1;
@@ -857,40 +832,14 @@ impl SessionService {
                         .await?;
                 }
 
-                if let Some(restore_point) = restore_point {
-                    for blob in &restore_point.blobs {
-                        session_restore::upsert_blob(txn, blob, now).await?;
-                    }
-                    session_restore::create_restore_point(
-                        txn,
-                        session_id,
-                        next_seq,
-                        Some(restore_point.call_id),
-                        Some(restore_point.message_id),
-                        Some(restore_point.operation_id.as_str()),
-                        restore_point.snapshot,
-                        now,
-                    )
-                    .await?;
-                }
-
-                let mut checkpoint_session = session_for_cache.clone();
-                checkpoint_session.apply_persisted_metadata(&updated_session);
-                checkpoint_session.refresh_derived();
-                session_runtime::save_checkpoint(
-                    txn,
-                    session_id,
-                    next_seq,
-                    checkpoint_session.clone(),
-                    None,
-                    now,
-                )
-                .await?;
-
+                let updated_session_for_cache = updated_session.clone();
                 effects.push(async move {
                     if let Ok(mut guard) = cache.write() {
+                        let mut cached_session = session_for_cache.clone();
+                        cached_session.apply_persisted_metadata(&updated_session_for_cache);
+                        cached_session.refresh_derived();
                         guard.insert(
-                            checkpoint_session,
+                            cached_session,
                             config.cache_max_sessions,
                             config.cache_max_bytes,
                             config.cache_ttl,
@@ -923,125 +872,9 @@ impl SessionService {
         });
         let session = self.load_session(session_id).await?;
         let _ = self
-            .persist_session_changes(session, Vec::new(), vec![event], None, None)
+            .persist_session_changes(session, Vec::new(), vec![event], None)
             .await?;
         Ok(())
-    }
-
-    async fn load_restore_blobs(
-        &self,
-        journal: &crate::checkpoint::FileJournalCheckpoint,
-    ) -> Result<HashMap<String, Vec<u8>>, AppError> {
-        let mut blobs = HashMap::new();
-        for entry in &journal.entries {
-            let crate::checkpoint::JournalFileState::RegularFile { blob_hash, .. } =
-                &entry.prior_state
-            else {
-                continue;
-            };
-            if blobs.contains_key(blob_hash.as_str()) {
-                continue;
-            }
-
-            let bytes = session_restore::load_blob(&self.db, blob_hash.as_str())
-                .await?
-                .ok_or_else(|| {
-                    AppError::Internal(format!("missing checkpoint blob: {blob_hash}"))
-                })?;
-            blobs.insert(blob_hash.clone(), bytes);
-        }
-
-        Ok(blobs)
-    }
-
-    async fn restore_conversation_state(
-        &self,
-        restore_point: &crate::checkpoint::SessionRestorePoint,
-        mode: SessionRestoreMode,
-        restored_paths: Vec<String>,
-    ) -> Result<Session, AppError> {
-        let session_id = restore_point.session_id;
-        let restore_point_id = restore_point.id;
-        let restored_session = restore_point.snapshot.conversation.clone().into_session();
-        let cache = Arc::clone(&self.cache);
-        let config = self.config.clone();
-        let restored = with_transaction_and_effects(&self.db, move |txn, effects| {
-            let restored_session = restored_session.clone();
-            let restored_paths = restored_paths.clone();
-            let cache = Arc::clone(&cache);
-            let config = config.clone();
-            Box::pin(async move {
-                message::delete_messages_by_session_id(txn, session_id).await?;
-                for message in &restored_session.messages {
-                    message::insert_message_with_parts(txn, session_id, message).await?;
-                }
-
-                let updated_session = session::touch_session_updated_at(txn, session_id)
-                    .await?
-                    .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
-                let updated_session = session_from_model_db(updated_session)?;
-
-                let mut next_seq = session_runtime::latest_checkpoint(txn, session_id)
-                    .await?
-                    .map(|checkpoint| checkpoint.upto_seq)
-                    .unwrap_or(0);
-                next_seq += 1;
-                session_runtime::append_session_event(
-                    txn,
-                    session_id,
-                    next_seq,
-                    SessionEvent::SessionRestored(SessionRestoredEvent {
-                        session_id,
-                        restore_point_id,
-                        mode,
-                        restored_paths: restored_paths.clone(),
-                        ts_ms: Utc::now().timestamp_millis(),
-                    }),
-                    Utc::now(),
-                )
-                .await?;
-                session_runtime::save_checkpoint(
-                    txn,
-                    session_id,
-                    next_seq,
-                    {
-                        let mut checkpoint_session = restored_session.clone();
-                        checkpoint_session.apply_persisted_metadata(&updated_session);
-                        checkpoint_session.replace_child_session_ids(
-                            session::list_child_session_ids(txn, session_id).await?,
-                        );
-                        checkpoint_session.set_cache_source(SessionCacheSource::Restored);
-                        checkpoint_session
-                    },
-                    None,
-                    Utc::now(),
-                )
-                .await?;
-
-                let mut session = restored_session.clone();
-                session.apply_persisted_metadata(&updated_session);
-                session.replace_child_session_ids(
-                    session::list_child_session_ids(txn, session_id).await?,
-                );
-                session.set_cache_source(SessionCacheSource::Restored);
-                let session_for_cache = session.clone();
-                effects.push(async move {
-                    if let Ok(mut guard) = cache.write() {
-                        guard.insert(
-                            session_for_cache,
-                            config.cache_max_sessions,
-                            config.cache_max_bytes,
-                            config.cache_ttl,
-                        );
-                    }
-                });
-
-                Ok(session)
-            })
-        })
-        .await?;
-
-        Ok(restored)
     }
 
     async fn load_session(&self, session_id: i64) -> Result<Session, AppError> {
@@ -1074,7 +907,7 @@ impl SessionService {
     fn execute_pending_tool(
         &self,
         session_id: i64,
-        pending_tool: &SessionPendingTool,
+        pending_tool: &ResolvedPendingTool,
     ) -> Result<ToolInvocationExecution, ToolError> {
         self.tool_executor.execute_invocation_detailed(
             &pending_tool.invocation,
@@ -1086,7 +919,7 @@ impl SessionService {
     fn execute_pending_tool_after_approval(
         &self,
         session_id: i64,
-        pending_tool: &SessionPendingTool,
+        pending_tool: &ResolvedPendingTool,
     ) -> Result<ToolInvocationExecution, ToolError> {
         self.tool_executor
             .execute_invocation_detailed_bypassing_permissions(
@@ -1351,9 +1184,43 @@ fn build_message(
     message
 }
 
+fn resolve_pending_tool(
+    session: &Session,
+    pending_tool: &SessionPendingTool,
+) -> Result<ResolvedPendingTool, AppError> {
+    let part = session.part(&pending_tool.part).ok_or_else(|| {
+        AppError::Internal(format!(
+            "pending tool part not found: message={}, part={}",
+            pending_tool.part.message_id, pending_tool.part.part_id
+        ))
+    })?;
+    let operation_id = part.operation_id.clone().ok_or_else(|| {
+        AppError::Internal(format!(
+            "pending tool operation id missing: message={}, part={}",
+            pending_tool.part.message_id, pending_tool.part.part_id
+        ))
+    })?;
+    let (call_id, invocation, lifecycle) = session
+        .pending_tool_execution(pending_tool)
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "pending tool payload missing: message={}, part={}",
+                pending_tool.part.message_id, pending_tool.part.part_id
+            ))
+        })?;
+
+    Ok(ResolvedPendingTool {
+        pending: pending_tool.clone(),
+        operation_id,
+        call_id,
+        invocation: invocation.clone(),
+        lifecycle: lifecycle.clone(),
+    })
+}
+
 fn build_tool_message(
     ids: ReservedMessageIds,
-    pending_tool: &SessionPendingTool,
+    pending_tool: &ResolvedPendingTool,
     attachments: Vec<ToolAttachment>,
     output_text: String,
     blocks: Vec<ToolResultBlock>,
@@ -1416,7 +1283,7 @@ fn build_tool_message(
         created_at,
         metadata: MessageMetadata {
             source: MessageSource::Tool,
-            parent_message_id: Some(pending_tool.message_id),
+            parent_message_id: Some(pending_tool.pending.part.message_id),
             generated_by_call_id: Some(pending_tool.call_id),
             model_provider_id: String::new(),
             model_id: String::new(),
@@ -1525,21 +1392,6 @@ fn push_unique_attachment_item(items: &mut Vec<AttachmentItem>, item: Attachment
     if !items.contains(&item) {
         items.push(item);
     }
-}
-
-fn pending_restore_point_write(
-    session: &Session,
-    pending_tool: &SessionPendingTool,
-    filesystem_checkpoint: Option<FilesystemCheckpointCapture>,
-) -> Option<PendingRestorePointWrite> {
-    let filesystem_checkpoint = filesystem_checkpoint?;
-    Some(PendingRestorePointWrite {
-        call_id: pending_tool.call_id,
-        message_id: pending_tool.message_id,
-        operation_id: pending_tool.operation_id.clone(),
-        snapshot: SessionRestorePointSnapshot::new(session.clone(), filesystem_checkpoint.snapshot),
-        blobs: filesystem_checkpoint.blobs,
-    })
 }
 
 fn part_status(content: &PartContent) -> ExecutionStatus {
@@ -1745,7 +1597,6 @@ fn validate_user_input_reply(
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
-    use std::process::Command;
     use std::sync::Arc;
 
     use async_trait::async_trait;
@@ -1755,12 +1606,10 @@ mod tests {
     use uuid::Uuid;
 
     use crate::agent::Agent;
-    use crate::checkpoint::{FilesystemCheckpoint, SessionRestoreMode, SessionRestoreRequest};
-    use crate::db::crud::session_restore;
     use crate::db::init_schema;
     use crate::message::{
-        ApplyPatchToolInput, AttachmentSource, BuiltinToolInput, BuiltinToolOutput, FileChangeKind,
-        McpToolOutput, RequestUserInputToolInput, ToolAttachment, ToolExecutionPart, ToolOutput,
+        ApplyPatchToolInput, AttachmentSource, BuiltinToolOutput, FileChangeKind, McpToolOutput,
+        RequestUserInputToolInput, ToolAttachment, ToolExecutionPart, ToolOutput,
         ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
         UserInputReplyKind,
     };
@@ -2058,11 +1907,11 @@ mod tests {
         }
     }
 
-    async fn build_service(
+    async fn build_manager(
         root: &std::path::Path,
         permission_policy: PermissionPolicy,
-        config: SessionServiceConfig,
-    ) -> SessionService {
+        config: SessionManagerConfig,
+    ) -> SessionManager {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("failed to create sqlite db");
@@ -2076,7 +1925,7 @@ mod tests {
         );
         let executor = ToolExecutor::new(root, Agent::new("build", permission_policy));
 
-        SessionService::new(db, processor, executor).with_config(config)
+        SessionManager::new(db, processor, executor).with_config(config)
     }
 
     fn run_options() -> SessionRunOptions {
@@ -2086,45 +1935,6 @@ mod tests {
             temperature: None,
             max_output_tokens: Some(128),
         }
-    }
-
-    fn ensure_git_repo(path: &std::path::Path) -> bool {
-        if Command::new("git").arg("--version").output().is_err() {
-            return false;
-        }
-
-        let status = Command::new("git")
-            .arg("init")
-            .arg(path)
-            .status()
-            .expect("git init should run");
-        assert!(status.success(), "git init should succeed");
-
-        fs::write(path.join("seed.txt"), "seed\n").expect("seed file should be written");
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(["add", "seed.txt"])
-            .status()
-            .expect("git add should run");
-        assert!(status.success(), "git add should succeed");
-
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args([
-                "-c",
-                "user.name=agena",
-                "-c",
-                "user.email=agena@example.invalid",
-                "commit",
-                "-m",
-                "seed",
-            ])
-            .status()
-            .expect("git commit should run");
-        assert!(status.success(), "git commit should succeed");
-        true
     }
 
     fn cache_state(session_id: i64, text: impl Into<String>) -> Session {
@@ -2204,10 +2014,10 @@ mod tests {
     #[tokio::test]
     async fn permission_allow_reply_resumes_and_executes_tool() {
         let workspace = TempWorkspace::new();
-        let service = build_service(
+        let service = build_manager(
             &workspace.root,
             PermissionPolicy::new(PermissionMode::Allow, PermissionMode::Ask),
-            SessionServiceConfig::default(),
+            SessionManagerConfig::default(),
         )
         .await;
 
@@ -2293,10 +2103,10 @@ mod tests {
     #[tokio::test]
     async fn permission_deny_reply_marks_tool_failed_and_continues() {
         let workspace = TempWorkspace::new();
-        let service = build_service(
+        let service = build_manager(
             &workspace.root,
             PermissionPolicy::new(PermissionMode::Allow, PermissionMode::Ask),
-            SessionServiceConfig::default(),
+            SessionManagerConfig::default(),
         )
         .await;
 
@@ -2354,10 +2164,10 @@ mod tests {
     #[tokio::test]
     async fn user_input_reply_completes_tool_and_resumes_turn() {
         let workspace = TempWorkspace::new();
-        let service = build_service(
+        let service = build_manager(
             &workspace.root,
             PermissionPolicy::allow_all(),
-            SessionServiceConfig::default(),
+            SessionManagerConfig::default(),
         )
         .await;
 
@@ -2448,138 +2258,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_session_rewinds_non_git_apply_patch_filesystem_and_conversation() {
-        let workspace = TempWorkspace::new();
-        let service = build_service(
-            &workspace.root,
-            PermissionPolicy::allow_all(),
-            SessionServiceConfig::default(),
-        )
-        .await;
-
-        let created = service
-            .create_session(SessionCreateRequest {
-                title: "restore-non-git".to_string(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("create session");
-
-        let completed = service
-            .submit_user_turn(SessionUserTurnRequest {
-                session_id: created.id,
-                options: run_options(),
-                parts: vec![PartContent::text("please patch a file")],
-            })
-            .await
-            .expect("submit turn");
-
-        assert!(!completed.blocked());
-        assert_eq!(
-            fs::read_to_string(workspace.root.join("result.txt"))
-                .expect("patched file should exist"),
-            "approved\n"
-        );
-
-        let restored = service
-            .restore_session(SessionRestoreRequest {
-                session_id: created.id,
-                restore_point_id: None,
-                mode: SessionRestoreMode::Both,
-            })
-            .await
-            .expect("restore session");
-
-        assert!(!workspace.root.join("result.txt").exists());
-        assert!(
-            restored.messages.iter().all(|message| {
-                message.role != Role::Tool
-                    || !message.as_text_lossy().contains("Applied 1 file changes")
-            }),
-            "tool result message should be removed after conversation restore"
-        );
-        assert!(restored.messages.iter().any(|message| {
-            message.parts.iter().any(|part| {
-                matches!(
-                    part.content.as_ref(),
-                    Some(PartContent::ToolExecution(ToolExecutionPart::Pending { invocation, .. }))
-                        if matches!(
-                            invocation,
-                            ToolInvocation::Builtin {
-                                input: BuiltinToolInput::ApplyPatch(_)
-                            }
-                        )
-                )
-            })
-        }));
-    }
-
-    #[tokio::test]
-    async fn restore_session_captures_git_snapshot_when_workspace_is_repo() {
-        let workspace = TempWorkspace::new();
-        if !ensure_git_repo(&workspace.root) {
-            return;
-        }
-        let service = build_service(
-            &workspace.root,
-            PermissionPolicy::allow_all(),
-            SessionServiceConfig::default(),
-        )
-        .await;
-
-        let created = service
-            .create_session(SessionCreateRequest {
-                title: "restore-git".to_string(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("create session");
-
-        let completed = service
-            .submit_user_turn(SessionUserTurnRequest {
-                session_id: created.id,
-                options: run_options(),
-                parts: vec![PartContent::text("please patch a file")],
-            })
-            .await
-            .expect("submit turn");
-
-        assert!(!completed.blocked());
-        let restore_point = session_restore::latest_restore_point(&service.db, created.id)
-            .await
-            .expect("load restore point")
-            .expect("restore point should exist");
-        assert!(matches!(
-            restore_point.snapshot.filesystem,
-            FilesystemCheckpoint::Composite { .. }
-        ));
-
-        let restored = service
-            .restore_session(SessionRestoreRequest {
-                session_id: created.id,
-                restore_point_id: Some(restore_point.id),
-                mode: SessionRestoreMode::Filesystem,
-            })
-            .await
-            .expect("restore filesystem");
-
-        assert!(!workspace.root.join("result.txt").exists());
-        assert!(
-            restored
-                .messages
-                .iter()
-                .any(|message| message.as_text_lossy() == "patch done"),
-            "filesystem-only restore should preserve current conversation state"
-        );
-    }
-
-    #[tokio::test]
     async fn cache_eviction_falls_back_to_db_reload() {
         let workspace = TempWorkspace::new();
-        let service = build_service(
+        let service = build_manager(
             &workspace.root,
             PermissionPolicy::allow_all(),
-            SessionServiceConfig {
+            SessionManagerConfig {
                 cache_max_sessions: 1,
                 cache_ttl: Duration::from_secs(60),
                 cache_max_bytes: usize::MAX,

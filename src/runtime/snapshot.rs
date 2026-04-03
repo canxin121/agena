@@ -16,7 +16,7 @@ use crate::{
     plugin::PluginManager,
     provider::{ProviderRegistry, auth::AuthStore},
     session::{
-        ContextGovernor, ContextPolicy, SessionProcessor, SessionService, SessionServiceConfig,
+        ContextGovernor, ContextPolicy, SessionManager, SessionManagerConfig, SessionProcessor,
     },
     tool::ToolExecutor,
 };
@@ -75,7 +75,7 @@ pub struct RuntimeSnapshot {
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginManager>,
     auth_store: RuntimeAuthStore,
-    session_service: Option<Arc<SessionService>>,
+    session_manager: Option<Arc<SessionManager>>,
     watch_paths: Vec<PathBuf>,
 }
 
@@ -91,8 +91,8 @@ impl RuntimeSnapshot {
         let providers = Arc::new(resolution.config.build_provider_registry()?);
         let plugins = Arc::new(resolution.build_plugin_manager()?);
         let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
-        let session_service = database.as_ref().map(|db| {
-            build_session_service(
+        let session_manager = database.as_ref().map(|db| {
+            build_session_manager(
                 db,
                 Arc::clone(&providers),
                 Arc::clone(&plugins),
@@ -109,7 +109,7 @@ impl RuntimeSnapshot {
             providers,
             plugins,
             auth_store,
-            session_service,
+            session_manager,
             watch_paths,
         })
     }
@@ -183,8 +183,8 @@ impl RuntimeSnapshot {
         self.auth_store.clone()
     }
 
-    pub fn session_service(&self) -> Option<Arc<SessionService>> {
-        self.session_service.as_ref().map(Arc::clone)
+    pub fn session_manager(&self) -> Option<Arc<SessionManager>> {
+        self.session_manager.as_ref().map(Arc::clone)
     }
 
     pub(crate) fn watch_paths(&self) -> &[PathBuf] {
@@ -216,18 +216,18 @@ impl fmt::Debug for RuntimeSnapshot {
             .field("config_path", &self.resolution.meta.config_path)
             .field("provider_count", &self.providers.provider_ids().len())
             .field("plugin_count", &self.plugins.plugins().len())
-            .field("session_service", &self.session_service.is_some())
+            .field("session_manager", &self.session_manager.is_some())
             .finish()
     }
 }
 
-fn build_session_service(
+fn build_session_manager(
     db: &Arc<DatabaseConnection>,
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginManager>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
-) -> Arc<SessionService> {
+) -> Arc<SessionManager> {
     let processor =
         SessionProcessor::new(providers, ContextGovernor::new(ContextPolicy::default()));
     let executor = ToolExecutor::new(
@@ -235,15 +235,15 @@ fn build_session_service(
         Agent::new("build", resolution.config.permission_policy()),
     )
     .with_plugin_manager(plugins);
-    let service = SessionService::new(db.as_ref().clone(), processor, executor).with_config(
-        SessionServiceConfig {
+    let manager = SessionManager::new(db.as_ref().clone(), processor, executor).with_config(
+        SessionManagerConfig {
             cache_max_sessions: resolution.config.runtime.session_cache.max_sessions,
             cache_ttl: Duration::from_secs(resolution.config.runtime.session_cache.ttl_secs),
             cache_max_bytes: resolution.config.runtime.session_cache.max_bytes,
-            max_turn_loops: SessionServiceConfig::default().max_turn_loops,
+            max_turn_loops: SessionManagerConfig::default().max_turn_loops,
         },
     );
-    Arc::new(service)
+    Arc::new(manager)
 }
 
 fn collect_watch_paths(resolution: &ConfigResolution) -> Vec<PathBuf> {

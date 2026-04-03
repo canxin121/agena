@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::{
     error::AppError,
     message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
+    model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse,
@@ -23,7 +24,7 @@ pub struct OpenAiCompatibleProvider {
     client: reqwest::Client,
     api_key: String,
     base_url: String,
-    default_model: String,
+    default_model: ModelId,
     auth_header: String,
     auth_scheme: Option<String>,
     extra_headers: HashMap<String, String>,
@@ -50,7 +51,7 @@ impl OpenAiCompatibleProvider {
             client,
             api_key: api_key.into(),
             base_url: utils::normalize_base_url(base_url.into().as_str()),
-            default_model: default_model.into(),
+            default_model: ModelId::new(default_model),
             auth_header: "authorization".to_owned(),
             auth_scheme: Some("Bearer".to_owned()),
             extra_headers: HashMap::new(),
@@ -222,9 +223,9 @@ impl OpenAiCompatibleProvider {
         Ok(models
             .into_iter()
             .map(|model| {
-                let capabilities = self.model_capabilities(model.id.as_str());
-                let mut entry =
-                    ProviderModel::new(self.id.clone(), model.id).with_capabilities(capabilities);
+                let mut entry = ProviderModel::new(self.id.clone(), model.id);
+                let capabilities = self.model_capabilities(&entry.id);
+                entry = entry.with_capabilities(capabilities);
                 entry.display_name = model.display_name.or(model.name);
                 entry
             })
@@ -381,8 +382,12 @@ impl OpenAiCompatibleProvider {
         let usage = payload.usage.map(usage_to_completion_usage);
 
         Ok(CompletionResponse {
-            provider_id: self.id.clone(),
-            model: payload.model.unwrap_or_else(|| self.default_model.clone()),
+            provider_id: ProviderId::new(self.id.clone()),
+            model: ModelId::new(
+                payload
+                    .model
+                    .unwrap_or_else(|| self.default_model.to_string()),
+            ),
             text,
             finish_reason,
             tool_calls,
@@ -398,11 +403,7 @@ impl OpenAiCompatibleProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         let ws_endpoint = self.realtime_ws_endpoint(model.as_str())?;
         let handshake = self.realtime_handshake_request(&ws_endpoint)?;
@@ -415,7 +416,7 @@ impl OpenAiCompatibleProvider {
                 ))
             })?;
 
-        let provider_id = self.id.clone();
+        let provider_id = ProviderId::new(self.id.clone());
         let model_name = model;
         let input_text = build_realtime_input_text(request.messages.as_slice());
         let response_tools = (!request.tools.is_empty()).then(|| {
@@ -941,13 +942,22 @@ impl ModelProvider for OpenAiCompatibleProvider {
         &self.id
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
-        crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAiCompatible, model)
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
+        crate::provider::default_capability_registry().capabilities_for_family(
+            crate::provider::CapabilityFamily::OpenAiCompatible,
+            model.as_str(),
+        )
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        crate::provider::default_model_metadata_registry().metadata_for_family(
+            crate::provider::CapabilityFamily::OpenAiCompatible,
+            model.as_str(),
+        )
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -962,17 +972,13 @@ impl ModelProvider for OpenAiCompatibleProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         let tools = (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice()));
         let messages = Self::convert_messages(request.system, request.messages);
 
         let body = ChatCompletionRequest {
-            model,
+            model: model.to_string(),
             messages,
             tools,
             temperature: request.temperature,
@@ -1006,17 +1012,13 @@ impl ModelProvider for OpenAiCompatibleProvider {
             return self.complete_stream_with_realtime_ws(request).await;
         }
 
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         let tools = (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice()));
         let messages = Self::convert_messages(request.system, request.messages);
 
         let body = ChatCompletionRequest {
-            model: model.clone(),
+            model: model.to_string(),
             messages,
             tools,
             temperature: request.temperature,
@@ -1038,7 +1040,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
         }
 
         let mut events = sse::json_events(response);
-        let provider_id = self.id.clone();
+        let provider_id = ProviderId::new(self.id.clone());
         let model_name = model;
 
         let stream = async_stream::try_stream! {
@@ -1342,6 +1344,7 @@ mod tests {
         AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, StructuredObject,
         TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
     };
+    use crate::model::ModelId;
     use crate::tool::{ToolBehavior, ToolDefinition};
     use tokio::net::TcpListener;
 
@@ -1447,7 +1450,7 @@ mod tests {
 
         let response = provider
             .complete(CompletionRequest {
-                model: "gpt-4o-mini".to_owned(),
+                model: ModelId::new("gpt-4o-mini"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -1543,7 +1546,7 @@ mod tests {
 
         let response = provider
             .complete(CompletionRequest {
-                model: "gpt-4o-mini".to_owned(),
+                model: ModelId::new("gpt-4o-mini"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: vec![sample_tool_definition()],
@@ -1618,7 +1621,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-4o-mini".to_owned(),
+                model: ModelId::new("gpt-4o-mini"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -1824,7 +1827,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-4o-mini".to_owned(),
+                model: ModelId::new("gpt-4o-mini"),
                 system: Some("you are helpful".to_owned()),
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -1916,7 +1919,7 @@ mod tests {
 
         let err = match provider
             .complete_stream(CompletionRequest {
-                model: "gpt-4o-mini".to_owned(),
+                model: ModelId::new("gpt-4o-mini"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -1970,7 +1973,7 @@ mod tests {
 
         let response = provider
             .complete(CompletionRequest {
-                model: "text-davinci-003".to_owned(),
+                model: ModelId::new("text-davinci-003"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -2014,7 +2017,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-4o-mini".to_owned(),
+                model: ModelId::new("gpt-4o-mini"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -2065,7 +2068,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-4o-mini".to_owned(),
+                model: ModelId::new("gpt-4o-mini"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),

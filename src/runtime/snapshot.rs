@@ -12,6 +12,7 @@ use crate::{
     AppError,
     agent::Agent,
     config::{ConfigLoader, ConfigResolution, LoadConfigRequest, ProcessEnvironment},
+    model::ModelRef,
     plugin::PluginManager,
     provider::{ProviderRegistry, auth::AuthStore},
     session::{
@@ -136,12 +137,34 @@ impl RuntimeSnapshot {
         self.providers.list_models(provider_id).await
     }
 
+    pub fn resolve_model_target(
+        &self,
+        target: &str,
+        model: Option<&str>,
+    ) -> Result<ModelRef, AppError> {
+        self.providers.resolve_model_target(target, model)
+    }
+
+    pub async fn resolve_model(
+        &self,
+        model: &ModelRef,
+    ) -> Result<crate::provider::ProviderModel, AppError> {
+        self.providers.resolve_model(model).await
+    }
+
+    pub fn model_capabilities_for(
+        &self,
+        model: &ModelRef,
+    ) -> Result<crate::provider::ModelCapabilities, AppError> {
+        self.providers.model_capabilities(model)
+    }
+
     pub async fn provider_model(
         &self,
         provider_id: &str,
         model: &str,
     ) -> Result<crate::provider::ProviderModel, AppError> {
-        self.providers.provider_model(provider_id, model).await
+        self.resolve_model(&ModelRef::new(provider_id, model)).await
     }
 
     pub fn model_capabilities(
@@ -149,7 +172,7 @@ impl RuntimeSnapshot {
         provider_id: &str,
         model: &str,
     ) -> Result<crate::provider::ModelCapabilities, AppError> {
-        self.providers.model_capabilities(provider_id, model)
+        self.model_capabilities_for(&ModelRef::new(provider_id, model))
     }
 
     pub fn plugin_manager(&self) -> Arc<PluginManager> {

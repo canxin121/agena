@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::{
     error::AppError,
     message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
+    model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, OpenAiCompatibleProvider,
@@ -64,7 +65,7 @@ enum BedrockAuthMode {
 pub struct AmazonBedrockProvider {
     client: reqwest::Client,
     base_url: String,
-    default_model: String,
+    default_model: ModelId,
     region: String,
     auth_mode: BedrockAuthMode,
 }
@@ -78,7 +79,7 @@ impl AmazonBedrockProvider {
         region: impl Into<String>,
     ) -> Self {
         let base_url = utils::normalize_base_url(base_url.into().as_str());
-        let default_model = default_model.into();
+        let default_model = ModelId::new(default_model);
         let region = region.into();
         Self {
             client: client.clone(),
@@ -106,7 +107,7 @@ impl AmazonBedrockProvider {
         Self {
             client,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
-            default_model: default_model.into(),
+            default_model: ModelId::new(default_model),
             region: region.into(),
             auth_mode: BedrockAuthMode::SigV4 {
                 profile,
@@ -117,7 +118,7 @@ impl AmazonBedrockProvider {
 
     fn resolve_model(&self, model: &str) -> String {
         let model = if model.trim().is_empty() {
-            self.default_model.clone()
+            self.default_model.to_string()
         } else {
             model.trim().to_owned()
         };
@@ -202,9 +203,9 @@ impl AmazonBedrockProvider {
         Ok(models
             .into_iter()
             .map(|model| {
-                let capabilities = self.model_capabilities(model.id.as_str());
-                let mut entry =
-                    ProviderModel::new(PROVIDER_ID, model.id).with_capabilities(capabilities);
+                let mut entry = ProviderModel::new(PROVIDER_ID, model.id);
+                let capabilities = self.model_capabilities(&entry.id);
+                entry = entry.with_capabilities(capabilities);
                 entry.display_name = model.display_name.or(model.name);
                 entry
             })
@@ -287,8 +288,12 @@ impl AmazonBedrockProvider {
         });
 
         Ok(CompletionResponse {
-            provider_id: PROVIDER_ID.to_owned(),
-            model: payload.model.unwrap_or_else(|| self.default_model.clone()),
+            provider_id: ProviderId::new(PROVIDER_ID),
+            model: ModelId::new(
+                payload
+                    .model
+                    .unwrap_or_else(|| self.default_model.to_string()),
+            ),
             text,
             finish_reason,
             tool_calls,
@@ -375,7 +380,8 @@ impl AmazonBedrockProvider {
         }
 
         let mut events = sse::json_events(response);
-        let model_name = model;
+        let provider_id = ProviderId::new(PROVIDER_ID);
+        let model_name = ModelId::new(model);
 
         let stream = async_stream::try_stream! {
             let mut pending_tool_calls: std::collections::BTreeMap<String, ToolCallState> = std::collections::BTreeMap::new();
@@ -399,7 +405,7 @@ impl AmazonBedrockProvider {
                 if !delta.is_empty() {
                     stream_has_content = true;
                     yield CompletionStreamEvent::TextDelta {
-                        provider_id: PROVIDER_ID.to_owned(),
+                        provider_id: provider_id.clone(),
                         model: model_name.clone(),
                         delta,
                     };
@@ -442,7 +448,7 @@ impl AmazonBedrockProvider {
                                 state.arguments.push_str(args.as_str());
                                 stream_has_content = true;
                                 yield CompletionStreamEvent::ToolCallDelta {
-                                    provider_id: PROVIDER_ID.to_owned(),
+                                    provider_id: provider_id.clone(),
                                     model: model_name.clone(),
                                     stream_key: key.clone(),
                                     id: state.id.clone(),
@@ -485,7 +491,7 @@ impl AmazonBedrockProvider {
 
             if stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some() {
                 yield CompletionStreamEvent::Completed {
-                    provider_id: PROVIDER_ID.to_owned(),
+                    provider_id,
                     model: model_name.clone(),
                     finish_reason: CompletionFinishReason::from_provider(
                         stream_finish_reason.as_deref(),
@@ -506,13 +512,18 @@ impl ModelProvider for AmazonBedrockProvider {
         PROVIDER_ID
     }
 
-    fn default_model(&self) -> &str {
-        self.default_model.as_str()
+    fn default_model(&self) -> &ModelId {
+        &self.default_model
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
         crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::Bedrock, model)
+            .capabilities_for_family(crate::provider::CapabilityFamily::Bedrock, model.as_str())
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        crate::provider::default_model_metadata_registry()
+            .metadata_for_family(crate::provider::CapabilityFamily::Bedrock, model.as_str())
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -534,7 +545,10 @@ impl ModelProvider for AmazonBedrockProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = self.resolve_model(request.model.as_str());
-        let request = CompletionRequest { model, ..request };
+        let request = CompletionRequest {
+            model: ModelId::new(model),
+            ..request
+        };
 
         match &self.auth_mode {
             BedrockAuthMode::Bearer(inner) => inner.complete(request).await,
@@ -556,7 +570,10 @@ impl ModelProvider for AmazonBedrockProvider {
         AppError,
     > {
         let model = self.resolve_model(request.model.as_str());
-        let request = CompletionRequest { model, ..request };
+        let request = CompletionRequest {
+            model: ModelId::new(model),
+            ..request
+        };
 
         match &self.auth_mode {
             BedrockAuthMode::Bearer(inner) => inner.complete_stream(request).await,
@@ -1285,7 +1302,7 @@ data: [DONE]\n\n";
         AmazonBedrockProvider {
             client: reqwest::Client::new(),
             base_url,
-            default_model: "anthropic.claude-3-7-sonnet-20250219-v1:0".to_owned(),
+            default_model: crate::model::ModelId::new("anthropic.claude-3-7-sonnet-20250219-v1:0"),
             region: "us-east-1".to_owned(),
             auth_mode: BedrockAuthMode::SigV4 {
                 profile: None,
@@ -1302,7 +1319,7 @@ data: [DONE]\n\n";
 
     fn test_request() -> CompletionRequest {
         CompletionRequest {
-            model: "anthropic.claude-3-7-sonnet-20250219-v1:0".to_owned(),
+            model: crate::model::ModelId::new("anthropic.claude-3-7-sonnet-20250219-v1:0"),
             system: None,
             messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
             tools: Vec::new(),

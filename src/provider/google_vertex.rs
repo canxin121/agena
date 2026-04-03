@@ -3,9 +3,10 @@ use futures_core::Stream;
 
 use crate::{
     error::AppError,
+    model::{Model, ModelId},
     provider::{
         CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider,
-        OpenAiCompatibleProvider, ProviderModel, StreamResumePolicy,
+        OpenAiCompatibleProvider, StreamResumePolicy,
     },
 };
 
@@ -22,7 +23,7 @@ pub struct GoogleVertexProvider {
     id: String,
     client: reqwest::Client,
     base_url: String,
-    default_model: String,
+    default_model: ModelId,
     auth: GoogleVertexAuth,
 }
 
@@ -38,7 +39,7 @@ impl GoogleVertexProvider {
             id: provider_id.into(),
             client,
             base_url: crate::provider::utils::normalize_base_url(base_url.into().as_str()),
-            default_model: default_model.into(),
+            default_model: ModelId::new(default_model),
             auth: GoogleVertexAuth::Static(access_token.into()),
         }
     }
@@ -53,7 +54,7 @@ impl GoogleVertexProvider {
             id: provider_id.into(),
             client,
             base_url: crate::provider::utils::normalize_base_url(base_url.into().as_str()),
-            default_model: default_model.into(),
+            default_model: ModelId::new(default_model),
             auth: GoogleVertexAuth::Adc,
         }
     }
@@ -100,20 +101,25 @@ impl ModelProvider for GoogleVertexProvider {
         self.id.as_str()
     }
 
-    fn default_model(&self) -> &str {
-        self.default_model.as_str()
+    fn default_model(&self) -> &ModelId {
+        &self.default_model
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
         crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::Gemini, model)
+            .capabilities_for_family(crate::provider::CapabilityFamily::Gemini, model.as_str())
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        crate::provider::default_model_metadata_registry()
+            .metadata_for_family(crate::provider::CapabilityFamily::Gemini, model.as_str())
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         StreamResumePolicy::ReplaySafePrefix
     }
 
-    async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+    async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let token = self.auth_token().await?;
         self.provider_with_token(token).list_models().await
     }

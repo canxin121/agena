@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::provider::{CapabilitySupport, ModelCapabilities};
+use crate::model::{CapabilitySupport, ModelCapabilities};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityFamily {

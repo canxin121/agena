@@ -7,6 +7,7 @@ use std::{
 use aws_credential_types::Credentials;
 
 use crate::{
+    model::ModelId,
     plugin::PluginManager,
     provider::{
         AmazonBedrockProvider, AnthropicProvider, CapabilityOverrideProvider,
@@ -238,7 +239,7 @@ fn build_provider(
             let auth = required_auth(auth_snapshot, config.auth_provider_id.as_str(), provider_id)?;
             let options = RuntimeCopilotProviderOptions {
                 base_url: copilot_base_url(config),
-                default_model: Some(config.default_model.clone()),
+                default_model: Some(ModelId::new(config.default_model.clone())),
                 models_url: config.models_url.clone(),
             };
             Ok(register_provider(
@@ -644,7 +645,7 @@ image_input = "unsupported"
             .expect("registry should build");
 
         let capabilities = registry
-            .model_capabilities("prod", "")
+            .model_capabilities(&crate::model::ModelRef::new("prod", "gpt-5"))
             .expect("aliased provider capabilities should resolve");
         assert_eq!(capabilities.image_input, CapabilitySupport::Unsupported);
         assert_eq!(capabilities.document_input, CapabilitySupport::Supported);

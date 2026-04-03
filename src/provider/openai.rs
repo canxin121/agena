@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use crate::{
     error::AppError,
     message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
+    model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse,
@@ -22,7 +23,7 @@ pub struct OpenAiProvider {
     client: reqwest::Client,
     api_key: String,
     base_url: String,
-    default_model: String,
+    default_model: ModelId,
     api_mode: OpenAiApiMode,
     extra_headers: HashMap<String, String>,
     stream_mode: OpenAiStreamMode,
@@ -53,7 +54,7 @@ impl OpenAiProvider {
             client,
             api_key: api_key.into(),
             base_url: utils::normalize_base_url(base_url.into().as_str()),
-            default_model: default_model.into(),
+            default_model: ModelId::new(default_model),
             api_mode: OpenAiApiMode::Responses,
             extra_headers: HashMap::new(),
             stream_mode: OpenAiStreamMode::Sse,
@@ -271,8 +272,8 @@ impl OpenAiProvider {
         }
 
         Ok(CompletionResponse {
-            provider_id: PROVIDER_ID.to_owned(),
-            model: payload.model.unwrap_or(model),
+            provider_id: ProviderId::new(PROVIDER_ID),
+            model: ModelId::new(payload.model.unwrap_or(model)),
             text,
             finish_reason,
             tool_calls,
@@ -317,8 +318,8 @@ impl OpenAiProvider {
         }
 
         let mut events = sse::json_events(response);
-        let provider_id = PROVIDER_ID.to_owned();
-        let model_name = model;
+        let provider_id = ProviderId::new(PROVIDER_ID);
+        let model_name = ModelId::new(model);
 
         let stream = async_stream::try_stream! {
             let mut pending_tool_calls: std::collections::BTreeMap<String, ChatToolCallState> = std::collections::BTreeMap::new();
@@ -457,8 +458,8 @@ impl OpenAiProvider {
                 AppError::Provider(format!("openai realtime websocket connect failed: {err}"))
             })?;
 
-        let provider_id = PROVIDER_ID.to_owned();
-        let model_name = model;
+        let provider_id = ProviderId::new(PROVIDER_ID);
+        let model_name = ModelId::new(model);
         let input_text = build_realtime_input_text(request.messages.as_slice());
         let response_tools = (!request.tools.is_empty()).then(|| {
             serde_json::to_value(Self::responses_tools(request.tools.as_slice()))
@@ -1404,13 +1405,18 @@ impl ModelProvider for OpenAiProvider {
         PROVIDER_ID
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
         crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model)
+            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        crate::provider::default_model_metadata_registry()
+            .metadata_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -1433,27 +1439,26 @@ impl ModelProvider for OpenAiProvider {
             .data
             .into_iter()
             .map(|m| {
-                let capabilities = self.model_capabilities(m.id.as_str());
-                ProviderModel::new(PROVIDER_ID, m.id).with_capabilities(capabilities)
+                let model = ProviderModel::new(PROVIDER_ID, m.id);
+                let capabilities = self.model_capabilities(&model.id);
+                model.with_capabilities(capabilities)
             })
             .collect())
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         if !self.should_use_responses(model.as_str()) {
-            return self.complete_with_chat_api(&request, model).await;
+            return self
+                .complete_with_chat_api(&request, model.to_string())
+                .await;
         }
 
         let input = Self::to_responses_input(&request);
 
         let body = OpenAiResponsesRequest {
-            model: model.clone(),
+            model: model.to_string(),
             input,
             tools: Self::responses_tools(request.tools.as_slice()),
             max_output_tokens: request.max_output_tokens,
@@ -1467,12 +1472,15 @@ impl ModelProvider for OpenAiProvider {
                 Err(AppError::HttpStatus { status, .. })
                     if Self::responses_endpoint_unsupported(status) =>
                 {
-                    return self.complete_with_chat_api(&request, model).await;
+                    return self
+                        .complete_with_chat_api(&request, model.to_string())
+                        .await;
                 }
                 Err(err) => return Err(err),
             };
 
-        let response_model = response.model.clone().unwrap_or(model);
+        let response_model =
+            ModelId::new(response.model.clone().unwrap_or_else(|| model.to_string()));
         let text = Self::extract_text(&response);
         let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
         let tool_calls = Self::parse_responses_tool_calls(response.output.as_ref())?;
@@ -1486,7 +1494,7 @@ impl ModelProvider for OpenAiProvider {
         let usage = Self::map_usage(response.usage);
 
         Ok(CompletionResponse {
-            provider_id: PROVIDER_ID.to_owned(),
+            provider_id: ProviderId::new(PROVIDER_ID),
             model: response_model,
             text,
             finish_reason,
@@ -1503,24 +1511,24 @@ impl ModelProvider for OpenAiProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         if matches!(self.stream_mode, OpenAiStreamMode::RealtimeWebSocket) {
-            return self.complete_stream_with_realtime_ws(&request, model).await;
+            return self
+                .complete_stream_with_realtime_ws(&request, model.to_string())
+                .await;
         }
 
         if !self.should_use_responses(model.as_str()) {
-            return self.complete_stream_with_chat_api(&request, model).await;
+            return self
+                .complete_stream_with_chat_api(&request, model.to_string())
+                .await;
         }
 
         let input = Self::to_responses_input(&request);
 
         let body = OpenAiResponsesRequest {
-            model: model.clone(),
+            model: model.to_string(),
             input,
             tools: Self::responses_tools(request.tools.as_slice()),
             max_output_tokens: request.max_output_tokens,
@@ -1541,13 +1549,15 @@ impl ModelProvider for OpenAiProvider {
 
         if !response.status().is_success() {
             if Self::responses_endpoint_unsupported(response.status()) {
-                return self.complete_stream_with_chat_api(&request, model).await;
+                return self
+                    .complete_stream_with_chat_api(&request, model.to_string())
+                    .await;
             }
             return Err(utils::http_status_error_from_response(PROVIDER_ID, response).await);
         }
 
         let mut events = sse::json_events(response);
-        let provider_id = PROVIDER_ID.to_owned();
+        let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = model;
 
         let stream = async_stream::try_stream! {
@@ -2048,6 +2058,7 @@ mod tests {
         AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, StructuredObject,
         TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
     };
+    use crate::model::ModelId;
     use crate::tool::{ToolBehavior, ToolDefinition};
 
     fn sample_tool_definition() -> ToolDefinition {
@@ -2192,7 +2203,7 @@ mod tests {
 
         let response = provider
             .complete(CompletionRequest {
-                model: "gpt-5".to_owned(),
+                model: ModelId::new("gpt-5"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -2239,7 +2250,7 @@ mod tests {
 
         let response = provider
             .complete(CompletionRequest {
-                model: "text-davinci-003".to_owned(),
+                model: ModelId::new("text-davinci-003"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -2282,7 +2293,7 @@ mod tests {
 
         let response = provider
             .complete(CompletionRequest {
-                model: "gpt-5".to_owned(),
+                model: ModelId::new("gpt-5"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -2337,7 +2348,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-4.1-mini".to_owned(),
+                model: ModelId::new("gpt-4.1-mini"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -2396,7 +2407,7 @@ mod tests {
 
         let response = provider
             .complete(CompletionRequest {
-                model: "gpt-5".to_owned(),
+                model: ModelId::new("gpt-5"),
                 system: None,
                 messages: vec![Message::prompt_tool_result("call_1", "{\"ok\":true}")],
                 tools: Vec::new(),
@@ -2412,7 +2423,7 @@ mod tests {
     #[test]
     fn responses_input_encodes_tool_result_images_as_multimodal_function_output() {
         let request = CompletionRequest {
-            model: "gpt-5".to_owned(),
+            model: ModelId::new("gpt-5"),
             system: None,
             messages: vec![tool_result_message_with_image("call_1")],
             tools: Vec::new(),
@@ -2437,7 +2448,7 @@ mod tests {
     #[test]
     fn responses_input_encodes_tool_result_files_as_input_file() {
         let request = CompletionRequest {
-            model: "gpt-5".to_owned(),
+            model: ModelId::new("gpt-5"),
             system: None,
             messages: vec![tool_result_message_with_pdf("call_1")],
             tools: Vec::new(),
@@ -2486,7 +2497,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-5".to_owned(),
+                model: ModelId::new("gpt-5"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -2691,7 +2702,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-4o-realtime-preview".to_owned(),
+                model: ModelId::new("gpt-4o-realtime-preview"),
                 system: Some("you are helpful".to_owned()),
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: vec![sample_tool_definition()],

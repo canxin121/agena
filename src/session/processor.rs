@@ -14,6 +14,7 @@ use crate::message::{
     ReadToolInput, RequestUserInputToolInput, StructuredObject, TaskToolInput, TimeRange,
     TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput, ViewFileToolInput,
 };
+use crate::model::ModelRef;
 use crate::provider::{CompletionRequest, CompletionStreamEvent, ProviderRegistry};
 use crate::role::Role;
 use crate::tool::{ToolDefinition, ToolSource};
@@ -23,7 +24,7 @@ use super::context_governor::ContextGovernor;
 #[derive(Debug, Clone)]
 pub(crate) struct SessionRunRequest {
     pub session_id: i64,
-    pub provider_id: String,
+    pub model: ModelRef,
     pub completion: CompletionRequest,
     pub next_message_id: i64,
     pub next_part_id: i64,
@@ -74,7 +75,7 @@ impl SessionProcessor {
 
             let mut stream = match self
                 .provider_registry
-                .complete_stream(run.provider_id.as_str(), completion_request)
+                .complete_stream(&run.model, completion_request)
                 .await
             {
                 Ok(stream) => stream,
@@ -110,8 +111,8 @@ impl SessionProcessor {
                                 .last()
                                 .map(|message| message.id),
                             generated_by_call_id: None,
-                            model_provider_id: run.provider_id.clone(),
-                            model_id: run.completion.model.clone(),
+                            model_provider_id: run.model.provider_id.to_string(),
+                            model_id: run.completion.model.to_string(),
                             tags: Vec::new(),
                         }),
                     },

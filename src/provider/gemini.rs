@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::AppError,
     message::{AttachmentItem, Message, MessageUsage},
+    model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ModelProvider, ProviderModel, sse, utils,
@@ -20,7 +21,7 @@ pub struct GeminiProvider {
     client: reqwest::Client,
     api_key: String,
     base_url: String,
-    default_model: String,
+    default_model: ModelId,
 }
 
 impl GeminiProvider {
@@ -34,7 +35,7 @@ impl GeminiProvider {
             client,
             api_key: api_key.into(),
             base_url: utils::normalize_base_url(base_url.into().as_str()),
-            default_model: default_model.into(),
+            default_model: ModelId::new(default_model),
         }
     }
 
@@ -103,13 +104,18 @@ impl ModelProvider for GeminiProvider {
         PROVIDER_ID
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
         crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::Gemini, model)
+            .capabilities_for_family(crate::provider::CapabilityFamily::Gemini, model.as_str())
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        crate::provider::default_model_metadata_registry()
+            .metadata_for_family(crate::provider::CapabilityFamily::Gemini, model.as_str())
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -122,8 +128,9 @@ impl ModelProvider for GeminiProvider {
             .into_iter()
             .map(|m| {
                 let id = m.name.trim_start_matches("models/").to_owned();
-                let capabilities = self.model_capabilities(id.as_str());
-                let mut model = ProviderModel::new(PROVIDER_ID, id).with_capabilities(capabilities);
+                let mut model = ProviderModel::new(PROVIDER_ID, id);
+                let capabilities = self.model_capabilities(&model.id);
+                model = model.with_capabilities(capabilities);
                 model.display_name = m.display_name;
                 model
             })
@@ -131,11 +138,7 @@ impl ModelProvider for GeminiProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -171,7 +174,7 @@ impl ModelProvider for GeminiProvider {
 
         let response = self
             .client
-            .post(self.generate_endpoint(&model))
+            .post(self.generate_endpoint(model.as_str()))
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(&body)
             .send()
@@ -192,7 +195,7 @@ impl ModelProvider for GeminiProvider {
         let usage = payload.usage_metadata.map(map_gemini_usage);
 
         Ok(CompletionResponse {
-            provider_id: PROVIDER_ID.to_owned(),
+            provider_id: ProviderId::new(PROVIDER_ID),
             model,
             text,
             finish_reason: CompletionFinishReason::from_provider(finish_reason.as_deref()),
@@ -212,11 +215,7 @@ impl ModelProvider for GeminiProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -252,7 +251,7 @@ impl ModelProvider for GeminiProvider {
 
         let response = self
             .client
-            .post(self.stream_generate_endpoint(&model))
+            .post(self.stream_generate_endpoint(model.as_str()))
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(&body)
             .send()
@@ -263,7 +262,7 @@ impl ModelProvider for GeminiProvider {
         }
 
         let mut events = sse::json_events(response);
-        let provider_id = PROVIDER_ID.to_owned();
+        let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = model;
 
         let stream = async_stream::try_stream! {
@@ -549,7 +548,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gemini-2.5-flash".to_owned(),
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::AppError,
     message::{AttachmentItem, AttachmentKind, AttachmentSource, MessageUsage},
+    model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, auth::AuthData, sse,
@@ -22,14 +23,14 @@ pub struct CopilotProvider {
     client: reqwest::Client,
     bearer_token: String,
     base_url: String,
-    default_model: String,
+    default_model: ModelId,
     models_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct CopilotProviderOptions {
     pub base_url: Option<String>,
-    pub default_model: Option<String>,
+    pub default_model: Option<ModelId>,
     pub models_url: Option<String>,
 }
 
@@ -68,7 +69,7 @@ impl CopilotProvider {
         let base_url = options.base_url.unwrap_or(default_base);
         let default_model = options
             .default_model
-            .unwrap_or_else(|| "gpt-4o-mini".to_owned());
+            .unwrap_or_else(|| ModelId::new("gpt-4o-mini"));
 
         Ok(Self {
             id: id.to_owned(),
@@ -207,13 +208,18 @@ impl ModelProvider for CopilotProvider {
         &self.id
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
         crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model)
+            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        crate::provider::default_model_metadata_registry()
+            .metadata_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -243,9 +249,9 @@ impl ModelProvider for CopilotProvider {
             .into_items()
             .into_iter()
             .map(|m| {
-                let capabilities = self.model_capabilities(m.id.as_str());
-                let mut model =
-                    ProviderModel::new(self.id.clone(), m.id).with_capabilities(capabilities);
+                let mut model = ProviderModel::new(self.id.clone(), m.id);
+                let capabilities = self.model_capabilities(&model.id);
+                model = model.with_capabilities(capabilities);
                 model.display_name = m.name;
                 model
             })
@@ -253,14 +259,10 @@ impl ModelProvider for CopilotProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         if Self::should_use_responses(model.as_str()) {
-            let body = OpenAiResponsesRequest::from_request(model.clone(), &request);
+            let body = OpenAiResponsesRequest::from_request(model.to_string(), &request);
             let response = self
                 .client
                 .post(self.responses_endpoint())
@@ -297,8 +299,8 @@ impl ModelProvider for CopilotProvider {
                 }
 
                 return Ok(CompletionResponse {
-                    provider_id: self.id.clone(),
-                    model: payload.model.unwrap_or(model.clone()),
+                    provider_id: ProviderId::new(self.id.clone()),
+                    model: ModelId::new(payload.model.unwrap_or_else(|| model.to_string())),
                     text,
                     finish_reason,
                     tool_calls,
@@ -314,7 +316,7 @@ impl ModelProvider for CopilotProvider {
             }
         }
 
-        let body = ChatCompletionRequest::from_request(model.clone(), &request);
+        let body = ChatCompletionRequest::from_request(model.to_string(), &request);
         let response = self
             .client
             .post(self.chat_endpoint())
@@ -360,8 +362,8 @@ impl ModelProvider for CopilotProvider {
         }
 
         Ok(CompletionResponse {
-            provider_id: self.id.clone(),
-            model: payload.model.unwrap_or(model),
+            provider_id: ProviderId::new(self.id.clone()),
+            model: ModelId::new(payload.model.unwrap_or_else(|| model.to_string())),
             text,
             finish_reason,
             tool_calls,
@@ -387,15 +389,11 @@ impl ModelProvider for CopilotProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         if Self::should_use_responses(model.as_str()) {
             let body =
-                OpenAiResponsesRequest::from_request(model.clone(), &request).with_stream(true);
+                OpenAiResponsesRequest::from_request(model.to_string(), &request).with_stream(true);
             let response = self
                 .client
                 .post(self.responses_endpoint())
@@ -407,7 +405,7 @@ impl ModelProvider for CopilotProvider {
 
             if response.status().is_success() {
                 let mut events = sse::json_events(response);
-                let provider_id = self.id.clone();
+                let provider_id = ProviderId::new(self.id.clone());
                 let model_name = model.clone();
 
                 let stream = async_stream::try_stream! {
@@ -584,7 +582,8 @@ impl ModelProvider for CopilotProvider {
             }
         }
 
-        let body = ChatCompletionRequest::from_request(model.clone(), &request).with_stream(true);
+        let body =
+            ChatCompletionRequest::from_request(model.to_string(), &request).with_stream(true);
         let response = self
             .client
             .post(self.chat_endpoint())
@@ -599,7 +598,7 @@ impl ModelProvider for CopilotProvider {
         }
 
         let mut events = sse::json_events(response);
-        let provider_id = self.id.clone();
+        let provider_id = ProviderId::new(self.id.clone());
         let model_name = model;
 
         let stream = async_stream::try_stream! {
@@ -1558,6 +1557,7 @@ mod tests {
 
     use super::*;
     use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent};
+    use crate::model::ModelId;
 
     use crate::provider::CompletionRequest;
 
@@ -1567,7 +1567,7 @@ mod tests {
             client: reqwest::Client::new(),
             bearer_token: "test-token".to_owned(),
             base_url,
-            default_model: "gpt-4o-mini".to_owned(),
+            default_model: ModelId::new("gpt-4o-mini"),
             models_url: None,
         }
     }
@@ -1601,14 +1601,14 @@ mod tests {
             .expect("list_models should succeed");
 
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "gpt-4o-mini");
+        assert_eq!(models[0].id.as_str(), "gpt-4o-mini");
         assert_eq!(models[0].display_name.as_deref(), Some("GPT-4o mini"));
     }
 
     #[test]
     fn is_vision_request_detects_projected_image_parts() {
         let request = CompletionRequest {
-            model: "gpt-5".to_owned(),
+            model: ModelId::new("gpt-5"),
             system: None,
             messages: vec![Message::prompt_parts(
                 crate::role::Role::User,
@@ -1736,11 +1736,11 @@ mod tests {
             .await;
 
         let mut provider = mock_provider(server.url());
-        provider.default_model = "gpt-5".to_owned();
+        provider.default_model = ModelId::new("gpt-5");
 
         let response = provider
             .complete(CompletionRequest {
-                model: "gpt-5".to_owned(),
+                model: ModelId::new("gpt-5"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -1783,11 +1783,11 @@ mod tests {
             .await;
 
         let mut provider = mock_provider(server.url());
-        provider.default_model = "gpt-5".to_owned();
+        provider.default_model = ModelId::new("gpt-5");
 
         let response = provider
             .complete(CompletionRequest {
-                model: "gpt-5".to_owned(),
+                model: ModelId::new("gpt-5"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -1833,11 +1833,11 @@ mod tests {
             .await;
 
         let mut provider = mock_provider(server.url());
-        provider.default_model = "gpt-4o".to_owned();
+        provider.default_model = ModelId::new("gpt-4o");
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-4o".to_owned(),
+                model: ModelId::new("gpt-4o"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -1888,11 +1888,11 @@ mod tests {
             .await;
 
         let mut provider = mock_provider(server.url());
-        provider.default_model = "gpt-5".to_owned();
+        provider.default_model = ModelId::new("gpt-5");
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-5".to_owned(),
+                model: ModelId::new("gpt-5"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),

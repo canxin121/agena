@@ -3,9 +3,10 @@ use futures_core::Stream;
 
 use crate::{
     error::AppError,
+    model::{Model, ModelId},
     provider::{
         CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider,
-        OpenAiCompatibleProvider, ProviderModel, StreamResumePolicy,
+        OpenAiCompatibleProvider, StreamResumePolicy,
     },
 };
 
@@ -38,15 +39,11 @@ impl CloudflareAiGatewayProvider {
         Self { inner }
     }
 
-    fn normalize_model(&self, model: &str) -> Result<String, AppError> {
-        let normalized = if model.trim().is_empty() {
-            self.inner.default_model().to_owned()
-        } else {
-            model.trim().to_owned()
-        };
+    fn normalize_model(&self, model: &ModelId) -> Result<ModelId, AppError> {
+        let normalized = model.as_str().trim();
 
         if normalized.contains('/') && !normalized.starts_with('/') && !normalized.ends_with('/') {
-            return Ok(normalized);
+            return Ok(ModelId::new(normalized));
         }
 
         Err(AppError::Config(format!(
@@ -61,24 +58,28 @@ impl ModelProvider for CloudflareAiGatewayProvider {
         PROVIDER_ID
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         self.inner.default_model()
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
         self.inner.model_capabilities(model)
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        self.inner.model_metadata(model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         self.inner.stream_resume_policy()
     }
 
-    async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+    async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         self.inner.list_models().await
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        let model = self.normalize_model(request.model.as_str())?;
+        let model = self.normalize_model(&request.model)?;
         self.inner
             .complete(CompletionRequest { model, ..request })
             .await
@@ -91,7 +92,7 @@ impl ModelProvider for CloudflareAiGatewayProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let model = self.normalize_model(request.model.as_str())?;
+        let model = self.normalize_model(&request.model)?;
         self.inner
             .complete_stream(CompletionRequest { model, ..request })
             .await
@@ -116,9 +117,15 @@ mod tests {
 
         assert!(
             provider
-                .normalize_model("workers-ai/@cf/meta/llama-3.1-8b-instruct")
+                .normalize_model(&crate::model::ModelId::new(
+                    "workers-ai/@cf/meta/llama-3.1-8b-instruct",
+                ))
                 .is_ok()
         );
-        assert!(provider.normalize_model("gpt-4.1-mini").is_err());
+        assert!(
+            provider
+                .normalize_model(&crate::model::ModelId::new("gpt-4.1-mini"))
+                .is_err()
+        );
     }
 }

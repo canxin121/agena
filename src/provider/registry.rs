@@ -10,11 +10,12 @@ use futures_core::Stream;
 use futures_util::StreamExt;
 
 use crate::error::{AppError, ProviderErrorKind};
+use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ProviderId};
 
 use super::{
     CapabilityOverrideProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    ModelCapabilities, ModelProvider, ProviderCapabilityOverrideRule, ProviderHttpClientConfig,
-    ProviderModel, ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
+    ModelProvider, ProviderCapabilityOverrideRule, ProviderHttpClientConfig,
+    ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
     StreamResumePolicy, utils,
 };
 
@@ -22,7 +23,7 @@ use super::{
 pub struct ProviderAliasRegistration {
     pub alias_id: String,
     pub target_provider_id: String,
-    pub default_model: Option<String>,
+    pub default_model: Option<ModelId>,
     pub capability_overrides: Vec<ProviderCapabilityOverrideRule>,
 }
 
@@ -37,7 +38,7 @@ impl ProviderAliasRegistration {
     }
 
     pub fn with_default_model(mut self, model: impl Into<String>) -> Self {
-        self.default_model = Some(model.into());
+        self.default_model = Some(ModelId::new(model));
         self
     }
 
@@ -127,7 +128,7 @@ pub struct ProviderRegistry {
 pub struct NamedProvider {
     provider_id: String,
     target: Arc<dyn ModelProvider>,
-    default_model: Option<String>,
+    default_model: Option<ModelId>,
 }
 
 impl NamedProvider {
@@ -140,7 +141,7 @@ impl NamedProvider {
     }
 
     pub fn with_default_model(mut self, model: impl Into<String>) -> Self {
-        self.default_model = Some(model.into());
+        self.default_model = Some(ModelId::new(model));
         self
     }
 }
@@ -151,63 +152,52 @@ impl ModelProvider for NamedProvider {
         self.provider_id.as_str()
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         self.default_model
-            .as_deref()
+            .as_ref()
             .unwrap_or_else(|| self.target.default_model())
     }
 
-    fn model_capabilities(&self, model: &str) -> super::ModelCapabilities {
-        let resolved_model = if model.trim().is_empty() {
-            self.default_model()
-        } else {
-            model.trim()
-        };
-        self.target.model_capabilities(resolved_model)
+    fn model_capabilities(&self, model: &ModelId) -> super::ModelCapabilities {
+        self.target.model_capabilities(model)
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> super::ModelMetadata {
+        self.target.model_metadata(model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         self.target.stream_resume_policy()
     }
 
-    async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+    async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let mut models = self.target.list_models().await?;
         for model in &mut models {
-            model.provider_id = self.provider_id.clone();
-            let fallback = self.target.model_capabilities(model.id.as_str());
+            model.provider_id = ProviderId::new(self.provider_id.clone());
+            let fallback = self.target.model_capabilities(&model.id);
             model.capabilities = model.capabilities.clone().with_fallbacks_from(&fallback);
+            let metadata_fallback = self.target.model_metadata(&model.id);
+            model.metadata = model
+                .metadata
+                .clone()
+                .with_fallbacks_from(&metadata_fallback);
         }
         Ok(models)
     }
 
-    async fn complete(
-        &self,
-        mut request: CompletionRequest,
-    ) -> Result<CompletionResponse, AppError> {
-        if request.model.trim().is_empty() {
-            if let Some(default_model) = self.default_model.as_ref() {
-                request.model = default_model.clone();
-            }
-        }
-
+    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let mut response = self.target.complete(request).await?;
-        response.provider_id = self.provider_id.clone();
+        response.provider_id = ProviderId::new(self.provider_id.clone());
         Ok(response)
     }
 
     async fn complete_stream(
         &self,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        if request.model.trim().is_empty() {
-            if let Some(default_model) = self.default_model.as_ref() {
-                request.model = default_model.clone();
-            }
-        }
-
         let stream = self.target.complete_stream(request).await?;
         let alias_id = self.provider_id.clone();
         let mapped = stream
@@ -280,14 +270,7 @@ impl ProviderRegistry {
             ))
         })?;
 
-        let default_model = alias.default_model.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_owned())
-            }
-        });
+        let default_model = alias.default_model;
 
         let aliased = match default_model {
             Some(model) => {
@@ -309,6 +292,48 @@ impl ProviderRegistry {
 
     pub fn provider_ids(&self) -> Vec<String> {
         self.providers.keys().cloned().collect()
+    }
+
+    pub fn resolve_model_target(
+        &self,
+        target: &str,
+        model: Option<&str>,
+    ) -> Result<ModelRef, AppError> {
+        let target = target.trim();
+        if target.is_empty() {
+            return Err(AppError::Config(
+                "provider or model reference cannot be empty".to_owned(),
+            ));
+        }
+
+        let requested_model = model.map(str::trim).filter(|value| !value.is_empty());
+        if target.contains('/') {
+            if requested_model.is_some() {
+                return Err(AppError::Config(format!(
+                    "model reference `{target}` already includes a model; omit `--model`"
+                )));
+            }
+            return target.parse::<ModelRef>().map_err(|err| {
+                AppError::Config(format!("invalid model reference `{target}`: {err}"))
+            });
+        }
+
+        let provider = self
+            .get(target)
+            .ok_or_else(|| AppError::Config(format!("provider not found: {target}")))?;
+        let provider_id = ProviderId::try_new(target)
+            .map_err(|err| AppError::Config(format!("invalid provider id `{target}`: {err}")))?;
+        let model_id = match requested_model {
+            Some(requested_model) => ModelId::try_new(requested_model).map_err(|err| {
+                AppError::Config(format!("invalid model id `{requested_model}`: {err}"))
+            })?,
+            None => provider.default_model().clone(),
+        };
+
+        Ok(ModelRef {
+            provider_id,
+            model_id,
+        })
     }
 
     fn should_retry_error(&self, err: &AppError, retry_index: u32) -> bool {
@@ -388,7 +413,7 @@ impl ProviderRegistry {
         }
     }
 
-    pub async fn list_models(&self, provider_id: &str) -> Result<Vec<ProviderModel>, AppError> {
+    pub async fn list_models(&self, provider_id: &str) -> Result<Vec<Model>, AppError> {
         let provider = self
             .get(provider_id)
             .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
@@ -402,10 +427,15 @@ impl ProviderRegistry {
                 async move {
                     let mut models = provider.list_models().await?;
                     for model in &mut models {
-                        model.provider_id = provider_id.to_owned();
-                        let fallback = provider.model_capabilities(model.id.as_str());
+                        model.provider_id = ProviderId::new(provider_id.clone());
+                        let fallback = provider.model_capabilities(&model.id);
                         model.capabilities =
                             model.capabilities.clone().with_fallbacks_from(&fallback);
+                        let metadata_fallback = provider.model_metadata(&model.id);
+                        model.metadata = model
+                            .metadata
+                            .clone()
+                            .with_fallbacks_from(&metadata_fallback);
                     }
                     Ok(models)
                 }
@@ -414,56 +444,52 @@ impl ProviderRegistry {
         .await
     }
 
-    pub fn model_capabilities(
-        &self,
-        provider_id: &str,
-        model: &str,
-    ) -> Result<ModelCapabilities, AppError> {
-        let provider = self
-            .get(provider_id)
-            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
-        let resolved_model = if model.trim().is_empty() {
-            provider.default_model().to_owned()
-        } else {
-            model.trim().to_owned()
-        };
-        Ok(provider.model_capabilities(resolved_model.as_str()))
+    pub fn model_capabilities(&self, model: &ModelRef) -> Result<ModelCapabilities, AppError> {
+        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
+            AppError::Config(format!("provider not found: {}", model.provider_id))
+        })?;
+        Ok(provider.model_capabilities(&model.model_id))
     }
 
-    pub async fn provider_model(
-        &self,
-        provider_id: &str,
-        model: &str,
-    ) -> Result<ProviderModel, AppError> {
-        let provider = self
-            .get(provider_id)
-            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
-        let resolved_model = if model.trim().is_empty() {
-            provider.default_model().to_owned()
-        } else {
-            model.trim().to_owned()
-        };
+    pub fn model_metadata(&self, model: &ModelRef) -> Result<ModelMetadata, AppError> {
+        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
+            AppError::Config(format!("provider not found: {}", model.provider_id))
+        })?;
+        Ok(provider.model_metadata(&model.model_id))
+    }
 
-        let listed = self.list_models(provider_id).await?;
-        if let Some(model) = listed.into_iter().find(|entry| entry.id == resolved_model) {
-            let fallback = provider.model_capabilities(model.id.as_str());
-            return Ok(model.with_capability_fallbacks(&fallback));
+    pub async fn resolve_model(&self, model: &ModelRef) -> Result<Model, AppError> {
+        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
+            AppError::Config(format!("provider not found: {}", model.provider_id))
+        })?;
+
+        let listed = self.list_models(model.provider_id.as_str()).await?;
+        if let Some(entry) = listed.into_iter().find(|entry| entry.id == model.model_id) {
+            let fallback = provider.model_capabilities(&entry.id);
+            let metadata_fallback = provider.model_metadata(&entry.id);
+            return Ok(entry
+                .with_capability_fallbacks(&fallback)
+                .with_metadata_fallbacks(&metadata_fallback));
         }
 
-        Ok(ProviderModel::new(provider_id, resolved_model.clone())
-            .with_capabilities(provider.model_capabilities(resolved_model.as_str())))
+        Ok(
+            Model::new(model.provider_id.as_str(), model.model_id.as_str())
+                .with_capabilities(provider.model_capabilities(&model.model_id))
+                .with_metadata(provider.model_metadata(&model.model_id)),
+        )
     }
 
     pub async fn complete(
         &self,
-        provider_id: &str,
-        request: CompletionRequest,
+        model: &ModelRef,
+        mut request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
-        let provider = self
-            .get(provider_id)
-            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
-        validate_request_capabilities(provider_id, provider.as_ref(), &request)?;
-        self.call_with_retry(provider_id, "complete", {
+        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
+            AppError::Config(format!("provider not found: {}", model.provider_id))
+        })?;
+        validate_request_capabilities(model, provider.as_ref(), &request)?;
+        request.model = model.model_id.clone();
+        self.call_with_retry(model.provider_id.as_str(), "complete", {
             let provider = provider.clone();
             let request = request.clone();
             move || {
@@ -477,17 +503,18 @@ impl ProviderRegistry {
 
     pub async fn complete_stream(
         &self,
-        provider_id: &str,
-        request: CompletionRequest,
+        model: &ModelRef,
+        mut request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let provider = self
-            .get(provider_id)
-            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
-        validate_request_capabilities(provider_id, provider.as_ref(), &request)?;
-        let provider_id = provider_id.to_owned();
+        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
+            AppError::Config(format!("provider not found: {}", model.provider_id))
+        })?;
+        validate_request_capabilities(model, provider.as_ref(), &request)?;
+        request.model = model.model_id.clone();
+        let provider_id = model.provider_id.to_string();
         let retry_policy = self.retry_policy;
         let replay_policy = self.stream_replay_policy;
         let provider_resume_policy = provider.stream_resume_policy();
@@ -769,9 +796,10 @@ fn remap_event_provider_id(
     event: CompletionStreamEvent,
     provider_id: &str,
 ) -> CompletionStreamEvent {
+    let provider_id = ProviderId::new(provider_id);
     match event {
         CompletionStreamEvent::TextDelta { model, delta, .. } => CompletionStreamEvent::TextDelta {
-            provider_id: provider_id.to_owned(),
+            provider_id: provider_id.clone(),
             model,
             delta,
         },
@@ -783,7 +811,7 @@ fn remap_event_provider_id(
             arguments_delta,
             ..
         } => CompletionStreamEvent::ToolCallDelta {
-            provider_id: provider_id.to_owned(),
+            provider_id: provider_id.clone(),
             model,
             stream_key,
             id,
@@ -797,7 +825,7 @@ fn remap_event_provider_id(
             provider_metadata,
             ..
         } => CompletionStreamEvent::Completed {
-            provider_id: provider_id.to_owned(),
+            provider_id,
             model,
             finish_reason,
             usage,
@@ -807,16 +835,11 @@ fn remap_event_provider_id(
 }
 
 fn validate_request_capabilities(
-    provider_id: &str,
+    model: &ModelRef,
     provider: &dyn ModelProvider,
     request: &CompletionRequest,
 ) -> Result<(), AppError> {
-    let model = if request.model.trim().is_empty() {
-        provider.default_model().to_owned()
-    } else {
-        request.model.trim().to_owned()
-    };
-    let capabilities = provider.model_capabilities(model.as_str());
+    let capabilities = provider.model_capabilities(&model.model_id);
 
     let mut unsupported = Vec::new();
     for message in &request.messages {
@@ -841,7 +864,8 @@ fn validate_request_capabilities(
         .collect::<Vec<_>>()
         .join(", ");
     Err(AppError::Provider(format!(
-        "provider `{provider_id}` model `{model}` explicitly does not support requested input modalities: {details}"
+        "provider `{}` model `{}` explicitly does not support requested input modalities: {details}",
+        model.provider_id, model.model_id
     )))
 }
 
@@ -889,13 +913,17 @@ fn provider_error_kind_label(kind: ProviderErrorKind) -> &'static str {
 mod tests {
     use super::*;
     use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent};
+    use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::provider::{
         CapabilityOverrideMatchMode, CapabilitySupport, CompletionFinishReason, CompletionRequest,
         CompletionResponse, ModelCapabilities, ModelCapabilityPatch,
-        ProviderCapabilityOverrideRule,
+        ProviderCapabilityOverrideRule, ProviderModel,
     };
     use futures_util::{StreamExt, stream};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        LazyLock,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     struct FlakyProvider {
         provider_id: &'static str,
@@ -929,22 +957,46 @@ mod tests {
         }
     }
 
+    fn pid(value: &str) -> ProviderId {
+        ProviderId::new(value)
+    }
+
+    fn mid(value: &str) -> ModelId {
+        ModelId::new(value)
+    }
+
+    fn model_ref(provider: &str, model: &str) -> ModelRef {
+        ModelRef::new(provider, model)
+    }
+
+    fn completion_request(model: &str) -> CompletionRequest {
+        CompletionRequest {
+            model: mid(model),
+            system: None,
+            messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: Some(16),
+        }
+    }
+
     #[async_trait::async_trait]
     impl ModelProvider for FlakyProvider {
         fn id(&self) -> &str {
             self.provider_id
         }
-        fn default_model(&self) -> &str {
-            "flaky-model"
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: LazyLock<ModelId> = LazyLock::new(|| ModelId::new("flaky-model"));
+            &DEFAULT_MODEL
         }
-        fn model_capabilities(&self, _model: &str) -> ModelCapabilities {
+        fn model_capabilities(&self, _model: &ModelId) -> ModelCapabilities {
             ModelCapabilities::default()
                 .with_tool_calling(CapabilitySupport::Supported)
                 .with_streaming(CapabilitySupport::Supported)
         }
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
             Ok(vec![
-                ProviderModel::new(self.provider_id, "flaky-model")
+                ProviderModel::new(self.provider_id, self.default_model().as_str())
                     .with_display_name("Flaky Model"),
             ])
         }
@@ -965,12 +1017,8 @@ mod tests {
                 return Err(AppError::Provider("permanent failure".to_owned()));
             }
             Ok(CompletionResponse {
-                provider_id: self.provider_id.to_owned(),
-                model: if request.model.trim().is_empty() {
-                    "flaky-model".to_owned()
-                } else {
-                    request.model
-                },
+                provider_id: pid(self.provider_id),
+                model: request.model,
                 text: "ok".to_owned(),
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
@@ -985,10 +1033,12 @@ mod tests {
         fn id(&self) -> &str {
             self.provider_id
         }
-        fn default_model(&self) -> &str {
-            "flaky-stream-model"
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: LazyLock<ModelId> =
+                LazyLock::new(|| ModelId::new("flaky-stream-model"));
+            &DEFAULT_MODEL
         }
-        fn model_capabilities(&self, _model: &str) -> ModelCapabilities {
+        fn model_capabilities(&self, _model: &ModelId) -> ModelCapabilities {
             ModelCapabilities::default().with_streaming(CapabilitySupport::Supported)
         }
         fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -996,7 +1046,7 @@ mod tests {
         }
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
             Ok(vec![
-                ProviderModel::new(self.provider_id, "flaky-stream-model")
+                ProviderModel::new(self.provider_id, self.default_model().as_str())
                     .with_display_name("Flaky Stream Model"),
             ])
         }
@@ -1005,8 +1055,8 @@ mod tests {
             _request: CompletionRequest,
         ) -> Result<CompletionResponse, AppError> {
             Ok(CompletionResponse {
-                provider_id: self.provider_id.to_owned(),
-                model: "flaky-stream-model".to_owned(),
+                provider_id: pid(self.provider_id),
+                model: self.default_model().clone(),
                 text: "ok".to_owned(),
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
@@ -1022,16 +1072,18 @@ mod tests {
             AppError,
         > {
             let start = self.stream_starts.fetch_add(1, Ordering::SeqCst);
+            let provider_id = pid(self.provider_id);
+            let model = self.default_model().clone();
             let success_events = || {
                 vec![
                     Ok(CompletionStreamEvent::TextDelta {
-                        provider_id: self.provider_id.to_owned(),
-                        model: "flaky-stream-model".to_owned(),
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
                         delta: "ok".to_owned(),
                     }),
                     Ok(CompletionStreamEvent::Completed {
-                        provider_id: self.provider_id.to_owned(),
-                        model: "flaky-stream-model".to_owned(),
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
                         finish_reason: Some(CompletionFinishReason::Stop),
                         usage: None,
                         provider_metadata: None,
@@ -1059,8 +1111,8 @@ mod tests {
                 }
                 StreamFailureMode::MidStreamRetryableNoRestart => Ok(Box::pin(stream::iter(vec![
                     Ok(CompletionStreamEvent::TextDelta {
-                        provider_id: self.provider_id.to_owned(),
-                        model: "flaky-stream-model".to_owned(),
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
                         delta: "partial".to_owned(),
                     }),
                     Err(retryable_api_error(self.provider_id, "mid-stream failure")),
@@ -1069,8 +1121,8 @@ mod tests {
                     if start == 0 {
                         return Ok(Box::pin(stream::iter(vec![
                             Ok(CompletionStreamEvent::TextDelta {
-                                provider_id: self.provider_id.to_owned(),
-                                model: "flaky-stream-model".to_owned(),
+                                provider_id: provider_id.clone(),
+                                model: model.clone(),
                                 delta: "partial".to_owned(),
                             }),
                             Err(retryable_api_error(self.provider_id, "mid-stream failure")),
@@ -1078,18 +1130,18 @@ mod tests {
                     }
                     Ok(Box::pin(stream::iter(vec![
                         Ok(CompletionStreamEvent::TextDelta {
-                            provider_id: self.provider_id.to_owned(),
-                            model: "flaky-stream-model".to_owned(),
+                            provider_id: provider_id.clone(),
+                            model: model.clone(),
                             delta: "partial".to_owned(),
                         }),
                         Ok(CompletionStreamEvent::TextDelta {
-                            provider_id: self.provider_id.to_owned(),
-                            model: "flaky-stream-model".to_owned(),
+                            provider_id: provider_id.clone(),
+                            model: model.clone(),
                             delta: "final".to_owned(),
                         }),
                         Ok(CompletionStreamEvent::Completed {
-                            provider_id: self.provider_id.to_owned(),
-                            model: "flaky-stream-model".to_owned(),
+                            provider_id: provider_id.clone(),
+                            model: model.clone(),
                             finish_reason: Some(CompletionFinishReason::Stop),
                             usage: None,
                             provider_metadata: None,
@@ -1100,8 +1152,8 @@ mod tests {
                     if start == 0 {
                         return Ok(Box::pin(stream::iter(vec![
                             Ok(CompletionStreamEvent::TextDelta {
-                                provider_id: self.provider_id.to_owned(),
-                                model: "flaky-stream-model".to_owned(),
+                                provider_id: provider_id.clone(),
+                                model: model.clone(),
                                 delta: "partial".to_owned(),
                             }),
                             Err(retryable_api_error(self.provider_id, "mid-stream failure")),
@@ -1109,13 +1161,13 @@ mod tests {
                     }
                     Ok(Box::pin(stream::iter(vec![
                         Ok(CompletionStreamEvent::TextDelta {
-                            provider_id: self.provider_id.to_owned(),
-                            model: "flaky-stream-model".to_owned(),
+                            provider_id: provider_id.clone(),
+                            model: model.clone(),
                             delta: "DIFF".to_owned(),
                         }),
                         Ok(CompletionStreamEvent::Completed {
-                            provider_id: self.provider_id.to_owned(),
-                            model: "flaky-stream-model".to_owned(),
+                            provider_id: provider_id.clone(),
+                            model: model.clone(),
                             finish_reason: Some(CompletionFinishReason::Stop),
                             usage: None,
                             provider_metadata: None,
@@ -1136,11 +1188,13 @@ mod tests {
             "unsupported-image"
         }
 
-        fn default_model(&self) -> &str {
-            "unsupported-image-model"
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: LazyLock<ModelId> =
+                LazyLock::new(|| ModelId::new("unsupported-image-model"));
+            &DEFAULT_MODEL
         }
 
-        fn model_capabilities(&self, _model: &str) -> ModelCapabilities {
+        fn model_capabilities(&self, _model: &ModelId) -> ModelCapabilities {
             ModelCapabilities::default()
                 .with_image_input(CapabilitySupport::Unsupported)
                 .with_streaming(CapabilitySupport::Supported)
@@ -1148,8 +1202,8 @@ mod tests {
 
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
             Ok(vec![
-                ProviderModel::new("unsupported-image", "unsupported-image-model")
-                    .with_capabilities(self.model_capabilities("unsupported-image-model")),
+                ProviderModel::new("unsupported-image", self.default_model().as_str())
+                    .with_capabilities(self.model_capabilities(self.default_model())),
             ])
         }
 
@@ -1159,8 +1213,8 @@ mod tests {
         ) -> Result<CompletionResponse, AppError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(CompletionResponse {
-                provider_id: "unsupported-image".to_owned(),
-                model: "unsupported-image-model".to_owned(),
+                provider_id: pid("unsupported-image"),
+                model: self.default_model().clone(),
                 text: "should not run".to_owned(),
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
@@ -1213,15 +1267,8 @@ mod tests {
         registry.register(provider);
         let response = registry
             .complete(
-                "flaky-retryable",
-                CompletionRequest {
-                    model: String::new(),
-                    system: None,
-                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: Vec::new(),
-                    temperature: None,
-                    max_output_tokens: Some(16),
-                },
+                &model_ref("flaky-retryable", "flaky-model"),
+                completion_request("flaky-model"),
             )
             .await
             .expect("completion should succeed after retry");
@@ -1246,15 +1293,8 @@ mod tests {
         registry.register(provider);
         let err = registry
             .complete(
-                "flaky-non-retryable",
-                CompletionRequest {
-                    model: String::new(),
-                    system: None,
-                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: Vec::new(),
-                    temperature: None,
-                    max_output_tokens: Some(16),
-                },
+                &model_ref("flaky-non-retryable", "flaky-model"),
+                completion_request("flaky-model"),
             )
             .await
             .expect_err("non-retryable error should bubble up immediately");
@@ -1272,6 +1312,39 @@ mod tests {
             ))
             .expect_err("alias registration should fail when target is missing");
         assert!(matches!(err, AppError::Config(message) if message.contains("target not found")));
+    }
+
+    #[test]
+    fn resolve_model_target_parses_explicit_model_reference() {
+        let registry = ProviderRegistry::new();
+        let resolved = registry
+            .resolve_model_target("openai/gpt-5", None)
+            .expect("model reference should parse");
+        assert_eq!(resolved, model_ref("openai", "gpt-5"));
+    }
+
+    #[test]
+    fn resolve_model_target_uses_provider_default_model() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let provider = FlakyProvider {
+            provider_id: "target-default",
+            attempts,
+            fail_attempts: 0,
+            retryable: false,
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+        registry
+            .register_alias(
+                ProviderAliasRegistration::new("target-alias", "target-default")
+                    .with_default_model("alias-model"),
+            )
+            .expect("alias registration should succeed");
+
+        let resolved = registry
+            .resolve_model_target("target-alias", None)
+            .expect("target should resolve using alias default");
+        assert_eq!(resolved, model_ref("target-alias", "alias-model"));
     }
 
     #[tokio::test]
@@ -1293,31 +1366,17 @@ mod tests {
             .expect("alias registration should succeed");
         let response = registry
             .complete(
-                "custom-provider",
-                CompletionRequest {
-                    model: String::new(),
-                    system: None,
-                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: Vec::new(),
-                    temperature: None,
-                    max_output_tokens: Some(16),
-                },
+                &model_ref("custom-provider", "alias-model"),
+                completion_request("alias-model"),
             )
             .await
             .expect("alias completion should succeed");
-        assert_eq!(response.provider_id, "custom-provider");
-        assert_eq!(response.model, "alias-model");
+        assert_eq!(response.provider_id, pid("custom-provider"));
+        assert_eq!(response.model, mid("alias-model"));
         let mut stream = registry
             .complete_stream(
-                "custom-provider",
-                CompletionRequest {
-                    model: String::new(),
-                    system: None,
-                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: Vec::new(),
-                    temperature: None,
-                    max_output_tokens: Some(16),
-                },
+                &model_ref("custom-provider", "alias-model"),
+                completion_request("alias-model"),
             )
             .await
             .expect("alias stream should start");
@@ -1327,7 +1386,7 @@ mod tests {
             .expect("first stream event should exist")
             .expect("first stream event should be success");
         assert!(
-            matches!(first, CompletionStreamEvent::TextDelta { ref provider_id, .. } if provider_id == "custom-provider")
+            matches!(first, CompletionStreamEvent::TextDelta { ref provider_id, .. } if provider_id == &pid("custom-provider"))
         );
         let second = stream
             .next()
@@ -1335,7 +1394,7 @@ mod tests {
             .expect("second stream event should exist")
             .expect("second stream event should be success");
         assert!(
-            matches!(second, CompletionStreamEvent::Completed { ref provider_id, .. } if provider_id == "custom-provider")
+            matches!(second, CompletionStreamEvent::Completed { ref provider_id, .. } if provider_id == &pid("custom-provider"))
         );
     }
 
@@ -1352,12 +1411,12 @@ mod tests {
         registry.register(provider);
 
         let model = registry
-            .provider_model("model-info", "flaky-model")
+            .resolve_model(&model_ref("model-info", "flaky-model"))
             .await
             .expect("provider model should resolve");
 
-        assert_eq!(model.provider_id, "model-info");
-        assert_eq!(model.id, "flaky-model");
+        assert_eq!(model.provider_id, pid("model-info"));
+        assert_eq!(model.id, mid("flaky-model"));
         assert_eq!(model.display_name.as_deref(), Some("Flaky Model"));
         assert_eq!(
             model.capabilities.tool_calling,
@@ -1379,12 +1438,12 @@ mod tests {
         registry.register(provider);
 
         let model = registry
-            .provider_model("model-fallback", "custom-unlisted-model")
+            .resolve_model(&model_ref("model-fallback", "custom-unlisted-model"))
             .await
             .expect("provider model should synthesize missing entry");
 
-        assert_eq!(model.provider_id, "model-fallback");
-        assert_eq!(model.id, "custom-unlisted-model");
+        assert_eq!(model.provider_id, pid("model-fallback"));
+        assert_eq!(model.id, mid("custom-unlisted-model"));
         assert_eq!(model.display_name, None);
         assert_eq!(
             model.capabilities.tool_calling,
@@ -1394,7 +1453,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_model_uses_alias_default_model_when_model_is_empty() {
+    async fn resolve_model_for_alias_unlisted_model_preserves_alias_identity() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let provider = FlakyProvider {
             provider_id: "internal-model-info",
@@ -1412,12 +1471,12 @@ mod tests {
             .expect("alias registration should succeed");
 
         let model = registry
-            .provider_model("alias-model-info", "")
+            .resolve_model(&model_ref("alias-model-info", "alias-model"))
             .await
             .expect("alias provider model should resolve");
 
-        assert_eq!(model.provider_id, "alias-model-info");
-        assert_eq!(model.id, "alias-model");
+        assert_eq!(model.provider_id, pid("alias-model-info"));
+        assert_eq!(model.id, mid("alias-model"));
         assert_eq!(model.display_name, None);
         assert_eq!(
             model.capabilities.tool_calling,
@@ -1452,12 +1511,12 @@ mod tests {
             .expect("alias registration should succeed");
 
         let model = registry
-            .provider_model("override-alias", "")
+            .resolve_model(&model_ref("override-alias", "alias-model"))
             .await
             .expect("alias provider model should resolve");
 
-        assert_eq!(model.provider_id, "override-alias");
-        assert_eq!(model.id, "alias-model");
+        assert_eq!(model.provider_id, pid("override-alias"));
+        assert_eq!(model.id, mid("alias-model"));
         assert_eq!(model.capabilities.streaming, CapabilitySupport::Unsupported);
         assert_eq!(
             model.capabilities.tool_calling,
@@ -1476,9 +1535,9 @@ mod tests {
 
         let err = registry
             .complete(
-                "unsupported-image",
+                &model_ref("unsupported-image", "unsupported-image-model"),
                 CompletionRequest {
-                    model: String::new(),
+                    model: mid("unsupported-image-model"),
                     system: None,
                     messages: vec![Message::prompt_parts(
                         crate::role::Role::User,
@@ -1540,9 +1599,9 @@ mod tests {
 
         let err = registry
             .complete(
-                "validation-alias",
+                &model_ref("validation-alias", "alias-model"),
                 CompletionRequest {
-                    model: String::new(),
+                    model: mid("alias-model"),
                     system: None,
                     messages: vec![Message::prompt_parts(
                         crate::role::Role::User,
@@ -1593,14 +1652,11 @@ mod tests {
         registry.register(provider);
         let mut stream = registry
             .complete_stream(
-                "flaky-stream-startup",
+                &model_ref("flaky-stream-startup", "flaky-stream-model"),
                 CompletionRequest {
-                    model: String::new(),
-                    system: None,
-                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: Vec::new(),
-                    temperature: None,
+                    model: mid("flaky-stream-model"),
                     max_output_tokens: Some(32),
+                    ..completion_request("flaky-stream-model")
                 },
             )
             .await
@@ -1636,14 +1692,11 @@ mod tests {
         registry.register(provider);
         let mut stream = registry
             .complete_stream(
-                "flaky-stream-first-item",
+                &model_ref("flaky-stream-first-item", "flaky-stream-model"),
                 CompletionRequest {
-                    model: String::new(),
-                    system: None,
-                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: Vec::new(),
-                    temperature: None,
+                    model: mid("flaky-stream-model"),
                     max_output_tokens: Some(32),
+                    ..completion_request("flaky-stream-model")
                 },
             )
             .await
@@ -1677,14 +1730,11 @@ mod tests {
         registry.register(provider);
         let mut stream = registry
             .complete_stream(
-                "flaky-stream-mid",
+                &model_ref("flaky-stream-mid", "flaky-stream-model"),
                 CompletionRequest {
-                    model: String::new(),
-                    system: None,
-                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: Vec::new(),
-                    temperature: None,
+                    model: mid("flaky-stream-model"),
                     max_output_tokens: Some(32),
+                    ..completion_request("flaky-stream-model")
                 },
             )
             .await
@@ -1728,14 +1778,11 @@ mod tests {
         registry.register(provider);
         let mut stream = registry
             .complete_stream(
-                "flaky-stream-replay",
+                &model_ref("flaky-stream-replay", "flaky-stream-model"),
                 CompletionRequest {
-                    model: String::new(),
-                    system: None,
-                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: Vec::new(),
-                    temperature: None,
+                    model: mid("flaky-stream-model"),
                     max_output_tokens: Some(32),
+                    ..completion_request("flaky-stream-model")
                 },
             )
             .await
@@ -1776,14 +1823,11 @@ mod tests {
         registry.register(provider);
         let mut stream = registry
             .complete_stream(
-                "flaky-stream-diverge",
+                &model_ref("flaky-stream-diverge", "flaky-stream-model"),
                 CompletionRequest {
-                    model: String::new(),
-                    system: None,
-                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: Vec::new(),
-                    temperature: None,
+                    model: mid("flaky-stream-model"),
                     max_output_tokens: Some(32),
+                    ..completion_request("flaky-stream-model")
                 },
             )
             .await

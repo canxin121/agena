@@ -8,6 +8,7 @@ mod orchestrator;
 mod read;
 mod request_user_input;
 mod result;
+mod subtask;
 mod task;
 mod todo_write;
 mod tool_search;
@@ -32,7 +33,6 @@ use crate::plugin::{
     PluginAfterToolRequest, PluginBeforeToolRequest, PluginManager, PluginShellEnvRequest,
     PluginToolCallRequest,
 };
-use crate::session::{InMemorySubtaskSessionManager, SubtaskSessionManager};
 use procwarden::{
     SandboxCommandRequest, SandboxError, SandboxExecOutput, SandboxManager, SandboxPolicy,
 };
@@ -41,6 +41,10 @@ pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use definition::{ToolBehavior, ToolDefinition, ToolLoadPriority, ToolSource};
 pub use result::{BuiltinExecution, ToolExecutionView, ToolInvocationExecution};
+pub use subtask::{
+    InMemorySubtaskSessionManager, SubtaskSession, SubtaskSessionError, SubtaskSessionManager,
+    SubtaskSessionRequest,
+};
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

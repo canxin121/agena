@@ -11,6 +11,7 @@ mod core;
 mod gemini;
 mod gitlab;
 mod google_vertex;
+mod model_metadata;
 mod openai;
 mod openai_compatible;
 mod registry;
@@ -19,6 +20,10 @@ mod sse;
 mod types;
 mod utils;
 
+pub use crate::model::{
+    CapabilitySupport, Model, ModelCapabilities, ModelFamily, ModelId, ModelInputModality,
+    ModelLifecycle, ModelMetadata, ModelRef, ModelTokenLimits, ProviderId,
+};
 pub use amazon_bedrock::AmazonBedrockProvider;
 pub use anthropic::AnthropicProvider;
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
@@ -33,6 +38,7 @@ pub use core::{ModelProvider, StreamResumePolicy};
 pub use gemini::GeminiProvider;
 pub use gitlab::{GitlabProvider, GitlabProviderConfig};
 pub use google_vertex::GoogleVertexProvider;
+pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
 pub use openai::{OpenAiApiMode, OpenAiProvider, OpenAiStreamMode};
 pub use openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleStreamMode};
 pub use registry::{NamedProvider, ProviderAliasRegistration, ProviderRegistry};
@@ -40,8 +46,8 @@ pub use runtime::{
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
     ProviderStreamReplayConfig,
 };
+pub type ProviderModel = Model;
 pub use types::{
-    CapabilitySupport, CompletionFinishReason, CompletionRequest, CompletionResponse,
-    CompletionStreamEvent, CompletionToolCall, CompletionUsage, ModelCapabilities,
-    ModelInputModality, ProviderModel,
+    CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
+    CompletionToolCall, CompletionUsage,
 };

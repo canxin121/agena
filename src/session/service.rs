@@ -25,6 +25,7 @@ use crate::message::{
     TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock,
     UserInputReply, UserInputReplyKind, UserInputRequest, UserInputRequestPart,
 };
+use crate::model::ModelRef;
 use crate::permission::{
     PermissionAction, PermissionDecision, PermissionMode, PermissionReply, PermissionReplyKind,
     PermissionRequest, decide_from_mode,
@@ -65,8 +66,7 @@ pub struct SessionCreateRequest {
 
 #[derive(Debug, Clone)]
 pub struct SessionRunOptions {
-    pub provider_id: String,
-    pub model: String,
+    pub model: ModelRef,
     pub system: Option<String>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
@@ -79,7 +79,7 @@ impl SessionRunOptions {
         tools: Vec<crate::tool::ToolDefinition>,
     ) -> crate::provider::CompletionRequest {
         crate::provider::CompletionRequest {
-            model: self.model.clone(),
+            model: self.model.model_id.clone(),
             system: self.system.clone(),
             messages,
             tools,
@@ -293,8 +293,8 @@ impl SessionService {
                 source: MessageSource::User,
                 parent_message_id: session.messages.last().map(|message| message.id),
                 generated_by_call_id: None,
-                model_provider_id: request.options.provider_id.clone(),
-                model_id: request.options.model.clone(),
+                model_provider_id: request.options.model.provider_id.to_string(),
+                model_id: request.options.model.model_id.to_string(),
                 tags: Vec::new(),
             },
         );
@@ -459,7 +459,7 @@ impl SessionService {
         let processor_ids = self.reserve_processor_ids().await?;
         let run = SessionRunRequest {
             session_id: session.id,
-            provider_id: options.provider_id.clone(),
+            model: options.model.clone(),
             completion: options.completion_request(
                 session.messages.clone(),
                 self.tool_executor
@@ -1764,6 +1764,7 @@ mod tests {
         ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
         UserInputReplyKind,
     };
+    use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::permission::{PermissionMode, PermissionPolicy};
     use crate::provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
@@ -1793,14 +1794,28 @@ mod tests {
 
     struct ScriptedProvider;
 
+    fn scripted_provider_id() -> ProviderId {
+        ProviderId::new("scripted")
+    }
+
+    fn scripted_model_id() -> ModelId {
+        ModelId::new("scripted-model")
+    }
+
+    fn scripted_model_ref() -> ModelRef {
+        ModelRef::new("scripted", "scripted-model")
+    }
+
     #[async_trait]
     impl ModelProvider for ScriptedProvider {
         fn id(&self) -> &str {
             "scripted"
         }
 
-        fn default_model(&self) -> &str {
-            "scripted-model"
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: std::sync::LazyLock<ModelId> =
+                std::sync::LazyLock::new(|| ModelId::new("scripted-model"));
+            &DEFAULT_MODEL
         }
 
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -1814,8 +1829,8 @@ mod tests {
             _request: CompletionRequest,
         ) -> Result<CompletionResponse, AppError> {
             Ok(CompletionResponse {
-                provider_id: "scripted".to_string(),
-                model: "scripted-model".to_string(),
+                provider_id: scripted_provider_id(),
+                model: scripted_model_id(),
                 text: String::new(),
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
@@ -1905,8 +1920,8 @@ mod tests {
             {
                 vec![
                     Ok(CompletionStreamEvent::ToolCallDelta {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         stream_key: "call_tool_search_1".to_string(),
                         id: Some("call_tool_search_1".to_string()),
                         name: Some("tool_search".to_string()),
@@ -1918,8 +1933,8 @@ mod tests {
                         .expect("serialize tool search input"),
                     }),
                     Ok(CompletionStreamEvent::Completed {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         finish_reason: Some(CompletionFinishReason::ToolCalls),
                         usage: None,
                         provider_metadata: None,
@@ -1928,8 +1943,8 @@ mod tests {
             } else if last_user_text.contains("choose model") && user_input_result.is_none() {
                 vec![
                     Ok(CompletionStreamEvent::ToolCallDelta {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         stream_key: "call_request_user_input_1".to_string(),
                         id: Some("call_request_user_input_1".to_string()),
                         name: Some("request_user_input".to_string()),
@@ -1955,8 +1970,8 @@ mod tests {
                         .expect("serialize request_user_input input"),
                     }),
                     Ok(CompletionStreamEvent::Completed {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         finish_reason: Some(CompletionFinishReason::ToolCalls),
                         usage: None,
                         provider_metadata: None,
@@ -1969,13 +1984,13 @@ mod tests {
                 };
                 vec![
                     Ok(CompletionStreamEvent::TextDelta {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         delta,
                     }),
                     Ok(CompletionStreamEvent::Completed {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         finish_reason: Some(CompletionFinishReason::Stop),
                         usage: None,
                         provider_metadata: None,
@@ -1984,8 +1999,8 @@ mod tests {
             } else if last_user_text.contains("patch") && tool_result.is_none() {
                 vec![
                     Ok(CompletionStreamEvent::ToolCallDelta {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         stream_key: "call_apply_patch_1".to_string(),
                         id: Some("call_apply_patch_1".to_string()),
                         name: Some("apply_patch".to_string()),
@@ -1996,8 +2011,8 @@ mod tests {
                         .expect("serialize tool input"),
                     }),
                     Ok(CompletionStreamEvent::Completed {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         finish_reason: Some(CompletionFinishReason::ToolCalls),
                         usage: None,
                         provider_metadata: None,
@@ -2010,13 +2025,13 @@ mod tests {
                 };
                 vec![
                     Ok(CompletionStreamEvent::TextDelta {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         delta,
                     }),
                     Ok(CompletionStreamEvent::Completed {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         finish_reason: Some(CompletionFinishReason::Stop),
                         usage: None,
                         provider_metadata: None,
@@ -2025,13 +2040,13 @@ mod tests {
             } else {
                 vec![
                     Ok(CompletionStreamEvent::TextDelta {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         delta: format!("echo:{last_user_text}"),
                     }),
                     Ok(CompletionStreamEvent::Completed {
-                        provider_id: "scripted".to_string(),
-                        model: "scripted-model".to_string(),
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
                         finish_reason: Some(CompletionFinishReason::Stop),
                         usage: None,
                         provider_metadata: None,
@@ -2066,8 +2081,7 @@ mod tests {
 
     fn run_options() -> SessionRunOptions {
         SessionRunOptions {
-            provider_id: "scripted".to_string(),
-            model: "scripted-model".to_string(),
+            model: scripted_model_ref(),
             system: None,
             temperature: None,
             max_output_tokens: Some(128),

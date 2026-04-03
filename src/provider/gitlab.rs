@@ -10,6 +10,7 @@ use std::{
 
 use crate::{
     error::AppError,
+    model::{ModelId, ProviderId},
     provider::{
         AnthropicProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ModelProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderModel, auth::AuthData,
@@ -58,7 +59,7 @@ pub struct GitlabProvider {
     api_key: String,
     instance_url: String,
     ai_gateway_url: String,
-    default_model: String,
+    default_model: ModelId,
     ai_gateway_headers: HashMap<String, String>,
     feature_flags: HashMap<String, bool>,
     direct_access_cache: Mutex<Option<DirectAccessToken>>,
@@ -133,7 +134,7 @@ impl GitlabProvider {
             api_key: token.into(),
             instance_url: normalize_url(config.instance_url),
             ai_gateway_url: normalize_url(config.ai_gateway_url),
-            default_model: config.default_model,
+            default_model: ModelId::new(config.default_model),
             ai_gateway_headers: config.ai_gateway_headers,
             feature_flags: config.feature_flags,
             direct_access_cache: Mutex::new(None),
@@ -257,7 +258,7 @@ impl GitlabProvider {
                 )
                 .with_extra_headers(token.headers);
                 let mut result = provider.complete(request).await?;
-                result.provider_id = PROVIDER_ID.to_owned();
+                result.provider_id = ProviderId::new(PROVIDER_ID);
                 return Ok(result);
             }
 
@@ -283,7 +284,7 @@ impl GitlabProvider {
         .with_extra_headers(token.headers);
 
         let mut result = provider.complete(request).await?;
-        result.provider_id = PROVIDER_ID.to_owned();
+        result.provider_id = ProviderId::new(PROVIDER_ID);
         Ok(result)
     }
 
@@ -344,43 +345,39 @@ impl ModelProvider for GitlabProvider {
         PROVIDER_ID
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
         crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::Gitlab, model)
+            .capabilities_for_family(crate::provider::CapabilityFamily::Gitlab, model.as_str())
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        crate::provider::default_model_metadata_registry()
+            .metadata_for_family(crate::provider::CapabilityFamily::Gitlab, model.as_str())
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         Ok(vec![
             ProviderModel::new(PROVIDER_ID, self.default_model.clone())
                 .with_display_name("GitLab Duo model")
-                .with_capabilities(self.model_capabilities(self.default_model.as_str())),
+                .with_capabilities(self.model_capabilities(&self.default_model)),
         ])
     }
 
-    async fn complete(
-        &self,
-        mut request: CompletionRequest,
-    ) -> Result<CompletionResponse, AppError> {
-        if request.model.trim().is_empty() {
-            request.model = self.default_model.clone();
-        }
+    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         self.complete_via_backend(request).await
     }
 
     async fn complete_stream(
         &self,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        if request.model.trim().is_empty() {
-            request.model = self.default_model.clone();
-        }
         self.complete_stream_via_backend(request).await
     }
 }
@@ -405,9 +402,10 @@ struct DirectAccessResponse {
 }
 
 fn remap_stream_provider_id(event: CompletionStreamEvent) -> CompletionStreamEvent {
+    let provider_id = ProviderId::new(PROVIDER_ID);
     match event {
         CompletionStreamEvent::TextDelta { model, delta, .. } => CompletionStreamEvent::TextDelta {
-            provider_id: PROVIDER_ID.to_owned(),
+            provider_id: provider_id.clone(),
             model,
             delta,
         },
@@ -419,7 +417,7 @@ fn remap_stream_provider_id(event: CompletionStreamEvent) -> CompletionStreamEve
             arguments_delta,
             ..
         } => CompletionStreamEvent::ToolCallDelta {
-            provider_id: PROVIDER_ID.to_owned(),
+            provider_id: provider_id.clone(),
             model,
             stream_key,
             id,
@@ -433,7 +431,7 @@ fn remap_stream_provider_id(event: CompletionStreamEvent) -> CompletionStreamEve
             provider_metadata,
             ..
         } => CompletionStreamEvent::Completed {
-            provider_id: PROVIDER_ID.to_owned(),
+            provider_id,
             model,
             finish_reason,
             usage,
@@ -560,7 +558,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "gpt-4o-mini".to_owned(),
+                model: crate::model::ModelId::new("gpt-4o-mini"),
                 system: None,
                 messages: vec![crate::message::Message::prompt_text(
                     crate::role::Role::User,
@@ -580,13 +578,13 @@ mod tests {
                 CompletionStreamEvent::TextDelta {
                     provider_id, delta, ..
                 } => {
-                    assert_eq!(provider_id, "gitlab");
+                    assert_eq!(provider_id.as_str(), "gitlab");
                     if delta == "Hello" {
                         saw_delta = true;
                     }
                 }
                 CompletionStreamEvent::Completed { provider_id, .. } => {
-                    assert_eq!(provider_id, "gitlab");
+                    assert_eq!(provider_id.as_str(), "gitlab");
                     saw_done = true;
                 }
                 _ => {}

@@ -3,26 +3,31 @@ use futures_core::Stream;
 use futures_util::stream;
 
 use crate::error::AppError;
+use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata};
 
-use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ProviderModel,
-};
+use super::{CompletionRequest, CompletionResponse, CompletionStreamEvent};
 
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
     fn id(&self) -> &str;
-    fn default_model(&self) -> &str;
+    fn default_model(&self) -> &ModelId;
 
-    fn model_capabilities(&self, model: &str) -> ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
         let _ = model;
         ModelCapabilities::default()
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
+        let _ = model;
+        ModelMetadata::default()
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         StreamResumePolicy::Disabled
     }
 
-    async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError>;
+    async fn list_models(&self) -> Result<Vec<Model>, AppError>;
+
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError>;
 
     async fn complete_stream(

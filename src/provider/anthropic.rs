@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use crate::{
     error::AppError,
     message::{AttachmentItem, AttachmentKind, Message, MessageUsage},
+    model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, sse, utils,
@@ -23,7 +24,7 @@ pub struct AnthropicProvider {
     client: reqwest::Client,
     api_key: String,
     base_url: String,
-    default_model: String,
+    default_model: ModelId,
     include_thinking: bool,
     auth_header: String,
     auth_scheme: Option<String>,
@@ -41,7 +42,7 @@ impl AnthropicProvider {
             client,
             api_key: api_key.into(),
             base_url: utils::normalize_base_url(base_url.into().as_str()),
-            default_model: default_model.into(),
+            default_model: ModelId::new(default_model),
             include_thinking: false,
             auth_header: "x-api-key".to_owned(),
             auth_scheme: None,
@@ -209,13 +210,18 @@ impl ModelProvider for AnthropicProvider {
         PROVIDER_ID
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
         crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::Anthropic, model)
+            .capabilities_for_family(crate::provider::CapabilityFamily::Anthropic, model.as_str())
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        crate::provider::default_model_metadata_registry()
+            .metadata_for_family(crate::provider::CapabilityFamily::Anthropic, model.as_str())
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -234,9 +240,9 @@ impl ModelProvider for AnthropicProvider {
             .data
             .into_iter()
             .map(|m| {
-                let capabilities = self.model_capabilities(m.id.as_str());
-                let mut model =
-                    ProviderModel::new(PROVIDER_ID, m.id).with_capabilities(capabilities);
+                let mut model = ProviderModel::new(PROVIDER_ID, m.id);
+                let capabilities = self.model_capabilities(&model.id);
+                model = model.with_capabilities(capabilities);
                 model.display_name = m.display_name;
                 model
             })
@@ -244,11 +250,7 @@ impl ModelProvider for AnthropicProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -272,7 +274,7 @@ impl ModelProvider for AnthropicProvider {
         }
 
         let body = AnthropicMessagesRequest {
-            model: model.clone(),
+            model: model.to_string(),
             max_tokens: request.max_output_tokens.unwrap_or(4096),
             system: (!system_chunks.is_empty()).then(|| system_chunks.join("\n\n")),
             messages,
@@ -325,8 +327,8 @@ impl ModelProvider for AnthropicProvider {
         }
 
         Ok(CompletionResponse {
-            provider_id: PROVIDER_ID.to_owned(),
-            model: response.model,
+            provider_id: ProviderId::new(PROVIDER_ID),
+            model: ModelId::new(response.model),
             text,
             finish_reason,
             tool_calls,
@@ -342,11 +344,7 @@ impl ModelProvider for AnthropicProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -370,7 +368,7 @@ impl ModelProvider for AnthropicProvider {
         }
 
         let body = AnthropicMessagesRequest {
-            model: model.clone(),
+            model: model.to_string(),
             max_tokens: request.max_output_tokens.unwrap_or(4096),
             system: (!system_chunks.is_empty()).then(|| system_chunks.join("\n\n")),
             messages,
@@ -395,7 +393,7 @@ impl ModelProvider for AnthropicProvider {
         }
 
         let mut events = sse::json_events(response);
-        let provider_id = PROVIDER_ID.to_owned();
+        let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = model;
         let include_thinking = self.include_thinking;
 
@@ -911,7 +909,7 @@ mod tests {
 
         let response = provider
             .complete(CompletionRequest {
-                model: "claude-3-7-sonnet-latest".to_owned(),
+                model: crate::model::ModelId::new("claude-3-7-sonnet-latest"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -982,7 +980,7 @@ mod tests {
 
         let response = provider
             .complete(CompletionRequest {
-                model: "claude-3-7-sonnet-latest".to_owned(),
+                model: crate::model::ModelId::new("claude-3-7-sonnet-latest"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: vec![sample_tool_definition()],
@@ -1022,7 +1020,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "claude-3-7-sonnet-latest".to_owned(),
+                model: crate::model::ModelId::new("claude-3-7-sonnet-latest"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),
@@ -1088,7 +1086,7 @@ mod tests {
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
-                model: "claude-3-7-sonnet-latest".to_owned(),
+                model: crate::model::ModelId::new("claude-3-7-sonnet-latest"),
                 system: None,
                 messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
                 tools: Vec::new(),

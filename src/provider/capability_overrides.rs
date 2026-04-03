@@ -5,10 +5,10 @@ use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
+use crate::model::{CapabilitySupport, Model, ModelCapabilities, ModelId};
 
 use super::{
-    CapabilitySupport, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    ModelCapabilities, ModelProvider, ProviderModel, StreamResumePolicy,
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider, StreamResumePolicy,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -152,30 +152,26 @@ impl ModelProvider for CapabilityOverrideProvider {
         self.target.id()
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         self.target.default_model()
     }
 
-    fn model_capabilities(&self, model: &str) -> ModelCapabilities {
-        let resolved_model = if model.trim().is_empty() {
-            self.default_model()
-        } else {
-            model.trim()
-        };
-        self.apply_overrides(
-            resolved_model,
-            self.target.model_capabilities(resolved_model),
-        )
+    fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
+        self.apply_overrides(model.as_str(), self.target.model_capabilities(model))
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        self.target.model_metadata(model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         self.target.stream_resume_policy()
     }
 
-    async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+    async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let mut models = self.target.list_models().await?;
         for model in &mut models {
-            let fallback = self.target.model_capabilities(model.id.as_str());
+            let fallback = self.target.model_capabilities(&model.id);
             let base = model.capabilities.clone().with_fallbacks_from(&fallback);
             model.capabilities = self.apply_overrides(model.id.as_str(), base);
         }

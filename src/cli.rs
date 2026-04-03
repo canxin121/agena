@@ -9,7 +9,7 @@ use crate::{
         LoadConfigRequest, ProcessEnvironment,
     },
     error::AppError,
-    provider::{ModelCapabilities, ProviderModel},
+    provider::{ModelCapabilities, ModelMetadata, ProviderModel},
     runtime::{AgenaRuntime, TracingFilterReloadHandle},
 };
 
@@ -86,7 +86,7 @@ pub struct ProviderModelsArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct ProviderCapabilitiesArgs {
-    pub provider_id: String,
+    pub target: String,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
@@ -102,6 +102,7 @@ struct ProviderListOutput {
 struct ProviderSummary {
     provider_id: String,
     default_model: String,
+    default_model_ref: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,7 +115,9 @@ struct ProviderModelsOutput {
 struct ProviderCapabilitiesOutput {
     provider_id: String,
     model: String,
+    model_ref: String,
     capabilities: ModelCapabilities,
+    metadata: ModelMetadata,
 }
 
 impl AgenaCli {
@@ -252,8 +255,12 @@ impl AgenaCli {
                         registry
                             .get(provider_id.as_str())
                             .map(|provider| ProviderSummary {
+                                default_model_ref: format!(
+                                    "{provider_id}/{}",
+                                    provider.default_model()
+                                ),
+                                default_model: provider.default_model().to_string(),
                                 provider_id,
-                                default_model: provider.default_model().to_owned(),
                             })
                     })
                     .collect::<Vec<_>>();
@@ -271,23 +278,18 @@ impl AgenaCli {
                 )
             }
             ProviderSubcommand::Capabilities(args) => {
-                let requested_model = args.model.unwrap_or_default();
-                let provider = registry.get(args.provider_id.as_str()).ok_or_else(|| {
-                    AppError::Config(format!("provider not found: {}", args.provider_id))
-                })?;
-                let resolved_model = if requested_model.trim().is_empty() {
-                    provider.default_model().to_owned()
-                } else {
-                    requested_model.trim().to_owned()
-                };
-                let capabilities = registry
-                    .model_capabilities(args.provider_id.as_str(), resolved_model.as_str())?;
+                let model_ref =
+                    registry.resolve_model_target(args.target.as_str(), args.model.as_deref())?;
+                let capabilities = registry.model_capabilities(&model_ref)?;
+                let metadata = registry.model_metadata(&model_ref)?;
                 render_serialized(
                     args.format,
                     &ProviderCapabilitiesOutput {
-                        provider_id: args.provider_id,
-                        model: resolved_model,
+                        provider_id: model_ref.provider_id.to_string(),
+                        model: model_ref.model_id.to_string(),
+                        model_ref: model_ref.to_string(),
                         capabilities,
+                        metadata,
                     },
                 )
             }
@@ -376,7 +378,7 @@ image_input = "unsupported"
             overrides: Vec::new(),
             command: Some(AgenaCommand::Provider(ProviderCommand {
                 command: Some(ProviderSubcommand::Capabilities(ProviderCapabilitiesArgs {
-                    provider_id: "prod".to_owned(),
+                    target: "prod".to_owned(),
                     model: None,
                     format: ConfigOutputFormat::Json,
                 })),
@@ -388,7 +390,7 @@ image_input = "unsupported"
                 &loader,
                 ProviderCommand {
                     command: Some(ProviderSubcommand::Capabilities(ProviderCapabilitiesArgs {
-                        provider_id: "prod".to_owned(),
+                        target: "prod/gpt-5".to_owned(),
                         model: None,
                         format: ConfigOutputFormat::Json,
                     })),
@@ -400,8 +402,10 @@ image_input = "unsupported"
 
         assert_eq!(value["provider_id"], "prod");
         assert_eq!(value["model"], "gpt-5");
+        assert_eq!(value["model_ref"], "prod/gpt-5");
         assert_eq!(value["capabilities"]["image_input"], "unsupported");
         assert_eq!(value["capabilities"]["document_input"], "supported");
+        assert_eq!(value["metadata"]["family"], "gpt");
     }
 
     #[tokio::test]
@@ -438,6 +442,7 @@ default_model = "claude-sonnet-4-5"
 
         assert_eq!(value["provider_id"], "gitlab");
         assert_eq!(value["models"][0]["id"], "claude-sonnet-4-5");
+        assert_eq!(value["models"][0]["metadata"]["family"], "claude");
         assert_eq!(
             value["models"][0]["capabilities"]["tool_calling"],
             "supported"
@@ -488,13 +493,15 @@ default_model = "gpt-5"
             .expect("providers should be an array");
 
         assert!(providers.iter().any(|item| {
-            item["provider_id"] == "openai" && item["default_model"] == "gpt-4.1-mini"
+            item["provider_id"] == "openai"
+                && item["default_model"] == "gpt-4.1-mini"
+                && item["default_model_ref"] == "openai/gpt-4.1-mini"
         }));
-        assert!(
-            providers
-                .iter()
-                .any(|item| { item["provider_id"] == "prod" && item["default_model"] == "gpt-5" })
-        );
+        assert!(providers.iter().any(|item| {
+            item["provider_id"] == "prod"
+                && item["default_model"] == "gpt-5"
+                && item["default_model_ref"] == "prod/gpt-5"
+        }));
     }
 
     #[test]

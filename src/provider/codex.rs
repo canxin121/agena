@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::{
     error::AppError,
     message::{AttachmentItem, AttachmentKind, AttachmentSource, MessageUsage},
+    model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy,
@@ -26,7 +27,7 @@ pub struct CodexProvider {
     auth_store: Arc<dyn AuthStore>,
     auth_provider_id: String,
     state: Mutex<CodexAuthState>,
-    default_model: String,
+    default_model: ModelId,
 }
 
 impl CodexProvider {
@@ -77,7 +78,7 @@ impl CodexProvider {
                 expires_at_ms: *expires_at_ms,
                 account_id: account_id.clone(),
             }),
-            default_model: default_model.into(),
+            default_model: ModelId::new(default_model),
         })
     }
 
@@ -515,13 +516,18 @@ impl ModelProvider for CodexProvider {
         PROVIDER_ID
     }
 
-    fn default_model(&self) -> &str {
+    fn default_model(&self) -> &ModelId {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
         crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model)
+            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
+        crate::provider::default_model_metadata_registry()
+            .metadata_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -532,21 +538,17 @@ impl ModelProvider for CodexProvider {
         Ok(vec![
             ProviderModel::new(PROVIDER_ID, self.default_model.clone())
                 .with_display_name("Codex OAuth model")
-                .with_capabilities(self.model_capabilities(self.default_model.as_str())),
+                .with_capabilities(self.model_capabilities(&self.default_model)),
         ])
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         let input = Self::to_responses_input(&request);
 
         let body = OpenAiResponsesRequest::new(
-            model.clone(),
+            model.to_string(),
             input,
             request.tools.as_slice(),
             request.max_output_tokens,
@@ -585,8 +587,8 @@ impl ModelProvider for CodexProvider {
         }
 
         Ok(CompletionResponse {
-            provider_id: PROVIDER_ID.to_owned(),
-            model: payload.model.unwrap_or(model),
+            provider_id: ProviderId::new(PROVIDER_ID),
+            model: ModelId::new(payload.model.unwrap_or_else(|| model.to_string())),
             text,
             finish_reason,
             tool_calls,
@@ -602,16 +604,12 @@ impl ModelProvider for CodexProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let model = if request.model.trim().is_empty() {
-            self.default_model.clone()
-        } else {
-            request.model.clone()
-        };
+        let model = request.model.clone();
 
         let input = Self::to_responses_input(&request);
 
         let body = OpenAiResponsesRequest::new(
-            model.clone(),
+            model.to_string(),
             input,
             request.tools.as_slice(),
             request.max_output_tokens,
@@ -625,7 +623,7 @@ impl ModelProvider for CodexProvider {
         }
 
         let mut event_stream = sse::json_events(response);
-        let provider_id = PROVIDER_ID.to_owned();
+        let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = model;
 
         let stream = async_stream::try_stream! {
@@ -1067,7 +1065,7 @@ mod tests {
     #[test]
     fn responses_input_encodes_tool_result_images_as_multimodal_function_output() {
         let request = CompletionRequest {
-            model: "gpt-5.3-codex".to_owned(),
+            model: crate::model::ModelId::new("gpt-5.3-codex"),
             system: None,
             messages: vec![tool_result_message_with_image("call_1")],
             tools: Vec::new(),

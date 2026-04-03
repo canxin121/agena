@@ -1,7 +1,6 @@
 use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
-use crate::checkpoint::SessionRestoreMode;
 use crate::message::{ExecutionStatus, MessagePart};
 
 fn is_false(value: &bool) -> bool {
@@ -34,17 +33,6 @@ pub struct StreamErrorEvent {
     #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub error: ErrorInfo,
-    pub ts_ms: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionRestoredEvent {
-    #[serde(alias = "thread_id")]
-    pub session_id: i64,
-    pub restore_point_id: i64,
-    pub mode: SessionRestoreMode,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub restored_paths: Vec<String>,
     pub ts_ms: i64,
 }
 
@@ -154,7 +142,6 @@ pub enum SessionEvent {
     RunStarted(RunStartedEvent),
     #[serde(alias = "thread_failed")]
     RunFailed(RunFailedEvent),
-    SessionRestored(SessionRestoredEvent),
     MessagePartUpdated(MessagePartUpdatedEvent),
     MessagePartDelta(MessagePartDeltaEvent),
     CommandBegin(CommandBeginEvent),

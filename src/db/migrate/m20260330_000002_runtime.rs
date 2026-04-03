@@ -17,10 +17,6 @@ impl MigrationTrait for Migration {
             .create_table_from_entity(entities::session_event::Entity)
             .if_not_exists()
             .to_owned();
-        let create_session_checkpoints = schema
-            .create_table_from_entity(entities::session_checkpoint::Entity)
-            .if_not_exists()
-            .to_owned();
         let create_permission_rules = schema
             .create_table_from_entity(entities::permission_rule::Entity)
             .if_not_exists()
@@ -29,10 +25,6 @@ impl MigrationTrait for Migration {
         manager
             .get_connection()
             .execute(backend.build(&create_session_events))
-            .await?;
-        manager
-            .get_connection()
-            .execute(backend.build(&create_session_checkpoints))
             .await?;
         manager
             .get_connection()
@@ -52,13 +44,6 @@ impl MigrationTrait for Migration {
                 .table(entities::session_event::Entity)
                 .col(entities::session_event::Column::SessionId)
                 .col(entities::session_event::Column::CreatedAtMs)
-                .if_not_exists()
-                .to_owned(),
-            Index::create()
-                .name("idx_agena_session_checkpoint_upto_seq")
-                .table(entities::session_checkpoint::Entity)
-                .col(entities::session_checkpoint::Column::SessionId)
-                .col(entities::session_checkpoint::Column::UptoSeq)
                 .if_not_exists()
                 .to_owned(),
             Index::create()
@@ -84,14 +69,6 @@ impl MigrationTrait for Migration {
                 Table::drop()
                     .if_exists()
                     .table(entities::permission_rule::Entity)
-                    .to_owned(),
-            )
-            .await?;
-        manager
-            .drop_table(
-                Table::drop()
-                    .if_exists()
-                    .table(entities::session_checkpoint::Entity)
                     .to_owned(),
             )
             .await?;

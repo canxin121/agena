@@ -46,9 +46,7 @@ pub(super) fn execute_builtin(
             view.metadata
                 .insert("changed_files".to_string(), result.files.len().to_string());
 
-            Ok(BuiltinExecution::new(output, view)
-                .with_apply_patch(result.clone())
-                .with_filesystem_checkpoint(result.filesystem_checkpoint))
+            Ok(BuiltinExecution::new(output, view).with_apply_patch(result.clone()))
         }
         BuiltinToolInput::Read(payload) => read::execute(executor, payload),
         BuiltinToolInput::ViewFile(payload) => view_file::execute(executor, payload),

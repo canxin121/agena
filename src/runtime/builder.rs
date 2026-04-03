@@ -13,7 +13,7 @@ use crate::{
     config::{ConfigLoader, ConfigResolution, LoadConfigRequest, ProcessEnvironment},
     db::init_schema,
     provider::auth::AuthManager,
-    session::SessionService,
+    session::SessionManager,
 };
 
 use super::{
@@ -185,8 +185,8 @@ impl AgenaRuntime {
         Arc::new(self.current_snapshot().config_resolution().clone())
     }
 
-    pub fn session_service(&self) -> Option<Arc<SessionService>> {
-        self.current_snapshot().session_service()
+    pub fn session_manager(&self) -> Option<Arc<SessionManager>> {
+        self.current_snapshot().session_manager()
     }
 
     pub fn auth_store(&self) -> RuntimeAuthStore {
@@ -352,7 +352,7 @@ api_key = "test"
     }
 
     #[tokio::test]
-    async fn builder_creates_session_service_when_database_is_configured() {
+    async fn builder_creates_session_manager_when_database_is_configured() {
         let path = write_temp_config(
             r#"
 [providers.openai]
@@ -378,7 +378,7 @@ api_key = "test"
             .await
             .expect("runtime should build");
 
-        assert!(runtime.session_service().is_some());
+        assert!(runtime.session_manager().is_some());
 
         runtime.shutdown();
         let _ = fs::remove_file(path);

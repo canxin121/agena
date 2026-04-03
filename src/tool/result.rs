@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use crate::checkpoint::FilesystemCheckpointCapture;
 use crate::message::{BuiltinToolOutput, ToolAttachment, ToolOutput};
 
 use super::ApplyPatchExecution;
@@ -29,7 +28,6 @@ pub struct BuiltinExecution {
     pub output: BuiltinToolOutput,
     pub view: ToolExecutionView,
     pub apply_patch: Option<ApplyPatchExecution>,
-    pub filesystem_checkpoint: Option<FilesystemCheckpointCapture>,
 }
 
 impl BuiltinExecution {
@@ -38,17 +36,11 @@ impl BuiltinExecution {
             output,
             view,
             apply_patch: None,
-            filesystem_checkpoint: None,
         }
     }
 
     pub fn with_apply_patch(mut self, execution: ApplyPatchExecution) -> Self {
         self.apply_patch = Some(execution);
-        self
-    }
-
-    pub fn with_filesystem_checkpoint(mut self, checkpoint: FilesystemCheckpointCapture) -> Self {
-        self.filesystem_checkpoint = Some(checkpoint);
         self
     }
 }
@@ -58,7 +50,6 @@ pub struct ToolInvocationExecution {
     pub output: ToolOutput,
     pub view: ToolExecutionView,
     pub apply_patch: Option<ApplyPatchExecution>,
-    pub filesystem_checkpoint: Option<FilesystemCheckpointCapture>,
 }
 
 impl ToolInvocationExecution {
@@ -67,17 +58,11 @@ impl ToolInvocationExecution {
             output,
             view,
             apply_patch: None,
-            filesystem_checkpoint: None,
         }
     }
 
     pub fn with_apply_patch(mut self, execution: ApplyPatchExecution) -> Self {
         self.apply_patch = Some(execution);
-        self
-    }
-
-    pub fn with_filesystem_checkpoint(mut self, checkpoint: FilesystemCheckpointCapture) -> Self {
-        self.filesystem_checkpoint = Some(checkpoint);
         self
     }
 }
@@ -90,7 +75,6 @@ impl From<BuiltinExecution> for ToolInvocationExecution {
             },
             view: value.view,
             apply_patch: value.apply_patch,
-            filesystem_checkpoint: value.filesystem_checkpoint,
         }
     }
 }

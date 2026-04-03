@@ -11,11 +11,13 @@ pub use part::{
     BashToolInput, BuiltinToolInput, BuiltinToolOutput, CommandExecutionPart, CustomToolOutput,
     ErrorPart, ExecutionStatus, FileChangeEntry, FileChangeKind, FileChangePart, GlobToolInput,
     GrepToolInput, McpToolOutput, MessagePart, MessagePartSummary, PartContent, PartKind,
-    PartStateTransitionError, PermissionRequestPart, ReadToolInput, ReasoningPart, StructuredField,
-    StructuredObject, StructuredValue, TaskSubagentType, TaskToolInput, TextPart, TimeRange,
-    TodoItem, TodoListPart, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment,
-    ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput,
-    WebSearchPart, WebSearchResult,
+    PartStateTransitionError, PermissionRequestPart, ReadToolInput, ReasoningPart,
+    RequestUserInputToolInput, StructuredField, StructuredObject, StructuredValue,
+    TaskSubagentType, TaskToolInput, TextPart, TimeRange, TodoItem, TodoListPart, TodoPriority,
+    TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput,
+    ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
+    UserInputReplyKind, UserInputRequest, UserInputRequestPart, ViewFileToolInput, WebSearchPart,
+    WebSearchResult,
 };
 pub use state::{MessageStateStore, MessageStateStoreError, MessageUpdate};
 pub use usage::MessageUsage;

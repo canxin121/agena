@@ -9,10 +9,11 @@ use aws_credential_types::Credentials;
 use crate::{
     plugin::PluginManager,
     provider::{
-        AmazonBedrockProvider, AnthropicProvider, CloudflareAiGatewayProvider, CodexProvider,
-        CopilotProvider, CopilotProviderOptions as RuntimeCopilotProviderOptions, GeminiProvider,
-        GitlabProvider, GitlabProviderConfig, GoogleVertexProvider, ModelProvider, NamedProvider,
-        OpenAiCompatibleProvider, OpenAiProvider, ProviderRegistry,
+        AmazonBedrockProvider, AnthropicProvider, CapabilityOverrideProvider,
+        CloudflareAiGatewayProvider, CodexProvider, CopilotProvider,
+        CopilotProviderOptions as RuntimeCopilotProviderOptions, GeminiProvider, GitlabProvider,
+        GitlabProviderConfig, GoogleVertexProvider, ModelProvider, NamedProvider,
+        OpenAiCompatibleProvider, OpenAiProvider, ProviderAliasRegistration, ProviderRegistry,
         auth::{AuthData, AuthStore},
     },
 };
@@ -44,9 +45,11 @@ impl ResolvedConfig {
             }
 
             match &resolved.definition {
-                ProviderDefinition::Alias(alias) => {
-                    aliases.push((provider_id.clone(), alias.clone()))
-                }
+                ProviderDefinition::Alias(alias) => aliases.push((
+                    provider_id.clone(),
+                    alias.clone(),
+                    resolved.capability_overrides.clone(),
+                )),
                 _ => {
                     let provider = build_provider(
                         provider_id.as_str(),
@@ -131,7 +134,7 @@ fn build_provider(
     auth_snapshot: &HashMap<String, AuthData>,
     env: &dyn ConfigEnvironment,
 ) -> Result<Arc<dyn ModelProvider>, ConfigError> {
-    match &resolved.definition {
+    let provider = match &resolved.definition {
         ProviderDefinition::Alias(_) => Err(ConfigError::Validation(format!(
             "provider `{provider_id}` alias should be registered in alias phase"
         ))),
@@ -313,38 +316,52 @@ fn build_provider(
             provider_id,
             build_cloudflare_provider(provider_id, client, config, env)?,
         )),
-    }
+    }?;
+
+    Ok(apply_capability_overrides(
+        provider,
+        resolved.capability_overrides.clone(),
+    ))
 }
 
 fn register_aliases(
     registry: &mut ProviderRegistry,
-    mut aliases: Vec<(String, super::ProviderAliasConfig)>,
+    mut aliases: Vec<(
+        String,
+        super::ProviderAliasConfig,
+        Vec<crate::provider::ProviderCapabilityOverrideRule>,
+    )>,
 ) -> Result<(), ConfigError> {
     while !aliases.is_empty() {
         let mut remaining = Vec::new();
         let mut progressed = false;
 
-        for (alias_id, alias) in aliases {
-            let Some(target) = registry.get(alias.target_provider_id.as_str()) else {
-                remaining.push((alias_id, alias));
+        for (alias_id, alias, capability_overrides) in aliases {
+            let Some(_target) = registry.get(alias.target_provider_id.as_str()) else {
+                remaining.push((alias_id, alias, capability_overrides));
                 continue;
             };
 
-            let named = alias.default_model.as_ref().map_or_else(
-                || NamedProvider::new(alias_id.clone(), target.clone()),
-                |model| {
-                    NamedProvider::new(alias_id.clone(), target.clone())
-                        .with_default_model(model.clone())
-                },
-            );
-            registry.register_arc(Arc::new(named));
+            let mut registration =
+                ProviderAliasRegistration::new(alias_id.clone(), alias.target_provider_id.clone());
+            if let Some(model) = alias.default_model {
+                registration = registration.with_default_model(model);
+            }
+            if !capability_overrides.is_empty() {
+                registration = registration.with_capability_overrides(capability_overrides);
+            }
+            registry.register_alias(registration).map_err(|err| {
+                ConfigError::Validation(format!(
+                    "failed to register provider alias `{alias_id}`: {err}"
+                ))
+            })?;
             progressed = true;
         }
 
         if !progressed {
             let unresolved = remaining
                 .into_iter()
-                .map(|(alias_id, alias)| {
+                .map(|(alias_id, alias, _)| {
                     format!("{alias_id}->{target}", target = alias.target_provider_id)
                 })
                 .collect::<Vec<_>>()
@@ -501,6 +518,13 @@ where
     }
 }
 
+fn apply_capability_overrides(
+    provider: Arc<dyn ModelProvider>,
+    rules: Vec<crate::provider::ProviderCapabilityOverrideRule>,
+) -> Arc<dyn ModelProvider> {
+    CapabilityOverrideProvider::new(provider, rules)
+}
+
 fn normalize_text(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
@@ -526,6 +550,7 @@ mod tests {
     };
 
     use crate::config::{ConfigEnvironment, ConfigLoader, LoadConfigRequest};
+    use crate::provider::CapabilitySupport;
 
     #[derive(Clone, Default)]
     struct TestEnvironment {
@@ -580,6 +605,49 @@ default_model = "gpt-5"
         let ids = registry.provider_ids();
         assert!(ids.iter().any(|id| id == "openai"));
         assert!(ids.iter().any(|id| id == "prod"));
+    }
+
+    #[test]
+    fn registry_builder_applies_capability_overrides_to_alias_models() {
+        let path = write_temp_file(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.prod]
+kind = "alias"
+target_provider_id = "openai"
+default_model = "gpt-5"
+
+[[providers.prod.capability_overrides]]
+model = "gpt-5"
+image_input = "unsupported"
+"#,
+        );
+
+        let env = TestEnvironment {
+            vars: BTreeMap::from([("OPENAI_API_KEY".to_owned(), "sk-test".to_owned())]),
+        };
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                ..LoadConfigRequest::default()
+            })
+            .expect("config should load");
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build");
+
+        let capabilities = registry
+            .model_capabilities("prod", "")
+            .expect("aliased provider capabilities should resolve");
+        assert_eq!(capabilities.image_input, CapabilitySupport::Unsupported);
+        assert_eq!(capabilities.document_input, CapabilitySupport::Supported);
     }
 
     fn write_temp_file(content: &str) -> PathBuf {

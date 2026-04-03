@@ -79,4 +79,6 @@ pub enum PartKind {
     Attachment,
     #[sea_orm(num_value = 10)]
     PermissionRequest,
+    #[sea_orm(num_value = 11)]
+    UserInputRequest,
 }

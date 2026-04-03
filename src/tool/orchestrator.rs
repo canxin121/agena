@@ -2,7 +2,8 @@ use crate::message::{BuiltinToolInput, BuiltinToolOutput, FileChangeEntry, FileC
 
 use super::{
     BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
-    apply_patch, bash, glob, grep, read, task, todo_write, tool_search,
+    apply_patch, bash, glob, grep, read, request_user_input, task, todo_write, tool_search,
+    view_file,
 };
 
 pub(super) fn execute_builtin(
@@ -45,14 +46,18 @@ pub(super) fn execute_builtin(
             view.metadata
                 .insert("changed_files".to_string(), result.files.len().to_string());
 
-            Ok(BuiltinExecution::new(output, view).with_apply_patch(result))
+            Ok(BuiltinExecution::new(output, view)
+                .with_apply_patch(result.clone())
+                .with_filesystem_checkpoint(result.filesystem_checkpoint))
         }
         BuiltinToolInput::Read(payload) => read::execute(executor, payload),
+        BuiltinToolInput::ViewFile(payload) => view_file::execute(executor, payload),
         BuiltinToolInput::Glob(payload) => glob::execute(executor, payload),
         BuiltinToolInput::Grep(payload) => grep::execute(executor, payload),
         BuiltinToolInput::Task(payload) => task::execute(executor, payload),
         BuiltinToolInput::ToolSearch(payload) => tool_search::execute(executor, payload),
         BuiltinToolInput::TodoWrite(payload) => Ok(todo_write::execute(payload)),
+        BuiltinToolInput::RequestUserInput(payload) => request_user_input::execute(payload),
         BuiltinToolInput::Bash(payload) => bash::execute(executor, payload, context),
     }
 }

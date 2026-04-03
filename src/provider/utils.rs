@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
+use base64::Engine as _;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::error::{AppError, ProviderErrorKind};
 use crate::message::{
-    AttachmentSource, Message, PartContent, TodoListPart, TodoPriority, TodoStatus,
-    ToolExecutionPart, ToolInvocation,
+    AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, TodoListPart,
+    TodoPriority, TodoStatus, ToolExecutionPart, ToolInvocation,
 };
 use crate::role::Role;
 
@@ -15,8 +16,8 @@ pub enum ProjectedSessionPart {
     Text {
         text: String,
     },
-    ImageUrl {
-        url: String,
+    Attachment {
+        item: AttachmentItem,
     },
     ToolCall {
         id: String,
@@ -33,7 +34,7 @@ impl ProjectedSessionPart {
     pub fn as_text_lossy(&self) -> String {
         match self {
             Self::Text { text } => text.clone(),
-            Self::ImageUrl { url } => format!("[image:{url}]"),
+            Self::Attachment { item } => attachment_hint(item),
             Self::ToolCall { id, name, .. } => format!("[tool_call:{name}:{id}]"),
             Self::ToolResult { tool_call_id, .. } => format!("[tool_result:{tool_call_id}]"),
         }
@@ -55,14 +56,11 @@ pub fn project_session_parts(message: &Message) -> Vec<ProjectedSessionPart> {
                     });
                 }
             }
-            PartContent::Attachment(attachment) if message.role != Role::Tool => {
+            PartContent::Attachment(attachment) => {
                 for item in &attachment.attachments {
-                    if let AttachmentSource::Url { url } = &item.source {
-                        parts.push(ProjectedSessionPart::ImageUrl { url: url.clone() });
-                    }
+                    parts.push(ProjectedSessionPart::Attachment { item: item.clone() });
                 }
             }
-            PartContent::Attachment(_) => {}
             PartContent::TodoList(todo) if message.role != Role::Tool => {
                 parts.push(ProjectedSessionPart::Text {
                     text: render_todo_list(todo),
@@ -129,6 +127,24 @@ pub fn projected_parts_text_lossy(parts: &[ProjectedSessionPart]) -> String {
         .join("")
 }
 
+pub fn first_tool_result(parts: &[ProjectedSessionPart]) -> Option<(String, String)> {
+    parts.iter().find_map(|part| match part {
+        ProjectedSessionPart::ToolResult {
+            tool_call_id,
+            output_json,
+        } => Some((tool_call_id.clone(), output_json.clone())),
+        _ => None,
+    })
+}
+
+pub fn non_tool_result_parts(parts: &[ProjectedSessionPart]) -> Vec<ProjectedSessionPart> {
+    parts
+        .iter()
+        .filter(|part| !matches!(part, ProjectedSessionPart::ToolResult { .. }))
+        .cloned()
+        .collect()
+}
+
 pub fn project_session_text_lossy(message: &Message) -> String {
     let parts = project_session_parts(message);
     if parts.is_empty() {
@@ -157,6 +173,146 @@ fn project_tool_invocation(invocation: &ToolInvocation) -> (String, String) {
             serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
         ),
     }
+}
+
+fn attachment_hint(item: &AttachmentItem) -> String {
+    let label = item.summary_label();
+    match item.kind {
+        AttachmentKind::Image => format!("[image:{label}]"),
+        AttachmentKind::Audio => format!("[audio:{label}]"),
+        AttachmentKind::Video => format!("[video:{label}]"),
+        AttachmentKind::Pdf => format!("[document:{label}]"),
+        AttachmentKind::File => format!("[file:{label}]"),
+    }
+}
+
+pub fn attachment_hint_text(item: &AttachmentItem) -> String {
+    attachment_hint(item)
+}
+
+pub fn attachment_filename(item: &AttachmentItem) -> Option<&str> {
+    item.filename
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+pub fn attachment_data_url(item: &AttachmentItem) -> Option<String> {
+    match &item.source {
+        AttachmentSource::DataUrl { url } => {
+            let trimmed = url.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_owned())
+        }
+        AttachmentSource::Base64 { data } => {
+            let mime = item.mime.trim();
+            let data = data.trim();
+            if mime.is_empty() || data.is_empty() {
+                None
+            } else {
+                Some(format!("data:{mime};base64,{data}"))
+            }
+        }
+        AttachmentSource::Url { .. }
+        | AttachmentSource::FileId { .. }
+        | AttachmentSource::LocalPath { .. } => None,
+    }
+}
+
+pub fn attachment_media_url(item: &AttachmentItem) -> Option<String> {
+    match &item.source {
+        AttachmentSource::Url { url } | AttachmentSource::DataUrl { url } => {
+            Some(url.trim().to_owned())
+        }
+        AttachmentSource::Base64 { data } => {
+            if item.mime.trim().is_empty() || data.trim().is_empty() {
+                None
+            } else {
+                Some(format!("data:{};base64,{}", item.mime.trim(), data.trim()))
+            }
+        }
+        AttachmentSource::FileId { .. } | AttachmentSource::LocalPath { .. } => None,
+    }
+}
+
+pub fn attachment_base64_with_mime(item: &AttachmentItem) -> Option<(String, String)> {
+    match &item.source {
+        AttachmentSource::Base64 { data } => {
+            let mime = item.mime.trim();
+            let data = data.trim();
+            if mime.is_empty() || data.is_empty() {
+                None
+            } else {
+                Some((mime.to_owned(), data.to_owned()))
+            }
+        }
+        AttachmentSource::DataUrl { url } => {
+            let (detected_mime, data) = parse_data_url(url)?;
+            let mime = if detected_mime.trim().is_empty() {
+                item.mime.trim()
+            } else {
+                detected_mime.trim()
+            };
+            if mime.is_empty() || data.is_empty() {
+                None
+            } else {
+                Some((mime.to_owned(), data))
+            }
+        }
+        AttachmentSource::Url { .. }
+        | AttachmentSource::FileId { .. }
+        | AttachmentSource::LocalPath { .. } => None,
+    }
+}
+
+pub fn attachment_text(item: &AttachmentItem) -> Option<String> {
+    let mime = item.mime.trim().to_ascii_lowercase();
+    let is_text_like = mime.starts_with("text/")
+        || matches!(
+            mime.as_str(),
+            "application/json"
+                | "application/xml"
+                | "application/yaml"
+                | "application/x-yaml"
+                | "application/javascript"
+        );
+    if !is_text_like {
+        return None;
+    }
+
+    let bytes = match &item.source {
+        AttachmentSource::Base64 { data } => base64::engine::general_purpose::STANDARD
+            .decode(data.trim())
+            .ok()?,
+        AttachmentSource::DataUrl { url } => {
+            let (_, encoded) = url.split_once(',')?;
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded.trim())
+                .ok()?
+        }
+        AttachmentSource::Url { .. }
+        | AttachmentSource::FileId { .. }
+        | AttachmentSource::LocalPath { .. } => return None,
+    };
+
+    String::from_utf8(bytes).ok()
+}
+
+fn parse_data_url(url: &str) -> Option<(String, String)> {
+    let trimmed = url.trim();
+    let payload = trimmed.strip_prefix("data:")?;
+    let (metadata, encoded) = payload.split_once(',')?;
+    let metadata = metadata.trim();
+    let encoded = encoded.trim();
+    if encoded.is_empty() {
+        return None;
+    }
+
+    let mime = metadata
+        .strip_suffix(";base64")
+        .unwrap_or(metadata)
+        .trim()
+        .to_owned();
+    Some((mime, encoded.to_owned()))
 }
 
 fn render_todo_list(todo: &TodoListPart) -> String {
@@ -398,7 +554,7 @@ mod projection_tests {
     }
 
     #[test]
-    fn project_session_parts_ignores_tool_attachment_parts() {
+    fn project_session_parts_keeps_tool_attachment_images() {
         let message = Message {
             id: 9,
             role: Role::Tool,
@@ -451,8 +607,120 @@ mod projection_tests {
         };
 
         let parts = project_session_parts(&message);
-        assert_eq!(parts.len(), 1);
+        assert_eq!(parts.len(), 2);
         assert!(matches!(parts[0], ProjectedSessionPart::ToolResult { .. }));
+        assert_eq!(
+            parts[1],
+            ProjectedSessionPart::Attachment {
+                item: AttachmentItem {
+                    kind: AttachmentKind::Image,
+                    mime: "image/png".to_string(),
+                    source: AttachmentSource::Url {
+                        url: "https://example.com/image.png".to_string(),
+                    },
+                    filename: Some("image.png".to_string()),
+                    title: None,
+                    size_bytes: None,
+                    sha256: None,
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: None,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn project_session_parts_keeps_all_attachment_kinds() {
+        let message = Message {
+            id: 10,
+            role: Role::User,
+            state: MessageStatus::Completed,
+            parts: vec![MessagePart::with_content(
+                1,
+                10,
+                Utc::now(),
+                ExecutionStatus::Completed,
+                PartContent::attachments(vec![
+                    AttachmentItem {
+                        kind: AttachmentKind::Audio,
+                        mime: "audio/mpeg".to_string(),
+                        source: AttachmentSource::Url {
+                            url: "https://example.com/voice.mp3".to_string(),
+                        },
+                        filename: Some("voice.mp3".to_string()),
+                        title: None,
+                        size_bytes: None,
+                        sha256: None,
+                        width: None,
+                        height: None,
+                        duration_ms: None,
+                        page_count: None,
+                    },
+                    AttachmentItem {
+                        kind: AttachmentKind::Image,
+                        mime: "image/png".to_string(),
+                        source: AttachmentSource::DataUrl {
+                            url: "data:image/png;base64,AAA".to_string(),
+                        },
+                        filename: Some("image.png".to_string()),
+                        title: None,
+                        size_bytes: None,
+                        sha256: None,
+                        width: None,
+                        height: None,
+                        duration_ms: None,
+                        page_count: None,
+                    },
+                ]),
+            )],
+            created_at: Utc::now(),
+            metadata: MessageMetadata::default(),
+            usage: None,
+            finish: None,
+        };
+
+        let parts = project_session_parts(&message);
+        assert_eq!(
+            parts,
+            vec![
+                ProjectedSessionPart::Attachment {
+                    item: AttachmentItem {
+                        kind: AttachmentKind::Audio,
+                        mime: "audio/mpeg".to_string(),
+                        source: AttachmentSource::Url {
+                            url: "https://example.com/voice.mp3".to_string(),
+                        },
+                        filename: Some("voice.mp3".to_string()),
+                        title: None,
+                        size_bytes: None,
+                        sha256: None,
+                        width: None,
+                        height: None,
+                        duration_ms: None,
+                        page_count: None,
+                    },
+                },
+                ProjectedSessionPart::Attachment {
+                    item: AttachmentItem {
+                        kind: AttachmentKind::Image,
+                        mime: "image/png".to_string(),
+                        source: AttachmentSource::DataUrl {
+                            url: "data:image/png;base64,AAA".to_string(),
+                        },
+                        filename: Some("image.png".to_string()),
+                        title: None,
+                        size_bytes: None,
+                        sha256: None,
+                        width: None,
+                        height: None,
+                        duration_ms: None,
+                        page_count: None,
+                    },
+                },
+            ]
+        );
     }
 }
 
@@ -871,6 +1139,7 @@ struct ProviderErrorBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::{CapabilitySupport, ModelCapabilities, ModelInputModality};
 
     #[test]
     fn responses_is_completed_only_accepts_terminal_event_types() {
@@ -1029,5 +1298,41 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn model_capabilities_reject_non_text_generic_files_only_when_explicitly_unsupported() {
+        let capabilities =
+            ModelCapabilities::default().with_file_input(CapabilitySupport::Unsupported);
+        let attachment = AttachmentItem {
+            kind: AttachmentKind::File,
+            mime: "application/octet-stream".to_owned(),
+            source: AttachmentSource::Base64 {
+                data: "QUJD".to_owned(),
+            },
+            filename: Some("blob.bin".to_owned()),
+            title: None,
+            size_bytes: None,
+            sha256: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
+        };
+
+        assert_eq!(
+            capabilities.unsupported_attachment_modality(&attachment),
+            Some(ModelInputModality::File)
+        );
+
+        let text_attachment = AttachmentItem {
+            mime: "text/plain".to_owned(),
+            filename: Some("notes.txt".to_owned()),
+            ..attachment
+        };
+        assert_eq!(
+            capabilities.unsupported_attachment_modality(&text_attachment),
+            None
+        );
     }
 }

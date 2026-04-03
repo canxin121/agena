@@ -65,6 +65,10 @@ impl ModelProvider for CloudflareAiGatewayProvider {
         self.inner.default_model()
     }
 
+    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+        self.inner.model_capabilities(model)
+    }
+
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         self.inner.stream_resume_policy()
     }

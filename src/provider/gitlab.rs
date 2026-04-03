@@ -348,12 +348,17 @@ impl ModelProvider for GitlabProvider {
         &self.default_model
     }
 
+    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+        crate::provider::default_capability_registry()
+            .capabilities_for_family(crate::provider::CapabilityFamily::Gitlab, model)
+    }
+
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        Ok(vec![ProviderModel {
-            provider_id: PROVIDER_ID.to_owned(),
-            id: self.default_model.clone(),
-            display_name: Some("GitLab Duo model".to_owned()),
-        }])
+        Ok(vec![
+            ProviderModel::new(PROVIDER_ID, self.default_model.clone())
+                .with_display_name("GitLab Duo model")
+                .with_capabilities(self.model_capabilities(self.default_model.as_str())),
+        ])
     }
 
     async fn complete(

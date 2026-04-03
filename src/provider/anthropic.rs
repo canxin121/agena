@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::{
     error::AppError,
-    message::{Message, MessageUsage},
+    message::{AttachmentItem, AttachmentKind, Message, MessageUsage},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, sse, utils,
@@ -106,8 +106,8 @@ impl AnthropicProvider {
                 utils::ProjectedSessionPart::Text { text } => {
                     blocks.push(AnthropicTextBlock::text(text));
                 }
-                utils::ProjectedSessionPart::ImageUrl { url } => {
-                    blocks.push(AnthropicTextBlock::text(format!("[image:{url}]")));
+                utils::ProjectedSessionPart::Attachment { item } => {
+                    blocks.extend(Self::attachment_blocks(&item));
                 }
                 utils::ProjectedSessionPart::ToolCall {
                     id,
@@ -122,6 +122,48 @@ impl AnthropicProvider {
         }
 
         blocks
+    }
+
+    fn attachment_blocks(item: &AttachmentItem) -> Vec<AnthropicTextBlock> {
+        match item.kind {
+            AttachmentKind::Image => Self::binary_source(item)
+                .map(AnthropicTextBlock::image)
+                .into_iter()
+                .collect(),
+            AttachmentKind::Pdf => Self::binary_source(item)
+                .map(AnthropicTextBlock::document)
+                .into_iter()
+                .collect(),
+            AttachmentKind::File => utils::attachment_text(item)
+                .map(AnthropicTextBlock::text)
+                .into_iter()
+                .collect(),
+            AttachmentKind::Audio | AttachmentKind::Video => Vec::new(),
+        }
+        .into_iter()
+        .chain(
+            match item.kind {
+                AttachmentKind::Audio | AttachmentKind::Video => {
+                    Some(AnthropicTextBlock::text(utils::attachment_hint_text(item)))
+                }
+                AttachmentKind::Image | AttachmentKind::Pdf
+                    if Self::binary_source(item).is_none() =>
+                {
+                    Some(AnthropicTextBlock::text(utils::attachment_hint_text(item)))
+                }
+                AttachmentKind::File if utils::attachment_text(item).is_none() => {
+                    Some(AnthropicTextBlock::text(utils::attachment_hint_text(item)))
+                }
+                _ => None,
+            }
+            .into_iter(),
+        )
+        .collect()
+    }
+
+    fn binary_source(item: &AttachmentItem) -> Option<AnthropicBinarySource> {
+        utils::attachment_base64_with_mime(item)
+            .map(|(media_type, data)| AnthropicBinarySource::base64(media_type, data))
     }
 
     fn tools(tools: &[crate::tool::ToolDefinition]) -> Vec<AnthropicToolDefinition> {
@@ -171,6 +213,11 @@ impl ModelProvider for AnthropicProvider {
         &self.default_model
     }
 
+    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+        crate::provider::default_capability_registry()
+            .capabilities_for_family(crate::provider::CapabilityFamily::Anthropic, model)
+    }
+
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let response = self
             .apply_headers(
@@ -186,10 +233,12 @@ impl ModelProvider for AnthropicProvider {
         Ok(payload
             .data
             .into_iter()
-            .map(|m| ProviderModel {
-                provider_id: PROVIDER_ID.to_owned(),
-                id: m.id,
-                display_name: m.display_name,
+            .map(|m| {
+                let capabilities = self.model_capabilities(m.id.as_str());
+                let mut model =
+                    ProviderModel::new(PROVIDER_ID, m.id).with_capabilities(capabilities);
+                model.display_name = m.display_name;
+                model
             })
             .collect())
     }
@@ -552,6 +601,8 @@ struct AnthropicTextBlock {
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
+    source: Option<AnthropicBinarySource>,
+    #[serde(default)]
     id: Option<String>,
     #[serde(default)]
     name: Option<String>,
@@ -568,6 +619,33 @@ impl AnthropicTextBlock {
         Self {
             kind: "text".to_owned(),
             text: Some(text.into()),
+            source: None,
+            id: None,
+            name: None,
+            input: None,
+            tool_use_id: None,
+            content: None,
+        }
+    }
+
+    fn image(source: AnthropicBinarySource) -> Self {
+        Self {
+            kind: "image".to_owned(),
+            text: None,
+            source: Some(source),
+            id: None,
+            name: None,
+            input: None,
+            tool_use_id: None,
+            content: None,
+        }
+    }
+
+    fn document(source: AnthropicBinarySource) -> Self {
+        Self {
+            kind: "document".to_owned(),
+            text: None,
+            source: Some(source),
             id: None,
             name: None,
             input: None,
@@ -585,6 +663,7 @@ impl AnthropicTextBlock {
         Self {
             kind: "tool_use".to_owned(),
             text: None,
+            source: None,
             id: Some(id.into()),
             name: Some(name.into()),
             input: Some(input),
@@ -598,11 +677,30 @@ impl AnthropicTextBlock {
         Self {
             kind: "tool_result".to_owned(),
             text: None,
+            source: None,
             id: None,
             name: None,
             input: None,
             tool_use_id: Some(tool_use_id.into()),
             content: Some(content),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AnthropicBinarySource {
+    #[serde(rename = "type")]
+    kind: String,
+    media_type: String,
+    data: String,
+}
+
+impl AnthropicBinarySource {
+    fn base64(media_type: impl Into<String>, data: impl Into<String>) -> Self {
+        Self {
+            kind: "base64".to_owned(),
+            media_type: media_type.into(),
+            data: data.into(),
         }
     }
 }

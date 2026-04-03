@@ -4,12 +4,19 @@ use futures_util::stream;
 
 use crate::error::AppError;
 
-use super::{CompletionRequest, CompletionResponse, CompletionStreamEvent, ProviderModel};
+use super::{
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ProviderModel,
+};
 
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
     fn id(&self) -> &str;
     fn default_model(&self) -> &str;
+
+    fn model_capabilities(&self, model: &str) -> ModelCapabilities {
+        let _ = model;
+        ModelCapabilities::default()
+    }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         StreamResumePolicy::Disabled

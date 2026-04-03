@@ -258,6 +258,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
         }
         PartContent::Attachment(_) => Some("attachment".to_string()),
         PartContent::PermissionRequest(_) => Some("permission_request".to_string()),
+        PartContent::UserInputRequest(_) => Some("user_input_request".to_string()),
     }
 }
 
@@ -323,6 +324,7 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
         PartContent::PermissionRequest(permission) => {
             truncate_summary(permission.summary_text().as_str())
         }
+        PartContent::UserInputRequest(request) => truncate_summary(request.summary_text().as_str()),
     }
 }
 

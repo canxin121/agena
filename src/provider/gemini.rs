@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::AppError,
-    message::MessageUsage,
+    message::{AttachmentItem, Message, MessageUsage},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ModelProvider, ProviderModel, sse, utils,
@@ -65,6 +65,36 @@ impl GeminiProvider {
             self.base_url, model_name, self.api_key
         )
     }
+
+    fn message_parts(message: &Message) -> Vec<GeminiPart> {
+        let projected_parts = utils::project_session_parts(message);
+        if projected_parts.is_empty() {
+            let text = message.as_text_lossy();
+            return (!text.trim().is_empty())
+                .then(|| vec![GeminiPart::text(text)])
+                .unwrap_or_default();
+        }
+
+        projected_parts
+            .iter()
+            .map(|part| match part {
+                utils::ProjectedSessionPart::Text { text } => GeminiPart::text(text.clone()),
+                utils::ProjectedSessionPart::Attachment { item } => Self::attachment_part(item),
+                utils::ProjectedSessionPart::ToolCall { name, .. } => {
+                    GeminiPart::text(format!("[tool_call:{name}]"))
+                }
+                utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                    GeminiPart::text(format!("[tool_result:{tool_call_id}]"))
+                }
+            })
+            .collect()
+    }
+
+    fn attachment_part(item: &AttachmentItem) -> GeminiPart {
+        utils::attachment_base64_with_mime(item)
+            .map(|(mime_type, data)| GeminiPart::inline_data(mime_type, data))
+            .unwrap_or_else(|| GeminiPart::text(utils::attachment_hint_text(item)))
+    }
 }
 
 #[async_trait]
@@ -77,6 +107,11 @@ impl ModelProvider for GeminiProvider {
         &self.default_model
     }
 
+    fn model_capabilities(&self, model: &str) -> crate::provider::ModelCapabilities {
+        crate::provider::default_capability_registry()
+            .capabilities_for_family(crate::provider::CapabilityFamily::Gemini, model)
+    }
+
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let response = self.client.get(self.list_models_endpoint()).send().await?;
 
@@ -85,10 +120,12 @@ impl ModelProvider for GeminiProvider {
         Ok(payload
             .models
             .into_iter()
-            .map(|m| ProviderModel {
-                provider_id: PROVIDER_ID.to_owned(),
-                id: m.name.trim_start_matches("models/").to_owned(),
-                display_name: m.display_name,
+            .map(|m| {
+                let id = m.name.trim_start_matches("models/").to_owned();
+                let capabilities = self.model_capabilities(id.as_str());
+                let mut model = ProviderModel::new(PROVIDER_ID, id).with_capabilities(capabilities);
+                model.display_name = m.display_name;
+                model
             })
             .collect())
     }
@@ -111,24 +148,18 @@ impl ModelProvider for GeminiProvider {
                 Role::System => system_chunks.push(msg.as_text_lossy()),
                 Role::Assistant => contents.push(GeminiContent {
                     role: Some("model".to_owned()),
-                    parts: vec![GeminiPart {
-                        text: msg.as_text_lossy(),
-                    }],
+                    parts: Self::message_parts(&msg),
                 }),
                 Role::User | Role::Tool => contents.push(GeminiContent {
                     role: Some("user".to_owned()),
-                    parts: vec![GeminiPart {
-                        text: msg.as_text_lossy(),
-                    }],
+                    parts: Self::message_parts(&msg),
                 }),
             }
         }
 
         let body = GeminiGenerateRequest {
             system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
-                parts: vec![GeminiPart {
-                    text: system_chunks.join("\n\n"),
-                }],
+                parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
             }),
             contents,
             generation_config: GeminiGenerationConfig {
@@ -198,24 +229,18 @@ impl ModelProvider for GeminiProvider {
                 Role::System => system_chunks.push(msg.as_text_lossy()),
                 Role::Assistant => contents.push(GeminiContent {
                     role: Some("model".to_owned()),
-                    parts: vec![GeminiPart {
-                        text: msg.as_text_lossy(),
-                    }],
+                    parts: Self::message_parts(&msg),
                 }),
                 Role::User | Role::Tool => contents.push(GeminiContent {
                     role: Some("user".to_owned()),
-                    parts: vec![GeminiPart {
-                        text: msg.as_text_lossy(),
-                    }],
+                    parts: Self::message_parts(&msg),
                 }),
             }
         }
 
         let body = GeminiGenerateRequest {
             system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
-                parts: vec![GeminiPart {
-                    text: system_chunks.join("\n\n"),
-                }],
+                parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
             }),
             contents,
             generation_config: GeminiGenerationConfig {
@@ -315,7 +340,40 @@ struct GeminiContent {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GeminiPart {
-    text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(
+        default,
+        rename = "inlineData",
+        skip_serializing_if = "Option::is_none"
+    )]
+    inline_data: Option<GeminiInlineData>,
+}
+
+impl GeminiPart {
+    fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: Some(text.into()),
+            inline_data: None,
+        }
+    }
+
+    fn inline_data(mime_type: impl Into<String>, data: impl Into<String>) -> Self {
+        Self {
+            text: None,
+            inline_data: Some(GeminiInlineData {
+                mime_type: mime_type.into(),
+                data: data.into(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiInlineData {
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -367,7 +425,7 @@ impl GeminiCandidate {
                 content
                     .parts
                     .iter()
-                    .map(|part| part.text.clone())
+                    .filter_map(|part| part.text.clone())
                     .collect::<Vec<_>>()
                     .join("")
             })

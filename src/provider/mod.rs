@@ -2,6 +2,8 @@ pub mod auth;
 
 mod amazon_bedrock;
 mod anthropic;
+mod capabilities;
+mod capability_overrides;
 mod cloudflare_ai_gateway;
 mod codex;
 mod copilot;
@@ -19,6 +21,11 @@ mod utils;
 
 pub use amazon_bedrock::AmazonBedrockProvider;
 pub use anthropic::AnthropicProvider;
+pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
+pub use capability_overrides::{
+    CapabilityOverrideMatchMode, CapabilityOverrideProvider, ModelCapabilityPatch,
+    ProviderCapabilityOverrideRule,
+};
 pub use cloudflare_ai_gateway::CloudflareAiGatewayProvider;
 pub use codex::CodexProvider;
 pub use copilot::{CopilotProvider, CopilotProviderOptions};
@@ -34,6 +41,7 @@ pub use runtime::{
     ProviderStreamReplayConfig,
 };
 pub use types::{
-    CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionToolCall, CompletionUsage, ProviderModel,
+    CapabilitySupport, CompletionFinishReason, CompletionRequest, CompletionResponse,
+    CompletionStreamEvent, CompletionToolCall, CompletionUsage, ModelCapabilities,
+    ModelInputModality, ProviderModel,
 };

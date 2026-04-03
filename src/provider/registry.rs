@@ -12,9 +12,10 @@ use futures_util::StreamExt;
 use crate::error::{AppError, ProviderErrorKind};
 
 use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider,
-    ProviderHttpClientConfig, ProviderModel, ProviderRequestRetryConfig, ProviderRuntimeConfig,
-    ProviderStreamReplayConfig, StreamResumePolicy,
+    CapabilityOverrideProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
+    ModelCapabilities, ModelProvider, ProviderCapabilityOverrideRule, ProviderHttpClientConfig,
+    ProviderModel, ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
+    StreamResumePolicy, utils,
 };
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,7 @@ pub struct ProviderAliasRegistration {
     pub alias_id: String,
     pub target_provider_id: String,
     pub default_model: Option<String>,
+    pub capability_overrides: Vec<ProviderCapabilityOverrideRule>,
 }
 
 impl ProviderAliasRegistration {
@@ -30,11 +32,20 @@ impl ProviderAliasRegistration {
             alias_id: alias_id.into(),
             target_provider_id: target_provider_id.into(),
             default_model: None,
+            capability_overrides: Vec::new(),
         }
     }
 
     pub fn with_default_model(mut self, model: impl Into<String>) -> Self {
         self.default_model = Some(model.into());
+        self
+    }
+
+    pub fn with_capability_overrides(
+        mut self,
+        capability_overrides: Vec<ProviderCapabilityOverrideRule>,
+    ) -> Self {
+        self.capability_overrides = capability_overrides;
         self
     }
 }
@@ -146,6 +157,15 @@ impl ModelProvider for NamedProvider {
             .unwrap_or_else(|| self.target.default_model())
     }
 
+    fn model_capabilities(&self, model: &str) -> super::ModelCapabilities {
+        let resolved_model = if model.trim().is_empty() {
+            self.default_model()
+        } else {
+            model.trim()
+        };
+        self.target.model_capabilities(resolved_model)
+    }
+
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         self.target.stream_resume_policy()
     }
@@ -154,6 +174,8 @@ impl ModelProvider for NamedProvider {
         let mut models = self.target.list_models().await?;
         for model in &mut models {
             model.provider_id = self.provider_id.clone();
+            let fallback = self.target.model_capabilities(model.id.as_str());
+            model.capabilities = model.capabilities.clone().with_fallbacks_from(&fallback);
         }
         Ok(models)
     }
@@ -274,8 +296,10 @@ impl ProviderRegistry {
             None => NamedProvider::new(alias_id.to_owned(), target),
         };
 
-        self.providers
-            .insert(alias_id.to_owned(), Arc::new(aliased));
+        let provider =
+            CapabilityOverrideProvider::new(Arc::new(aliased), alias.capability_overrides);
+
+        self.providers.insert(alias_id.to_owned(), provider);
         Ok(())
     }
 
@@ -368,14 +392,66 @@ impl ProviderRegistry {
         let provider = self
             .get(provider_id)
             .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
-        self.call_with_retry(provider_id, "list_models", {
+        let provider_id = provider_id.to_owned();
+        self.call_with_retry(provider_id.as_str(), "list_models", {
             let provider = provider.clone();
+            let provider_id = provider_id.clone();
             move || {
                 let provider = provider.clone();
-                async move { provider.list_models().await }
+                let provider_id = provider_id.clone();
+                async move {
+                    let mut models = provider.list_models().await?;
+                    for model in &mut models {
+                        model.provider_id = provider_id.to_owned();
+                        let fallback = provider.model_capabilities(model.id.as_str());
+                        model.capabilities =
+                            model.capabilities.clone().with_fallbacks_from(&fallback);
+                    }
+                    Ok(models)
+                }
             }
         })
         .await
+    }
+
+    pub fn model_capabilities(
+        &self,
+        provider_id: &str,
+        model: &str,
+    ) -> Result<ModelCapabilities, AppError> {
+        let provider = self
+            .get(provider_id)
+            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
+        let resolved_model = if model.trim().is_empty() {
+            provider.default_model().to_owned()
+        } else {
+            model.trim().to_owned()
+        };
+        Ok(provider.model_capabilities(resolved_model.as_str()))
+    }
+
+    pub async fn provider_model(
+        &self,
+        provider_id: &str,
+        model: &str,
+    ) -> Result<ProviderModel, AppError> {
+        let provider = self
+            .get(provider_id)
+            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
+        let resolved_model = if model.trim().is_empty() {
+            provider.default_model().to_owned()
+        } else {
+            model.trim().to_owned()
+        };
+
+        let listed = self.list_models(provider_id).await?;
+        if let Some(model) = listed.into_iter().find(|entry| entry.id == resolved_model) {
+            let fallback = provider.model_capabilities(model.id.as_str());
+            return Ok(model.with_capability_fallbacks(&fallback));
+        }
+
+        Ok(ProviderModel::new(provider_id, resolved_model.clone())
+            .with_capabilities(provider.model_capabilities(resolved_model.as_str())))
     }
 
     pub async fn complete(
@@ -386,6 +462,7 @@ impl ProviderRegistry {
         let provider = self
             .get(provider_id)
             .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
+        validate_request_capabilities(provider_id, provider.as_ref(), &request)?;
         self.call_with_retry(provider_id, "complete", {
             let provider = provider.clone();
             let request = request.clone();
@@ -409,6 +486,7 @@ impl ProviderRegistry {
         let provider = self
             .get(provider_id)
             .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
+        validate_request_capabilities(provider_id, provider.as_ref(), &request)?;
         let provider_id = provider_id.to_owned();
         let retry_policy = self.retry_policy;
         let replay_policy = self.stream_replay_policy;
@@ -728,6 +806,45 @@ fn remap_event_provider_id(
     }
 }
 
+fn validate_request_capabilities(
+    provider_id: &str,
+    provider: &dyn ModelProvider,
+    request: &CompletionRequest,
+) -> Result<(), AppError> {
+    let model = if request.model.trim().is_empty() {
+        provider.default_model().to_owned()
+    } else {
+        request.model.trim().to_owned()
+    };
+    let capabilities = provider.model_capabilities(model.as_str());
+
+    let mut unsupported = Vec::new();
+    for message in &request.messages {
+        for part in utils::project_session_parts(message) {
+            let utils::ProjectedSessionPart::Attachment { item } = part else {
+                continue;
+            };
+
+            if let Some(modality) = capabilities.unsupported_attachment_modality(&item) {
+                unsupported.push((modality, item.summary_label()));
+            }
+        }
+    }
+
+    if unsupported.is_empty() {
+        return Ok(());
+    }
+
+    let details = unsupported
+        .into_iter()
+        .map(|(modality, label)| format!("{} (`{label}`)", modality.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(AppError::Provider(format!(
+        "provider `{provider_id}` model `{model}` explicitly does not support requested input modalities: {details}"
+    )))
+}
+
 fn elapsed_ms(started_at: Instant) -> u64 {
     started_at.elapsed().as_millis() as u64
 }
@@ -771,8 +888,12 @@ fn provider_error_kind_label(kind: ProviderErrorKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Message;
-    use crate::provider::{CompletionFinishReason, CompletionRequest, CompletionResponse};
+    use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent};
+    use crate::provider::{
+        CapabilityOverrideMatchMode, CapabilitySupport, CompletionFinishReason, CompletionRequest,
+        CompletionResponse, ModelCapabilities, ModelCapabilityPatch,
+        ProviderCapabilityOverrideRule,
+    };
     use futures_util::{StreamExt, stream};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -816,12 +937,16 @@ mod tests {
         fn default_model(&self) -> &str {
             "flaky-model"
         }
+        fn model_capabilities(&self, _model: &str) -> ModelCapabilities {
+            ModelCapabilities::default()
+                .with_tool_calling(CapabilitySupport::Supported)
+                .with_streaming(CapabilitySupport::Supported)
+        }
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-            Ok(vec![ProviderModel {
-                provider_id: self.provider_id.to_owned(),
-                id: "flaky-model".to_owned(),
-                display_name: Some("Flaky Model".to_owned()),
-            }])
+            Ok(vec![
+                ProviderModel::new(self.provider_id, "flaky-model")
+                    .with_display_name("Flaky Model"),
+            ])
         }
         async fn complete(
             &self,
@@ -863,15 +988,17 @@ mod tests {
         fn default_model(&self) -> &str {
             "flaky-stream-model"
         }
+        fn model_capabilities(&self, _model: &str) -> ModelCapabilities {
+            ModelCapabilities::default().with_streaming(CapabilitySupport::Supported)
+        }
         fn stream_resume_policy(&self) -> StreamResumePolicy {
             self.resume_policy
         }
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-            Ok(vec![ProviderModel {
-                provider_id: self.provider_id.to_owned(),
-                id: "flaky-stream-model".to_owned(),
-                display_name: Some("Flaky Stream Model".to_owned()),
-            }])
+            Ok(vec![
+                ProviderModel::new(self.provider_id, "flaky-stream-model")
+                    .with_display_name("Flaky Stream Model"),
+            ])
         }
         async fn complete(
             &self,
@@ -996,6 +1123,50 @@ mod tests {
                     ])))
                 }
             }
+        }
+    }
+
+    struct UnsupportedImageProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelProvider for UnsupportedImageProvider {
+        fn id(&self) -> &str {
+            "unsupported-image"
+        }
+
+        fn default_model(&self) -> &str {
+            "unsupported-image-model"
+        }
+
+        fn model_capabilities(&self, _model: &str) -> ModelCapabilities {
+            ModelCapabilities::default()
+                .with_image_input(CapabilitySupport::Unsupported)
+                .with_streaming(CapabilitySupport::Supported)
+        }
+
+        async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+            Ok(vec![
+                ProviderModel::new("unsupported-image", "unsupported-image-model")
+                    .with_capabilities(self.model_capabilities("unsupported-image-model")),
+            ])
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(CompletionResponse {
+                provider_id: "unsupported-image".to_owned(),
+                model: "unsupported-image-model".to_owned(),
+                text: "should not run".to_owned(),
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
         }
     }
 
@@ -1166,6 +1337,243 @@ mod tests {
         assert!(
             matches!(second, CompletionStreamEvent::Completed { ref provider_id, .. } if provider_id == "custom-provider")
         );
+    }
+
+    #[tokio::test]
+    async fn provider_model_returns_capabilities_for_listed_models() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let provider = FlakyProvider {
+            provider_id: "model-info",
+            attempts,
+            fail_attempts: 0,
+            retryable: false,
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+
+        let model = registry
+            .provider_model("model-info", "flaky-model")
+            .await
+            .expect("provider model should resolve");
+
+        assert_eq!(model.provider_id, "model-info");
+        assert_eq!(model.id, "flaky-model");
+        assert_eq!(model.display_name.as_deref(), Some("Flaky Model"));
+        assert_eq!(
+            model.capabilities.tool_calling,
+            CapabilitySupport::Supported
+        );
+        assert_eq!(model.capabilities.streaming, CapabilitySupport::Supported);
+    }
+
+    #[tokio::test]
+    async fn provider_model_synthesizes_capabilities_for_unlisted_model() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let provider = FlakyProvider {
+            provider_id: "model-fallback",
+            attempts,
+            fail_attempts: 0,
+            retryable: false,
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+
+        let model = registry
+            .provider_model("model-fallback", "custom-unlisted-model")
+            .await
+            .expect("provider model should synthesize missing entry");
+
+        assert_eq!(model.provider_id, "model-fallback");
+        assert_eq!(model.id, "custom-unlisted-model");
+        assert_eq!(model.display_name, None);
+        assert_eq!(
+            model.capabilities.tool_calling,
+            CapabilitySupport::Supported
+        );
+        assert_eq!(model.capabilities.streaming, CapabilitySupport::Supported);
+    }
+
+    #[tokio::test]
+    async fn provider_model_uses_alias_default_model_when_model_is_empty() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let provider = FlakyProvider {
+            provider_id: "internal-model-info",
+            attempts,
+            fail_attempts: 0,
+            retryable: false,
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+        registry
+            .register_alias(
+                ProviderAliasRegistration::new("alias-model-info", "internal-model-info")
+                    .with_default_model("alias-model"),
+            )
+            .expect("alias registration should succeed");
+
+        let model = registry
+            .provider_model("alias-model-info", "")
+            .await
+            .expect("alias provider model should resolve");
+
+        assert_eq!(model.provider_id, "alias-model-info");
+        assert_eq!(model.id, "alias-model");
+        assert_eq!(model.display_name, None);
+        assert_eq!(
+            model.capabilities.tool_calling,
+            CapabilitySupport::Supported
+        );
+    }
+
+    #[tokio::test]
+    async fn alias_capability_overrides_change_exposed_model_capabilities() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let provider = FlakyProvider {
+            provider_id: "override-target",
+            attempts,
+            fail_attempts: 0,
+            retryable: false,
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+        registry
+            .register_alias(
+                ProviderAliasRegistration::new("override-alias", "override-target")
+                    .with_default_model("alias-model")
+                    .with_capability_overrides(vec![ProviderCapabilityOverrideRule {
+                        model: "alias-model".to_owned(),
+                        match_mode: CapabilityOverrideMatchMode::Exact,
+                        capabilities: ModelCapabilityPatch {
+                            streaming: Some(CapabilitySupport::Unsupported),
+                            ..ModelCapabilityPatch::default()
+                        },
+                    }]),
+            )
+            .expect("alias registration should succeed");
+
+        let model = registry
+            .provider_model("override-alias", "")
+            .await
+            .expect("alias provider model should resolve");
+
+        assert_eq!(model.provider_id, "override-alias");
+        assert_eq!(model.id, "alias-model");
+        assert_eq!(model.capabilities.streaming, CapabilitySupport::Unsupported);
+        assert_eq!(
+            model.capabilities.tool_calling,
+            CapabilitySupport::Supported
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_rejects_explicitly_unsupported_image_inputs_before_request() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = UnsupportedImageProvider {
+            calls: Arc::clone(&calls),
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+
+        let err = registry
+            .complete(
+                "unsupported-image",
+                CompletionRequest {
+                    model: String::new(),
+                    system: None,
+                    messages: vec![Message::prompt_parts(
+                        crate::role::Role::User,
+                        vec![PartContent::attachments(vec![AttachmentItem {
+                            kind: AttachmentKind::Image,
+                            mime: "image/png".to_owned(),
+                            source: AttachmentSource::DataUrl {
+                                url: "data:image/png;base64,AAA".to_owned(),
+                            },
+                            filename: Some("pixel.png".to_owned()),
+                            title: None,
+                            size_bytes: None,
+                            sha256: None,
+                            width: Some(1),
+                            height: Some(1),
+                            duration_ms: None,
+                            page_count: None,
+                        }])],
+                    )],
+                    tools: Vec::new(),
+                    temperature: None,
+                    max_output_tokens: Some(16),
+                },
+            )
+            .await
+            .expect_err("unsupported image request should be rejected");
+
+        assert!(
+            matches!(err, AppError::Provider(message) if message.contains("does not support requested input modalities") && message.contains("image (`pixel.png`)"))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn alias_capability_overrides_participate_in_request_validation() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = FlakyProvider {
+            provider_id: "validation-target",
+            attempts: Arc::clone(&calls),
+            fail_attempts: 0,
+            retryable: false,
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+        registry
+            .register_alias(
+                ProviderAliasRegistration::new("validation-alias", "validation-target")
+                    .with_default_model("alias-model")
+                    .with_capability_overrides(vec![ProviderCapabilityOverrideRule {
+                        model: "alias-model".to_owned(),
+                        match_mode: CapabilityOverrideMatchMode::Exact,
+                        capabilities: ModelCapabilityPatch {
+                            image_input: Some(CapabilitySupport::Unsupported),
+                            ..ModelCapabilityPatch::default()
+                        },
+                    }]),
+            )
+            .expect("alias registration should succeed");
+
+        let err = registry
+            .complete(
+                "validation-alias",
+                CompletionRequest {
+                    model: String::new(),
+                    system: None,
+                    messages: vec![Message::prompt_parts(
+                        crate::role::Role::User,
+                        vec![PartContent::attachments(vec![AttachmentItem {
+                            kind: AttachmentKind::Image,
+                            mime: "image/png".to_owned(),
+                            source: AttachmentSource::DataUrl {
+                                url: "data:image/png;base64,AAA".to_owned(),
+                            },
+                            filename: Some("pixel.png".to_owned()),
+                            title: None,
+                            size_bytes: None,
+                            sha256: None,
+                            width: Some(1),
+                            height: Some(1),
+                            duration_ms: None,
+                            page_count: None,
+                        }])],
+                    )],
+                    tools: Vec::new(),
+                    max_output_tokens: None,
+                    temperature: None,
+                },
+            )
+            .await
+            .expect_err("explicitly unsupported image input should be rejected");
+
+        assert!(
+            matches!(err, AppError::Provider(message) if message.contains("validation-alias") && message.contains("image"))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

@@ -48,6 +48,7 @@ impl ToolOutputTruncator {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
             }
+            BuiltinToolOutput::ViewFile { .. } => {}
             BuiltinToolOutput::ApplyPatch { inverse_patch, .. } => {
                 *inverse_patch = truncate_text(inverse_patch, self.policy.max_chars);
             }
@@ -55,7 +56,8 @@ impl ToolOutputTruncator {
             | BuiltinToolOutput::Grep { .. }
             | BuiltinToolOutput::Task { .. }
             | BuiltinToolOutput::ToolSearch { .. }
-            | BuiltinToolOutput::TodoWrite { .. } => {}
+            | BuiltinToolOutput::TodoWrite { .. }
+            | BuiltinToolOutput::RequestUserInput { .. } => {}
         }
 
         execution

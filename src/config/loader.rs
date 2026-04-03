@@ -68,6 +68,10 @@ where
             .unwrap_or_else(default_config_path)
     }
 
+    pub fn environment(&self) -> &E {
+        &self.env
+    }
+
     pub fn load(&self, request: &LoadConfigRequest) -> Result<ConfigResolution, ConfigError> {
         let config_path = request
             .config_path

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     AttachmentItem, AttachmentPart, CommandExecutionPart, ErrorPart, ExecutionStatus,
     FileChangePart, PartKind, PermissionRequestPart, ReasoningPart, TextPart, TodoListPart,
-    ToolExecutionPart, WebSearchPart,
+    ToolExecutionPart, UserInputRequestPart, WebSearchPart,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
@@ -20,6 +20,7 @@ pub enum PartContent {
     Error(ErrorPart),
     Attachment(AttachmentPart),
     PermissionRequest(PermissionRequestPart),
+    UserInputRequest(UserInputRequestPart),
 }
 
 impl PartContent {
@@ -55,6 +56,7 @@ impl PartContent {
             Self::Error(_) => PartKind::Error,
             Self::Attachment(_) => PartKind::Attachment,
             Self::PermissionRequest(_) => PartKind::PermissionRequest,
+            Self::UserInputRequest(_) => PartKind::UserInputRequest,
         }
     }
 

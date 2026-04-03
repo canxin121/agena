@@ -9,7 +9,8 @@ mod tool;
 pub use activity::{
     CommandExecutionPart, ErrorPart, FileChangeEntry, FileChangeKind, FileChangePart,
     PermissionRequestPart, ReasoningPart, TextPart, TodoItem, TodoListPart, TodoPriority,
-    TodoStatus, WebSearchPart, WebSearchResult,
+    TodoStatus, UserInputOption, UserInputQuestion, UserInputReply, UserInputReplyKind,
+    UserInputRequest, UserInputRequestPart, WebSearchPart, WebSearchResult,
 };
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use common::{ExecutionStatus, PartKind, TimeRange};
@@ -18,7 +19,7 @@ pub use message_part::{MessagePart, MessagePartSummary, PartStateTransitionError
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
     ApplyPatchToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput, CustomToolOutput,
-    GlobToolInput, GrepToolInput, McpToolOutput, ReadToolInput, TaskSubagentType, TaskToolInput,
-    TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput,
-    ToolResultBlock, ToolSearchToolInput,
+    GlobToolInput, GrepToolInput, McpToolOutput, ReadToolInput, RequestUserInputToolInput,
+    TaskSubagentType, TaskToolInput, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
+    ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput, ViewFileToolInput,
 };

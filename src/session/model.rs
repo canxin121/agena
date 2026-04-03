@@ -55,16 +55,18 @@ pub enum SessionEventType {
     #[sea_orm(num_value = 2)]
     RunFailed,
     #[sea_orm(num_value = 3)]
-    MessagePartUpdated,
+    SessionRestored,
     #[sea_orm(num_value = 4)]
-    MessagePartDelta,
+    MessagePartUpdated,
     #[sea_orm(num_value = 5)]
-    CommandBegin,
+    MessagePartDelta,
     #[sea_orm(num_value = 6)]
-    CommandOutputDelta,
+    CommandBegin,
     #[sea_orm(num_value = 7)]
-    CommandEnd,
+    CommandOutputDelta,
     #[sea_orm(num_value = 8)]
+    CommandEnd,
+    #[sea_orm(num_value = 9)]
     StreamError,
 }
 
@@ -73,6 +75,7 @@ impl From<&SessionEvent> for SessionEventType {
         match value {
             SessionEvent::RunStarted(_) => Self::RunStarted,
             SessionEvent::RunFailed(_) => Self::RunFailed,
+            SessionEvent::SessionRestored(_) => Self::SessionRestored,
             SessionEvent::MessagePartUpdated(_) => Self::MessagePartUpdated,
             SessionEvent::MessagePartDelta(_) => Self::MessagePartDelta,
             SessionEvent::CommandBegin(_) => Self::CommandBegin,

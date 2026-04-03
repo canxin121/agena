@@ -1,7 +1,6 @@
 use crate::message::{BuiltinToolOutput, TaskToolInput};
-use crate::session::SubtaskSessionRequest;
 
-use super::{BuiltinExecution, ToolExecutionView, ToolExecutor};
+use super::{BuiltinExecution, SubtaskSessionRequest, ToolExecutionView, ToolExecutor};
 
 pub(super) fn execute(
     executor: &ToolExecutor,

@@ -21,7 +21,7 @@ use crate::tool::{ToolDefinition, ToolSource};
 use super::context_governor::ContextGovernor;
 
 #[derive(Debug, Clone)]
-pub struct SessionRunRequest {
+pub(crate) struct SessionRunRequest {
     pub session_id: i64,
     pub provider_id: String,
     pub completion: CompletionRequest,
@@ -31,7 +31,7 @@ pub struct SessionRunRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionRunResult {
+pub(crate) struct SessionRunResult {
     pub assistant_message_id: i64,
     pub state: Vec<Message>,
     pub client_events: Vec<SessionEvent>,
@@ -55,7 +55,10 @@ impl SessionProcessor {
         }
     }
 
-    pub async fn run_turn(&self, mut run: SessionRunRequest) -> Result<SessionRunResult, AppError> {
+    pub(crate) async fn run_turn(
+        &self,
+        mut run: SessionRunRequest,
+    ) -> Result<SessionRunResult, AppError> {
         let mut store = MessageStateStore::default();
         let mut client_events = Vec::new();
         let mut compacted_rounds = 0_u8;

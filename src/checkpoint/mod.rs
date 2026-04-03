@@ -42,9 +42,9 @@ pub struct SessionRestorePointSnapshot {
 }
 
 impl SessionRestorePointSnapshot {
-    pub fn new(session: Session, messages: Vec<Message>, filesystem: FilesystemCheckpoint) -> Self {
+    pub fn new(session: Session, filesystem: FilesystemCheckpoint) -> Self {
         Self {
-            conversation: ConversationCheckpoint { session, messages },
+            conversation: ConversationCheckpoint::new(session),
             filesystem,
         }
     }
@@ -53,7 +53,26 @@ impl SessionRestorePointSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConversationCheckpoint {
     pub session: Session,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<Message>,
+}
+
+impl ConversationCheckpoint {
+    pub fn new(session: Session) -> Self {
+        Self {
+            session,
+            messages: Vec::new(),
+        }
+    }
+
+    pub fn into_session(self) -> Session {
+        let mut session = self.session;
+        if session.messages.is_empty() && !self.messages.is_empty() {
+            session.messages = self.messages;
+        }
+        session.refresh_derived();
+        session
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

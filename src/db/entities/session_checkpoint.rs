@@ -10,7 +10,7 @@ pub struct Model {
     pub session_id: i64,
     pub upto_seq: i64,
     #[sea_orm(column_name = "snapshot_json", column_type = "JsonBinary")]
-    pub snapshot: crate::session::SessionSnapshot,
+    pub snapshot: serde_json::Value,
     pub state_hash: Option<String>,
     pub created_at_ms: i64,
 }

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
@@ -152,26 +154,43 @@ where
         .all(db)
         .await?;
 
-    let mut result = Vec::with_capacity(message_rows.len());
-    for row in message_rows {
-        let part_rows = entities::message_part::Entity::find()
-            .filter(entities::message_part::Column::MessageId.eq(row.id))
-            .order_by_asc(entities::message_part::Column::PartIndex)
+    if message_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let message_ids = message_rows.iter().map(|row| row.id).collect::<Vec<_>>();
+    let part_rows = entities::message_part::Entity::find()
+        .filter(entities::message_part::Column::MessageId.is_in(message_ids))
+        .order_by_asc(entities::message_part::Column::MessageId)
+        .order_by_asc(entities::message_part::Column::PartIndex)
+        .all(db)
+        .await?;
+    let detail_ids = part_rows
+        .iter()
+        .filter(|row| row.has_detail)
+        .map(|row| row.id)
+        .collect::<Vec<_>>();
+    let detail_map = if detail_ids.is_empty() {
+        HashMap::new()
+    } else {
+        entities::message_part_detail::Entity::find()
+            .filter(entities::message_part_detail::Column::PartId.is_in(detail_ids))
             .all(db)
-            .await?;
-
-        let mut parts = Vec::with_capacity(part_rows.len());
-        for part_row in part_rows {
-            let detail = if part_row.has_detail {
-                entities::message_part_detail::Entity::find_by_id(part_row.id)
-                    .one(db)
-                    .await?
-                    .map(|item| item.detail)
-            } else {
-                None
-            };
-
-            parts.push(MessagePart::from_summary(
+            .await?
+            .into_iter()
+            .map(|row| (row.part_id, row.detail))
+            .collect::<HashMap<_, _>>()
+    };
+    let mut parts_by_message = HashMap::<i64, Vec<MessagePart>>::new();
+    for part_row in part_rows {
+        let detail = part_row
+            .has_detail
+            .then(|| detail_map.get(&part_row.id).cloned())
+            .flatten();
+        parts_by_message
+            .entry(part_row.message_id)
+            .or_default()
+            .push(MessagePart::from_summary(
                 crate::message::MessagePartSummary {
                     id: part_row.id,
                     message_id: part_row.message_id,
@@ -186,13 +205,15 @@ where
                 },
                 detail,
             ));
-        }
+    }
 
+    let mut result = Vec::with_capacity(message_rows.len());
+    for row in message_rows {
         result.push(Message {
             id: row.id,
             role: row.role,
             state: row.status,
-            parts,
+            parts: parts_by_message.remove(&row.id).unwrap_or_default(),
             created_at: timestamp_millis_to_utc(row.created_at_ms)?,
             metadata: MessageMetadata {
                 source: row.source,

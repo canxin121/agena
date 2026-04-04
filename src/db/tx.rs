@@ -18,8 +18,8 @@ impl DbTxEffects {
         self.effects.push(Box::pin(effect));
     }
 
-    async fn run(mut self) {
-        while let Some(effect) = self.effects.pop() {
+    async fn run(self) {
+        for effect in self.effects {
             effect.await;
         }
     }

@@ -1,17 +1,10 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::{sync::Arc, time::Duration};
 
-use chrono::{DateTime, Utc};
-use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryOrder};
+use arc_swap::ArcSwap;
+use chrono::Utc;
 
 use crate::AppError;
-use crate::db::crud::{message, permission_rule, session, session_runtime, workspace};
-use crate::db::entities;
-use crate::db::tx::with_transaction_and_effects;
-use crate::event::{
-    ErrorInfo, MessagePartUpdatedEvent, RunFailedEvent, RunStartedEvent, SessionEvent,
-};
+use crate::event::{ErrorInfo, RunFailedEvent, RunStartedEvent, SessionEvent};
 use crate::message::{
     AttachmentItem, BuiltinToolOutput, ExecutionStatus, FileChangePart, Message, MessageMetadata,
     MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart, TimeRange,
@@ -26,11 +19,11 @@ use crate::permission::{
 use crate::role::Role;
 use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissionCheck};
 
-use super::model::{SessionCacheSource, SessionPendingTool, SessionStatus};
+use super::cache::SessionCachePolicy;
+use super::model::{SessionListRequest, SessionPendingTool, SessionStatus, SessionSummary};
 use super::processor::SessionRunRequest;
+use super::store::{ReservedMessageIds, SessionCommit, SessionStore};
 use super::{Session, SessionEventRecord, SessionProcessor};
-
-const PROCESSOR_PART_ID_BLOCK: i64 = 1024;
 
 #[derive(Debug, Clone)]
 pub struct SessionManagerConfig {
@@ -47,6 +40,16 @@ impl Default for SessionManagerConfig {
             cache_ttl: Duration::from_secs(15 * 60),
             cache_max_bytes: 64 * 1024 * 1024,
             max_turn_loops: 16,
+        }
+    }
+}
+
+impl SessionManagerConfig {
+    fn cache_policy(&self) -> SessionCachePolicy {
+        SessionCachePolicy {
+            max_sessions: self.cache_max_sessions,
+            ttl: self.cache_ttl,
+            max_bytes: self.cache_max_bytes,
         }
     }
 }
@@ -118,105 +121,122 @@ struct ResolvedPendingTool {
     lifecycle: TimeRange,
 }
 
-pub struct SessionManager {
-    db: DatabaseConnection,
+#[derive(Clone)]
+struct SessionManagerState {
     processor: SessionProcessor,
     tool_executor: ToolExecutor,
-    cache: Arc<RwLock<SessionCache>>,
-    id_allocator: Arc<RwLock<GlobalIdAllocator>>,
     config: SessionManagerConfig,
+}
+
+impl SessionManagerState {
+    fn new(
+        processor: SessionProcessor,
+        tool_executor: ToolExecutor,
+        config: SessionManagerConfig,
+    ) -> Self {
+        Self {
+            processor,
+            tool_executor,
+            config,
+        }
+    }
+
+    fn cache_policy(&self) -> SessionCachePolicy {
+        self.config.cache_policy()
+    }
+}
+
+pub struct SessionManager {
+    store: Arc<SessionStore>,
+    execution: ArcSwap<SessionManagerState>,
 }
 
 impl SessionManager {
     pub fn new(
-        db: DatabaseConnection,
+        db: sea_orm::DatabaseConnection,
         processor: SessionProcessor,
         tool_executor: ToolExecutor,
     ) -> Self {
+        let store = Arc::new(SessionStore::new(db, tool_executor.workspace_root()));
+        let state =
+            SessionManagerState::new(processor, tool_executor, SessionManagerConfig::default());
         Self {
-            db,
-            processor,
-            tool_executor,
-            cache: Arc::new(RwLock::new(SessionCache::default())),
-            id_allocator: Arc::new(RwLock::new(GlobalIdAllocator::default())),
-            config: SessionManagerConfig::default(),
+            store,
+            execution: ArcSwap::from_pointee(state),
         }
     }
 
-    pub fn with_config(mut self, config: SessionManagerConfig) -> Self {
-        self.config = config;
+    pub fn with_config(self, config: SessionManagerConfig) -> Self {
+        let mut next = (*self.execution.load_full()).clone();
+        next.config = config;
+        self.execution.store(Arc::new(next));
         self
     }
 
+    pub(crate) fn reconfigure(
+        &self,
+        processor: SessionProcessor,
+        tool_executor: ToolExecutor,
+        config: SessionManagerConfig,
+    ) {
+        self.execution.store(Arc::new(SessionManagerState::new(
+            processor,
+            tool_executor,
+            config,
+        )));
+    }
+
     pub fn prune_cache(&self) {
-        if let Ok(mut cache) = self.cache.write() {
-            cache.prune(self.config.cache_ttl);
-            cache.enforce_limit(self.config.cache_max_sessions, self.config.cache_max_bytes);
-        }
+        let state = self.execution_state();
+        self.store.prune_cache(state.cache_policy());
     }
 
     pub async fn create_session(&self, request: SessionCreateRequest) -> Result<Session, AppError> {
-        let workspace_path = self.workspace_path_string();
-        let cache = Arc::clone(&self.cache);
-        let config = self.config.clone();
-        let title = request.title;
-        let parent_session_id = request.parent_session_id;
-
-        let session = with_transaction_and_effects(&self.db, move |txn, effects| {
-            let workspace_path = workspace_path.clone();
-            let cache = Arc::clone(&cache);
-            let config = config.clone();
-            let title = title.clone();
-            Box::pin(async move {
-                let workspace_id =
-                    workspace::ensure_workspace_id(txn, workspace_path.as_str()).await?;
-                let created =
-                    session::create_session(txn, workspace_id, parent_session_id, title).await?;
-                let created_session_id = created.id;
-                let mut session = session_from_model_db(created)?;
-                session.set_cache_source(SessionCacheSource::Fresh);
-                session.refresh_derived();
-
-                let session_for_cache = session.clone();
-                effects.push(async move {
-                    if let Ok(mut guard) = cache.write() {
-                        guard.insert(
-                            session_for_cache,
-                            config.cache_max_sessions,
-                            config.cache_max_bytes,
-                            config.cache_ttl,
-                        );
-                        if let Some(parent_session_id) = parent_session_id {
-                            guard.append_child_session(parent_session_id, created_session_id);
-                        }
-                    }
-                });
-
-                Ok(session)
-            })
-        })
-        .await?;
-
-        Ok(session)
+        let state = self.execution_state();
+        self.store
+            .create_session(
+                request.title,
+                request.parent_session_id,
+                state.cache_policy(),
+            )
+            .await
     }
 
     pub async fn get_session(&self, session_id: i64) -> Result<Session, AppError> {
-        self.load_session(session_id).await
+        let state = self.execution_state();
+        self.store
+            .load_session(session_id, state.cache_policy())
+            .await
+    }
+
+    pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
+        self.store.list_workspace_session_ids().await
+    }
+
+    pub async fn list_session_summaries(
+        &self,
+        request: SessionListRequest,
+    ) -> Result<Vec<SessionSummary>, AppError> {
+        self.store.list_session_summaries(request).await
     }
 
     pub async fn list_session_events(
         &self,
         session_id: i64,
     ) -> Result<Vec<SessionEventRecord>, AppError> {
-        Ok(session_runtime::list_session_events(&self.db, session_id).await?)
+        self.store.list_session_events(session_id).await
     }
 
     pub async fn submit_user_turn(
         &self,
         request: SessionUserTurnRequest,
     ) -> Result<Session, AppError> {
-        let mut session = self.load_session(request.session_id).await?;
-        let ids = self.reserve_message_ids(request.parts.len()).await?;
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(request.session_id, state.cache_policy())
+            .await?;
+        let ids = self.store.reserve_message_ids(request.parts.len()).await?;
         let user_message = build_message(
             ids,
             Role::User,
@@ -233,25 +253,35 @@ impl SessionManager {
         );
         session.messages.push(user_message.clone());
         session = self
-            .persist_session_changes(session, vec![user_message], Vec::new(), None)
+            .persist_session_changes(session, vec![user_message], Vec::new(), None, state.clone())
             .await?;
 
-        self.run_until_stable(session, &request.options).await
+        self.run_until_stable(session, &request.options, state)
+            .await
     }
 
     pub async fn continue_session(
         &self,
         request: SessionContinueRequest,
     ) -> Result<Session, AppError> {
-        let session = self.load_session(request.session_id).await?;
-        self.run_until_stable(session, &request.options).await
+        let state = self.execution_state();
+        let session = self
+            .store
+            .load_session(request.session_id, state.cache_policy())
+            .await?;
+        self.run_until_stable(session, &request.options, state)
+            .await
     }
 
     pub async fn reply_permission(
         &self,
         request: SessionPermissionReplyRequest,
     ) -> Result<Session, AppError> {
-        let mut session = self.load_session(request.session_id).await?;
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(request.session_id, state.cache_policy())
+            .await?;
         let pending = session
             .find_pending_permission_by_request_id(request.reply.request_id.as_str())
             .ok_or_else(|| {
@@ -299,7 +329,7 @@ impl SessionManager {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
                 let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
                 let execution = self
-                    .execute_pending_tool_after_approval(session.id, &resolved_tool)
+                    .execute_pending_tool_after_approval(state.as_ref(), session.id, &resolved_tool)
                     .map_err(tool_error_to_app_error)?;
                 session = self
                     .apply_tool_success(
@@ -308,6 +338,7 @@ impl SessionManager {
                         execution,
                         persisted_action_key,
                         persisted_mode,
+                        state.clone(),
                     )
                     .await?;
             }
@@ -319,19 +350,25 @@ impl SessionManager {
                         reply_reason,
                         persisted_action_key,
                         persisted_mode,
+                        state.clone(),
                     )
                     .await?;
             }
         }
 
-        self.run_until_stable(session, &request.options).await
+        self.run_until_stable(session, &request.options, state)
+            .await
     }
 
     pub async fn reply_user_input(
         &self,
         request: SessionUserInputReplyRequest,
     ) -> Result<Session, AppError> {
-        let mut session = self.load_session(request.session_id).await?;
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(request.session_id, state.cache_policy())
+            .await?;
         let pending = session
             .find_pending_user_input_by_request_id(request.reply.request_id.as_str())
             .ok_or_else(|| {
@@ -368,7 +405,14 @@ impl SessionManager {
             UserInputReplyKind::Submit => {
                 let execution = user_input_execution(&user_input_request, &request.reply)?;
                 session = self
-                    .apply_tool_success(session, &pending.tool, execution, None, None)
+                    .apply_tool_success(
+                        session,
+                        &pending.tool,
+                        execution,
+                        None,
+                        None,
+                        state.clone(),
+                    )
                     .await?;
             }
             UserInputReplyKind::Cancel => {
@@ -377,36 +421,40 @@ impl SessionManager {
                         "user declined to answer requested questions".to_string()
                     });
                 session = self
-                    .apply_tool_failure(session, &pending.tool, reason, None, None)
+                    .apply_tool_failure(session, &pending.tool, reason, None, None, state.clone())
                     .await?;
             }
         }
 
-        self.run_until_stable(session, &request.options).await
+        self.run_until_stable(session, &request.options, state)
+            .await
     }
 
     async fn run_until_stable(
         &self,
         mut session: Session,
         options: &SessionRunOptions,
+        state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        for _ in 0..self.config.max_turn_loops {
+        for _ in 0..state.config.max_turn_loops {
             session.refresh_derived();
             if session.blocked() {
                 return Ok(session);
             }
 
             if let Some(tool) = session.next_pending_tool() {
-                session = self.resolve_pending_tool(session, tool).await?;
+                session = self
+                    .resolve_pending_tool(session, tool, state.clone())
+                    .await?;
                 continue;
             }
 
             match session.status() {
-                SessionStatus::Idle | SessionStatus::PendingOperations => return Ok(session),
+                SessionStatus::Idle => return Ok(session),
                 SessionStatus::AwaitingModel => {}
             }
 
-            session = self.run_model_turn(session, options).await?;
+            session = self.run_model_turn(session, options, state.clone()).await?;
         }
 
         Err(AppError::Internal(
@@ -418,14 +466,16 @@ impl SessionManager {
         &self,
         mut session: Session,
         options: &SessionRunOptions,
+        state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let processor_ids = self.reserve_processor_ids().await?;
+        let processor_ids = self.store.reserve_processor_ids().await?;
         let run = SessionRunRequest {
             session_id: session.id,
             model: options.model.clone(),
             completion: options.completion_request(
                 session.messages.clone(),
-                self.tool_executor
+                state
+                    .tool_executor
                     .available_tools_for_messages(session.messages.as_slice()),
             ),
             next_message_id: processor_ids.message_id,
@@ -433,7 +483,7 @@ impl SessionManager {
             next_call_id: session.next_call_id(),
         };
 
-        match self.processor.run_turn(run).await {
+        match state.processor.run_turn(run).await {
             Ok(result) => {
                 let assistant_message = result
                     .state
@@ -456,11 +506,12 @@ impl SessionManager {
                     vec![assistant_message],
                     client_events,
                     None,
+                    state,
                 )
                 .await
             }
             Err(err) => {
-                self.persist_run_failed_event(session.id, err.to_string())
+                self.persist_run_failed_event(session.id, err.to_string(), state)
                     .await?;
                 Err(err)
             }
@@ -471,16 +522,18 @@ impl SessionManager {
         &self,
         mut session: Session,
         pending_tool: SessionPendingTool,
+        state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let mut resolved = resolve_pending_tool(&session, &pending_tool)?;
-        let prepared = self
+        let prepared = state
             .tool_executor
             .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
             .map_err(tool_error_to_app_error)?;
         if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
-            let current_title = match session.part(&resolved.pending.part).and_then(|part| {
-                part.content.as_ref()
-            }) {
+            let current_title = match session
+                .part(&resolved.pending.part)
+                .and_then(|part| part.content.as_ref())
+            {
                 Some(PartContent::ToolExecution(ToolExecutionPart::Pending { title, .. })) => {
                     title.clone()
                 }
@@ -502,7 +555,7 @@ impl SessionManager {
             }));
         }
 
-        for check in self
+        for check in state
             .tool_executor
             .collect_permission_checks_for_invocation(&resolved.invocation)
             .map_err(tool_error_to_app_error)?
@@ -512,24 +565,30 @@ impl SessionManager {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Ask { reason } => {
                     return self
-                        .apply_permission_request(session, &resolved.pending, check.action, reason)
+                        .apply_permission_request(
+                            session,
+                            &resolved.pending,
+                            check.action,
+                            reason,
+                            state,
+                        )
                         .await;
                 }
                 PermissionDecision::Deny { reason } => {
                     return self
-                        .apply_tool_failure(session, &resolved.pending, reason, None, None)
+                        .apply_tool_failure(session, &resolved.pending, reason, None, None, state)
                         .await;
                 }
             }
         }
 
-        match self.execute_pending_tool(session.id, &resolved) {
+        match self.execute_pending_tool(state.as_ref(), session.id, &resolved) {
             Ok(execution) => {
-                self.apply_tool_success(session, &resolved.pending, execution, None, None)
+                self.apply_tool_success(session, &resolved.pending, execution, None, None, state)
                     .await
             }
             Err(ToolError::UserInputRequired(input)) => {
-                self.apply_user_input_request(session, &resolved.pending, input)
+                self.apply_user_input_request(session, &resolved.pending, input, state)
                     .await
             }
             Err(err) => Err(tool_error_to_app_error(err)),
@@ -547,7 +606,7 @@ impl SessionManager {
             }),
             PermissionDecision::Ask { reason } => {
                 let key = permission_action_key(&check.action)?;
-                if let Some(mode) = permission_rule::resolve_rule(&self.db, key.as_str()).await? {
+                if let Some(mode) = self.store.resolve_permission_mode(key.as_str()).await? {
                     return Ok(decide_from_mode(mode, reason.clone()));
                 }
                 Ok(PermissionDecision::Ask {
@@ -563,6 +622,7 @@ impl SessionManager {
         pending_tool: &SessionPendingTool,
         action: PermissionAction,
         reason: String,
+        state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let request = PermissionRequest {
@@ -590,7 +650,7 @@ impl SessionManager {
             tool_part.summary = Some(reason.clone());
         }
 
-        let permission_part_id = self.reserve_part_id().await?;
+        let permission_part_id = self.store.reserve_part_id().await?;
         let permission_part = build_permission_part(
             permission_part_id,
             pending_tool.part.message_id,
@@ -602,7 +662,7 @@ impl SessionManager {
             .push(permission_part.clone());
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
-        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None)
+        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state)
             .await
     }
 
@@ -611,6 +671,7 @@ impl SessionManager {
         mut session: Session,
         pending_tool: &SessionPendingTool,
         input: crate::message::RequestUserInputToolInput,
+        state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let request = UserInputRequest {
@@ -640,7 +701,7 @@ impl SessionManager {
             ));
         }
 
-        let input_part_id = self.reserve_part_id().await?;
+        let input_part_id = self.store.reserve_part_id().await?;
         let input_part = build_user_input_part(
             input_part_id,
             pending_tool.part.message_id,
@@ -652,7 +713,7 @@ impl SessionManager {
             .push(input_part.clone());
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
-        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None)
+        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state)
             .await
     }
 
@@ -663,6 +724,7 @@ impl SessionManager {
         execution: ToolInvocationExecution,
         persisted_action_key: Option<String>,
         persisted_mode: Option<PermissionMode>,
+        state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let tool_output = execution.output.clone();
@@ -695,7 +757,8 @@ impl SessionManager {
         }
 
         let tool_message = build_tool_message(
-            self.reserve_message_ids(1 + extra_part_contents.len())
+            self.store
+                .reserve_message_ids(1 + extra_part_contents.len())
                 .await?,
             &resolved,
             execution.view.attachments,
@@ -714,6 +777,7 @@ impl SessionManager {
             vec![assistant_message, tool_message],
             Vec::new(),
             persisted_rule_update(persisted_action_key, persisted_mode),
+            state,
         )
         .await
     }
@@ -725,6 +789,7 @@ impl SessionManager {
         reason: String,
         persisted_action_key: Option<String>,
         persisted_mode: Option<PermissionMode>,
+        state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
@@ -751,7 +816,7 @@ impl SessionManager {
         }
 
         let tool_message = build_tool_message(
-            self.reserve_message_ids(1).await?,
+            self.store.reserve_message_ids(1).await?,
             &resolved,
             Vec::new(),
             reason.clone(),
@@ -769,98 +834,37 @@ impl SessionManager {
             vec![assistant_message, tool_message],
             Vec::new(),
             persisted_rule_update(persisted_action_key, persisted_mode),
+            state,
         )
         .await
     }
 
     async fn persist_session_changes(
         &self,
-        mut session: Session,
+        session: Session,
         touched_messages: Vec<Message>,
-        mut client_events: Vec<SessionEvent>,
+        client_events: Vec<SessionEvent>,
         persisted_rule: Option<(String, PermissionMode)>,
+        state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let session_id = session.id;
-        let mut unique_messages = HashMap::new();
-        for message in touched_messages {
-            unique_messages.insert(message.id, message);
-        }
-        let touched_messages = unique_messages.into_values().collect::<Vec<_>>();
-        let now = Utc::now();
-        let ts_ms = now.timestamp_millis();
-        for message in &touched_messages {
-            for part in &message.parts {
-                client_events.push(SessionEvent::MessagePartUpdated(MessagePartUpdatedEvent {
-                    session_id,
-                    message_id: message.id,
-                    part: part.clone(),
-                    ts_ms,
-                }));
-            }
-        }
-
-        let cache = Arc::clone(&self.cache);
-        let config = self.config.clone();
-        let session_for_cache = session.clone();
-        let updated_session = with_transaction_and_effects(&self.db, move |txn, effects| {
-            let touched_messages = touched_messages.clone();
-            let client_events = client_events.clone();
-            let persisted_rule = persisted_rule.clone();
-            let cache = Arc::clone(&cache);
-            let config = config.clone();
-            let session_for_cache = session_for_cache.clone();
-            Box::pin(async move {
-                for message in &touched_messages {
-                    message::upsert_message_with_parts(txn, session_id, message).await?;
-                }
-
-                if let Some((action_key, mode)) = persisted_rule {
-                    permission_rule::upsert_rule(txn, action_key.as_str(), mode).await?;
-                }
-
-                let updated_session = session::touch_session_updated_at(txn, session_id)
-                    .await?
-                    .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
-                let updated_session = session_from_model_db(updated_session)?;
-
-                let mut next_seq = session_runtime::latest_event_seq(txn, session_id)
-                    .await?
-                    .unwrap_or(0);
-                for event in client_events {
-                    next_seq += 1;
-                    session_runtime::append_session_event(txn, session_id, next_seq, event, now)
-                        .await?;
-                }
-
-                let updated_session_for_cache = updated_session.clone();
-                effects.push(async move {
-                    if let Ok(mut guard) = cache.write() {
-                        let mut cached_session = session_for_cache.clone();
-                        cached_session.apply_persisted_metadata(&updated_session_for_cache);
-                        cached_session.refresh_derived();
-                        guard.insert(
-                            cached_session,
-                            config.cache_max_sessions,
-                            config.cache_max_bytes,
-                            config.cache_ttl,
-                        );
-                    }
-                });
-
-                Ok(updated_session)
-            })
-        })
-        .await?;
-
-        session.apply_persisted_metadata(&updated_session);
-        session.refresh_derived();
-        Ok(session)
+        self.store
+            .persist(
+                SessionCommit {
+                    session,
+                    touched_messages,
+                    client_events,
+                    persisted_rule,
+                },
+                state.cache_policy(),
+            )
+            .await
     }
 
     async fn persist_run_failed_event(
         &self,
         session_id: i64,
         reason: String,
+        state: Arc<SessionManagerState>,
     ) -> Result<(), AppError> {
         let event = SessionEvent::RunFailed(RunFailedEvent {
             session_id,
@@ -870,46 +874,23 @@ impl SessionManager {
             },
             ts_ms: Utc::now().timestamp_millis(),
         });
-        let session = self.load_session(session_id).await?;
+        let session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
         let _ = self
-            .persist_session_changes(session, Vec::new(), vec![event], None)
+            .persist_session_changes(session, Vec::new(), vec![event], None, state)
             .await?;
         Ok(())
     }
 
-    async fn load_session(&self, session_id: i64) -> Result<Session, AppError> {
-        if let Ok(mut cache) = self.cache.write()
-            && let Some(session) = cache.get(session_id, self.config.cache_ttl)
-        {
-            return Ok(session);
-        }
-
-        let session_model = session::get_session_by_id(&self.db, session_id)
-            .await?
-            .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-        let mut session = session_from_model(session_model)?;
-        session.replace_child_session_ids(
-            session::list_child_session_ids(&self.db, session_id).await?,
-        );
-        session.replace_messages(message::list_messages_with_parts(&self.db, session_id).await?);
-        session.set_cache_source(SessionCacheSource::Database);
-        if let Ok(mut cache) = self.cache.write() {
-            cache.insert(
-                session.clone(),
-                self.config.cache_max_sessions,
-                self.config.cache_max_bytes,
-                self.config.cache_ttl,
-            );
-        }
-        Ok(session)
-    }
-
     fn execute_pending_tool(
         &self,
+        state: &SessionManagerState,
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
     ) -> Result<ToolInvocationExecution, ToolError> {
-        self.tool_executor.execute_invocation_detailed(
+        state.tool_executor.execute_invocation_detailed(
             &pending_tool.invocation,
             session_id,
             pending_tool.call_id,
@@ -918,10 +899,12 @@ impl SessionManager {
 
     fn execute_pending_tool_after_approval(
         &self,
+        state: &SessionManagerState,
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
     ) -> Result<ToolInvocationExecution, ToolError> {
-        self.tool_executor
+        state
+            .tool_executor
             .execute_invocation_detailed_bypassing_permissions(
                 &pending_tool.invocation,
                 session_id,
@@ -929,224 +912,8 @@ impl SessionManager {
             )
     }
 
-    fn workspace_path_string(&self) -> String {
-        self.tool_executor
-            .workspace_root()
-            .to_string_lossy()
-            .replace('\\', "/")
-    }
-
-    async fn reserve_message_ids(&self, part_count: usize) -> Result<ReservedMessageIds, AppError> {
-        self.ensure_id_allocator().await?;
-        let mut allocator = self
-            .id_allocator
-            .write()
-            .map_err(|_| AppError::Internal("session id allocator lock poisoned".to_string()))?;
-        let message_id = allocator.next_message_id;
-        allocator.next_message_id += 1;
-
-        let first_part_id = allocator.next_part_id;
-        allocator.next_part_id += part_count as i64;
-        let part_ids = (0..part_count)
-            .map(|index| first_part_id + index as i64)
-            .collect::<Vec<_>>();
-
-        Ok(ReservedMessageIds {
-            message_id,
-            part_ids,
-        })
-    }
-
-    async fn reserve_part_id(&self) -> Result<i64, AppError> {
-        self.ensure_id_allocator().await?;
-        let mut allocator = self
-            .id_allocator
-            .write()
-            .map_err(|_| AppError::Internal("session id allocator lock poisoned".to_string()))?;
-        let part_id = allocator.next_part_id;
-        allocator.next_part_id += 1;
-        Ok(part_id)
-    }
-
-    async fn reserve_processor_ids(&self) -> Result<ReservedProcessorIds, AppError> {
-        self.ensure_id_allocator().await?;
-        let mut allocator = self
-            .id_allocator
-            .write()
-            .map_err(|_| AppError::Internal("session id allocator lock poisoned".to_string()))?;
-        let ids = ReservedProcessorIds {
-            message_id: allocator.next_message_id,
-            first_part_id: allocator.next_part_id,
-        };
-        allocator.next_message_id += 1;
-        allocator.next_part_id += PROCESSOR_PART_ID_BLOCK;
-        Ok(ids)
-    }
-
-    async fn ensure_id_allocator(&self) -> Result<(), AppError> {
-        let initialized = self
-            .id_allocator
-            .read()
-            .map_err(|_| AppError::Internal("session id allocator lock poisoned".to_string()))?
-            .initialized;
-        if initialized {
-            return Ok(());
-        }
-
-        let next_message_id = entities::message::Entity::find()
-            .order_by_desc(entities::message::Column::Id)
-            .one(&self.db)
-            .await?
-            .map(|model| model.id + 1)
-            .unwrap_or(1);
-        let next_part_id = entities::message_part::Entity::find()
-            .order_by_desc(entities::message_part::Column::Id)
-            .one(&self.db)
-            .await?
-            .map(|model| model.id + 1)
-            .unwrap_or(1);
-
-        let mut allocator = self
-            .id_allocator
-            .write()
-            .map_err(|_| AppError::Internal("session id allocator lock poisoned".to_string()))?;
-        if !allocator.initialized {
-            allocator.initialized = true;
-            allocator.next_message_id = next_message_id;
-            allocator.next_part_id = next_part_id;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-struct CachedSessionEntry {
-    session: Session,
-    last_accessed: Instant,
-}
-
-#[derive(Debug, Default)]
-struct GlobalIdAllocator {
-    initialized: bool,
-    next_message_id: i64,
-    next_part_id: i64,
-}
-
-#[derive(Debug, Clone)]
-struct ReservedMessageIds {
-    message_id: i64,
-    part_ids: Vec<i64>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ReservedProcessorIds {
-    message_id: i64,
-    first_part_id: i64,
-}
-
-#[derive(Debug, Default)]
-struct SessionCache {
-    entries: HashMap<i64, CachedSessionEntry>,
-    access_order: VecDeque<i64>,
-    total_bytes: usize,
-}
-
-impl SessionCache {
-    fn get(&mut self, session_id: i64, ttl: Duration) -> Option<Session> {
-        self.prune(ttl);
-        let mut session = {
-            let entry = self.entries.get_mut(&session_id)?;
-            entry.last_accessed = Instant::now();
-            entry.session.clone()
-        };
-        self.bump(session_id);
-        session.set_cache_source(SessionCacheSource::Memory);
-        session.refresh_derived();
-        Some(session)
-    }
-
-    fn insert(
-        &mut self,
-        mut session: Session,
-        max_sessions: usize,
-        max_bytes: usize,
-        ttl: Duration,
-    ) {
-        self.prune(ttl);
-        session.refresh_derived();
-        let session_id = session.id;
-        self.remove(session_id);
-        let approx_bytes = session.approx_bytes();
-        if approx_bytes > max_bytes.max(1) {
-            return;
-        }
-
-        self.entries.insert(
-            session_id,
-            CachedSessionEntry {
-                session,
-                last_accessed: Instant::now(),
-            },
-        );
-        self.total_bytes = self.total_bytes.saturating_add(approx_bytes);
-        self.bump(session_id);
-        self.enforce_limit(max_sessions, max_bytes);
-    }
-
-    fn prune(&mut self, ttl: Duration) {
-        let now = Instant::now();
-        let expired = self
-            .entries
-            .iter()
-            .filter_map(|(session_id, entry)| {
-                (now.saturating_duration_since(entry.last_accessed) > ttl).then_some(*session_id)
-            })
-            .collect::<Vec<_>>();
-        for session_id in expired {
-            self.remove(session_id);
-        }
-    }
-
-    fn enforce_limit(&mut self, max_sessions: usize, max_bytes: usize) {
-        while self.entries.len() > max_sessions.max(1) || self.total_bytes > max_bytes.max(1) {
-            let Some(session_id) = self.access_order.pop_front() else {
-                break;
-            };
-            if let Some(entry) = self.entries.remove(&session_id) {
-                self.total_bytes = self
-                    .total_bytes
-                    .saturating_sub(entry.session.approx_bytes());
-            }
-        }
-    }
-
-    fn bump(&mut self, session_id: i64) {
-        self.access_order.retain(|item| *item != session_id);
-        self.access_order.push_back(session_id);
-    }
-
-    fn remove(&mut self, session_id: i64) {
-        if let Some(entry) = self.entries.remove(&session_id) {
-            self.total_bytes = self
-                .total_bytes
-                .saturating_sub(entry.session.approx_bytes());
-        }
-        self.access_order.retain(|item| *item != session_id);
-    }
-
-    fn append_child_session(&mut self, parent_session_id: i64, child_session_id: i64) {
-        let Some(entry) = self.entries.get_mut(&parent_session_id) else {
-            return;
-        };
-
-        let before = entry.session.approx_bytes();
-        entry.session.append_child_session_id(child_session_id);
-        let after = entry.session.approx_bytes();
-        self.total_bytes = self
-            .total_bytes
-            .saturating_sub(before)
-            .saturating_add(after);
-        self.bump(parent_session_id);
+    fn execution_state(&self) -> Arc<SessionManagerState> {
+        self.execution.load_full()
     }
 }
 
@@ -1481,34 +1248,6 @@ fn permission_action_key(action: &PermissionAction) -> Result<String, AppError> 
     serde_json::to_string(action).map_err(AppError::from)
 }
 
-fn session_from_model(model: crate::db::entities::session::Model) -> Result<Session, AppError> {
-    let created_at = timestamp_millis_to_utc(model.created_at_ms)?;
-    let updated_at = timestamp_millis_to_utc(model.updated_at_ms)?;
-    let mut session = Session::new(model.id, model.workspace_id, model.title, created_at);
-    session.parent_id = model.parent_id;
-    session.updated_at = updated_at;
-    Ok(session)
-}
-
-fn session_from_model_db(model: crate::db::entities::session::Model) -> Result<Session, DbErr> {
-    let created_at = timestamp_millis_to_utc_db(model.created_at_ms)?;
-    let updated_at = timestamp_millis_to_utc_db(model.updated_at_ms)?;
-    let mut session = Session::new(model.id, model.workspace_id, model.title, created_at);
-    session.parent_id = model.parent_id;
-    session.updated_at = updated_at;
-    Ok(session)
-}
-
-fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError> {
-    DateTime::from_timestamp_millis(timestamp_ms)
-        .ok_or_else(|| AppError::Internal(format!("invalid timestamp millis: {timestamp_ms}")))
-}
-
-fn timestamp_millis_to_utc_db(timestamp_ms: i64) -> Result<DateTime<Utc>, DbErr> {
-    DateTime::from_timestamp_millis(timestamp_ms)
-        .ok_or_else(|| DbErr::Custom(format!("invalid timestamp millis: {timestamp_ms}")))
-}
-
 fn tool_error_to_app_error(err: ToolError) -> AppError {
     match err {
         ToolError::PermissionDenied(reason) | ToolError::PermissionAsk(reason) => {
@@ -1609,8 +1348,8 @@ mod tests {
     use crate::db::init_schema;
     use crate::message::{
         ApplyPatchToolInput, AttachmentSource, BuiltinToolOutput, FileChangeKind, McpToolOutput,
-        RequestUserInputToolInput, ToolAttachment, ToolExecutionPart, ToolOutput,
-        ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
+        RequestUserInputToolInput, ToolAttachment, ToolExecutionPart, ToolOutput, ToolResultBlock,
+        ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
         UserInputReplyKind,
     };
     use crate::model::{ModelId, ModelRef, ProviderId};
@@ -1622,6 +1361,7 @@ mod tests {
     use crate::session::{ContextGovernor, ContextPolicy};
 
     use super::*;
+    use crate::session::cache::{SessionCache, SessionCachePolicy};
 
     struct TempWorkspace {
         root: std::path::PathBuf,
@@ -2329,16 +2069,97 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn list_session_summaries_reports_workspace_order_counts_and_pagination() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let parent = service
+            .create_session(SessionCreateRequest {
+                title: "parent".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create parent session");
+        let child = service
+            .create_session(SessionCreateRequest {
+                title: "child".to_string(),
+                parent_session_id: Some(parent.id),
+            })
+            .await
+            .expect("create child session");
+        let sibling = service
+            .create_session(SessionCreateRequest {
+                title: "sibling".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create sibling session");
+
+        let updated_parent = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: parent.id,
+                options: run_options(),
+                parts: vec![PartContent::text("hello parent")],
+            })
+            .await
+            .expect("update parent session");
+
+        let session_ids = service
+            .workspace_session_ids()
+            .await
+            .expect("list workspace session ids");
+        assert_eq!(session_ids, vec![parent.id, sibling.id, child.id]);
+
+        let summaries = service
+            .list_session_summaries(SessionListRequest::default())
+            .await
+            .expect("list session summaries");
+        assert_eq!(summaries.len(), 3);
+        assert_eq!(summaries[0].id, parent.id);
+        assert_eq!(summaries[0].title, "parent");
+        assert_eq!(summaries[0].version, updated_parent.version);
+        assert_eq!(summaries[0].message_count, 2);
+        assert_eq!(summaries[0].child_session_count, 1);
+        assert!(summaries[0].last_message_at.is_some());
+        assert_eq!(summaries[1].id, sibling.id);
+        assert_eq!(summaries[1].message_count, 0);
+        assert_eq!(summaries[1].child_session_count, 0);
+        assert_eq!(summaries[1].last_message_at, None);
+        assert_eq!(summaries[2].id, child.id);
+        assert_eq!(summaries[2].parent_id, Some(parent.id));
+
+        let paged = service
+            .list_session_summaries(SessionListRequest {
+                offset: 1,
+                limit: Some(1),
+            })
+            .await
+            .expect("list paged session summaries");
+        assert_eq!(paged.len(), 1);
+        assert_eq!(paged[0].id, sibling.id);
+    }
+
     #[test]
     fn cache_skips_entries_larger_than_byte_budget() {
         let state = cache_state(1, "x".repeat(256));
         let mut cache = SessionCache::default();
         let max_bytes = state.approx_bytes().saturating_sub(1).max(1);
+        let cache_policy = SessionCachePolicy {
+            max_sessions: 8,
+            ttl: Duration::from_secs(60),
+            max_bytes,
+        };
 
-        cache.insert(state.clone(), 8, max_bytes, Duration::from_secs(60));
+        cache.insert(state.clone(), cache_policy);
 
-        assert!(cache.get(state.id, Duration::from_secs(60)).is_none());
-        assert_eq!(cache.total_bytes, 0);
+        assert!(cache.get(state.id, cache_policy).is_none());
+        assert_eq!(cache.total_bytes(), 0);
     }
 
     #[test]
@@ -2350,12 +2171,17 @@ mod tests {
             .approx_bytes()
             .saturating_add(second.approx_bytes())
             .saturating_sub(1);
+        let cache_policy = SessionCachePolicy {
+            max_sessions: 8,
+            ttl: Duration::from_secs(60),
+            max_bytes,
+        };
 
-        cache.insert(first.clone(), 8, max_bytes, Duration::from_secs(60));
-        cache.insert(second.clone(), 8, max_bytes, Duration::from_secs(60));
+        cache.insert(first.clone(), cache_policy);
+        cache.insert(second.clone(), cache_policy);
 
-        assert!(cache.get(first.id, Duration::from_secs(60)).is_none());
-        assert!(cache.get(second.id, Duration::from_secs(60)).is_some());
-        assert!(cache.total_bytes <= max_bytes);
+        assert!(cache.get(first.id, cache_policy).is_none());
+        assert!(cache.get(second.id, cache_policy).is_some());
+        assert!(cache.total_bytes() <= max_bytes);
     }
 }

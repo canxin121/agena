@@ -38,6 +38,7 @@ pub(crate) struct SessionRunResult {
     pub client_events: Vec<SessionEvent>,
 }
 
+#[derive(Clone)]
 pub struct SessionProcessor {
     provider_registry: Arc<ProviderRegistry>,
     context_governor: ContextGovernor,

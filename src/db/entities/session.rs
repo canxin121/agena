@@ -10,6 +10,7 @@ pub struct Model {
     pub parent_id: Option<i64>,
     pub workspace_id: i64,
     pub title: String,
+    pub version: i64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }

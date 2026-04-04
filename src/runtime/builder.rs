@@ -100,6 +100,7 @@ impl AgenaRuntimeBuilder {
                 &load_request,
                 workspace_root.as_path(),
                 database.clone(),
+                None,
             )
             .await?,
         );
@@ -222,6 +223,7 @@ impl AgenaRuntime {
                 &self.inner.load_request,
                 self.inner.workspace_root.as_path(),
                 self.inner.database.clone(),
+                previous.session_manager(),
             )
             .await?,
         );
@@ -281,6 +283,7 @@ mod tests {
     use std::{
         fs,
         path::PathBuf,
+        sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -379,6 +382,62 @@ api_key = "test"
             .expect("runtime should build");
 
         assert!(runtime.session_manager().is_some());
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn reload_reuses_existing_session_manager() {
+        let path = write_temp_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key = "test"
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root)
+            .with_database_url("sqlite::memory:")
+            .build()
+            .await
+            .expect("runtime should build");
+        let before = runtime
+            .session_manager()
+            .expect("session manager should be available");
+
+        fs::write(
+            &path,
+            r#"
+[tracing]
+filter = "debug"
+
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-5"
+api_key = "test"
+"#,
+        )
+        .expect("config rewrite should succeed");
+
+        runtime.reload().await.expect("reload should succeed");
+        let after = runtime
+            .session_manager()
+            .expect("session manager should still be available");
+
+        assert!(Arc::ptr_eq(&before, &after));
 
         runtime.shutdown();
         let _ = fs::remove_file(path);

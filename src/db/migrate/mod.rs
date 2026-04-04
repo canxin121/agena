@@ -1,6 +1,7 @@
 mod m20260322_000001_initial;
 mod m20260330_000002_runtime;
 mod m20260404_000003_drop_checkpoints;
+mod m20260404_000004_session_version;
 mod migrator;
 
 use sea_orm::{DatabaseConnection, DbErr};

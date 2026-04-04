@@ -72,11 +72,61 @@ pub struct RuntimeSnapshot {
     generation: u64,
     loaded_at: DateTime<Utc>,
     resolution: Arc<ConfigResolution>,
+    services: RuntimeServices,
+    maintenance: RuntimeMaintenance,
+}
+
+#[derive(Clone)]
+struct RuntimeServices {
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginManager>,
     auth_store: RuntimeAuthStore,
     session_manager: Option<Arc<SessionManager>>,
+}
+
+impl RuntimeServices {
+    fn new(
+        providers: Arc<ProviderRegistry>,
+        plugins: Arc<PluginManager>,
+        auth_store: RuntimeAuthStore,
+        session_manager: Option<Arc<SessionManager>>,
+    ) -> Self {
+        Self {
+            providers,
+            plugins,
+            auth_store,
+            session_manager,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeTaskPolicy {
+    enabled: bool,
+    interval: Duration,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeMaintenance {
     watch_paths: Vec<PathBuf>,
+    reload: RuntimeTaskPolicy,
+    janitor: RuntimeTaskPolicy,
+}
+
+impl RuntimeMaintenance {
+    fn from_resolution(resolution: &ConfigResolution) -> Self {
+        Self {
+            watch_paths: collect_watch_paths(resolution),
+            reload: RuntimeTaskPolicy {
+                enabled: resolution.config.runtime.reload.enabled,
+                interval: Duration::from_secs(resolution.config.runtime.reload.poll_interval_secs),
+            },
+            janitor: RuntimeTaskPolicy {
+                enabled: resolution.config.runtime.janitor.enabled,
+                interval: Duration::from_secs(resolution.config.runtime.janitor.interval_secs),
+            },
+        }
+    }
 }
 
 impl RuntimeSnapshot {
@@ -86,31 +136,33 @@ impl RuntimeSnapshot {
         load_request: &LoadConfigRequest,
         workspace_root: &Path,
         database: Option<Arc<DatabaseConnection>>,
+        existing_session_manager: Option<Arc<SessionManager>>,
     ) -> Result<Self, AppError> {
         let resolution = loader.load(load_request)?;
         let providers = Arc::new(resolution.config.build_provider_registry()?);
         let plugins = Arc::new(resolution.build_plugin_manager()?);
         let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
-        let session_manager = database.as_ref().map(|db| {
-            build_session_manager(
+        let session_manager = if let Some(db) = database.as_ref() {
+            Some(build_or_reconfigure_session_manager(
+                existing_session_manager,
                 db,
                 Arc::clone(&providers),
                 Arc::clone(&plugins),
                 workspace_root,
                 &resolution,
-            )
-        });
-        let watch_paths = collect_watch_paths(&resolution);
+            ))
+        } else {
+            None
+        };
+        let services = RuntimeServices::new(providers, plugins, auth_store, session_manager);
+        let maintenance = RuntimeMaintenance::from_resolution(&resolution);
 
         Ok(Self {
             generation,
             loaded_at: Utc::now(),
             resolution: Arc::new(resolution),
-            providers,
-            plugins,
-            auth_store,
-            session_manager,
-            watch_paths,
+            services,
+            maintenance,
         })
     }
 
@@ -127,14 +179,14 @@ impl RuntimeSnapshot {
     }
 
     pub fn provider_registry(&self) -> Arc<ProviderRegistry> {
-        Arc::clone(&self.providers)
+        Arc::clone(&self.services.providers)
     }
 
     pub async fn list_provider_models(
         &self,
         provider_id: &str,
     ) -> Result<Vec<crate::provider::ProviderModel>, AppError> {
-        self.providers.list_models(provider_id).await
+        self.services.providers.list_models(provider_id).await
     }
 
     pub fn resolve_model_target(
@@ -142,21 +194,21 @@ impl RuntimeSnapshot {
         target: &str,
         model: Option<&str>,
     ) -> Result<ModelRef, AppError> {
-        self.providers.resolve_model_target(target, model)
+        self.services.providers.resolve_model_target(target, model)
     }
 
     pub async fn resolve_model(
         &self,
         model: &ModelRef,
     ) -> Result<crate::provider::ProviderModel, AppError> {
-        self.providers.resolve_model(model).await
+        self.services.providers.resolve_model(model).await
     }
 
     pub fn model_capabilities_for(
         &self,
         model: &ModelRef,
     ) -> Result<crate::provider::ModelCapabilities, AppError> {
-        self.providers.model_capabilities(model)
+        self.services.providers.model_capabilities(model)
     }
 
     pub async fn provider_model(
@@ -176,35 +228,35 @@ impl RuntimeSnapshot {
     }
 
     pub fn plugin_manager(&self) -> Arc<PluginManager> {
-        Arc::clone(&self.plugins)
+        Arc::clone(&self.services.plugins)
     }
 
     pub fn auth_store(&self) -> RuntimeAuthStore {
-        self.auth_store.clone()
+        self.services.auth_store.clone()
     }
 
     pub fn session_manager(&self) -> Option<Arc<SessionManager>> {
-        self.session_manager.as_ref().map(Arc::clone)
+        self.services.session_manager.as_ref().map(Arc::clone)
     }
 
     pub(crate) fn watch_paths(&self) -> &[PathBuf] {
-        &self.watch_paths
+        self.maintenance.watch_paths.as_slice()
     }
 
     pub(crate) fn reload_enabled(&self) -> bool {
-        self.resolution.config.runtime.reload.enabled
+        self.maintenance.reload.enabled
     }
 
     pub(crate) fn reload_poll_interval(&self) -> Duration {
-        Duration::from_secs(self.resolution.config.runtime.reload.poll_interval_secs)
+        self.maintenance.reload.interval
     }
 
     pub(crate) fn janitor_enabled(&self) -> bool {
-        self.resolution.config.runtime.janitor.enabled
+        self.maintenance.janitor.enabled
     }
 
     pub(crate) fn janitor_interval(&self) -> Duration {
-        Duration::from_secs(self.resolution.config.runtime.janitor.interval_secs)
+        self.maintenance.janitor.interval
     }
 }
 
@@ -214,36 +266,59 @@ impl fmt::Debug for RuntimeSnapshot {
             .field("generation", &self.generation)
             .field("loaded_at", &self.loaded_at)
             .field("config_path", &self.resolution.meta.config_path)
-            .field("provider_count", &self.providers.provider_ids().len())
-            .field("plugin_count", &self.plugins.plugins().len())
-            .field("session_manager", &self.session_manager.is_some())
+            .field(
+                "provider_count",
+                &self.services.providers.provider_ids().len(),
+            )
+            .field("plugin_count", &self.services.plugins.plugins().len())
+            .field("session_manager", &self.services.session_manager.is_some())
             .finish()
     }
 }
 
-fn build_session_manager(
+fn build_or_reconfigure_session_manager(
+    existing: Option<Arc<SessionManager>>,
     db: &Arc<DatabaseConnection>,
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginManager>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
 ) -> Arc<SessionManager> {
-    let processor =
-        SessionProcessor::new(providers, ContextGovernor::new(ContextPolicy::default()));
-    let executor = ToolExecutor::new(
+    let processor = build_session_processor(providers);
+    let executor = build_tool_executor(plugins, workspace_root, resolution);
+    let config = session_manager_config(resolution);
+
+    if let Some(manager) = existing {
+        manager.reconfigure(processor, executor, config);
+        return manager;
+    }
+
+    Arc::new(SessionManager::new(db.as_ref().clone(), processor, executor).with_config(config))
+}
+
+fn build_session_processor(providers: Arc<ProviderRegistry>) -> SessionProcessor {
+    SessionProcessor::new(providers, ContextGovernor::new(ContextPolicy::default()))
+}
+
+fn build_tool_executor(
+    plugins: Arc<PluginManager>,
+    workspace_root: &Path,
+    resolution: &ConfigResolution,
+) -> ToolExecutor {
+    ToolExecutor::new(
         workspace_root.to_path_buf(),
         Agent::new("build", resolution.config.permission_policy()),
     )
-    .with_plugin_manager(plugins);
-    let manager = SessionManager::new(db.as_ref().clone(), processor, executor).with_config(
-        SessionManagerConfig {
-            cache_max_sessions: resolution.config.runtime.session_cache.max_sessions,
-            cache_ttl: Duration::from_secs(resolution.config.runtime.session_cache.ttl_secs),
-            cache_max_bytes: resolution.config.runtime.session_cache.max_bytes,
-            max_turn_loops: SessionManagerConfig::default().max_turn_loops,
-        },
-    );
-    Arc::new(manager)
+    .with_plugin_manager(plugins)
+}
+
+fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig {
+    SessionManagerConfig {
+        cache_max_sessions: resolution.config.runtime.session_cache.max_sessions,
+        cache_ttl: Duration::from_secs(resolution.config.runtime.session_cache.ttl_secs),
+        cache_max_bytes: resolution.config.runtime.session_cache.max_bytes,
+        max_turn_loops: SessionManagerConfig::default().max_turn_loops,
+    }
 }
 
 fn collect_watch_paths(resolution: &ConfigResolution) -> Vec<PathBuf> {

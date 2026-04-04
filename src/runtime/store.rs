@@ -1,37 +1,30 @@
 use std::sync::{
-    Arc, RwLock,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 
+use arc_swap::ArcSwap;
 use tokio::sync::Notify;
 
 use super::RuntimeSnapshot;
 
 pub(crate) struct RuntimeSnapshotStore {
-    current: RwLock<Arc<RuntimeSnapshot>>,
+    current: ArcSwap<RuntimeSnapshot>,
 }
 
 impl RuntimeSnapshotStore {
     pub(crate) fn new(initial: Arc<RuntimeSnapshot>) -> Self {
         Self {
-            current: RwLock::new(initial),
+            current: ArcSwap::from(initial),
         }
     }
 
     pub(crate) fn current(&self) -> Arc<RuntimeSnapshot> {
-        self.current
-            .read()
-            .map(|guard| Arc::clone(&*guard))
-            .unwrap_or_else(|_| {
-                panic!("runtime snapshot store lock poisoned while reading current snapshot")
-            })
+        self.current.load_full()
     }
 
     pub(crate) fn swap(&self, next: Arc<RuntimeSnapshot>) -> Arc<RuntimeSnapshot> {
-        let mut guard = self.current.write().unwrap_or_else(|_| {
-            panic!("runtime snapshot store lock poisoned while swapping snapshot")
-        });
-        std::mem::replace(&mut *guard, next)
+        self.current.swap(next)
     }
 }
 

@@ -1,10 +1,32 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect,
+    FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
 };
 
-use crate::db::{crud::workspace, entities};
+use crate::db::entities;
+use crate::session::SessionListRequest;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionMessageStats {
+    pub message_count: i64,
+    pub last_message_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, FromQueryResult)]
+struct SessionMessageStatsRow {
+    session_id: i64,
+    message_count: i64,
+    last_message_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, FromQueryResult)]
+struct SessionChildCountRow {
+    session_id: i64,
+    child_session_count: i64,
+}
 
 pub async fn create_session<C>(
     db: &C,
@@ -20,6 +42,7 @@ where
         parent_id: Set(parent_id),
         workspace_id: Set(workspace_id),
         title: Set(title.into()),
+        version: Set(1),
         created_at_ms: Set(now_ms),
         updated_at_ms: Set(now_ms),
         ..Default::default()
@@ -50,7 +73,9 @@ where
     let Some(existing) = get_session_by_id(db, session_id).await? else {
         return Ok(None);
     };
+    let next_version = existing.version + 1;
     let mut active: entities::session::ActiveModel = existing.into();
+    active.version = Set(next_version);
     active.updated_at_ms = Set(Utc::now().timestamp_millis());
     active.update(db).await.map(Some)
 }
@@ -63,20 +88,6 @@ where
         .exec(db)
         .await?;
     Ok(deleted.rows_affected)
-}
-
-pub async fn list_child_session_ids<C>(db: &C, parent_session_id: i64) -> Result<Vec<i64>, DbErr>
-where
-    C: ConnectionTrait,
-{
-    entities::session::Entity::find()
-        .select_only()
-        .column(entities::session::Column::Id)
-        .filter(entities::session::Column::ParentId.eq(parent_session_id))
-        .order_by_asc(entities::session::Column::Id)
-        .into_tuple::<i64>()
-        .all(db)
-        .await
 }
 
 pub async fn list_session_ids_by_workspace_id<C>(
@@ -97,45 +108,95 @@ where
         .await
 }
 
-pub async fn list_sessions_by_workspace_id<C>(
+pub async fn list_sessions_by_workspace_id_with_request<C>(
     db: &C,
     workspace_id: i64,
+    request: SessionListRequest,
 ) -> Result<Vec<entities::session::Model>, DbErr>
 where
     C: ConnectionTrait,
 {
-    entities::session::Entity::find()
+    let mut query = entities::session::Entity::find()
         .filter(entities::session::Column::WorkspaceId.eq(workspace_id))
         .order_by_desc(entities::session::Column::UpdatedAtMs)
-        .order_by_desc(entities::session::Column::Id)
+        .order_by_desc(entities::session::Column::Id);
+
+    if let Some(limit) = request.limit {
+        if request.offset > 0 {
+            query = query.offset(request.offset);
+        }
+        query = query.limit(limit);
+        return query.all(db).await;
+    }
+
+    let sessions = query.all(db).await?;
+    let offset = usize::try_from(request.offset)
+        .map_err(|_| DbErr::Custom(format!("session list offset too large: {}", request.offset)))?;
+    Ok(sessions.into_iter().skip(offset).collect())
+}
+
+pub async fn session_message_stats_by_session_ids<C>(
+    db: &C,
+    session_ids: &[i64],
+) -> Result<HashMap<i64, SessionMessageStats>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    if session_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    entities::message::Entity::find()
+        .select_only()
+        .column(entities::message::Column::SessionId)
+        .column_as(entities::message::Column::Id.count(), "message_count")
+        .column_as(
+            entities::message::Column::CreatedAtMs.max(),
+            "last_message_at_ms",
+        )
+        .filter(entities::message::Column::SessionId.is_in(session_ids.iter().copied()))
+        .group_by(entities::message::Column::SessionId)
+        .into_model::<SessionMessageStatsRow>()
         .all(db)
         .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| {
+                    (
+                        row.session_id,
+                        SessionMessageStats {
+                            message_count: row.message_count,
+                            last_message_at_ms: row.last_message_at_ms,
+                        },
+                    )
+                })
+                .collect()
+        })
 }
 
-pub async fn list_session_ids_by_workspace<C>(
+pub async fn child_session_counts_by_parent_ids<C>(
     db: &C,
-    workspace_path: &str,
-) -> Result<Vec<i64>, DbErr>
+    parent_ids: &[i64],
+) -> Result<HashMap<i64, i64>, DbErr>
 where
     C: ConnectionTrait,
 {
-    let Some(workspace_id) = workspace::get_workspace_id_by_path(db, workspace_path).await? else {
-        return Ok(Vec::new());
-    };
+    if parent_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
 
-    list_session_ids_by_workspace_id(db, workspace_id).await
-}
-
-pub async fn list_sessions_by_workspace<C>(
-    db: &C,
-    workspace_path: &str,
-) -> Result<Vec<entities::session::Model>, DbErr>
-where
-    C: ConnectionTrait,
-{
-    let Some(workspace_id) = workspace::get_workspace_id_by_path(db, workspace_path).await? else {
-        return Ok(Vec::new());
-    };
-
-    list_sessions_by_workspace_id(db, workspace_id).await
+    entities::session::Entity::find()
+        .select_only()
+        .column_as(entities::session::Column::ParentId, "session_id")
+        .column_as(entities::session::Column::Id.count(), "child_session_count")
+        .filter(entities::session::Column::ParentId.is_in(parent_ids.iter().copied()))
+        .group_by(entities::session::Column::ParentId)
+        .into_model::<SessionChildCountRow>()
+        .all(db)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| (row.session_id, row.child_session_count))
+                .collect()
+        })
 }

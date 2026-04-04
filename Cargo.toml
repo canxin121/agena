@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 abi_stable = "0.11.3"
+arc-swap = "1.7.1"
 chrono = { version = "0.4.42", features = ["serde"] }
 async-trait = "0.1.89"
 async-stream = "0.3.6"

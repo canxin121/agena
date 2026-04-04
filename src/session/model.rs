@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use chrono::{DateTime, Utc};
 use sea_orm::FromJsonQueryResult;
 use sea_orm::entity::prelude::{DeriveActiveEnum, EnumIter};
@@ -12,24 +14,6 @@ use crate::{
     },
     role::Role,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SessionCacheSource {
-    #[default]
-    Fresh,
-    Memory,
-    Database,
-    Restored,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-struct SessionCache {
-    #[serde(default)]
-    pub source: SessionCacheSource,
-    #[serde(default)]
-    pub approx_bytes: usize,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SessionPartRef {
@@ -72,15 +56,9 @@ pub(crate) struct SessionPendingUserInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum SessionPendingOperation {
-    Tool {
-        tool: SessionPendingTool,
-    },
-    Permission {
-        pending: SessionPendingPermission,
-    },
-    UserInput {
-        pending: SessionPendingUserInput,
-    },
+    Tool { tool: SessionPendingTool },
+    Permission { pending: SessionPendingPermission },
+    UserInput { pending: SessionPendingUserInput },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -89,7 +67,29 @@ pub(crate) enum SessionStatus {
     #[default]
     Idle,
     AwaitingModel,
-    PendingOperations,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SessionListRequest {
+    #[serde(default)]
+    pub offset: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub id: i64,
+    pub parent_id: Option<i64>,
+    pub workspace_id: i64,
+    pub title: String,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub message_count: u64,
+    pub child_session_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
@@ -102,13 +102,11 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    child_session_ids: Vec<i64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<Message>,
     #[serde(skip, default)]
-    cache: SessionCache,
+    approx_bytes: usize,
     #[serde(skip, default)]
-    status: SessionStatus,
+    pending_operations: Vec<SessionPendingOperation>,
 }
 
 impl Session {
@@ -121,10 +119,9 @@ impl Session {
             version: 1,
             created_at: now,
             updated_at: now,
-            child_session_ids: Vec::new(),
             messages: Vec::new(),
-            cache: SessionCache::default(),
-            status: SessionStatus::default(),
+            approx_bytes: 0,
+            pending_operations: Vec::new(),
         };
         session.refresh_derived();
         session
@@ -136,31 +133,22 @@ impl Session {
         self
     }
 
-    pub fn child_session_ids(&self) -> &[i64] {
-        self.child_session_ids.as_slice()
-    }
-
     pub(crate) fn replace_messages(&mut self, messages: Vec<Message>) {
         self.messages = messages;
         self.refresh_derived();
     }
 
-    pub(crate) fn replace_child_session_ids(&mut self, child_session_ids: Vec<i64>) {
-        self.child_session_ids = child_session_ids;
-        self.refresh_derived();
-    }
-
-    pub(crate) fn set_cache_source(&mut self, source: SessionCacheSource) {
-        self.cache.source = source;
-    }
-
     pub(crate) fn refresh_derived(&mut self) {
-        self.cache.approx_bytes = self.compute_approx_bytes();
-        self.status = self.derive_status();
+        self.approx_bytes = self.compute_approx_bytes();
+        self.pending_operations = self.derive_pending_operations();
     }
 
-    pub(crate) fn status(&self) -> &SessionStatus {
-        &self.status
+    pub(crate) fn status(&self) -> SessionStatus {
+        if self.should_run_model() {
+            SessionStatus::AwaitingModel
+        } else {
+            SessionStatus::Idle
+        }
     }
 
     pub(crate) fn apply_persisted_metadata(&mut self, persisted: &Session) {
@@ -174,7 +162,7 @@ impl Session {
     }
 
     pub fn blocked(&self) -> bool {
-        self.pending_operations().iter().any(|pending| {
+        self.pending_operations.iter().any(|pending| {
             matches!(
                 pending,
                 SessionPendingOperation::Permission { .. }
@@ -194,43 +182,21 @@ impl Session {
     }
 
     pub fn approx_bytes(&self) -> usize {
-        self.cache.approx_bytes
-    }
-
-    pub(crate) fn find_pending_permission_by_request_id(
-        &self,
-        request_id: &str,
-    ) -> Option<SessionPendingPermission> {
-        self.pending_operations().into_iter().find_map(|pending| {
-            let SessionPendingOperation::Permission { pending } = pending else {
-                return None;
-            };
-            self.pending_permission_request(&pending)
-                .filter(|request| request.request_id == request_id)
-                .map(|_| pending)
-        })
+        self.approx_bytes
     }
 
     pub(crate) fn find_pending_user_input_by_request_id(
         &self,
         request_id: &str,
     ) -> Option<SessionPendingUserInput> {
-        self.pending_operations().into_iter().find_map(|pending| {
+        self.pending_operations.iter().find_map(|pending| {
             let SessionPendingOperation::UserInput { pending } = pending else {
                 return None;
             };
             self.pending_user_input_request(&pending)
                 .filter(|request| request.request_id == request_id)
-                .map(|_| pending)
+                .map(|_| pending.clone())
         })
-    }
-
-    pub(crate) fn append_child_session_id(&mut self, child_session_id: i64) {
-        if !self.child_session_ids.contains(&child_session_id) {
-            self.child_session_ids.push(child_session_id);
-            self.child_session_ids.sort_unstable();
-            self.refresh_derived();
-        }
     }
 
     fn compute_approx_bytes(&self) -> usize {
@@ -242,7 +208,6 @@ impl Session {
             self.version,
             self.created_at,
             self.updated_at,
-            &self.child_session_ids,
             &self.messages,
         ))
         .map(|bytes| bytes.len())
@@ -255,18 +220,6 @@ impl Session {
         })
     }
 
-    fn derive_status(&self) -> SessionStatus {
-        if !self.pending_operations().is_empty() {
-            return SessionStatus::PendingOperations;
-        }
-
-        if self.should_run_model() {
-            SessionStatus::AwaitingModel
-        } else {
-            SessionStatus::Idle
-        }
-    }
-
     fn should_run_model(&self) -> bool {
         matches!(
             self.messages.last().map(|message| message.role),
@@ -274,12 +227,61 @@ impl Session {
         )
     }
 
-    pub(crate) fn pending_operations(&self) -> Vec<SessionPendingOperation> {
+    pub(crate) fn find_pending_permission_by_request_id(
+        &self,
+        request_id: &str,
+    ) -> Option<SessionPendingPermission> {
+        self.pending_operations.iter().find_map(|pending| {
+            let SessionPendingOperation::Permission { pending } = pending else {
+                return None;
+            };
+            self.pending_permission_request(&pending)
+                .filter(|request| request.request_id == request_id)
+                .map(|_| pending.clone())
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_operations(&self) -> &[SessionPendingOperation] {
+        self.pending_operations.as_slice()
+    }
+
+    fn derive_pending_operations(&self) -> Vec<SessionPendingOperation> {
         let mut operations = Vec::new();
+        let completed_tool_operations = self.completed_tool_operations();
 
         for (message_index, message) in self.messages.iter().enumerate() {
             if message.role != Role::Assistant {
                 continue;
+            }
+
+            let mut permission_parts = HashMap::new();
+            let mut user_input_parts = HashMap::new();
+
+            for (part_index, part) in message.parts.iter().enumerate() {
+                if part.status != ExecutionStatus::Pending {
+                    continue;
+                }
+
+                let Some(operation_id) = part.operation_id.as_deref() else {
+                    continue;
+                };
+
+                match part.content.as_ref() {
+                    Some(PartContent::PermissionRequest(_)) => {
+                        permission_parts.insert(
+                            operation_id,
+                            SessionPartRef::new(message_index, message, part_index, part),
+                        );
+                    }
+                    Some(PartContent::UserInputRequest(_)) => {
+                        user_input_parts.insert(
+                            operation_id,
+                            SessionPartRef::new(message_index, message, part_index, part),
+                        );
+                    }
+                    _ => {}
+                }
             }
 
             for (part_index, part) in message.parts.iter().enumerate() {
@@ -295,7 +297,7 @@ impl Session {
                 else {
                     continue;
                 };
-                if self.has_tool_result(operation_id) {
+                if completed_tool_operations.contains(operation_id) {
                     continue;
                 }
 
@@ -303,16 +305,22 @@ impl Session {
                     part: SessionPartRef::new(message_index, message, part_index, part),
                 };
 
-                if let Some(request) = self.find_permission_part(message_index, operation_id) {
+                if let Some(request) = permission_parts.get(operation_id) {
                     operations.push(SessionPendingOperation::Permission {
-                        pending: SessionPendingPermission { request, tool },
+                        pending: SessionPendingPermission {
+                            request: request.clone(),
+                            tool,
+                        },
                     });
                     continue;
                 }
 
-                if let Some(request) = self.find_user_input_part(message_index, operation_id) {
+                if let Some(request) = user_input_parts.get(operation_id) {
                     operations.push(SessionPendingOperation::UserInput {
-                        pending: SessionPendingUserInput { request, tool },
+                        pending: SessionPendingUserInput {
+                            request: request.clone(),
+                            tool,
+                        },
                     });
                     continue;
                 }
@@ -325,11 +333,11 @@ impl Session {
     }
 
     pub(crate) fn next_pending_tool(&self) -> Option<SessionPendingTool> {
-        self.pending_operations().into_iter().find_map(|pending| {
+        self.pending_operations.iter().find_map(|pending| {
             let SessionPendingOperation::Tool { tool } = pending else {
                 return None;
             };
-            Some(tool)
+            Some(tool.clone())
         })
     }
 
@@ -399,62 +407,13 @@ impl Session {
         Some(request)
     }
 
-    fn has_tool_result(&self, operation_id: &str) -> bool {
+    fn completed_tool_operations(&self) -> HashSet<&str> {
         self.messages
             .iter()
             .filter(|message| message.role == Role::Tool)
-            .any(|message| {
-                message
-                    .parts
-                    .iter()
-                    .any(|part| part.operation_id.as_deref() == Some(operation_id))
-            })
-    }
-
-    fn find_permission_part(
-        &self,
-        message_index: usize,
-        operation_id: &str,
-    ) -> Option<SessionPartRef> {
-        let message = &self.messages[message_index];
-        for (part_index, part) in message.parts.iter().enumerate() {
-            if part.operation_id.as_deref() != Some(operation_id)
-                || part.status != ExecutionStatus::Pending
-            {
-                continue;
-            }
-            let Some(PartContent::PermissionRequest(PermissionRequestPart { request, .. })) =
-                part.content.as_ref()
-            else {
-                continue;
-            };
-            let _ = request;
-            return Some(SessionPartRef::new(message_index, message, part_index, part));
-        }
-        None
-    }
-
-    fn find_user_input_part(
-        &self,
-        message_index: usize,
-        operation_id: &str,
-    ) -> Option<SessionPartRef> {
-        let message = &self.messages[message_index];
-        for (part_index, part) in message.parts.iter().enumerate() {
-            if part.operation_id.as_deref() != Some(operation_id)
-                || part.status != ExecutionStatus::Pending
-            {
-                continue;
-            }
-            let Some(PartContent::UserInputRequest(UserInputRequestPart { request, .. })) =
-                part.content.as_ref()
-            else {
-                continue;
-            };
-            let _ = request;
-            return Some(SessionPartRef::new(message_index, message, part_index, part));
-        }
-        None
+            .flat_map(|message| message.parts.iter())
+            .filter_map(|part| part.operation_id.as_deref())
+            .collect()
     }
 }
 
@@ -534,27 +493,6 @@ pub struct SessionEventRecord {
     pub created_at: DateTime<Utc>,
 }
 
-impl SessionEventRecord {
-    pub fn new(
-        session_id: i64,
-        seq: i64,
-        payload: SessionEvent,
-        created_at: DateTime<Utc>,
-    ) -> Self {
-        let event_type = SessionEventType::from(&payload);
-        Self {
-            event_id: None,
-            session_id,
-            seq,
-            event_type,
-            payload,
-            causation_id: None,
-            correlation_id: None,
-            created_at,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -571,8 +509,8 @@ mod tests {
 
     #[test]
     fn find_pending_permission_by_request_id_handles_multiple_requests() {
-        let session = Session::new(1, 1, "multi-permission", Utc::now())
-            .with_messages(vec![assistant_message(
+        let session = Session::new(1, 1, "multi-permission", Utc::now()).with_messages(vec![
+            assistant_message(
                 11,
                 vec![
                     pending_tool_part(101, 11, "op-1", 1),
@@ -580,7 +518,8 @@ mod tests {
                     pending_tool_part(103, 11, "op-2", 2),
                     pending_permission_part(104, 11, "op-2", "perm-2"),
                 ],
-            )]);
+            ),
+        ]);
 
         let pending = session
             .find_pending_permission_by_request_id("perm-2")
@@ -594,8 +533,8 @@ mod tests {
 
     #[test]
     fn find_pending_user_input_by_request_id_handles_multiple_requests() {
-        let session = Session::new(1, 1, "multi-input", Utc::now()).with_messages(vec![
-            assistant_message(
+        let session =
+            Session::new(1, 1, "multi-input", Utc::now()).with_messages(vec![assistant_message(
                 21,
                 vec![
                     pending_tool_part(201, 21, "op-1", 1),
@@ -603,8 +542,7 @@ mod tests {
                     pending_tool_part(203, 21, "op-2", 2),
                     pending_user_input_part(204, 21, "op-2", "input-2"),
                 ],
-            ),
-        ]);
+            )]);
 
         let pending = session
             .find_pending_user_input_by_request_id("input-2")
@@ -632,7 +570,12 @@ mod tests {
         }
     }
 
-    fn pending_tool_part(part_id: i64, message_id: i64, operation_id: &str, call_id: i64) -> MessagePart {
+    fn pending_tool_part(
+        part_id: i64,
+        message_id: i64,
+        operation_id: &str,
+        call_id: i64,
+    ) -> MessagePart {
         let invocation = ToolInvocation::Builtin {
             input: BuiltinToolInput::TodoWrite(TodoWriteToolInput { items: Vec::new() }),
         };

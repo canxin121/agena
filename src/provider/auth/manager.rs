@@ -32,6 +32,10 @@ impl<S: AuthStore> AuthManager<S> {
         self.store.remove(provider_id)
     }
 
+    pub fn set_auth_data(&self, provider_id: &str, auth: AuthData) -> Result<(), AppError> {
+        self.store.set(provider_id, auth)
+    }
+
     pub fn set_api_key(&self, provider_id: &str, key: impl Into<String>) -> Result<(), AppError> {
         let key = key.into();
         let key = key.trim();
@@ -70,10 +74,13 @@ impl<S: AuthStore> AuthManager<S> {
         pkce_verifier: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<AuthData, AppError> {
+        let code = code.into();
+        let pkce_verifier = pkce_verifier.into();
+        let redirect_uri = redirect_uri.into();
         let token = exchange_openai_oauth_code(
-            code.into().as_str(),
-            pkce_verifier.into().as_str(),
-            redirect_uri.into().as_str(),
+            code.as_str(),
+            pkce_verifier.as_str(),
+            redirect_uri.as_str(),
         )
         .await?;
         let auth = AuthData::OAuth {
@@ -110,11 +117,10 @@ impl<S: AuthStore> AuthManager<S> {
         device_code: impl Into<String>,
         user_code: impl Into<String>,
     ) -> Result<Option<AuthData>, AppError> {
-        let token = poll_openai_headless_device_code(
-            device_code.into().as_str(),
-            user_code.into().as_str(),
-        )
-        .await?;
+        let device_code = device_code.into();
+        let user_code = user_code.into();
+        let token =
+            poll_openai_headless_device_code(device_code.as_str(), user_code.as_str()).await?;
         let Some(token) = token else {
             return Ok(None);
         };
@@ -170,6 +176,7 @@ impl<S: AuthStore> AuthManager<S> {
         device_code: impl Into<String>,
         deployment: CopilotDeployment,
     ) -> Result<Option<AuthData>, AppError> {
+        let device_code = device_code.into();
         let (domain, provider_id, enterprise_url) = match deployment {
             CopilotDeployment::GitHubCom => {
                 ("github.com".to_owned(), "github-copilot".to_owned(), None)
@@ -184,7 +191,7 @@ impl<S: AuthStore> AuthManager<S> {
             }
         };
 
-        let token = poll_copilot_device_code(domain.as_str(), device_code.into().as_str()).await?;
+        let token = poll_copilot_device_code(domain.as_str(), device_code.as_str()).await?;
         let Some(token) = token else {
             return Ok(None);
         };
@@ -216,11 +223,14 @@ impl<S: AuthStore> AuthManager<S> {
         redirect_uri: impl Into<String>,
     ) -> Result<AuthData, AppError> {
         let instance = instance_url.into();
+        let code = code.into();
+        let pkce_verifier = pkce_verifier.into();
+        let redirect_uri = redirect_uri.into();
         let token: OAuthTokenResponse = exchange_gitlab_oauth_code(
             instance.as_str(),
-            code.into().as_str(),
-            pkce_verifier.into().as_str(),
-            redirect_uri.into().as_str(),
+            code.as_str(),
+            pkce_verifier.as_str(),
+            redirect_uri.as_str(),
         )
         .await?;
 

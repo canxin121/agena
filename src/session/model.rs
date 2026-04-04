@@ -63,7 +63,7 @@ pub(crate) enum SessionPendingOperation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum SessionStatus {
+pub enum SessionStatus {
     #[default]
     Idle,
     AwaitingModel,
@@ -143,7 +143,7 @@ impl Session {
         self.pending_operations = self.derive_pending_operations();
     }
 
-    pub(crate) fn status(&self) -> SessionStatus {
+    pub fn status(&self) -> SessionStatus {
         if self.should_run_model() {
             SessionStatus::AwaitingModel
         } else {

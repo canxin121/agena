@@ -1,5 +1,116 @@
 # Agena
 
+## HTTP API（新增）
+
+HTTP 后端现在已经从 core `agena` crate 中拆分出来，作为可选的独立 crate `agena-http-api`。
+
+这样做的目的很直接：
+
+- 纯应用开发只依赖 `agena` 时，不再被动拉入 `axum` / HTTP server 这条依赖链
+- 后端接口层可以独立演进、独立测试、独立部署
+
+启动 HTTP API：
+
+```bash
+cargo run -p agena-http-api -- serve
+```
+
+默认行为：
+
+- 监听地址：`127.0.0.1:8765`
+- 默认数据库：`~/.agena/agena.db`
+- 默认 workspace root：当前工作目录
+
+也可显式指定：
+
+```bash
+cargo run -p agena-http-api -- serve \
+  --listen 0.0.0.0:8080 \
+  --database-path ./data/agena.db \
+  --workspace-root .
+```
+
+说明：
+
+- `cargo run -- serve` 在 core crate 中已不再真正启动服务，而是给出迁移提示
+- 仓库根目录执行 `cargo test` 现在会同时覆盖 `agena` 和 `agena-http-api`
+
+已提供的资源接口：
+
+- `GET /api/v1/health`
+- `GET /api/v1/runtime`
+- `POST /api/v1/runtime/reload`
+- `GET /api/v1/auth/providers`
+- `POST /api/v1/auth/providers/openai/browser/start`
+- `POST /api/v1/auth/providers/openai/browser/finish`
+- `POST /api/v1/auth/providers/openai/device/start`
+- `POST /api/v1/auth/providers/openai/device/poll`
+- `POST /api/v1/auth/providers/gitlab/browser/start`
+- `POST /api/v1/auth/providers/gitlab/browser/finish`
+- `POST /api/v1/auth/providers/github-copilot/device/start`
+- `POST /api/v1/auth/providers/github-copilot/device/poll`
+- `GET /api/v1/auth/providers/{provider_id}`
+- `PUT /api/v1/auth/providers/{provider_id}/api-key`
+- `DELETE /api/v1/auth/providers/{provider_id}`
+- `POST /api/v1/auth/providers/{provider_id}/refresh`
+- `GET /api/v1/providers`
+- `GET /api/v1/providers/{provider_id}/models`
+- `GET|POST /api/v1/workspaces`
+- `POST /api/v1/workspaces/resolve`
+- `GET|PUT|DELETE /api/v1/workspaces/{workspace_id}`
+- `GET|POST /api/v1/sessions`
+- `GET|PUT|DELETE /api/v1/sessions/{session_id}`
+- `GET /api/v1/sessions/{session_id}/state`
+- `GET /api/v1/sessions/{session_id}/events`
+- `GET /api/v1/sessions/{session_id}/events/stream`
+- `POST /api/v1/sessions/{session_id}/turns`
+- `POST /api/v1/sessions/{session_id}/continue`
+- `POST /api/v1/sessions/{session_id}/permission-replies`
+- `POST /api/v1/sessions/{session_id}/user-input-replies`
+- `GET /api/v1/sessions/{session_id}/messages`
+- `GET /api/v1/messages/{message_id}`
+- `GET /api/v1/messages/{message_id}/parts`
+- `GET /api/v1/message-parts/{part_id}`
+- `GET|POST /api/v1/permission-rules`
+- `GET|PUT|DELETE /api/v1/permission-rules/{rule_id}`
+
+分页与懒加载设计：
+
+- 列表接口统一使用**不透明游标**（`cursor` + `limit`），而不是脆弱的 `offset/limit`
+- `sessions` / `workspaces` / `permission-rules` 默认按最近更新时间倒序分页
+- `messages` / `session events` 采用“按旧分页、按时间正序返回”的窗口设计，适合聊天 UI 的上翻加载
+- 消息默认 `parts=summary`，只返回 part 摘要，不加载重型 `detail_json`
+- 需要完整内容时再使用 `parts=full` 或单独请求 `/message-parts/{part_id}`
+- session 执行动作接口只返回轻量状态、pending request 和最新事件位点，避免把整段历史反复回传
+
+会话执行与并发控制：
+
+- 现在已经打通 `submit turn / continue / permission reply / user input reply` 四类 runtime 接口
+- `GET /api/v1/sessions/{session_id}/state` 可在页面刷新后恢复 blocked / pending / latest event seq
+- 支持 `GET /api/v1/sessions/{session_id}/events/stream` 做 SSE 增量订阅
+- 支持 session `version` + `If-Match` 的乐观并发控制，冲突时返回 `409`
+- 未显式提供 `model` 时，会优先复用 session 最近一次模型；若 runtime 只配置了一个 provider，则自动退回该 provider 的默认模型
+
+运行时与鉴权管理：
+
+- `GET /api/v1/runtime` 提供当前 generation、config path、active mode、watch paths、provider/plugin/runtime 状态
+- `POST /api/v1/runtime/reload` 提供手动 reload 入口
+- `GET /api/v1/auth/providers*` 提供 provider credential 状态读取
+- `PUT /api/v1/auth/providers/{provider_id}/api-key` / `DELETE ...` 提供 API key 管理
+- 提供 OpenAI / GitLab browser OAuth 与 OpenAI / GitHub Copilot device login 的用户态登录接口
+- public auth API 会隐藏内部凭据键（例如 `gitlab-instance`），避免把实现细节暴露给前端
+- auth 读取接口只返回安全摘要，不回传明文 secret
+
+Workspace 管理补充：
+
+- `POST /api/v1/workspaces/resolve` 支持按 path 规范化解析 workspace，并可通过 `create_if_missing=true` 实现幂等式“存在即返回，不存在就创建”
+
+这套设计相对 `opencode` 当前“部分资源有 cursor、部分资源仍偏简单 list”的方式更统一，适合直接给 Web / App 前端做无限滚动和局部 hydration。
+
+更完整的接口说明见：
+
+- [docs/http-api.md](/home/canxin/Git/ai/agena/docs/http-api.md)
+
 ## Config / Mode（新增）
 
 现在提供完整的强类型配置体系：

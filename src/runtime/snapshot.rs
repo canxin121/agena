@@ -239,23 +239,23 @@ impl RuntimeSnapshot {
         self.services.session_manager.as_ref().map(Arc::clone)
     }
 
-    pub(crate) fn watch_paths(&self) -> &[PathBuf] {
+    pub fn watch_paths(&self) -> &[PathBuf] {
         self.maintenance.watch_paths.as_slice()
     }
 
-    pub(crate) fn reload_enabled(&self) -> bool {
+    pub fn reload_enabled(&self) -> bool {
         self.maintenance.reload.enabled
     }
 
-    pub(crate) fn reload_poll_interval(&self) -> Duration {
+    pub fn reload_poll_interval(&self) -> Duration {
         self.maintenance.reload.interval
     }
 
-    pub(crate) fn janitor_enabled(&self) -> bool {
+    pub fn janitor_enabled(&self) -> bool {
         self.maintenance.janitor.enabled
     }
 
-    pub(crate) fn janitor_interval(&self) -> Duration {
+    pub fn janitor_interval(&self) -> Duration {
         self.maintenance.janitor.interval
     }
 }

@@ -2,6 +2,11 @@
 name = "agena"
 version = "0.1.0"
 edition = "2024"
+default-run = "agena"
+
+[workspace]
+members = ["crates/http-api"]
+default-members = [".", "crates/http-api"]
 
 [dependencies]
 abi_stable = "0.11.3"

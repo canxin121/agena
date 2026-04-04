@@ -18,8 +18,9 @@ pub use content::PartContent;
 pub use message_part::{MessagePart, MessagePartSummary, PartStateTransitionError};
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
-    ApplyPatchToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput, CustomToolOutput,
-    GlobToolInput, GrepToolInput, McpToolOutput, ReadToolInput, RequestUserInputToolInput,
-    TaskSubagentType, TaskToolInput, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
-    ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput, ViewFileToolInput,
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput,
+    CustomToolOutput, GlobToolInput, GrepToolInput, McpToolOutput, ReadToolInput,
+    RequestUserInputToolInput, TaskSubagentType, TaskToolInput, TodoWriteToolInput, ToolAttachment,
+    ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput,
+    ViewFileToolInput,
 };

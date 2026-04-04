@@ -1,4 +1,5 @@
 mod apply_patch;
+mod ask_user;
 mod bash;
 mod catalog;
 mod definition;
@@ -6,7 +7,6 @@ mod glob;
 mod grep;
 mod orchestrator;
 mod read;
-mod request_user_input;
 mod result;
 mod subtask;
 mod task;
@@ -22,8 +22,8 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, Message, PartContent,
-    RequestUserInputToolInput, StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput,
+    AskUserToolInput, BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, Message, PartContent,
+    StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput,
 };
 use crate::permission::{
     AccessKind, PermissionAction, PermissionDecision, PermissionRuleStore, PermissionRuntime,
@@ -84,7 +84,7 @@ pub enum ToolError {
     #[error("permission confirmation required: {0}")]
     PermissionAsk(String),
     #[error("user input required")]
-    UserInputRequired(RequestUserInputToolInput),
+    UserInputRequired(AskUserToolInput),
     #[error("invalid patch: {0}")]
     InvalidPatch(String),
     #[error("invalid tool input: {0}")]
@@ -231,7 +231,7 @@ impl ToolExecutor {
                 limit: None,
             }),
             BuiltinToolInput::TodoWrite(crate::message::TodoWriteToolInput { items: Vec::new() }),
-            BuiltinToolInput::RequestUserInput(crate::message::RequestUserInputToolInput {
+            BuiltinToolInput::AskUser(crate::message::AskUserToolInput {
                 questions: Vec::new(),
             }),
         ]
@@ -379,7 +379,7 @@ impl ToolExecutor {
             BuiltinToolInput::ToolSearch(_) => {}
             BuiltinToolInput::TodoWrite(_) => {}
             BuiltinToolInput::Task(_) => {}
-            BuiltinToolInput::RequestUserInput(_) => {}
+            BuiltinToolInput::AskUser(_) => {}
         }
 
         Ok(checks)
@@ -795,7 +795,7 @@ fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolErro
             BuiltinToolInput::Task(payload) => serde_json::to_string(payload),
             BuiltinToolInput::ToolSearch(payload) => serde_json::to_string(payload),
             BuiltinToolInput::TodoWrite(payload) => serde_json::to_string(payload),
-            BuiltinToolInput::RequestUserInput(payload) => serde_json::to_string(payload),
+            BuiltinToolInput::AskUser(payload) => serde_json::to_string(payload),
         }
         .map_err(|err| ToolError::InvalidInput(err.to_string())),
         ToolInvocation::Custom { input, .. } => {
@@ -853,7 +853,7 @@ fn parse_builtin_input(tool_name: &str, input_json: &str) -> Result<BuiltinToolI
         "task" => Ok(BuiltinToolInput::Task(parse(input_json)?)),
         "tool_search" => Ok(BuiltinToolInput::ToolSearch(parse(input_json)?)),
         "todo_write" => Ok(BuiltinToolInput::TodoWrite(parse(input_json)?)),
-        "request_user_input" => Ok(BuiltinToolInput::RequestUserInput(parse(input_json)?)),
+        "ask_user" | "request_user_input" => Ok(BuiltinToolInput::AskUser(parse(input_json)?)),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
 }

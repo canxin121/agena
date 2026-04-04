@@ -639,6 +639,8 @@ mod tests {
                     header: "Answer".to_string(),
                     question: format!("question for {operation_id}"),
                     options: Vec::new(),
+                    multiple: false,
+                    allow_custom: true,
                 }],
                 created_at: Utc::now(),
             })),

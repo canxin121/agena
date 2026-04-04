@@ -670,7 +670,7 @@ impl SessionManager {
         &self,
         mut session: Session,
         pending_tool: &SessionPendingTool,
-        input: crate::message::RequestUserInputToolInput,
+        input: crate::message::AskUserToolInput,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
@@ -691,14 +691,15 @@ impl SessionManager {
             tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
                 call_id: resolved.call_id,
                 invocation: resolved.invocation.clone(),
-                title: request_user_input_title(&request),
+                title: ask_user_title(&request),
                 lifecycle: resolved.lifecycle.clone(),
             }));
             tool_part.status = ExecutionStatus::Pending;
-            tool_part.summary = Some(format!(
-                "Awaiting user input for {} question(s)",
-                request.questions.len()
-            ));
+            tool_part.summary = Some(match request.questions.len() {
+                0 => "Ask user".to_string(),
+                1 => "Waiting for answer".to_string(),
+                count => format!("Waiting for {count} answers"),
+            });
         }
 
         let input_part_id = self.store.reserve_part_id().await?;
@@ -1260,11 +1261,18 @@ fn tool_error_to_app_error(err: ToolError) -> AppError {
     }
 }
 
-fn request_user_input_title(request: &UserInputRequest) -> String {
+fn ask_user_title(request: &UserInputRequest) -> String {
     match request.questions.len() {
-        0 => "Awaiting user input".to_string(),
-        1 => format!("Awaiting user input: {}", request.questions[0].header),
-        count => format!("Awaiting user input for {count} questions"),
+        0 => "Ask user".to_string(),
+        1 => {
+            let header = request.questions[0].header.trim();
+            if header.is_empty() {
+                "Ask user".to_string()
+            } else {
+                format!("Ask: {header}")
+            }
+        }
+        count => format!("Ask user ({count})"),
     }
 }
 
@@ -1273,16 +1281,17 @@ fn user_input_execution(
     reply: &UserInputReply,
 ) -> Result<ToolInvocationExecution, AppError> {
     let answers = validate_user_input_reply(request, reply)?;
-    let mut lines = vec!["Collected user input:".to_string()];
+    let mut lines = vec!["Answers:".to_string()];
     for question in &request.questions {
         if let Some(answer) = answers.get(question.id.as_str()) {
-            lines.push(format!("- {}: {}", question.id, answer));
+            lines.push(format!("- {}: {}", question.id, answer.join(", ")));
         }
     }
 
-    let mut view = crate::tool::ToolExecutionView::simple("User input", lines.join("\n"));
+    let mut view = crate::tool::ToolExecutionView::simple("Ask user", lines.join("\n"));
+    let selection_count: usize = answers.values().map(Vec::len).sum();
     view.metadata
-        .insert("answer_count".to_string(), answers.len().to_string());
+        .insert("answer_count".to_string(), selection_count.to_string());
     view.metadata.insert(
         "question_count".to_string(),
         request.questions.len().to_string(),
@@ -1290,7 +1299,7 @@ fn user_input_execution(
 
     Ok(ToolInvocationExecution::new(
         ToolOutput::Builtin {
-            output: BuiltinToolOutput::RequestUserInput { answers },
+            output: BuiltinToolOutput::AskUser { answers },
         },
         view,
     ))
@@ -1299,22 +1308,66 @@ fn user_input_execution(
 fn validate_user_input_reply(
     request: &UserInputRequest,
     reply: &UserInputReply,
-) -> Result<std::collections::BTreeMap<String, String>, AppError> {
+) -> Result<std::collections::BTreeMap<String, Vec<String>>, AppError> {
     let mut answers = std::collections::BTreeMap::new();
 
     for question in &request.questions {
-        let answer = reply
+        let raw_answers = reply
             .answers
             .get(question.id.as_str())
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
+            .cloned()
             .ok_or_else(|| {
                 AppError::Internal(format!(
                     "missing answer for user input question {}",
                     question.id
                 ))
             })?;
-        answers.insert(question.id.clone(), answer.to_string());
+        let mut normalized = Vec::new();
+        for value in raw_answers {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !normalized
+                .iter()
+                .any(|existing: &String| existing == trimmed)
+            {
+                normalized.push(trimmed.to_string());
+            }
+        }
+
+        if normalized.is_empty() {
+            return Err(AppError::Internal(format!(
+                "missing answer for user input question {}",
+                question.id
+            )));
+        }
+        if !question.multiple && normalized.len() != 1 {
+            return Err(AppError::Internal(format!(
+                "question {} accepts exactly one answer",
+                question.id
+            )));
+        }
+
+        let allowed = question
+            .options
+            .iter()
+            .map(|option| option.label.trim())
+            .filter(|label| !label.is_empty())
+            .collect::<std::collections::HashSet<_>>();
+        if !question.allow_custom {
+            if let Some(answer) = normalized
+                .iter()
+                .find(|value| !allowed.contains(value.as_str()))
+            {
+                return Err(AppError::Internal(format!(
+                    "unsupported answer '{}' for question {}",
+                    answer, question.id
+                )));
+            }
+        }
+
+        answers.insert(question.id.clone(), normalized);
     }
 
     for answer_id in reply.answers.keys() {
@@ -1347,8 +1400,8 @@ mod tests {
     use crate::agent::Agent;
     use crate::db::init_schema;
     use crate::message::{
-        ApplyPatchToolInput, AttachmentSource, BuiltinToolOutput, FileChangeKind, McpToolOutput,
-        RequestUserInputToolInput, ToolAttachment, ToolExecutionPart, ToolOutput, ToolResultBlock,
+        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, BuiltinToolOutput, FileChangeKind,
+        McpToolOutput, ToolAttachment, ToolExecutionPart, ToolOutput, ToolResultBlock,
         ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
         UserInputReplyKind,
     };
@@ -1469,17 +1522,20 @@ mod tests {
                     return None;
                 }
                 message.parts.iter().find_map(|part| {
-                    if part.operation_id.as_deref() != Some("call_request_user_input_1") {
+                    if part.operation_id.as_deref() != Some("call_ask_user_1") {
                         return None;
                     }
                     match part.content.as_ref() {
                         Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
                             details:
                                 ToolOutput::Builtin {
-                                    output: BuiltinToolOutput::RequestUserInput { answers },
+                                    output: BuiltinToolOutput::AskUser { answers },
                                 },
                             ..
-                        })) => answers.get("model_choice").cloned().map(Ok),
+                        })) => answers
+                            .get("model_choice")
+                            .and_then(|values| values.first().cloned())
+                            .map(Ok),
                         Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
                             error_message,
                             ..
@@ -1534,10 +1590,10 @@ mod tests {
                     Ok(CompletionStreamEvent::ToolCallDelta {
                         provider_id: scripted_provider_id(),
                         model: scripted_model_id(),
-                        stream_key: "call_request_user_input_1".to_string(),
-                        id: Some("call_request_user_input_1".to_string()),
-                        name: Some("request_user_input".to_string()),
-                        arguments_delta: serde_json::to_string(&RequestUserInputToolInput {
+                        stream_key: "call_ask_user_1".to_string(),
+                        id: Some("call_ask_user_1".to_string()),
+                        name: Some("ask_user".to_string()),
+                        arguments_delta: serde_json::to_string(&AskUserToolInput {
                             questions: vec![UserInputQuestion {
                                 id: "model_choice".to_string(),
                                 header: "Model".to_string(),
@@ -1554,9 +1610,11 @@ mod tests {
                                             .to_string(),
                                     },
                                 ],
+                                multiple: false,
+                                allow_custom: false,
                             }],
                         })
-                        .expect("serialize request_user_input input"),
+                        .expect("serialize ask_user input"),
                     }),
                     Ok(CompletionStreamEvent::Completed {
                         provider_id: scripted_provider_id(),
@@ -1935,7 +1993,7 @@ mod tests {
                     part.content.as_ref(),
                     Some(PartContent::UserInputRequest(request))
                         if request.reply.is_none()
-                            && request.request.request_id == "call_request_user_input_1"
+                            && request.request.request_id == "call_ask_user_1"
                 )
             })
         }));
@@ -1945,9 +2003,12 @@ mod tests {
                 session_id: created.id,
                 options: run_options(),
                 reply: UserInputReply {
-                    request_id: "call_request_user_input_1".to_string(),
+                    request_id: "call_ask_user_1".to_string(),
                     kind: UserInputReplyKind::Submit,
-                    answers: BTreeMap::from([("model_choice".to_string(), "gpt-5".to_string())]),
+                    answers: BTreeMap::from([(
+                        "model_choice".to_string(),
+                        vec!["gpt-5".to_string()],
+                    )]),
                     reason: None,
                 },
             })
@@ -1979,10 +2040,12 @@ mod tests {
                             Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
                                 details:
                                     ToolOutput::Builtin {
-                                        output: BuiltinToolOutput::RequestUserInput { answers },
+                                        output: BuiltinToolOutput::AskUser { answers },
                                     },
                                 ..
-                            })) if answers.get("model_choice").map(String::as_str) == Some("gpt-5")
+                            })) if answers
+                                .get("model_choice")
+                                .is_some_and(|values| values == &vec!["gpt-5".to_string()])
                         )
                     })
                 })
@@ -1994,6 +2057,52 @@ mod tests {
                 .expect("assistant message should exist")
                 .as_text_lossy(),
             "selected model: gpt-5"
+        );
+    }
+
+    #[test]
+    fn validate_user_input_reply_supports_multi_select_and_custom_answers() {
+        let request = UserInputRequest {
+            request_id: "ask-1".to_string(),
+            session_id: Some(1),
+            questions: vec![UserInputQuestion {
+                id: "stack".to_string(),
+                header: "Stack".to_string(),
+                question: "Which stacks should we support?".to_string(),
+                options: vec![
+                    UserInputOption {
+                        label: "rust".to_string(),
+                        description: String::new(),
+                    },
+                    UserInputOption {
+                        label: "go".to_string(),
+                        description: String::new(),
+                    },
+                ],
+                multiple: true,
+                allow_custom: true,
+            }],
+            created_at: Utc::now(),
+        };
+        let reply = UserInputReply {
+            request_id: "ask-1".to_string(),
+            kind: UserInputReplyKind::Submit,
+            answers: BTreeMap::from([(
+                "stack".to_string(),
+                vec![
+                    "rust".to_string(),
+                    "zig".to_string(),
+                    "rust".to_string(),
+                    "  ".to_string(),
+                ],
+            )]),
+            reason: None,
+        };
+
+        let answers = validate_user_input_reply(&request, &reply).expect("reply should validate");
+        assert_eq!(
+            answers.get("stack"),
+            Some(&vec!["rust".to_string(), "zig".to_string()])
         );
     }
 

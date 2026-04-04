@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::permission::{PermissionReply, PermissionReplyKind, PermissionRequest};
 
@@ -13,6 +13,36 @@ fn default_execution_pending() -> ExecutionStatus {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+pub(crate) fn user_input_answers_is_empty(value: &BTreeMap<String, Vec<String>>) -> bool {
+    value.is_empty()
+}
+
+pub(crate) fn deserialize_user_input_answers<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawAnswerValues {
+        Single(String),
+        Multiple(Vec<String>),
+    }
+
+    let raw = BTreeMap::<String, RawAnswerValues>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(question_id, values)| {
+            let values = match values {
+                RawAnswerValues::Single(value) => vec![value],
+                RawAnswerValues::Multiple(values) => values,
+            };
+            (question_id, values)
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -169,16 +199,22 @@ impl PermissionRequestPart {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct UserInputOption {
     pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct UserInputQuestion {
     pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub header: String,
     pub question: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<UserInputOption>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub multiple: bool,
+    #[serde(default, alias = "custom", skip_serializing_if = "is_false")]
+    pub allow_custom: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -201,8 +237,12 @@ pub enum UserInputReplyKind {
 pub struct UserInputReply {
     pub request_id: String,
     pub kind: UserInputReplyKind,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub answers: BTreeMap<String, String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_user_input_answers",
+        skip_serializing_if = "user_input_answers_is_empty"
+    )]
+    pub answers: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -239,15 +279,15 @@ impl UserInputRequestPart {
         match self.reply.as_ref() {
             None => {
                 let count = self.request.questions.len();
-                if count == 0 {
-                    "Awaiting user input".to_string()
-                } else {
-                    format!("Awaiting user input for {count} question(s)")
+                match count {
+                    0 => "Ask user".to_string(),
+                    1 => "Waiting for answer".to_string(),
+                    _ => format!("Waiting for {count} answers"),
                 }
             }
             Some(reply) => match reply.kind {
                 UserInputReplyKind::Submit => {
-                    format!("User input submitted: {} answer(s)", reply.answers.len())
+                    format!("Answered {} question(s)", reply.answers.len())
                 }
                 UserInputReplyKind::Cancel => {
                     let reason = reply
@@ -255,9 +295,31 @@ impl UserInputRequestPart {
                         .as_deref()
                         .filter(|reason| !reason.trim().is_empty())
                         .unwrap_or("user declined to answer");
-                    format!("User input cancelled: {reason}")
+                    format!("Ask cancelled: {reason}")
                 }
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{UserInputReply, UserInputReplyKind};
+
+    #[test]
+    fn user_input_reply_accepts_legacy_string_answers() {
+        let reply: UserInputReply = serde_json::from_value(json!({
+            "request_id": "req-1",
+            "kind": "submit",
+            "answers": {
+                "model": "gpt-5"
+            }
+        }))
+        .expect("legacy answer payload should deserialize");
+
+        assert_eq!(reply.kind, UserInputReplyKind::Submit);
+        assert_eq!(reply.answers.get("model"), Some(&vec!["gpt-5".to_string()]));
     }
 }

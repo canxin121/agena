@@ -153,7 +153,7 @@ where
             });
         }
 
-        let config = merged.resolve()?;
+        let config = merged.resolve_with_env(&self.env)?;
         Ok(ConfigResolution {
             config,
             meta: ConfigResolutionMeta {

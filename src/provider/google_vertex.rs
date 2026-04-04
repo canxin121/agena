@@ -5,18 +5,10 @@ use crate::{
     error::AppError,
     model::{Model, ModelId},
     provider::{
-        CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider,
-        OpenAiCompatibleProvider, StreamResumePolicy,
+        CompletionRequest, CompletionResponse, CompletionStreamEvent, ManagedCredential,
+        ModelProvider, OpenAiCompatibleProvider, StreamResumePolicy,
     },
 };
-
-const GOOGLE_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum GoogleVertexAuth {
-    Static(String),
-    Adc,
-}
 
 #[derive(Clone)]
 pub struct GoogleVertexProvider {
@@ -24,7 +16,7 @@ pub struct GoogleVertexProvider {
     client: reqwest::Client,
     base_url: String,
     default_model: ModelId,
-    auth: GoogleVertexAuth,
+    auth: ManagedCredential,
 }
 
 impl GoogleVertexProvider {
@@ -35,12 +27,29 @@ impl GoogleVertexProvider {
         default_model: impl Into<String>,
         access_token: impl Into<String>,
     ) -> Self {
+        Self::new_managed_token(
+            provider_id,
+            client,
+            base_url,
+            default_model,
+            ManagedCredential::static_value("google-vertex access token", access_token.into()),
+        )
+    }
+
+    pub fn new_managed_token(
+        provider_id: impl Into<String>,
+        client: reqwest::Client,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        access_token: ManagedCredential,
+    ) -> Self {
+        let provider_id = provider_id.into();
         Self {
-            id: provider_id.into(),
+            id: provider_id,
             client,
             base_url: crate::provider::utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
-            auth: GoogleVertexAuth::Static(access_token.into()),
+            auth: access_token,
         }
     }
 
@@ -50,38 +59,18 @@ impl GoogleVertexProvider {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        let provider_id = provider_id.into();
         Self {
-            id: provider_id.into(),
+            id: provider_id.clone(),
             client,
             base_url: crate::provider::utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
-            auth: GoogleVertexAuth::Adc,
+            auth: ManagedCredential::google_adc(format!("{provider_id} google adc"), provider_id),
         }
     }
 
     async fn auth_token(&self) -> Result<String, AppError> {
-        match &self.auth {
-            GoogleVertexAuth::Static(token) => Ok(token.clone()),
-            GoogleVertexAuth::Adc => {
-                let provider = gcp_auth::provider().await.map_err(|err| {
-                    AppError::Config(format!(
-                        "{} requires Google ADC credentials: {err}",
-                        self.id
-                    ))
-                })?;
-
-                let token = provider
-                    .token(&[GOOGLE_CLOUD_PLATFORM_SCOPE])
-                    .await
-                    .map_err(|err| {
-                        AppError::Provider(format!(
-                            "{} failed to obtain Google ADC access token: {err}",
-                            self.id
-                        ))
-                    })?;
-                Ok(token.as_str().to_owned())
-            }
-        }
+        self.auth.resolve().await
     }
 
     fn provider_with_token(&self, token: String) -> OpenAiCompatibleProvider {
@@ -147,8 +136,8 @@ impl ModelProvider for GoogleVertexProvider {
 mod tests {
     use super::*;
 
-    #[test]
-    fn new_static_token_configures_static_auth() {
+    #[tokio::test]
+    async fn new_static_token_uses_static_auth_credential() {
         let provider = GoogleVertexProvider::new_static_token(
             "google-vertex",
             reqwest::Client::new(),
@@ -156,17 +145,6 @@ mod tests {
             "google/gemini-2.5-flash",
             "token",
         );
-        assert_eq!(provider.auth, GoogleVertexAuth::Static("token".to_owned()));
-    }
-
-    #[test]
-    fn new_adc_configures_adc_auth() {
-        let provider = GoogleVertexProvider::new_adc(
-            "google-vertex",
-            reqwest::Client::new(),
-            "https://example.com/openapi",
-            "google/gemini-2.5-flash",
-        );
-        assert_eq!(provider.auth, GoogleVertexAuth::Adc);
+        assert_eq!(provider.auth_token().await.expect("token"), "token");
     }
 }

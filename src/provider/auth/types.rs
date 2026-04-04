@@ -39,6 +39,13 @@ impl AuthData {
         }
     }
 
+    pub fn enterprise_url(&self) -> Option<&str> {
+        match self {
+            Self::OAuth { enterprise_url, .. } => enterprise_url.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn is_oauth_expired(&self, now: DateTime<Utc>) -> bool {
         match self {
             Self::OAuth { expires_at_ms, .. } => {

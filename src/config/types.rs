@@ -224,6 +224,7 @@ pub enum ProviderDefinition {
     Alias(ProviderAliasConfig),
     OpenAi(HttpProviderConfig<OpenAiProviderOptions>),
     OpenAiCompatible(HttpProviderConfig<OpenAiCompatibleProviderOptions>),
+    SapAiCore(HttpProviderConfig<OpenAiCompatibleProviderOptions>),
     Anthropic(HttpProviderConfig<AnthropicProviderOptions>),
     Gemini(HttpProviderConfig<SimpleHttpProviderOptions>),
     Codex(CodexProviderOptions),

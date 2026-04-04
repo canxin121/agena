@@ -1,4 +1,5 @@
 pub mod auth;
+mod credential;
 
 mod amazon_bedrock;
 mod anthropic;
@@ -35,6 +36,10 @@ pub use cloudflare_ai_gateway::CloudflareAiGatewayProvider;
 pub use codex::CodexProvider;
 pub use copilot::{CopilotProvider, CopilotProviderOptions};
 pub use core::{ModelProvider, StreamResumePolicy};
+pub use credential::{
+    AuthRefreshStrategy, AuthSecretSelector, ManagedCredential, SapAiCoreServiceKey,
+    parse_sap_ai_core_service_key, should_retry_credential,
+};
 pub use gemini::GeminiProvider;
 pub use gitlab::{GitlabProvider, GitlabProviderConfig};
 pub use google_vertex::GoogleVertexProvider;

@@ -9,8 +9,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, auth::AuthData, sse,
-        utils,
+        CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, StreamResumePolicy,
+        auth::AuthData, should_retry_credential, sse, utils,
     },
     role::Role,
 };
@@ -21,7 +21,7 @@ const PROVIDER_ID_ENTERPRISE: &str = "github-copilot-enterprise";
 pub struct CopilotProvider {
     id: String,
     client: reqwest::Client,
-    bearer_token: String,
+    bearer_token: ManagedCredential,
     base_url: String,
     default_model: ModelId,
     models_url: Option<String>,
@@ -57,6 +57,29 @@ impl CopilotProvider {
             )));
         };
 
+        Self::with_bearer_credential(
+            id,
+            client,
+            ManagedCredential::static_value(
+                format!("{id} bearer token"),
+                select_copilot_bearer_token(refresh, access).ok_or_else(|| {
+                    AppError::Config(format!(
+                        "{id} oauth credential is missing usable access/refresh token"
+                    ))
+                })?,
+            ),
+            enterprise_url.clone(),
+            options,
+        )
+    }
+
+    pub fn with_bearer_credential(
+        id: &str,
+        client: reqwest::Client,
+        bearer_token: ManagedCredential,
+        enterprise_url: Option<String>,
+        options: CopilotProviderOptions,
+    ) -> Result<Self, AppError> {
         let default_base = if id == PROVIDER_ID_ENTERPRISE {
             let domain = enterprise_url.as_ref().ok_or_else(|| {
                 AppError::Config("enterprise_url missing for github-copilot-enterprise".into())
@@ -74,11 +97,7 @@ impl CopilotProvider {
         Ok(Self {
             id: id.to_owned(),
             client,
-            bearer_token: select_copilot_bearer_token(refresh, access).ok_or_else(|| {
-                AppError::Config(format!(
-                    "{id} oauth credential is missing usable access/refresh token"
-                ))
-            })?,
+            bearer_token,
             base_url,
             default_model,
             models_url: options.models_url,
@@ -171,13 +190,15 @@ impl CopilotProvider {
 
     fn base_headers(
         &self,
+        bearer_token: &str,
         request: &CompletionRequest,
     ) -> Result<reqwest::header::HeaderMap, AppError> {
         let mut headers = reqwest::header::HeaderMap::new();
-        let authorization = reqwest::header::HeaderValue::from_str(
-            format!("Bearer {}", self.bearer_token).as_str(),
-        )
-        .map_err(|e| AppError::Config(format!("invalid copilot bearer token header: {e}")))?;
+        let authorization =
+            reqwest::header::HeaderValue::from_str(format!("Bearer {bearer_token}").as_str())
+                .map_err(|e| {
+                    AppError::Config(format!("invalid copilot bearer token header: {e}"))
+                })?;
 
         headers.insert(reqwest::header::AUTHORIZATION, authorization);
         headers.insert(
@@ -199,6 +220,29 @@ impl CopilotProvider {
             );
         }
         Ok(headers)
+    }
+
+    async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>
+    where
+        F: FnMut(&str) -> Result<reqwest::RequestBuilder, AppError>,
+    {
+        let mut force_refresh = false;
+
+        loop {
+            let bearer_token = if force_refresh {
+                self.bearer_token.force_refresh().await?
+            } else {
+                self.bearer_token.resolve().await?
+            };
+
+            let response = build(bearer_token.as_str())?.send().await?;
+            if !force_refresh && should_retry_credential(response.status()) {
+                force_refresh = true;
+                continue;
+            }
+
+            return Ok(response);
+        }
     }
 }
 
@@ -227,16 +271,20 @@ impl ModelProvider for CopilotProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let authorization = reqwest::header::HeaderValue::from_str(
-            format!("Bearer {}", self.bearer_token).as_str(),
-        )
-        .map_err(|e| AppError::Config(format!("invalid copilot bearer token header: {e}")))?;
-
         let response = self
-            .client
-            .get(self.models_endpoint())
-            .header(reqwest::header::AUTHORIZATION, authorization)
-            .send()
+            .send_request(|bearer_token| {
+                let authorization = reqwest::header::HeaderValue::from_str(
+                    format!("Bearer {bearer_token}").as_str(),
+                )
+                .map_err(|e| {
+                    AppError::Config(format!("invalid copilot bearer token header: {e}"))
+                })?;
+
+                Ok(self
+                    .client
+                    .get(self.models_endpoint())
+                    .header(reqwest::header::AUTHORIZATION, authorization))
+            })
             .await?;
 
         if !response.status().is_success() {
@@ -264,12 +312,14 @@ impl ModelProvider for CopilotProvider {
         if Self::should_use_responses(model.as_str()) {
             let body = OpenAiResponsesRequest::from_request(model.to_string(), &request);
             let response = self
-                .client
-                .post(self.responses_endpoint())
-                .headers(self.base_headers(&request)?)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .json(&body)
-                .send()
+                .send_request(|bearer_token| {
+                    Ok(self
+                        .client
+                        .post(self.responses_endpoint())
+                        .headers(self.base_headers(bearer_token, &request)?)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json")
+                        .json(&body))
+                })
                 .await?;
 
             if response.status().is_success() {
@@ -318,12 +368,14 @@ impl ModelProvider for CopilotProvider {
 
         let body = ChatCompletionRequest::from_request(model.to_string(), &request);
         let response = self
-            .client
-            .post(self.chat_endpoint())
-            .headers(self.base_headers(&request)?)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
-            .send()
+            .send_request(|bearer_token| {
+                Ok(self
+                    .client
+                    .post(self.chat_endpoint())
+                    .headers(self.base_headers(bearer_token, &request)?)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .json(&body))
+            })
             .await?;
 
         if !response.status().is_success() {
@@ -395,12 +447,14 @@ impl ModelProvider for CopilotProvider {
             let body =
                 OpenAiResponsesRequest::from_request(model.to_string(), &request).with_stream(true);
             let response = self
-                .client
-                .post(self.responses_endpoint())
-                .headers(self.base_headers(&request)?)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .json(&body)
-                .send()
+                .send_request(|bearer_token| {
+                    Ok(self
+                        .client
+                        .post(self.responses_endpoint())
+                        .headers(self.base_headers(bearer_token, &request)?)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json")
+                        .json(&body))
+                })
                 .await?;
 
             if response.status().is_success() {
@@ -585,12 +639,14 @@ impl ModelProvider for CopilotProvider {
         let body =
             ChatCompletionRequest::from_request(model.to_string(), &request).with_stream(true);
         let response = self
-            .client
-            .post(self.chat_endpoint())
-            .headers(self.base_headers(&request)?)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
-            .send()
+            .send_request(|bearer_token| {
+                Ok(self
+                    .client
+                    .post(self.chat_endpoint())
+                    .headers(self.base_headers(bearer_token, &request)?)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .json(&body))
+            })
             .await?;
 
         if !response.status().is_success() {
@@ -1565,7 +1621,10 @@ mod tests {
         CopilotProvider {
             id: "github-copilot".to_owned(),
             client: reqwest::Client::new(),
-            bearer_token: "test-token".to_owned(),
+            bearer_token: ManagedCredential::static_value(
+                "test copilot bearer token",
+                "test-token",
+            ),
             base_url,
             default_model: ModelId::new("gpt-4o-mini"),
             models_url: None,
@@ -1636,8 +1695,8 @@ mod tests {
         assert!(CopilotProvider::is_vision_request(&request));
     }
 
-    #[test]
-    fn from_auth_prefers_refresh_token_for_bearer() {
+    #[tokio::test]
+    async fn from_auth_prefers_refresh_token_for_bearer() {
         let provider = CopilotProvider::from_auth(
             "github-copilot",
             reqwest::Client::new(),
@@ -1651,7 +1710,14 @@ mod tests {
         )
         .expect("copilot provider should build from oauth auth data");
 
-        assert_eq!(provider.bearer_token, "refresh-token");
+        assert_eq!(
+            provider
+                .bearer_token
+                .resolve()
+                .await
+                .expect("copilot bearer token should resolve"),
+            "refresh-token"
+        );
     }
 
     #[test]

@@ -11,7 +11,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, sse, utils,
+        CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
+        should_retry_credential, sse, utils,
     },
     role::Role,
 };
@@ -22,7 +23,7 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 #[derive(Clone)]
 pub struct AnthropicProvider {
     client: reqwest::Client,
-    api_key: String,
+    api_key: ManagedCredential,
     base_url: String,
     default_model: ModelId,
     include_thinking: bool,
@@ -38,9 +39,23 @@ impl AnthropicProvider {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        Self::new_managed(
+            client,
+            ManagedCredential::static_value("anthropic api key", api_key.into()),
+            base_url,
+            default_model,
+        )
+    }
+
+    pub fn new_managed(
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+    ) -> Self {
         Self {
             client,
-            api_key: api_key.into(),
+            api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
             include_thinking: false,
@@ -183,24 +198,52 @@ impl AnthropicProvider {
         R: for<'de> Deserialize<'de>,
     {
         let response = self
-            .apply_headers(
-                self.client
-                    .post(endpoint)
-                    .header("anthropic-version", ANTHROPIC_VERSION)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-            )
-            .json(body)
-            .send()
+            .send_request(|api_key| {
+                self.apply_headers(
+                    self.client
+                        .post(endpoint.clone())
+                        .header("anthropic-version", ANTHROPIC_VERSION)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                    api_key,
+                )
+                .json(body)
+            })
             .await?;
 
         utils::parse_json_response(PROVIDER_ID, response).await
     }
 
-    fn apply_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        let auth_value =
-            utils::auth_header_value(self.auth_scheme.as_deref(), self.api_key.as_str());
+    fn apply_headers(
+        &self,
+        req: reqwest::RequestBuilder,
+        api_key: &str,
+    ) -> reqwest::RequestBuilder {
+        let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
         let req = req.header(self.auth_header.as_str(), auth_value);
         utils::apply_extra_headers(req, &self.extra_headers)
+    }
+
+    async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>
+    where
+        F: FnMut(&str) -> reqwest::RequestBuilder,
+    {
+        let mut force_refresh = false;
+
+        loop {
+            let api_key = if force_refresh {
+                self.api_key.force_refresh().await?
+            } else {
+                self.api_key.resolve().await?
+            };
+
+            let response = build(api_key.as_str()).send().await?;
+            if !force_refresh && should_retry_credential(response.status()) {
+                force_refresh = true;
+                continue;
+            }
+
+            return Ok(response);
+        }
     }
 }
 
@@ -226,12 +269,14 @@ impl ModelProvider for AnthropicProvider {
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let response = self
-            .apply_headers(
-                self.client
-                    .get(self.models_endpoint())
-                    .header("anthropic-version", ANTHROPIC_VERSION),
-            )
-            .send()
+            .send_request(|api_key| {
+                self.apply_headers(
+                    self.client
+                        .get(self.models_endpoint())
+                        .header("anthropic-version", ANTHROPIC_VERSION),
+                    api_key,
+                )
+            })
             .await?;
 
         let payload: AnthropicModelListResponse =
@@ -378,14 +423,16 @@ impl ModelProvider for AnthropicProvider {
         };
 
         let response = self
-            .apply_headers(
-                self.client
-                    .post(self.messages_endpoint())
-                    .header("anthropic-version", ANTHROPIC_VERSION)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-            )
-            .json(&body)
-            .send()
+            .send_request(|api_key| {
+                self.apply_headers(
+                    self.client
+                        .post(self.messages_endpoint())
+                        .header("anthropic-version", ANTHROPIC_VERSION)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                    api_key,
+                )
+                .json(&body)
+            })
             .await?;
 
         if !response.status().is_success() {

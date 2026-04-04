@@ -48,6 +48,17 @@ api_key_env = "OPENAI_API_KEY"
 api_mode = "auto"
 stream_mode = "sse"
 
+# Opencode-aligned preset examples:
+#
+# [providers.openrouter]
+# kind = "preset"
+#
+# [providers."github-copilot"]
+# kind = "preset"
+#
+# [providers."google-vertex"]
+# kind = "preset"
+
 [providers.codex]
 kind = "codex"
 default_model = "gpt-5.3-codex"

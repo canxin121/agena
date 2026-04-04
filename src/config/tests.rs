@@ -247,6 +247,251 @@ model = "   "
 }
 
 #[test]
+fn preset_openrouter_resolves_to_openai_compatible_with_opencode_headers() {
+    let presets = write_temp_presets(
+        r#"[{"id":"openrouter","npm":"@openrouter/ai-sdk-provider","api":"https://openrouter.ai/api/v1","env":["OPENROUTER_API_KEY"],"default_model":"google/gemini-3-pro-preview"}]"#,
+    );
+    let path = write_temp_config(
+        r#"
+[providers.openrouter]
+kind = "preset"
+"#,
+    );
+
+    let env = TestEnvironment {
+        vars: BTreeMap::from([(
+            "AGENA_OPENCODE_PRESETS_PATH".to_owned(),
+            presets.display().to_string(),
+        )]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("preset config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("openrouter")
+        .expect("openrouter provider should exist");
+
+    match &provider.definition {
+        ProviderDefinition::OpenAiCompatible(config) => {
+            assert_eq!(config.base_url, "https://openrouter.ai/api/v1");
+            assert_eq!(config.default_model, "google/gemini-3-pro-preview");
+            assert_eq!(config.api_key_env.as_deref(), Some("OPENROUTER_API_KEY"));
+            assert_eq!(
+                config.extra_headers.get("HTTP-Referer").map(String::as_str),
+                Some("https://opencode.ai/")
+            );
+            assert_eq!(
+                config.extra_headers.get("X-Title").map(String::as_str),
+                Some("opencode")
+            );
+        }
+        other => panic!("expected openai-compatible preset, got {other:?}"),
+    }
+}
+
+#[test]
+fn preset_opencode_uses_public_key_when_no_api_key_is_available() {
+    let presets = write_temp_presets(
+        r#"[{"id":"opencode","npm":"@ai-sdk/openai-compatible","api":"https://opencode.ai/zen/v1","env":["OPENCODE_API_KEY"],"default_model":"gemini-3-pro"}]"#,
+    );
+    let path = write_temp_config(
+        r#"
+[providers.opencode]
+kind = "preset"
+"#,
+    );
+
+    let env = TestEnvironment {
+        vars: BTreeMap::from([(
+            "AGENA_OPENCODE_PRESETS_PATH".to_owned(),
+            presets.display().to_string(),
+        )]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("preset config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("opencode")
+        .expect("opencode provider should exist");
+
+    match &provider.definition {
+        ProviderDefinition::OpenAiCompatible(config) => {
+            assert_eq!(config.api_key.as_deref(), Some("public"));
+            assert!(config.api_key_env.is_none());
+        }
+        other => panic!("expected openai-compatible preset, got {other:?}"),
+    }
+}
+
+#[test]
+fn preset_google_vertex_builds_openapi_endpoint_from_project_and_location() {
+    let presets = write_temp_presets(
+        r#"[{"id":"google-vertex","npm":"@ai-sdk/google-vertex","api":null,"env":["GOOGLE_VERTEX_PROJECT","GOOGLE_VERTEX_LOCATION","GOOGLE_APPLICATION_CREDENTIALS"],"default_model":"gemini-3-pro-preview"}]"#,
+    );
+    let path = write_temp_config(
+        r#"
+[providers."google-vertex"]
+kind = "preset"
+"#,
+    );
+
+    let env = TestEnvironment {
+        vars: BTreeMap::from([
+            (
+                "AGENA_OPENCODE_PRESETS_PATH".to_owned(),
+                presets.display().to_string(),
+            ),
+            ("GOOGLE_CLOUD_PROJECT".to_owned(), "demo-project".to_owned()),
+            ("VERTEX_LOCATION".to_owned(), "global".to_owned()),
+        ]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("preset config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("google-vertex")
+        .expect("google-vertex provider should exist");
+
+    match &provider.definition {
+        ProviderDefinition::GoogleVertex(config) => {
+            assert_eq!(
+                config.base_url,
+                "https://aiplatform.googleapis.com/v1/projects/demo-project/locations/global/endpoints/openapi"
+            );
+            assert_eq!(config.default_model, "gemini-3-pro-preview");
+            assert!(matches!(config.auth, GoogleVertexAuthConfig::Adc));
+        }
+        other => panic!("expected google-vertex preset, got {other:?}"),
+    }
+}
+
+#[test]
+fn preset_github_copilot_resolves_to_copilot_provider() {
+    let presets = write_temp_presets(
+        r#"[{"id":"github-copilot","npm":"@ai-sdk/openai-compatible","api":"https://api.githubcopilot.com","env":["GITHUB_TOKEN"],"default_model":"gemini-3-pro-preview"}]"#,
+    );
+    let path = write_temp_config(
+        r#"
+[providers."github-copilot"]
+kind = "preset"
+"#,
+    );
+
+    let env = TestEnvironment {
+        vars: BTreeMap::from([(
+            "AGENA_OPENCODE_PRESETS_PATH".to_owned(),
+            presets.display().to_string(),
+        )]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("preset config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("github-copilot")
+        .expect("github-copilot provider should exist");
+
+    match &provider.definition {
+        ProviderDefinition::Copilot(config) => {
+            assert_eq!(config.base_url, "https://api.githubcopilot.com");
+            assert_eq!(config.default_model, "gemini-3-pro-preview");
+            assert_eq!(config.auth_provider_id, "github-copilot");
+        }
+        other => panic!("expected copilot preset, got {other:?}"),
+    }
+}
+
+#[test]
+fn preset_sap_ai_core_resolves_to_runtime_managed_provider() {
+    let presets = write_temp_presets(
+        r#"[{"id":"sap-ai-core","npm":"@jerome-benoit/sap-ai-provider-v2","api":null,"env":["AICORE_SERVICE_KEY","AICORE_RESOURCE_GROUP"],"default_model":"anthropic/claude-sonnet-4"}]"#,
+    );
+    let path = write_temp_config(
+        r#"
+[providers."sap-ai-core"]
+kind = "preset"
+"#,
+    );
+
+    let env = TestEnvironment {
+        vars: BTreeMap::from([
+            (
+                "AGENA_OPENCODE_PRESETS_PATH".to_owned(),
+                presets.display().to_string(),
+            ),
+            (
+                "AICORE_SERVICE_KEY".to_owned(),
+                r#"{"clientid":"client","clientsecret":"secret","url":"https://auth.example.com","serviceurls":{"AI_API_URL":"https://api.example.com/v2"}}"#
+                    .to_owned(),
+            ),
+            (
+                "AICORE_RESOURCE_GROUP".to_owned(),
+                "default-group".to_owned(),
+            ),
+        ]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("preset config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("sap-ai-core")
+        .expect("sap-ai-core provider should exist");
+
+    match &provider.definition {
+        ProviderDefinition::SapAiCore(config) => {
+            assert_eq!(config.base_url, "https://api.example.com/v2");
+            assert_eq!(config.default_model, "anthropic/claude-sonnet-4");
+            assert!(
+                config.api_key.is_none() && config.api_key_env.is_none(),
+                "sap-ai-core preset should defer token exchange to runtime"
+            );
+            assert_eq!(
+                config
+                    .extra_headers
+                    .get("AI-Resource-Group")
+                    .map(String::as_str),
+                Some("default-group")
+            );
+        }
+        other => panic!("expected sap-ai-core preset, got {other:?}"),
+    }
+}
+
+#[test]
 fn build_plugin_manager_uses_config_relative_plugin_directory() {
     let dir = temp_dir("plugins-relative");
     let plugins_dir = dir.join("plugins");
@@ -318,6 +563,16 @@ fn write_temp_config(content: &str) -> PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("agena-config-{suffix}.toml"));
     fs::write(&path, content).expect("temp config should be written");
+    path
+}
+
+fn write_temp_presets(content: &str) -> PathBuf {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should move forward")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("agena-presets-{suffix}.json"));
+    fs::write(&path, content).expect("temp preset file should be written");
     path
 }
 

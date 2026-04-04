@@ -14,8 +14,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelProvider, OpenAiCompatibleProvider,
-        ProviderModel, StreamResumePolicy, sse, utils,
+        CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider,
+        OpenAiCompatibleProvider, ProviderModel, StreamResumePolicy, sse, utils,
     },
     role::Role,
 };
@@ -78,6 +78,22 @@ impl AmazonBedrockProvider {
         default_model: impl Into<String>,
         region: impl Into<String>,
     ) -> Self {
+        Self::new_managed_bearer(
+            client,
+            ManagedCredential::static_value("amazon-bedrock bearer token", api_token.into()),
+            base_url,
+            default_model,
+            region,
+        )
+    }
+
+    pub fn new_managed_bearer(
+        client: reqwest::Client,
+        api_token: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        region: impl Into<String>,
+    ) -> Self {
         let base_url = utils::normalize_base_url(base_url.into().as_str());
         let default_model = ModelId::new(default_model);
         let region = region.into();
@@ -86,7 +102,7 @@ impl AmazonBedrockProvider {
             base_url: base_url.clone(),
             default_model: default_model.clone(),
             region,
-            auth_mode: BedrockAuthMode::Bearer(OpenAiCompatibleProvider::new(
+            auth_mode: BedrockAuthMode::Bearer(OpenAiCompatibleProvider::new_managed(
                 PROVIDER_ID,
                 client,
                 api_token,

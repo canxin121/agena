@@ -10,8 +10,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse,
-        utils,
+        CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
+        StreamResumePolicy, should_retry_credential, sse, utils,
     },
     role::Role,
 };
@@ -21,7 +21,7 @@ const PROVIDER_ID: &str = "openai";
 #[derive(Clone)]
 pub struct OpenAiProvider {
     client: reqwest::Client,
-    api_key: String,
+    api_key: ManagedCredential,
     base_url: String,
     default_model: ModelId,
     api_mode: OpenAiApiMode,
@@ -50,9 +50,23 @@ impl OpenAiProvider {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        Self::new_managed(
+            client,
+            ManagedCredential::static_value("openai api key", api_key.into()),
+            base_url,
+            default_model,
+        )
+    }
+
+    pub fn new_managed(
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+    ) -> Self {
         Self {
             client,
-            api_key: api_key.into(),
+            api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
             api_mode: OpenAiApiMode::Responses,
@@ -142,6 +156,7 @@ impl OpenAiProvider {
     fn realtime_handshake_request(
         &self,
         endpoint: &url::Url,
+        api_key: &str,
     ) -> Result<http::Request<()>, AppError> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -152,11 +167,10 @@ impl OpenAiProvider {
         })?;
 
         let auth_header_name = http::header::HeaderName::from_static("authorization");
-        let auth_header_value =
-            http::header::HeaderValue::from_str(format!("Bearer {}", self.api_key).as_str())
-                .map_err(|err| {
-                    AppError::Config(format!("openai auth header value is invalid: {err}"))
-                })?;
+        let auth_header_value = http::header::HeaderValue::from_str(
+            format!("Bearer {api_key}").as_str(),
+        )
+        .map_err(|err| AppError::Config(format!("openai auth header value is invalid: {err}")))?;
         request
             .headers_mut()
             .insert(auth_header_name, auth_header_value);
@@ -228,14 +242,15 @@ impl OpenAiProvider {
         };
 
         let response = self
-            .apply_headers(
-                self.client
-                    .post(self.chat_endpoint())
-                    .bearer_auth(&self.api_key)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-            )
-            .json(&body)
-            .send()
+            .send_request(|api_key| {
+                self.apply_headers(
+                    self.client
+                        .post(self.chat_endpoint())
+                        .bearer_auth(api_key)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                )
+                .json(&body)
+            })
             .await?;
 
         let payload: OpenAiChatCompletionResponse =
@@ -303,14 +318,15 @@ impl OpenAiProvider {
         };
 
         let response = self
-            .apply_headers(
-                self.client
-                    .post(self.chat_endpoint())
-                    .bearer_auth(&self.api_key)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-            )
-            .json(&body)
-            .send()
+            .send_request(|api_key| {
+                self.apply_headers(
+                    self.client
+                        .post(self.chat_endpoint())
+                        .bearer_auth(api_key)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                )
+                .json(&body)
+            })
             .await?;
 
         if !response.status().is_success() {
@@ -451,7 +467,8 @@ impl OpenAiProvider {
         AppError,
     > {
         let ws_endpoint = self.realtime_ws_endpoint(model.as_str())?;
-        let handshake = self.realtime_handshake_request(&ws_endpoint)?;
+        let api_key = self.api_key.resolve().await?;
+        let handshake = self.realtime_handshake_request(&ws_endpoint, api_key.as_str())?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(handshake)
             .await
             .map_err(|err| {
@@ -1379,23 +1396,50 @@ impl OpenAiProvider {
     where
         R: for<'de> Deserialize<'de>,
     {
-        let mut request = self.apply_headers(
-            self.client
-                .post(endpoint)
-                .bearer_auth(&self.api_key)
-                .header(reqwest::header::CONTENT_TYPE, "application/json"),
-        );
+        let response = self
+            .send_request(|api_key| {
+                let mut request = self.apply_headers(
+                    self.client
+                        .post(endpoint.clone())
+                        .bearer_auth(api_key)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                );
 
-        if let Some(body) = body {
-            request = request.json(body);
-        }
+                if let Some(body) = body {
+                    request = request.json(body);
+                }
 
-        let response = request.send().await?;
+                request
+            })
+            .await?;
         utils::parse_json_response(PROVIDER_ID, response).await
     }
 
     fn apply_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         utils::apply_extra_headers(req, &self.extra_headers)
+    }
+
+    async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>
+    where
+        F: FnMut(&str) -> reqwest::RequestBuilder,
+    {
+        let mut force_refresh = false;
+
+        loop {
+            let api_key = if force_refresh {
+                self.api_key.force_refresh().await?
+            } else {
+                self.api_key.resolve().await?
+            };
+
+            let response = build(api_key.as_str()).send().await?;
+            if !force_refresh && should_retry_credential(response.status()) {
+                force_refresh = true;
+                continue;
+            }
+
+            return Ok(response);
+        }
     }
 }
 
@@ -1425,12 +1469,9 @@ impl ModelProvider for OpenAiProvider {
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let response = self
-            .apply_headers(
-                self.client
-                    .get(self.model_endpoint())
-                    .bearer_auth(&self.api_key),
-            )
-            .send()
+            .send_request(|api_key| {
+                self.apply_headers(self.client.get(self.model_endpoint()).bearer_auth(api_key))
+            })
             .await?;
 
         let payload: OpenAiModelListResponse =
@@ -1537,14 +1578,15 @@ impl ModelProvider for OpenAiProvider {
         };
 
         let response = self
-            .apply_headers(
-                self.client
-                    .post(self.responses_endpoint())
-                    .bearer_auth(&self.api_key)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-            )
-            .json(&body)
-            .send()
+            .send_request(|api_key| {
+                self.apply_headers(
+                    self.client
+                        .post(self.responses_endpoint())
+                        .bearer_auth(api_key)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                )
+                .json(&body)
+            })
             .await?;
 
         if !response.status().is_success() {

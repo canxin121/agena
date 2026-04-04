@@ -13,8 +13,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         AnthropicProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ModelProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderModel, auth::AuthData,
-        utils,
+        ManagedCredential, ModelProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderModel,
+        auth::AuthData, should_retry_credential, utils,
     },
 };
 
@@ -56,7 +56,7 @@ impl Default for GitlabProviderConfig {
 
 pub struct GitlabProvider {
     client: reqwest::Client,
-    api_key: String,
+    api_key: ManagedCredential,
     instance_url: String,
     ai_gateway_url: String,
     default_model: ModelId,
@@ -129,9 +129,21 @@ impl GitlabProvider {
         token: impl Into<String>,
         config: GitlabProviderConfig,
     ) -> Result<Self, AppError> {
+        Self::from_managed_token_with_config(
+            client,
+            ManagedCredential::static_value("gitlab token", token.into()),
+            config,
+        )
+    }
+
+    pub fn from_managed_token_with_config(
+        client: reqwest::Client,
+        token: ManagedCredential,
+        config: GitlabProviderConfig,
+    ) -> Result<Self, AppError> {
         Ok(Self {
             client,
-            api_key: token.into(),
+            api_key: token,
             instance_url: normalize_url(config.instance_url),
             ai_gateway_url: normalize_url(config.ai_gateway_url),
             default_model: ModelId::new(config.default_model),
@@ -206,17 +218,30 @@ impl GitlabProvider {
             serde_json::json!({ "feature_flags": self.feature_flags })
         };
 
-        let response = self
-            .client
-            .post(self.direct_access_endpoint())
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", self.api_key),
-            )
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let mut force_credential_refresh = force_refresh;
+        let response = loop {
+            let api_key = if force_credential_refresh {
+                self.api_key.force_refresh().await?
+            } else {
+                self.api_key.resolve().await?
+            };
+
+            let response = self
+                .client
+                .post(self.direct_access_endpoint())
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .json(&body)
+                .send()
+                .await?;
+
+            if !force_credential_refresh && should_retry_credential(response.status()) {
+                force_credential_refresh = true;
+                continue;
+            }
+
+            break response;
+        };
 
         let mut parsed: DirectAccessResponse =
             utils::parse_json_response(PROVIDER_ID, response).await?;
@@ -245,8 +270,23 @@ impl GitlabProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
+        match self.complete_via_backend_once(request.clone(), false).await {
+            Ok(result) => Ok(result),
+            Err(err) if should_retry_backend_auth(&err) => {
+                self.invalidate_direct_access_cache()?;
+                self.complete_via_backend_once(request, true).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn complete_via_backend_once(
+        &self,
+        request: CompletionRequest,
+        force_refresh: bool,
+    ) -> Result<CompletionResponse, AppError> {
         let model = Self::mapped_model(request.model.as_str());
-        let token = self.get_direct_access_token(false).await?;
+        let token = self.get_direct_access_token(force_refresh).await?;
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
@@ -295,8 +335,29 @@ impl GitlabProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        match self
+            .complete_stream_via_backend_once(request.clone(), false)
+            .await
+        {
+            Ok(stream) => Ok(stream),
+            Err(err) if should_retry_backend_auth(&err) => {
+                self.invalidate_direct_access_cache()?;
+                self.complete_stream_via_backend_once(request, true).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn complete_stream_via_backend_once(
+        &self,
+        request: CompletionRequest,
+        force_refresh: bool,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+        AppError,
+    > {
         let model = Self::mapped_model(request.model.as_str());
-        let token = self.get_direct_access_token(false).await?;
+        let token = self.get_direct_access_token(force_refresh).await?;
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
@@ -336,6 +397,13 @@ impl GitlabProvider {
         let stream = provider.complete_stream(request).await?;
         let mapped = stream.map(|item| item.map(remap_stream_provider_id));
         Ok(Box::pin(mapped))
+    }
+
+    fn invalidate_direct_access_cache(&self) -> Result<(), AppError> {
+        *self.direct_access_cache.lock().map_err(|_| {
+            AppError::Internal("gitlab direct access cache lock poisoned".to_owned())
+        })? = None;
+        Ok(())
     }
 }
 
@@ -437,6 +505,13 @@ fn remap_stream_provider_id(event: CompletionStreamEvent) -> CompletionStreamEve
             usage,
             provider_metadata,
         },
+    }
+}
+
+fn should_retry_backend_auth(err: &AppError) -> bool {
+    match err {
+        AppError::HttpStatus { status, .. } => should_retry_credential(*status),
+        _ => false,
     }
 }
 

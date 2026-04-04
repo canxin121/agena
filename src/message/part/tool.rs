@@ -118,10 +118,12 @@ pub struct TodoWriteToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct RequestUserInputToolInput {
+pub struct AskUserToolInput {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<UserInputQuestion>,
 }
+
+pub type RequestUserInputToolInput = AskUserToolInput;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ApplyPatchToolInput {
@@ -141,7 +143,8 @@ pub enum BuiltinToolInput {
     Task(TaskToolInput),
     ToolSearch(ToolSearchToolInput),
     TodoWrite(TodoWriteToolInput),
-    RequestUserInput(RequestUserInputToolInput),
+    #[serde(rename = "ask_user", alias = "request_user_input")]
+    AskUser(AskUserToolInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -232,9 +235,14 @@ pub enum BuiltinToolOutput {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         items: Vec<TodoItem>,
     },
-    RequestUserInput {
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        answers: BTreeMap<String, String>,
+    #[serde(rename = "ask_user", alias = "request_user_input")]
+    AskUser {
+        #[serde(
+            default,
+            deserialize_with = "crate::message::part::activity::deserialize_user_input_answers",
+            skip_serializing_if = "crate::message::part::activity::user_input_answers_is_empty"
+        )]
+        answers: BTreeMap<String, Vec<String>>,
     },
 }
 

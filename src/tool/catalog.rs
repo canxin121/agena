@@ -1,8 +1,8 @@
 use crate::agent::Agent;
 use crate::message::{
-    ApplyPatchToolInput, BashToolInput, BuiltinToolInput, GlobToolInput, GrepToolInput,
-    ReadToolInput, RequestUserInputToolInput, TaskToolInput, TodoWriteToolInput,
-    ToolSearchToolInput, ViewFileToolInput,
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, GlobToolInput,
+    GrepToolInput, ReadToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput,
+    ViewFileToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -135,12 +135,20 @@ impl ToolCatalog {
             )
             .with_search_terms(["plan", "todo", "track progress"])
             .with_always_load(),
-            ToolDefinition::builtin::<RequestUserInputToolInput>(
-                "request_user_input",
-                "Ask the user one to three short multiple-choice questions and wait for the response.",
+            ToolDefinition::builtin::<AskUserToolInput>(
+                "ask_user",
+                "Ask short questions and wait for answers.",
                 ToolBehavior::ReadOnly,
             )
-            .with_search_terms(["ask user", "clarify requirement", "human input"])
+            .with_search_terms([
+                "ask user",
+                "clarify requirement",
+                "human input",
+                "single select",
+                "multi select",
+                "custom answer",
+                "request user input",
+            ])
             .with_concurrency_safe(false)
             .with_requires_user_interaction(true)
             .with_always_load(),
@@ -169,7 +177,7 @@ impl ToolCatalog {
                         | "grep"
                         | "tool_search"
                         | "todo_write"
-                        | "request_user_input"
+                        | "ask_user"
                 )
             }
             ModelToolProfile::NoTask => tool_name != "task",

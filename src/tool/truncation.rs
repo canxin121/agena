@@ -57,7 +57,7 @@ impl ToolOutputTruncator {
             | BuiltinToolOutput::Task { .. }
             | BuiltinToolOutput::ToolSearch { .. }
             | BuiltinToolOutput::TodoWrite { .. }
-            | BuiltinToolOutput::RequestUserInput { .. } => {}
+            | BuiltinToolOutput::AskUser { .. } => {}
         }
 
         execution

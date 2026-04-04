@@ -9,9 +9,9 @@ use crate::event::{
     ErrorInfo, MessageProjectionEvent, MessageProjector, SessionEvent, StreamErrorEvent,
 };
 use crate::message::{
-    ApplyPatchToolInput, BashToolInput, BuiltinToolInput, GlobToolInput, GrepToolInput, Message,
-    MessageMetadata, MessagePart, MessageSource, MessageStateStore, MessageUpdate, PartContent,
-    ReadToolInput, RequestUserInputToolInput, StructuredObject, TaskToolInput, TimeRange,
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, GlobToolInput,
+    GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource, MessageStateStore,
+    MessageUpdate, PartContent, ReadToolInput, StructuredObject, TaskToolInput, TimeRange,
     TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput, ViewFileToolInput,
 };
 use crate::model::ModelRef;
@@ -328,9 +328,10 @@ pub(crate) fn parse_tool_invocation(
     available_tools: &[ToolDefinition],
 ) -> Result<ToolInvocation, AppError> {
     let trimmed_name = name.trim();
+    let canonical_name = canonical_builtin_tool_name(trimmed_name);
     let tool = available_tools
         .iter()
-        .find(|tool| tool.name == trimmed_name)
+        .find(|tool| tool.name == trimmed_name || tool.name == canonical_name)
         .ok_or_else(|| {
             AppError::Provider(format!("unsupported tool call from model: {trimmed_name}"))
         })?;
@@ -343,7 +344,7 @@ pub(crate) fn parse_tool_invocation(
         });
     }
 
-    let input = match trimmed_name {
+    let input = match canonical_name {
         "bash" => BuiltinToolInput::Bash(parse_input::<BashToolInput>(arguments_json)?),
         "read" => BuiltinToolInput::Read(parse_input::<ReadToolInput>(arguments_json)?),
         "view_file" => {
@@ -361,9 +362,7 @@ pub(crate) fn parse_tool_invocation(
         "todo_write" => {
             BuiltinToolInput::TodoWrite(parse_input::<TodoWriteToolInput>(arguments_json)?)
         }
-        "request_user_input" => BuiltinToolInput::RequestUserInput(parse_input::<
-            RequestUserInputToolInput,
-        >(arguments_json)?),
+        "ask_user" => BuiltinToolInput::AskUser(parse_input::<AskUserToolInput>(arguments_json)?),
         other => {
             return Err(AppError::Provider(format!(
                 "unsupported builtin tool call from model: {other}"
@@ -372,6 +371,13 @@ pub(crate) fn parse_tool_invocation(
     };
 
     Ok(ToolInvocation::Builtin { input })
+}
+
+fn canonical_builtin_tool_name(name: &str) -> &str {
+    match name {
+        "request_user_input" => "ask_user",
+        other => other,
+    }
 }
 
 fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {

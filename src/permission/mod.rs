@@ -87,6 +87,9 @@ impl ToolPermissionPolicy {
             .tool_modes
             .get(name)
             .copied()
+            .or_else(|| {
+                legacy_tool_alias(name).and_then(|alias| self.tool_modes.get(alias).copied())
+            })
             .unwrap_or(self.default_mode);
         match mode {
             PermissionMode::Allow => PermissionDecision::Allow,
@@ -111,7 +114,15 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
         BuiltinToolInput::Task(_) => "task",
         BuiltinToolInput::ToolSearch(_) => "tool_search",
         BuiltinToolInput::TodoWrite(_) => "todo_write",
-        BuiltinToolInput::RequestUserInput(_) => "request_user_input",
+        BuiltinToolInput::AskUser(_) => "ask_user",
+    }
+}
+
+fn legacy_tool_alias(name: &str) -> Option<&'static str> {
+    match name {
+        "ask_user" => Some("request_user_input"),
+        "request_user_input" => Some("ask_user"),
+        _ => None,
     }
 }
 

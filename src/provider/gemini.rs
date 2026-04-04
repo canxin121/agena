@@ -9,7 +9,7 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ModelProvider, ProviderModel, sse, utils,
+        ManagedCredential, ModelProvider, ProviderModel, should_retry_credential, sse, utils,
     },
     role::Role,
 };
@@ -19,7 +19,7 @@ const PROVIDER_ID: &str = "google";
 #[derive(Clone)]
 pub struct GeminiProvider {
     client: reqwest::Client,
-    api_key: String,
+    api_key: ManagedCredential,
     base_url: String,
     default_model: ModelId,
 }
@@ -31,39 +31,53 @@ impl GeminiProvider {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        Self::new_managed(
+            client,
+            ManagedCredential::static_value("gemini api key", api_key.into()),
+            base_url,
+            default_model,
+        )
+    }
+
+    pub fn new_managed(
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+    ) -> Self {
         Self {
             client,
-            api_key: api_key.into(),
+            api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
         }
     }
 
-    fn list_models_endpoint(&self) -> String {
-        format!("{}/models?key={}", self.base_url, self.api_key)
+    fn list_models_endpoint(&self, api_key: &str) -> String {
+        format!("{}/models?key={api_key}", self.base_url)
     }
 
-    fn generate_endpoint(&self, model: &str) -> String {
+    fn generate_endpoint(&self, model: &str, api_key: &str) -> String {
         let model_name = if model.starts_with("models/") {
             model.to_owned()
         } else {
             format!("models/{model}")
         };
         format!(
-            "{}/{}:generateContent?key={}",
-            self.base_url, model_name, self.api_key
+            "{}/{}:generateContent?key={api_key}",
+            self.base_url, model_name
         )
     }
 
-    fn stream_generate_endpoint(&self, model: &str) -> String {
+    fn stream_generate_endpoint(&self, model: &str, api_key: &str) -> String {
         let model_name = if model.starts_with("models/") {
             model.to_owned()
         } else {
             format!("models/{model}")
         };
         format!(
-            "{}/{}:streamGenerateContent?alt=sse&key={}",
-            self.base_url, model_name, self.api_key
+            "{}/{}:streamGenerateContent?alt=sse&key={api_key}",
+            self.base_url, model_name
         )
     }
 
@@ -96,6 +110,29 @@ impl GeminiProvider {
             .map(|(mime_type, data)| GeminiPart::inline_data(mime_type, data))
             .unwrap_or_else(|| GeminiPart::text(utils::attachment_hint_text(item)))
     }
+
+    async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>
+    where
+        F: FnMut(&str) -> reqwest::RequestBuilder,
+    {
+        let mut force_refresh = false;
+
+        loop {
+            let api_key = if force_refresh {
+                self.api_key.force_refresh().await?
+            } else {
+                self.api_key.resolve().await?
+            };
+
+            let response = build(api_key.as_str()).send().await?;
+            if !force_refresh && should_retry_credential(response.status()) {
+                force_refresh = true;
+                continue;
+            }
+
+            return Ok(response);
+        }
+    }
 }
 
 #[async_trait]
@@ -119,7 +156,9 @@ impl ModelProvider for GeminiProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let response = self.client.get(self.list_models_endpoint()).send().await?;
+        let response = self
+            .send_request(|api_key| self.client.get(self.list_models_endpoint(api_key)))
+            .await?;
 
         let payload: GeminiModelListResponse =
             utils::parse_json_response(PROVIDER_ID, response).await?;
@@ -173,11 +212,12 @@ impl ModelProvider for GeminiProvider {
         };
 
         let response = self
-            .client
-            .post(self.generate_endpoint(model.as_str()))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
-            .send()
+            .send_request(|api_key| {
+                self.client
+                    .post(self.generate_endpoint(model.as_str(), api_key))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .json(&body)
+            })
             .await?;
 
         let payload: GeminiGenerateResponse =
@@ -250,11 +290,12 @@ impl ModelProvider for GeminiProvider {
         };
 
         let response = self
-            .client
-            .post(self.stream_generate_endpoint(model.as_str()))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
-            .send()
+            .send_request(|api_key| {
+                self.client
+                    .post(self.stream_generate_endpoint(model.as_str(), api_key))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .json(&body)
+            })
             .await?;
 
         if !response.status().is_success() {

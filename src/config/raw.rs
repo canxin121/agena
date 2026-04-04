@@ -15,7 +15,7 @@ use crate::{
 use super::{
     AuthConfig, ConfigEnvironment, ConfigError, OpenAiApiModeConfig, PermissionConfig,
     PluginConfig, ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig,
-    RuntimeConfig, StreamTransportMode, TracingConfig,
+    RuntimeConfig, StreamTransportMode, TracingConfig, provider_presets,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -275,7 +275,15 @@ impl RawConfig {
         Ok(config)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn resolve(self) -> Result<ResolvedConfig, ConfigError> {
+        self.resolve_with_env(&super::ProcessEnvironment)
+    }
+
+    pub(crate) fn resolve_with_env(
+        self,
+        env: &dyn ConfigEnvironment,
+    ) -> Result<ResolvedConfig, ConfigError> {
         let tracing = TracingConfig {
             filter: self
                 .tracing
@@ -297,7 +305,7 @@ impl RawConfig {
         let providers = self
             .providers
             .into_iter()
-            .map(|(provider_id, raw)| raw.resolve(provider_id))
+            .map(|(provider_id, raw)| raw.resolve(provider_id, env))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
 
         Ok(ResolvedConfig {
@@ -619,12 +627,16 @@ impl PluginConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ProviderKind {
+    #[serde(rename = "preset")]
+    Preset,
     #[serde(rename = "alias")]
     Alias,
     #[serde(rename = "openai", alias = "open_ai")]
     OpenAi,
     #[serde(rename = "openai_compatible", alias = "open_ai_compatible")]
     OpenAiCompatible,
+    #[serde(rename = "sap_ai_core")]
+    SapAiCore,
     #[serde(rename = "anthropic")]
     Anthropic,
     #[serde(rename = "gemini")]
@@ -648,9 +660,11 @@ impl std::str::FromStr for ProviderKind {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim() {
+            "preset" => Ok(Self::Preset),
             "alias" => Ok(Self::Alias),
             "openai" => Ok(Self::OpenAi),
             "openai_compatible" => Ok(Self::OpenAiCompatible),
+            "sap_ai_core" => Ok(Self::SapAiCore),
             "anthropic" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
             "codex" => Ok(Self::Codex),
@@ -734,7 +748,15 @@ impl Merge for RawProviderConfig {
 }
 
 impl RawProviderConfig {
-    fn resolve(self, provider_id: String) -> Result<(String, ResolvedProviderConfig), ConfigError> {
+    fn resolve(
+        mut self,
+        provider_id: String,
+        env: &dyn ConfigEnvironment,
+    ) -> Result<(String, ResolvedProviderConfig), ConfigError> {
+        if matches!(self.kind, Some(ProviderKind::Preset)) {
+            self = provider_presets::apply_provider_preset(provider_id.as_str(), self, env)?;
+        }
+
         let kind = self.kind.ok_or_else(|| ConfigError::MissingProviderKind {
             provider_id: provider_id.clone(),
         })?;
@@ -743,6 +765,13 @@ impl RawProviderConfig {
         let capability_overrides = self.capability_overrides.clone();
 
         let definition = match kind {
+            ProviderKind::Preset => {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id,
+                    message: "preset provider must be resolved before building concrete definition"
+                        .to_owned(),
+                });
+            }
             ProviderKind::Alias => ProviderDefinition::Alias(ProviderAliasConfig {
                 target_provider_id: required_string(
                     provider_id.as_str(),
@@ -789,6 +818,26 @@ impl RawProviderConfig {
                     },
                 })
             }
+            ProviderKind::SapAiCore => ProviderDefinition::SapAiCore(super::HttpProviderConfig {
+                base_url: required_string(provider_id.as_str(), "base_url", self.base_url)?,
+                default_model: required_string(
+                    provider_id.as_str(),
+                    "default_model",
+                    self.default_model,
+                )?,
+                api_key: normalize_optional(self.api_key),
+                api_key_env: normalize_optional(self.api_key_env),
+                extra_headers: self.extra_headers,
+                options: super::OpenAiCompatibleProviderOptions {
+                    auth_header: self
+                        .auth_header
+                        .unwrap_or_else(|| "authorization".to_owned()),
+                    auth_scheme: normalize_optional(self.auth_scheme)
+                        .or_else(|| Some("Bearer".to_owned())),
+                    stream_mode: self.stream_mode.unwrap_or(StreamTransportMode::Sse),
+                    realtime_ws_url: normalize_optional(self.realtime_ws_url),
+                },
+            }),
             ProviderKind::Anthropic => ProviderDefinition::Anthropic(super::HttpProviderConfig {
                 base_url: required_string(provider_id.as_str(), "base_url", self.base_url)?,
                 default_model: required_string(

@@ -12,8 +12,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse,
-        utils,
+        CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
+        StreamResumePolicy, should_retry_credential, sse, utils,
     },
     role::Role,
 };
@@ -22,7 +22,7 @@ use crate::{
 pub struct OpenAiCompatibleProvider {
     id: String,
     client: reqwest::Client,
-    api_key: String,
+    api_key: ManagedCredential,
     base_url: String,
     default_model: ModelId,
     auth_header: String,
@@ -46,10 +46,26 @@ impl OpenAiCompatibleProvider {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        Self::new_managed(
+            id,
+            client,
+            ManagedCredential::static_value("openai-compatible api key", api_key.into()),
+            base_url,
+            default_model,
+        )
+    }
+
+    pub fn new_managed(
+        id: impl Into<String>,
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             client,
-            api_key: api_key.into(),
+            api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
             auth_header: "authorization".to_owned(),
@@ -146,6 +162,7 @@ impl OpenAiCompatibleProvider {
     fn realtime_handshake_request(
         &self,
         endpoint: &url::Url,
+        api_key: &str,
     ) -> Result<http::Request<()>, AppError> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -160,8 +177,7 @@ impl OpenAiCompatibleProvider {
             .map_err(|err| {
                 AppError::Config(format!("{} auth header name is invalid: {err}", self.id))
             })?;
-        let auth_value =
-            utils::auth_header_value(self.auth_scheme.as_deref(), self.api_key.as_str());
+        let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
         let auth_header_value =
             http::header::HeaderValue::from_str(auth_value.as_str()).map_err(|err| {
                 AppError::Config(format!("{} auth header value is invalid: {err}", self.id))
@@ -204,9 +220,12 @@ impl OpenAiCompatibleProvider {
         Ok(request)
     }
 
-    fn apply_auth_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        let auth_value =
-            utils::auth_header_value(self.auth_scheme.as_deref(), self.api_key.as_str());
+    fn apply_auth_headers(
+        &self,
+        mut req: reqwest::RequestBuilder,
+        api_key: &str,
+    ) -> reqwest::RequestBuilder {
+        let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
 
         req = req.header(self.auth_header.as_str(), auth_value);
         utils::apply_extra_headers(req, &self.extra_headers)
@@ -406,7 +425,8 @@ impl OpenAiCompatibleProvider {
         let model = request.model.clone();
 
         let ws_endpoint = self.realtime_ws_endpoint(model.as_str())?;
-        let handshake = self.realtime_handshake_request(&ws_endpoint)?;
+        let api_key = self.api_key.resolve().await?;
+        let handshake = self.realtime_handshake_request(&ws_endpoint, api_key.as_str())?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(handshake)
             .await
             .map_err(|err| {
@@ -682,6 +702,29 @@ impl OpenAiCompatibleProvider {
         };
 
         Ok(Box::pin(stream))
+    }
+
+    async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>
+    where
+        F: FnMut(&str) -> reqwest::RequestBuilder,
+    {
+        let mut force_refresh = false;
+
+        loop {
+            let api_key = if force_refresh {
+                self.api_key.force_refresh().await?
+            } else {
+                self.api_key.resolve().await?
+            };
+
+            let response = build(api_key.as_str()).send().await?;
+            if !force_refresh && should_retry_credential(response.status()) {
+                force_refresh = true;
+                continue;
+            }
+
+            return Ok(response);
+        }
     }
 }
 
@@ -965,8 +1008,11 @@ impl ModelProvider for OpenAiCompatibleProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let request = self.apply_auth_headers(self.client.get(self.models_endpoint()));
-        let response = request.send().await?;
+        let response = self
+            .send_request(|api_key| {
+                self.apply_auth_headers(self.client.get(self.models_endpoint()), api_key)
+            })
+            .await?;
         let payload: Value = utils::parse_json_response(self.id.as_str(), response).await?;
         self.parse_models(payload)
     }
@@ -987,12 +1033,13 @@ impl ModelProvider for OpenAiCompatibleProvider {
             stream_options: None,
         };
 
-        let req = self
-            .apply_auth_headers(self.client.post(self.completions_endpoint()))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body);
-
-        let response = req.send().await?;
+        let response = self
+            .send_request(|api_key| {
+                self.apply_auth_headers(self.client.post(self.completions_endpoint()), api_key)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .json(&body)
+            })
+            .await?;
         let payload: ChatCompletionResponse =
             utils::parse_json_response(self.id.as_str(), response).await?;
         self.parse_completion(payload)
@@ -1029,12 +1076,13 @@ impl ModelProvider for OpenAiCompatibleProvider {
             }),
         };
 
-        let req = self
-            .apply_auth_headers(self.client.post(self.completions_endpoint()))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body);
-
-        let response = req.send().await?;
+        let response = self
+            .send_request(|api_key| {
+                self.apply_auth_headers(self.client.post(self.completions_endpoint()), api_key)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .json(&body)
+            })
+            .await?;
         if !response.status().is_success() {
             return Err(utils::http_status_error_from_response(self.id.as_str(), response).await);
         }

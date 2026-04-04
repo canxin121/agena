@@ -1,6 +1,7 @@
 mod error;
 mod loader;
 mod overrides;
+mod provider_presets;
 mod raw;
 mod registry;
 mod types;

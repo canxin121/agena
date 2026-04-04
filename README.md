@@ -21,6 +21,7 @@ agena --mode prod -c providers.openai.default_model=gpt-5 config resolve --forma
 
 ### 支持的 provider config kind
 
+- `preset`（对齐 `opencode`/`models.dev` provider 命名空间）
 - `openai`
 - `openai_compatible`
 - `anthropic`
@@ -34,6 +35,35 @@ agena --mode prod -c providers.openai.default_model=gpt-5 config resolve --forma
 - `alias`
 
 示例见仓库根目录 `config.example.toml`。
+
+### `preset` provider（对齐 opencode）
+
+`agena` 现在支持：
+
+- 通过 `kind = "preset"` 显式注册 `opencode` 对齐的 provider id
+- provider 元数据从 `models.dev` 拉取并缓存到 `~/.agena/opencode-provider-presets.json`
+- 可用 `AGENA_OPENCODE_PRESETS_PATH` 指向本地 preset JSON，用于离线运行或测试
+
+示例：
+
+```toml
+[providers.openrouter]
+kind = "preset"
+
+[providers."github-copilot"]
+kind = "preset"
+
+[providers."google-vertex"]
+kind = "preset"
+
+[providers.opencode]
+kind = "preset"
+```
+
+说明：
+
+- `preset` 会按 `opencode` 的 provider 分组规则补齐默认 `base_url`、默认 `default_model`、鉴权环境变量和少数 provider 的专用 header。
+- 仍然是**显式注册**：只有配置文件里声明的 provider 才会进入 `agena` 的 provider registry。
 
 ## Plugin System（新增）
 

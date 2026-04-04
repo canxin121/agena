@@ -10,12 +10,14 @@ use crate::{
     model::ModelId,
     plugin::PluginManager,
     provider::{
-        AmazonBedrockProvider, AnthropicProvider, CapabilityOverrideProvider,
-        CloudflareAiGatewayProvider, CodexProvider, CopilotProvider,
+        AmazonBedrockProvider, AnthropicProvider, AuthRefreshStrategy, AuthSecretSelector,
+        CapabilityOverrideProvider, CloudflareAiGatewayProvider, CodexProvider, CopilotProvider,
         CopilotProviderOptions as RuntimeCopilotProviderOptions, GeminiProvider, GitlabProvider,
-        GitlabProviderConfig, GoogleVertexProvider, ModelProvider, NamedProvider,
-        OpenAiCompatibleProvider, OpenAiProvider, ProviderAliasRegistration, ProviderRegistry,
+        GitlabProviderConfig, GoogleVertexProvider, ManagedCredential, ModelProvider,
+        NamedProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderAliasRegistration,
+        ProviderRegistry,
         auth::{AuthData, AuthStore},
+        parse_sap_ai_core_service_key,
     },
 };
 
@@ -141,9 +143,15 @@ fn build_provider(
         ))),
         ProviderDefinition::OpenAi(config) => Ok(register_provider(
             provider_id,
-            OpenAiProvider::new(
+            OpenAiProvider::new_managed(
                 client,
-                required_secret(provider_id, "api_key", config, env)?,
+                required_managed_secret(
+                    provider_id,
+                    "api_key",
+                    config.api_key.as_ref(),
+                    config.api_key_env.as_ref(),
+                    env,
+                )?,
                 config.base_url.clone(),
                 config.default_model.clone(),
             )
@@ -154,10 +162,16 @@ fn build_provider(
         )),
         ProviderDefinition::OpenAiCompatible(config) => Ok(register_provider(
             provider_id,
-            OpenAiCompatibleProvider::new(
+            OpenAiCompatibleProvider::new_managed(
                 provider_id,
                 client,
-                required_secret(provider_id, "api_key", config, env)?,
+                required_managed_secret(
+                    provider_id,
+                    "api_key",
+                    config.api_key.as_ref(),
+                    config.api_key_env.as_ref(),
+                    env,
+                )?,
                 config.base_url.clone(),
                 config.default_model.clone(),
             )
@@ -169,11 +183,21 @@ fn build_provider(
             .with_stream_mode(config.options.stream_mode.into())
             .with_realtime_ws_url(config.options.realtime_ws_url.clone()),
         )),
+        ProviderDefinition::SapAiCore(config) => Ok(register_provider(
+            provider_id,
+            build_sap_ai_core_provider(provider_id, client, config, env)?,
+        )),
         ProviderDefinition::Anthropic(config) => Ok(register_provider(
             provider_id,
-            AnthropicProvider::new(
+            AnthropicProvider::new_managed(
                 client,
-                required_secret(provider_id, "api_key", config, env)?,
+                required_managed_secret(
+                    provider_id,
+                    "api_key",
+                    config.api_key.as_ref(),
+                    config.api_key_env.as_ref(),
+                    env,
+                )?,
                 config.base_url.clone(),
                 config.default_model.clone(),
             )
@@ -186,9 +210,15 @@ fn build_provider(
         )),
         ProviderDefinition::Gemini(config) => Ok(register_provider(
             provider_id,
-            GeminiProvider::new(
+            GeminiProvider::new_managed(
                 client,
-                required_secret(provider_id, "api_key", config, env)?,
+                required_managed_secret(
+                    provider_id,
+                    "api_key",
+                    config.api_key.as_ref(),
+                    config.api_key_env.as_ref(),
+                    env,
+                )?,
                 config.base_url.clone(),
                 config.default_model.clone(),
             ),
@@ -215,7 +245,7 @@ fn build_provider(
                 feature_flags: to_hash_map(&config.feature_flags),
             };
 
-            if let Some(api_key) = optional_secret(
+            if has_resolved_secret(
                 provider_id,
                 "api_key",
                 config.api_key.as_ref(),
@@ -224,14 +254,29 @@ fn build_provider(
             )? {
                 Ok(register_provider(
                     provider_id,
-                    GitlabProvider::from_token_with_config(client, api_key, runtime_config)?,
+                    GitlabProvider::from_managed_token_with_config(
+                        client,
+                        required_managed_secret(
+                            provider_id,
+                            "api_key",
+                            config.api_key.as_ref(),
+                            config.api_key_env.as_ref(),
+                            env,
+                        )?,
+                        runtime_config,
+                    )?,
                 ))
             } else {
-                let auth =
-                    required_auth(auth_snapshot, config.auth_provider_id.as_str(), provider_id)?;
                 Ok(register_provider(
                     provider_id,
-                    GitlabProvider::from_auth_with_config(client, auth, runtime_config)?,
+                    build_gitlab_auth_provider(
+                        provider_id,
+                        client,
+                        auth_store,
+                        auth_snapshot,
+                        config,
+                        runtime_config,
+                    )?,
                 ))
             }
         }
@@ -244,7 +289,19 @@ fn build_provider(
             };
             Ok(register_provider(
                 provider_id,
-                CopilotProvider::from_auth_with_options(provider_id, client, auth, options)?,
+                CopilotProvider::with_bearer_credential(
+                    provider_id,
+                    client,
+                    ManagedCredential::auth_store(
+                        format!("{provider_id} bearer token"),
+                        auth_store,
+                        config.auth_provider_id.clone(),
+                        AuthSecretSelector::RefreshOrAccess,
+                        AuthRefreshStrategy::ReloadFromStore,
+                    ),
+                    auth.enterprise_url().map(ToOwned::to_owned),
+                    options,
+                )?,
             ))
         }
         ProviderDefinition::AmazonBedrock(config) => {
@@ -252,9 +309,9 @@ fn build_provider(
                 BedrockAuthConfig::Bearer {
                     api_key,
                     api_key_env,
-                } => AmazonBedrockProvider::new_bearer(
+                } => AmazonBedrockProvider::new_managed_bearer(
                     client,
-                    required_resolved_secret(
+                    required_managed_secret(
                         provider_id,
                         "api_key",
                         api_key.as_ref(),
@@ -291,12 +348,12 @@ fn build_provider(
                 GoogleVertexAuthConfig::StaticToken {
                     access_token,
                     access_token_env,
-                } => GoogleVertexProvider::new_static_token(
+                } => GoogleVertexProvider::new_managed_token(
                     provider_id,
                     client,
                     config.base_url.clone(),
                     config.default_model.clone(),
-                    required_resolved_secret(
+                    required_managed_secret(
                         provider_id,
                         "access_token",
                         access_token.as_ref(),
@@ -384,10 +441,10 @@ fn build_cloudflare_provider(
     config: &CloudflareAiGatewayProviderOptions,
     env: &dyn ConfigEnvironment,
 ) -> Result<CloudflareAiGatewayProvider, ConfigError> {
-    let inner = OpenAiCompatibleProvider::new(
+    let inner = OpenAiCompatibleProvider::new_managed(
         provider_id,
         client,
-        required_resolved_secret(
+        required_managed_secret(
             provider_id,
             "api_key",
             config.api_key.as_ref(),
@@ -400,63 +457,162 @@ fn build_cloudflare_provider(
     Ok(CloudflareAiGatewayProvider::new(inner))
 }
 
-fn required_secret(
+fn build_sap_ai_core_provider(
     provider_id: &str,
-    field: &'static str,
-    config: &HttpProviderConfig<impl Clone>,
+    client: reqwest::Client,
+    config: &HttpProviderConfig<super::OpenAiCompatibleProviderOptions>,
     env: &dyn ConfigEnvironment,
-) -> Result<String, ConfigError> {
-    required_resolved_secret(
+) -> Result<OpenAiCompatibleProvider, ConfigError> {
+    let credential = if has_resolved_secret(
         provider_id,
-        field,
+        "api_key",
         config.api_key.as_ref(),
         config.api_key_env.as_ref(),
         env,
+    )? {
+        required_managed_secret(
+            provider_id,
+            "api_key",
+            config.api_key.as_ref(),
+            config.api_key_env.as_ref(),
+            env,
+        )?
+    } else {
+        let service_key_raw = env
+            .var("AICORE_SERVICE_KEY")
+            .and_then(|value| normalize_text(&value))
+            .ok_or_else(|| ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.to_owned(),
+                message:
+                    "sap-ai-core requires `AICORE_SERVICE_KEY` when `api_key` is not configured"
+                        .to_owned(),
+            })?;
+        let service_key =
+            parse_sap_ai_core_service_key(service_key_raw.as_str()).map_err(|err| {
+                ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: format!("failed to parse `AICORE_SERVICE_KEY`: {err}"),
+                }
+            })?;
+        ManagedCredential::sap_ai_core(
+            format!("{provider_id} sap ai core token"),
+            client.clone(),
+            provider_id.to_owned(),
+            service_key,
+        )
+    };
+
+    Ok(OpenAiCompatibleProvider::new_managed(
+        provider_id,
+        client,
+        credential,
+        config.base_url.clone(),
+        config.default_model.clone(),
     )
+    .with_auth_header(
+        config.options.auth_header.clone(),
+        config.options.auth_scheme.clone(),
+    )
+    .with_extra_headers(to_hash_map(&config.extra_headers))
+    .with_stream_mode(config.options.stream_mode.into())
+    .with_realtime_ws_url(config.options.realtime_ws_url.clone()))
 }
 
-fn required_resolved_secret(
+fn build_gitlab_auth_provider(
+    provider_id: &str,
+    client: reqwest::Client,
+    auth_store: Arc<dyn AuthStore>,
+    auth_snapshot: &HashMap<String, AuthData>,
+    config: &super::GitlabProviderOptions,
+    runtime_config: GitlabProviderConfig,
+) -> Result<GitlabProvider, ConfigError> {
+    let _ = required_auth(auth_snapshot, config.auth_provider_id.as_str(), provider_id)?;
+    GitlabProvider::from_managed_token_with_config(
+        client,
+        ManagedCredential::auth_store(
+            format!("{provider_id} gitlab access token"),
+            auth_store,
+            config.auth_provider_id.clone(),
+            AuthSecretSelector::AccessOrApiKey,
+            AuthRefreshStrategy::GitlabOAuth {
+                instance_url: config.instance_url.clone(),
+            },
+        ),
+        runtime_config,
+    )
+    .map_err(ConfigError::from)
+}
+
+fn has_resolved_secret(
     provider_id: &str,
     field: &'static str,
     direct: Option<&String>,
     env_key: Option<&String>,
     env: &dyn ConfigEnvironment,
-) -> Result<String, ConfigError> {
-    optional_secret(provider_id, field, direct, env_key, env)?.ok_or_else(|| {
-        ConfigError::MissingProviderField {
-            provider_id: provider_id.to_owned(),
-            field,
+) -> Result<bool, ConfigError> {
+    match (
+        direct.and_then(|value| normalize_text(value)),
+        env_key.and_then(|value| normalize_text(value)),
+    ) {
+        (Some(_), _) => Ok(true),
+        (None, Some(env_key)) => {
+            if env
+                .var(env_key.as_str())
+                .and_then(|value| normalize_text(&value))
+                .is_some()
+            {
+                Ok(true)
+            } else {
+                Err(ConfigError::MissingEnvironmentVariable {
+                    provider_id: provider_id.to_owned(),
+                    field,
+                    env_key,
+                })
+            }
         }
-    })
+        (None, None) => Ok(false),
+    }
 }
 
-fn optional_secret(
+fn required_managed_secret(
     provider_id: &str,
     field: &'static str,
     direct: Option<&String>,
     env_key: Option<&String>,
     env: &dyn ConfigEnvironment,
-) -> Result<Option<String>, ConfigError> {
+) -> Result<ManagedCredential, ConfigError> {
     if let Some(value) = direct.and_then(|value| normalize_text(value)) {
-        return Ok(Some(value));
+        return Ok(ManagedCredential::static_value(
+            format!("{provider_id} {field}"),
+            value,
+        ));
     }
 
     let Some(env_key) = env_key.and_then(|value| normalize_text(value)) else {
-        return Ok(None);
+        return Err(ConfigError::MissingProviderField {
+            provider_id: provider_id.to_owned(),
+            field,
+        });
     };
 
-    let Some(value) = env
+    if env
         .var(env_key.as_str())
         .and_then(|value| normalize_text(&value))
-    else {
+        .is_none()
+    {
         return Err(ConfigError::MissingEnvironmentVariable {
             provider_id: provider_id.to_owned(),
             field,
             env_key,
         });
-    };
+    }
 
-    Ok(Some(value))
+    Ok(ManagedCredential::environment(
+        format!("{provider_id} {field}"),
+        provider_id.to_owned(),
+        field,
+        env_key,
+    ))
 }
 
 fn required_auth<'a>(

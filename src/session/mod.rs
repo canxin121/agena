@@ -14,6 +14,7 @@ pub use manager::{
     SessionUserTurnRequest,
 };
 pub use model::{
-    Session, SessionEventRecord, SessionEventType, SessionListRequest, SessionSummary,
+    Session, SessionEventRecord, SessionEventType, SessionListRequest, SessionStatus,
+    SessionSummary,
 };
 pub use processor::SessionProcessor;

@@ -30,6 +30,7 @@ pub struct AgenaCli {
 pub enum AgenaCommand {
     Config(ConfigCommand),
     Provider(ProviderCommand),
+    Serve(ServeCommand),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -43,6 +44,9 @@ pub struct ProviderCommand {
     #[command(subcommand)]
     pub command: Option<ProviderSubcommand>,
 }
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct ServeCommand {}
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ConfigSubcommand {
@@ -130,6 +134,9 @@ impl AgenaCli {
         match self.command.clone() {
             Some(AgenaCommand::Config(command)) => self.run_config(loader, command),
             Some(AgenaCommand::Provider(command)) => self.run_provider(loader, command).await,
+            Some(AgenaCommand::Serve(_command)) => Err(AppError::Config(
+                "the HTTP server moved to the `agena-http-api` crate; run `cargo run -p agena-http-api -- --help` from the repository root".to_owned(),
+            )),
             None => self.run_default(loader, tracing_reload_handle).await,
         }
     }

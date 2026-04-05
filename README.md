@@ -1,8 +1,60 @@
 # Agena
 
+## Repository Layout
+
+当前仓库已经统一重组为：
+
+- `apps/`：可运行的 Rust 应用
+- `crates/`：可复用的 Rust library crates
+- `packages/`：前端包
+- `ops/`：安装、打包、发布脚本
+- `artifacts/`：生成的发布产物
+- `docs/`：产品与接口文档
+
+其中关键入口如下：
+
+- CLI app：`apps/agena-cli`
+- HTTP API app：`apps/agena-http-api-server`
+- HTTP API crate：`crates/agena-http-api`
+- Studio server app：`apps/agena-studio-server`
+- Studio desktop app：`apps/agena-studio-desktop`
+- Studio web package：`packages/agena-studio-web`
+
+## Agena Studio
+
+`agena-studio` 相关入口现在统一如下：
+
+- 详细说明：`[docs/agena-studio.md](docs/agena-studio.md)`
+- 根仓库 CI：`[.github/workflows/ci.yml](.github/workflows/ci.yml)`
+- Studio 发布流：`[.github/workflows/agena-studio-release.yml](.github/workflows/agena-studio-release.yml)`
+- 后端打包：`ops/agena-studio/scripts/package-backend.sh` / `ops/agena-studio/scripts/package-backend.ps1`
+- 桌面整包：`ops/agena-studio/desktop/build-full.sh` / `ops/agena-studio/desktop/build-full.ps1`
+- 桌面 bundle 输出：`artifacts/agena-studio/desktop/`
+- 桌面构建缓存：`artifacts/t/desktop/` 与 `artifacts/t/cef/`
+- 后端安装脚本：`ops/agena-studio/scripts/install-service.sh` / `ops/agena-studio/scripts/install-service.ps1`
+
+常用命令：
+
+```bash
+cargo check --workspace --locked
+bash ops/agena-studio/scripts/package-backend.sh
+bash ops/agena-studio/desktop/build-full.sh
+```
+
+Windows PowerShell：
+
+```powershell
+cargo check --workspace --locked
+./ops/agena-studio/scripts/package-backend.ps1
+./ops/agena-studio/desktop/build-full.ps1
+```
+
 ## HTTP API（新增）
 
-HTTP 后端现在已经从 core `agena` crate 中拆分出来，作为可选的独立 crate `agena-http-api`。
+HTTP 后端现在已经拆成两层：
+
+- library crate：`crates/agena-http-api`
+- runnable app：`apps/agena-http-api-server`
 
 这样做的目的很直接：
 
@@ -12,7 +64,7 @@ HTTP 后端现在已经从 core `agena` crate 中拆分出来，作为可选的�
 启动 HTTP API：
 
 ```bash
-cargo run -p agena-http-api -- serve
+cargo run -p agena-http-api-server -- serve
 ```
 
 默认行为：
@@ -24,7 +76,7 @@ cargo run -p agena-http-api -- serve
 也可显式指定：
 
 ```bash
-cargo run -p agena-http-api -- serve \
+cargo run -p agena-http-api-server -- serve \
   --listen 0.0.0.0:8080 \
   --database-path ./data/agena.db \
   --workspace-root .
@@ -33,7 +85,8 @@ cargo run -p agena-http-api -- serve \
 说明：
 
 - `cargo run -- serve` 在 core crate 中已不再真正启动服务，而是给出迁移提示
-- 仓库根目录执行 `cargo test` 现在会同时覆盖 `agena` 和 `agena-http-api`
+- 仓库根目录执行 `cargo test` 默认覆盖 `agena`
+- 执行 `cargo test --workspace` 会同时覆盖 `agena`、`agena-http-api` 和相关 app package
 
 已提供的资源接口：
 
@@ -105,11 +158,11 @@ Workspace 管理补充：
 
 - `POST /api/v1/workspaces/resolve` 支持按 path 规范化解析 workspace，并可通过 `create_if_missing=true` 实现幂等式“存在即返回，不存在就创建”
 
-这套设计相对 `opencode` 当前“部分资源有 cursor、部分资源仍偏简单 list”的方式更统一，适合直接给 Web / App 前端做无限滚动和局部 hydration。
+这套设计把分页、懒加载和执行状态统一到了同一套资源语义上，适合直接给 Web / App 前端做无限滚动和局部 hydration。
 
 更完整的接口说明见：
 
-- [docs/http-api.md](/home/canxin/Git/ai/agena/docs/http-api.md)
+- [docs/http-api.md](docs/http-api.md)
 
 ## Config / Mode（新增）
 
@@ -132,7 +185,7 @@ agena --mode prod -c providers.openai.default_model=gpt-5 config resolve --forma
 
 ### 支持的 provider config kind
 
-- `preset`（对齐 `opencode`/`models.dev` provider 命名空间）
+- `preset`（基于 `models.dev` 的 provider 预设）
 - `openai`
 - `openai_compatible`
 - `anthropic`
@@ -147,13 +200,13 @@ agena --mode prod -c providers.openai.default_model=gpt-5 config resolve --forma
 
 示例见仓库根目录 `config.example.toml`。
 
-### `preset` provider（对齐 opencode）
+### `preset` provider（基于 models.dev）
 
 `agena` 现在支持：
 
-- 通过 `kind = "preset"` 显式注册 `opencode` 对齐的 provider id
-- provider 元数据从 `models.dev` 拉取并缓存到 `~/.agena/opencode-provider-presets.json`
-- 可用 `AGENA_OPENCODE_PRESETS_PATH` 指向本地 preset JSON，用于离线运行或测试
+- 通过 `kind = "preset"` 显式注册任意 `models.dev` provider id
+- provider 元数据从 `models.dev` 拉取并缓存到 `~/.agena/provider-presets.json`
+- 可用 `AGENA_PROVIDER_PRESETS_PATH` 指向本地 preset JSON，用于离线运行或测试
 
 示例：
 
@@ -167,13 +220,11 @@ kind = "preset"
 [providers."google-vertex"]
 kind = "preset"
 
-[providers.opencode]
-kind = "preset"
 ```
 
 说明：
 
-- `preset` 会按 `opencode` 的 provider 分组规则补齐默认 `base_url`、默认 `default_model`、鉴权环境变量和少数 provider 的专用 header。
+- `preset` 会按 `models.dev` 元数据补齐默认 `base_url`、默认 `default_model`、鉴权环境变量和少数 provider 的集成 header。
 - 仍然是**显式注册**：只有配置文件里声明的 provider 才会进入 `agena` 的 provider registry。
 
 ## Plugin System（新增）
@@ -337,7 +388,7 @@ let auth = mgr
     .await?;
 ```
 
-OpenAI Browser OAuth（自动 callback 等待，接近 opencode 行为）：
+OpenAI Browser OAuth（自动 callback 等待）：
 
 ```rust
 use std::time::Duration;
@@ -372,7 +423,7 @@ let maybe_auth = mgr
     .await?;
 ```
 
-## 与 opencode 对齐的行为细节（本阶段）
+## 当前 provider 行为细节（本阶段）
 
 - Codex (`openai` OAuth)
   - 请求前检查过期并自动 refresh

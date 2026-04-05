@@ -1,0 +1,39 @@
+{
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "types": ["vite/client", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
+    /* Linting */
+    "strict": true,
+    "allowJs": true,
+    "checkJs": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": [
+    "src/vite-env.d.ts",
+    "src/main.ts",
+    "src/App.vue",
+    "src/router.ts",
+    "src/agena/**/*.ts",
+    "src/agena/**/*.vue",
+    "src/lib/api.ts",
+    "src/lib/authEvents.ts",
+    "src/lib/backend.ts",
+    "src/lib/desktopConfig.ts",
+    "src/lib/persist.ts",
+    "src/lib/uiAuthToken.ts",
+    "src/lib/persistence/storageKeys.ts",
+    "src/stores/auth.ts",
+    "src/stores/health.ts",
+    "src/types/json.ts"
+  ]
+}

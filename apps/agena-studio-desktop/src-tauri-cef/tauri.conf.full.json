@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Agena Studio",
+  "version": "0.1.0",
+  "identifier": "cn.cxits.agena-studio",
+  "build": {
+    "beforeDevCommand": {
+      "script": "bun run dev",
+      "cwd": "../../../packages/agena-studio-web"
+    },
+    "devUrl": "http://127.0.0.1:3210",
+    "frontendDist": "../../../packages/agena-studio-web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Agena Studio",
+        "width": 1200,
+        "height": 820,
+        "resizable": true,
+        "url": "http://127.0.0.1:3210"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "resources": [
+      "../../../packages/agena-studio-web/dist"
+    ],
+    "externalBin": [
+      "binaries/agena-studio"
+    ]
+  }
+}

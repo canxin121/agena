@@ -1,0 +1,194 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use tauri::Manager;
+
+use crate::AppHandle;
+
+const RUNTIME_CONFIG_FILE_NAME: &str = "agena-studio.toml";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DesktopConfig {
+    #[serde(default = "default_autostart_on_boot")]
+    pub autostart_on_boot: bool,
+    pub backend: BackendConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackendConfig {
+    pub host: String,
+    pub port: u16,
+    pub ui_dir: Option<String>,
+    pub cors_origins: Vec<String>,
+    pub cors_allow_all: bool,
+    pub backend_log_level: Option<String>,
+    pub ui_password: Option<String>,
+    pub ui_cookie_samesite: Option<String>,
+    pub agena_config_path: Option<String>,
+    pub agena_mode: Option<String>,
+    pub workspace_root: Option<String>,
+    pub database_path: Option<String>,
+    pub database_url: Option<String>,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            autostart_on_boot: default_autostart_on_boot(),
+            backend: BackendConfig::default(),
+        }
+    }
+}
+
+fn default_autostart_on_boot() -> bool {
+    true
+}
+
+impl Default for BackendConfig {
+    fn default() -> Self {
+        Self {
+            host: "127.0.0.1".to_string(),
+            port: 3210,
+            ui_dir: None,
+            cors_origins: Vec::new(),
+            cors_allow_all: false,
+            backend_log_level: None,
+            ui_password: Some(String::new()),
+            ui_cookie_samesite: None,
+            agena_config_path: None,
+            agena_mode: None,
+            workspace_root: None,
+            database_path: None,
+            database_url: None,
+        }
+    }
+}
+
+pub fn runtime_config_path(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_config_dir().ok()?;
+    Some(dir.join(RUNTIME_CONFIG_FILE_NAME))
+}
+
+pub fn load_or_create(app: &AppHandle) -> Result<DesktopConfig, String> {
+    let path =
+        runtime_config_path(app).ok_or_else(|| "unable to resolve app config dir".to_string())?;
+    ensure_parent_dir(&path)?;
+
+    if path.exists() {
+        let txt = fs::read_to_string(&path).map_err(|e| format!("read runtime config: {e}"))?;
+        let cfg = normalize_config(
+            toml::from_str(&txt).map_err(|e| format!("parse runtime config: {e}"))?,
+        );
+        return Ok(cfg);
+    }
+
+    let cfg = normalize_config(DesktopConfig::default());
+    let txt = toml::to_string_pretty(&cfg).map_err(|e| format!("serialize runtime config: {e}"))?;
+    fs::write(&path, format!("{txt}\n")).map_err(|e| format!("write runtime config: {e}"))?;
+    Ok(cfg)
+}
+
+pub fn save(app: &AppHandle, cfg: DesktopConfig) -> Result<DesktopConfig, String> {
+    let path =
+        runtime_config_path(app).ok_or_else(|| "unable to resolve app config dir".to_string())?;
+    ensure_parent_dir(&path)?;
+
+    let normalized = normalize_config(cfg);
+    let txt = toml::to_string_pretty(&normalized)
+        .map_err(|e| format!("serialize runtime config: {e}"))?;
+    fs::write(&path, format!("{txt}\n")).map_err(|e| format!("write runtime config: {e}"))?;
+    Ok(normalized)
+}
+
+pub fn open_runtime_config_file(app: &AppHandle) -> Result<(), String> {
+    let path =
+        runtime_config_path(app).ok_or_else(|| "unable to resolve app config dir".to_string())?;
+    ensure_parent_dir(&path)?;
+
+    // If the config does not exist yet, create it.
+    if !path.exists() {
+        let _ = load_or_create(app)?;
+    }
+
+    use tauri_plugin_opener::OpenerExt;
+    let _ = app
+        .opener()
+        .open_path(path.to_string_lossy().as_ref(), None::<&str>);
+    Ok(())
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {parent:?}: {e}"))?;
+    }
+    Ok(())
+}
+
+fn normalize_config(mut cfg: DesktopConfig) -> DesktopConfig {
+    cfg.backend.host = normalize_host(&cfg.backend.host);
+    cfg.backend.ui_dir = normalize_optional_path(cfg.backend.ui_dir.take());
+    if cfg.backend.ui_password.is_none() {
+        cfg.backend.ui_password = Some(String::new());
+    }
+    cfg.backend.cors_origins = normalize_cors_origins(cfg.backend.cors_origins);
+    cfg.backend.backend_log_level = normalize_log_level(cfg.backend.backend_log_level.take());
+    cfg.backend.ui_cookie_samesite =
+        normalize_ui_cookie_samesite(cfg.backend.ui_cookie_samesite.take());
+    cfg.backend.agena_config_path = normalize_optional_path(cfg.backend.agena_config_path.take());
+    cfg.backend.agena_mode = normalize_optional_path(cfg.backend.agena_mode.take());
+    cfg.backend.workspace_root = normalize_optional_path(cfg.backend.workspace_root.take());
+    cfg.backend.database_path = normalize_optional_path(cfg.backend.database_path.take());
+    cfg.backend.database_url = normalize_optional_path(cfg.backend.database_url.take());
+    cfg
+}
+
+fn normalize_optional_path(raw: Option<String>) -> Option<String> {
+    let value = raw?.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn normalize_host(raw: &str) -> String {
+    let v = raw.trim();
+    if v.is_empty() {
+        "127.0.0.1".to_string()
+    } else {
+        v.to_string()
+    }
+}
+
+fn normalize_cors_origins(values: Vec<String>) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    for raw in values {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !out.iter().any(|v| v == trimmed) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
+
+fn normalize_log_level(raw: Option<String>) -> Option<String> {
+    let level = raw?.trim().to_ascii_uppercase();
+    match level.as_str() {
+        "DEBUG" | "INFO" | "WARN" | "ERROR" => Some(level),
+        _ => None,
+    }
+}
+
+fn normalize_ui_cookie_samesite(raw: Option<String>) -> Option<String> {
+    let value = raw?.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "auto" | "strict" | "lax" | "none" => Some(value),
+        _ => None,
+    }
+}

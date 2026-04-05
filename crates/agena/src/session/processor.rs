@@ -1,0 +1,444 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use chrono::Utc;
+use futures_util::StreamExt;
+
+use crate::error::AppError;
+use crate::event::{
+    ErrorInfo, MessageProjectionEvent, MessageProjector, SessionEvent, StreamErrorEvent,
+};
+use crate::message::{
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, GlobToolInput,
+    GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource, MessageStateStore,
+    MessageUpdate, PartContent, ReadToolInput, StructuredObject, TaskToolInput, TimeRange,
+    TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput, ViewFileToolInput,
+};
+use crate::model::ModelRef;
+use crate::provider::{CompletionRequest, CompletionStreamEvent, ProviderRegistry};
+use crate::role::Role;
+use crate::tool::{ToolDefinition, ToolSource};
+
+use super::context_governor::ContextGovernor;
+
+#[derive(Debug, Clone)]
+pub(crate) struct SessionRunRequest {
+    pub session_id: i64,
+    pub model: ModelRef,
+    pub completion: CompletionRequest,
+    pub next_message_id: i64,
+    pub next_part_id: i64,
+    pub next_call_id: i64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SessionRunResult {
+    pub assistant_message_id: i64,
+    pub state: Vec<Message>,
+    pub client_events: Vec<SessionEvent>,
+    pub provider_metadata: Option<serde_json::Value>,
+}
+
+#[derive(Clone)]
+pub struct SessionProcessor {
+    provider_registry: Arc<ProviderRegistry>,
+    context_governor: ContextGovernor,
+    projector: MessageProjector,
+}
+
+impl SessionProcessor {
+    pub fn new(
+        provider_registry: Arc<ProviderRegistry>,
+        context_governor: ContextGovernor,
+    ) -> Self {
+        Self {
+            provider_registry,
+            context_governor,
+            projector: MessageProjector,
+        }
+    }
+
+    pub(crate) async fn run_turn(
+        &self,
+        mut run: SessionRunRequest,
+    ) -> Result<SessionRunResult, AppError> {
+        let mut store = MessageStateStore::default();
+        let mut client_events = Vec::new();
+        let mut stream = self
+            .provider_registry
+            .complete_stream(&run.model, run.completion.clone())
+            .await?;
+
+        let assistant_message_id = run.next_message_id;
+        run.next_message_id += 1;
+
+        self.projector
+            .apply_to_store(
+                &mut store,
+                MessageProjectionEvent::MessageStarted {
+                    message_id: assistant_message_id,
+                    role: Role::Assistant,
+                    created_at: Utc::now(),
+                    metadata: Some(MessageMetadata {
+                        source: MessageSource::Assistant,
+                        parent_message_id: run.completion.messages.last().map(|message| message.id),
+                        generated_by_call_id: None,
+                        model_provider_id: run.model.provider_id.to_string(),
+                        model_id: run.completion.model.to_string(),
+                        tags: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+
+        let mut active_text_part: Option<i64> = None;
+        let mut pending_calls: BTreeMap<String, PendingToolCall> = BTreeMap::new();
+        let mut provider_err: Option<AppError> = None;
+        let mut usage = None;
+        let mut finish = None;
+        let mut provider_metadata = None;
+
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
+                    let part_id = if let Some(part_id) = active_text_part {
+                        part_id
+                    } else {
+                        let part_id = run.next_part_id;
+                        run.next_part_id += 1;
+                        self.projector
+                            .apply_to_store(
+                                &mut store,
+                                MessageProjectionEvent::TextPartStarted {
+                                    message_id: assistant_message_id,
+                                    part_id,
+                                    created_at: Utc::now(),
+                                    synthetic: false,
+                                    ignored: false,
+                                },
+                            )
+                            .map_err(|err| AppError::Internal(err.to_string()))?;
+                        active_text_part = Some(part_id);
+                        part_id
+                    };
+                    self.projector
+                        .apply_to_store(
+                            &mut store,
+                            MessageProjectionEvent::TextDelta { part_id, delta },
+                        )
+                        .map_err(|err| AppError::Internal(err.to_string()))?;
+                }
+                Ok(CompletionStreamEvent::ToolCallDelta {
+                    stream_key,
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                }) => {
+                    let pending = pending_calls.entry(stream_key).or_default();
+                    if let Some(id) = id {
+                        pending.id = Some(id);
+                    }
+                    if let Some(name) = name {
+                        pending.name = Some(name);
+                    }
+                    pending.arguments_json.push_str(arguments_delta.as_str());
+                }
+                Ok(CompletionStreamEvent::Completed {
+                    finish_reason,
+                    usage: usage_value,
+                    provider_metadata: completed_provider_metadata,
+                    ..
+                }) => {
+                    usage = usage_value.map(Into::into);
+                    finish = finish_reason.map(|item| format!("{item:?}"));
+                    provider_metadata = completed_provider_metadata;
+                }
+                Err(err) => {
+                    provider_err = Some(err);
+                    break;
+                }
+            }
+        }
+
+        if let Some(part_id) = active_text_part {
+            self.projector
+                .apply_to_store(
+                    &mut store,
+                    MessageProjectionEvent::TextCompleted { part_id },
+                )
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+
+        self.append_pending_tool_calls(&mut run, &mut store, assistant_message_id, pending_calls)?;
+
+        if let Some(err) = provider_err {
+            self.projector
+                .apply_to_store(
+                    &mut store,
+                    MessageProjectionEvent::MessageFailed {
+                        message_id: assistant_message_id,
+                        finish: Some(err.to_string()),
+                    },
+                )
+                .map_err(|inner| AppError::Internal(inner.to_string()))?;
+
+            client_events.push(SessionEvent::StreamError(StreamErrorEvent {
+                session_id: run.session_id,
+                error: ErrorInfo {
+                    code: "provider_stream_error".to_string(),
+                    message: err.to_string(),
+                },
+                ts_ms: Utc::now().timestamp_millis(),
+            }));
+            return Err(err);
+        }
+
+        self.projector
+            .apply_to_store(
+                &mut store,
+                MessageProjectionEvent::MessageCompleted {
+                    message_id: assistant_message_id,
+                    finish,
+                    usage,
+                },
+            )
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+
+        Ok(SessionRunResult {
+            assistant_message_id,
+            state: store.list_message_snapshots(),
+            client_events,
+            provider_metadata,
+        })
+    }
+
+    pub(crate) fn should_retry_with_compaction(&self, err: &AppError, rounds: u8) -> bool {
+        self.context_governor
+            .should_retry_with_compaction(err, rounds)
+    }
+
+    pub(crate) fn should_compact_prompt_with_budget(
+        &self,
+        messages: &[Message],
+        max_prompt_chars: usize,
+    ) -> bool {
+        self.context_governor
+            .should_compact_prompt_with_budget(messages, max_prompt_chars)
+    }
+
+    pub(crate) fn keep_tail_messages(&self) -> usize {
+        self.context_governor.keep_tail_messages()
+    }
+
+    pub(crate) fn max_prompt_chars(&self) -> usize {
+        self.context_governor.max_prompt_chars()
+    }
+
+    pub(crate) fn can_retry_compaction(&self, rounds: u8) -> bool {
+        self.context_governor.can_retry_compaction(rounds)
+    }
+
+    pub(crate) fn supports_prompt_continuation(&self, model: &ModelRef) -> bool {
+        self.provider_registry
+            .supports_prompt_continuation(model)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn model_metadata(
+        &self,
+        model: &ModelRef,
+    ) -> Result<crate::provider::ModelMetadata, AppError> {
+        self.provider_registry.model_metadata(model)
+    }
+
+    fn append_pending_tool_calls(
+        &self,
+        run: &mut SessionRunRequest,
+        store: &mut MessageStateStore,
+        assistant_message_id: i64,
+        pending_calls: BTreeMap<String, PendingToolCall>,
+    ) -> Result<(), AppError> {
+        for pending in pending_calls.into_values() {
+            let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
+            let invocation = parse_tool_invocation(
+                tool_name.as_str(),
+                pending.arguments_json.as_str(),
+                run.completion.tools.as_slice(),
+            )?;
+
+            let part_id = run.next_part_id;
+            run.next_part_id += 1;
+            let call_id = run.next_call_id;
+            run.next_call_id += 1;
+            let start = Utc::now();
+
+            let mut part = MessagePart::with_content(
+                part_id,
+                assistant_message_id,
+                start,
+                crate::message::ExecutionStatus::Pending,
+                PartContent::ToolExecution(ToolExecutionPart::Pending {
+                    call_id,
+                    invocation,
+                    title: format!("Tool {tool_name}"),
+                    lifecycle: TimeRange {
+                        start_ms: start.timestamp_millis(),
+                        end_ms: None,
+                    },
+                }),
+            );
+            if let Some(operation_id) = pending.id.filter(|id| !id.trim().is_empty()) {
+                part.operation_id = Some(operation_id);
+            }
+
+            store
+                .apply(MessageUpdate::InsertPart {
+                    message_id: assistant_message_id,
+                    part,
+                })
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct PendingToolCall {
+    id: Option<String>,
+    name: Option<String>,
+    arguments_json: String,
+}
+
+pub(crate) fn parse_tool_invocation(
+    name: &str,
+    arguments_json: &str,
+    available_tools: &[ToolDefinition],
+) -> Result<ToolInvocation, AppError> {
+    let trimmed_name = name.trim();
+    let canonical_name = canonical_builtin_tool_name(trimmed_name);
+    let tool = available_tools
+        .iter()
+        .find(|tool| tool.name == trimmed_name || tool.name == canonical_name)
+        .ok_or_else(|| {
+            AppError::Provider(format!("unsupported tool call from model: {trimmed_name}"))
+        })?;
+
+    if !matches!(tool.source, ToolSource::Builtin) {
+        let parsed = parse_custom_input(arguments_json)?;
+        return Ok(ToolInvocation::Custom {
+            name: tool.name.clone(),
+            input: parsed,
+        });
+    }
+
+    let input = match canonical_name {
+        "bash" => BuiltinToolInput::Bash(parse_input::<BashToolInput>(arguments_json)?),
+        "read" => BuiltinToolInput::Read(parse_input::<ReadToolInput>(arguments_json)?),
+        "view_file" => {
+            BuiltinToolInput::ViewFile(parse_input::<ViewFileToolInput>(arguments_json)?)
+        }
+        "apply_patch" => {
+            BuiltinToolInput::ApplyPatch(parse_input::<ApplyPatchToolInput>(arguments_json)?)
+        }
+        "glob" => BuiltinToolInput::Glob(parse_input::<GlobToolInput>(arguments_json)?),
+        "grep" => BuiltinToolInput::Grep(parse_input::<GrepToolInput>(arguments_json)?),
+        "task" => BuiltinToolInput::Task(parse_input::<TaskToolInput>(arguments_json)?),
+        "tool_search" => {
+            BuiltinToolInput::ToolSearch(parse_input::<ToolSearchToolInput>(arguments_json)?)
+        }
+        "todo_write" => {
+            BuiltinToolInput::TodoWrite(parse_input::<TodoWriteToolInput>(arguments_json)?)
+        }
+        "ask_user" => BuiltinToolInput::AskUser(parse_input::<AskUserToolInput>(arguments_json)?),
+        other => {
+            return Err(AppError::Provider(format!(
+                "unsupported builtin tool call from model: {other}"
+            )));
+        }
+    };
+
+    Ok(ToolInvocation::Builtin { input })
+}
+
+fn canonical_builtin_tool_name(name: &str) -> &str {
+    match name {
+        "request_user_input" => "ask_user",
+        other => other,
+    }
+}
+
+fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {
+    let value = if arguments_json.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(arguments_json)?
+    };
+    StructuredObject::try_from(value)
+        .map_err(|err| AppError::Internal(format!("invalid custom tool input: {err}")))
+}
+
+pub(crate) fn parse_input<T>(arguments_json: &str) -> Result<T, AppError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let body = if arguments_json.trim().is_empty() {
+        "{}"
+    } else {
+        arguments_json
+    };
+    serde_json::from_str::<T>(body).map_err(AppError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::tool::{ToolBehavior, ToolDefinition};
+
+    #[test]
+    fn parse_tool_invocation_recognizes_plugin_tools() {
+        let tools = vec![ToolDefinition::plugin(
+            "plugin_echo",
+            "Echo a message from a plugin.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string" }
+                },
+                "required": ["message"]
+            }),
+            ToolBehavior::ReadOnly,
+            "fixture",
+        )];
+
+        let invocation =
+            parse_tool_invocation("plugin_echo", "{\"message\":\"hello\"}", tools.as_slice())
+                .expect("custom tool call should parse");
+
+        match invocation {
+            ToolInvocation::Custom { name, input } => {
+                assert_eq!(name, "plugin_echo");
+                let payload = serde_json::Value::from(input);
+                assert_eq!(payload["message"], "hello");
+            }
+            other => panic!("expected custom tool invocation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_invocation_rejects_unloaded_builtin_tools() {
+        let tools = vec![ToolDefinition::builtin::<ReadToolInput>(
+            "read",
+            "Read a file.",
+            ToolBehavior::ReadOnly,
+        )];
+
+        let err = parse_tool_invocation("bash", "{\"command\":\"pwd\"}", tools.as_slice())
+            .expect_err("unexpected builtin should be rejected");
+
+        assert!(err.to_string().contains("unsupported tool call from model"));
+    }
+}

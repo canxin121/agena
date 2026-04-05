@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  rust-workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cargo Check
+        run: cargo check --workspace --locked
+
+      - name: Cargo Test
+        run: cargo test --workspace --locked
+
+  agena-studio-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build Frontend Dist
+        run: bash ops/agena-studio/scripts/build-frontend-dist.sh
+
+  agena-studio-desktop-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build Frontend Dist
+        shell: pwsh
+        run: ./ops/agena-studio/scripts/build-frontend-dist.ps1
+
+      - name: Cargo Check Desktop
+        run: cargo check --manifest-path apps/agena-studio-desktop/src-tauri/Cargo.toml --locked
+
+      - name: Cargo Check Desktop CEF
+        run: cargo check --manifest-path apps/agena-studio-desktop/src-tauri-cef/Cargo.toml --locked

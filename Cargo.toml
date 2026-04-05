@@ -1,53 +1,9 @@
-[package]
-name = "agena"
-version = "0.1.0"
-edition = "2024"
-default-run = "agena"
-
 [workspace]
-members = ["crates/http-api"]
-default-members = [".", "crates/http-api"]
-
-[dependencies]
-abi_stable = "0.11.3"
-arc-swap = "1.7.1"
-chrono = { version = "0.4.42", features = ["serde"] }
-async-trait = "0.1.89"
-async-stream = "0.3.6"
-aws-config = { version = "1.8.15", default-features = true }
-aws-credential-types = "1.2.14"
-aws-sigv4 = { version = "1.4.2", default-features = false, features = ["sign-http", "http1"] }
-base64 = "0.22.1"
-clap = { version = "4.5.51", features = ["derive", "env"] }
-derive_more = { version = "2.1.1", features = ["display", "from"] }
-gcp_auth = "0.12.6"
-globset = "0.4.16"
-http = "1.3.1"
-imagesize = "0.13.0"
-oauth2 = { version = "4.4.2", default-features = false, features = ["reqwest", "rustls-tls"] }
-mime_guess = "2.0.5"
-path-clean = "1.0.1"
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "stream"] }
-regex = "1.12.2"
-procwarden = { git = "https://github.com/canxin121/procwarden.git", rev = "7e878be99167fc0661241cbdb990a9502dda1f22" }
-sea-orm = { version = "1.1.19", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-json"] }
-sea-orm-migration = { version = "1.1.19", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
-schemars = { version = "0.8.21", features = ["derive"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-futures-core = "0.3.31"
-futures-util = "0.3.31"
-sha2 = "0.10.9"
-strum = { version = "0.27.2", features = ["derive"] }
-thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-toml = "0.9.8"
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
-url = { version = "2.5.8", features = ["serde"] }
-uuid = { version = "1.18.1", features = ["v4", "serde"] }
-walkdir = "2.5.0"
-
-[dev-dependencies]
-mockito = "1.7.0"
+resolver = "3"
+members = [
+    "apps/agena-cli",
+    "apps/agena-http-api-server",
+    "apps/agena-studio-server",
+    "crates/agena",
+    "crates/agena-http-api",
+]

@@ -16,7 +16,7 @@
 启动：
 
 ```bash
-cargo run -p agena-http-api -- serve
+cargo run -p agena-http-api-server -- serve
 ```
 
 常用参数：
@@ -29,7 +29,8 @@ cargo run -p agena-http-api -- serve
 架构说明：
 
 - core 能力保留在 `agena` crate
-- HTTP API 被拆到可选的 `agena-http-api` crate
+- HTTP API library 保留在 `crates/agena-http-api`
+- HTTP API 可执行入口放在 `apps/agena-http-api-server`
 - 这样应用如果只需要 runtime / provider / session 等能力，就不必依赖 HTTP server 栈
 
 ## Pagination

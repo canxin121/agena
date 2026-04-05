@@ -1,0 +1,51 @@
+[package]
+name = "agena-studio-desktop"
+version = "0.1.0"
+description = "Agena Studio Desktop (Tauri wrapper)"
+authors = ["Agena Studio Contributors"]
+edition = "2024"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "agena-studio-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.0.0"
+thiserror = "2"
+
+tokio = { version = "1", features = ["sync", "time"] }
+reqwest = { version = "0.13", default-features = true, features = ["json"] }
+flate2 = "1.1.4"
+tar = "0.4.44"
+zip = { version = "8.0.0", default-features = false, features = ["deflate"] }
+
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+
+[features]
+# Reserved for the experimental CEF variant (built from `apps/agena-studio-desktop/src-tauri-cef/`).
+# Declared here to avoid `unexpected cfg` warnings from `#[cfg(feature = "cef")]`.
+cef = []
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+strip = true
+
+# The repository root workspace is focused on shared crates and server apps.
+# Desktop packaging lives in this local workspace so Tauri/system dependency
+# builds stay opt-in.
+[workspace]

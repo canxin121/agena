@@ -48,7 +48,7 @@ api_key_env = "OPENAI_API_KEY"
 api_mode = "auto"
 stream_mode = "sse"
 
-# Opencode-aligned preset examples:
+# models.dev preset examples:
 #
 # [providers.openrouter]
 # kind = "preset"

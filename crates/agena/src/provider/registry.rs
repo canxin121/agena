@@ -174,6 +174,10 @@ impl ModelProvider for NamedProvider {
         self.target.supports_prompt_continuation(model)
     }
 
+    fn prompt_cache_shape(&self, model: &ModelId) -> Option<super::PromptCacheShape> {
+        self.target.prompt_cache_shape(model)
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let mut models = self.target.list_models().await?;
         for model in &mut models {
@@ -299,6 +303,25 @@ impl ProviderRegistry {
             AppError::Config(format!("provider not found: {}", model.provider_id))
         })?;
         Ok(provider.supports_prompt_continuation(&model.model_id))
+    }
+
+    pub fn prompt_cache_shape_fingerprint(
+        &self,
+        model: &ModelRef,
+    ) -> Result<Option<String>, AppError> {
+        Ok(self
+            .prompt_cache_shape(model)?
+            .map(|shape| shape.fingerprint()))
+    }
+
+    pub fn prompt_cache_shape(
+        &self,
+        model: &ModelRef,
+    ) -> Result<Option<super::PromptCacheShape>, AppError> {
+        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
+            AppError::Config(format!("provider not found: {}", model.provider_id))
+        })?;
+        Ok(provider.prompt_cache_shape(&model.model_id))
     }
 
     pub fn provider_ids(&self) -> Vec<String> {

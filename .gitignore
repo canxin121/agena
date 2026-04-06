@@ -16,3 +16,4 @@ apps/agena-studio-desktop/src-tauri-cef/binaries/agena-studio-*
 /.workbench
 /.tmp-artifacts
 /.tmp-dmgs
+docs/tex/build/

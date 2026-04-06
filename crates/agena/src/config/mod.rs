@@ -22,11 +22,11 @@ pub use types::{
     ProviderAliasConfig, ProviderDefinition, ProviderHttpConfig, RequestRetryConfig,
     ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeJanitorConfig,
     RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions, StreamReplayConfig,
-    StreamTransportMode, TracingConfig,
+    StreamTransportMode, TracingConfig, UiConfig,
 };
 
 pub(crate) use error::{parse_numeric, parse_permission_mode};
 pub(crate) use raw::{
     RawAuthConfig, RawConfig, RawConfigFile, RawPermissionConfig, RawProviderHttpConfig,
-    RawRequestRetryConfig, RawRuntimeConfig, RawStreamReplayConfig, RawTracingConfig,
+    RawRequestRetryConfig, RawRuntimeConfig, RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
 };

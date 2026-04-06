@@ -1,7 +1,11 @@
+use chrono::{DateTime, Utc};
 use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
-use crate::message::{ExecutionStatus, MessagePart};
+use crate::{
+    message::{ExecutionStatus, MessagePart, MessageStatus},
+    role::Role,
+};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -112,6 +116,9 @@ pub struct MessagePartUpdatedEvent {
     #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub message_id: i64,
+    pub message_role: Role,
+    pub message_state: MessageStatus,
+    pub message_created_at: DateTime<Utc>,
     pub part: MessagePart,
     pub ts_ms: i64,
 }

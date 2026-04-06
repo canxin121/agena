@@ -108,6 +108,15 @@ impl ModelProvider for GoogleVertexProvider {
         StreamResumePolicy::ReplaySafePrefix
     }
 
+    fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
+        Some(
+            crate::provider::PromptCacheShape::new(self.id.as_str())
+                .with_string("auth_scope", self.auth.prompt_cache_scope())
+                .with_string("base_url", self.base_url.as_str())
+                .with_string("default_model", self.default_model.as_str()),
+        )
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let token = self.auth_token().await?;
         self.provider_with_token(token).list_models().await
@@ -146,5 +155,42 @@ mod tests {
             "token",
         );
         assert_eq!(provider.auth_token().await.expect("token"), "token");
+    }
+
+    #[test]
+    fn prompt_cache_shape_changes_when_auth_scope_changes() {
+        let provider_a = GoogleVertexProvider::new_managed_token(
+            "google-vertex",
+            reqwest::Client::new(),
+            "https://example.com/openapi",
+            "google/gemini-2.5-flash",
+            ManagedCredential::environment(
+                "vertex env",
+                "google-vertex",
+                "access_token",
+                "VERTEX_TOKEN_A",
+            ),
+        );
+        let provider_b = GoogleVertexProvider::new_managed_token(
+            "google-vertex",
+            reqwest::Client::new(),
+            "https://example.com/openapi",
+            "google/gemini-2.5-flash",
+            ManagedCredential::environment(
+                "vertex env",
+                "google-vertex",
+                "access_token",
+                "VERTEX_TOKEN_B",
+            ),
+        );
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&ModelId::new("google/gemini-2.5-flash"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&ModelId::new("google/gemini-2.5-flash"))
+            .expect("shape should exist");
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
     }
 }

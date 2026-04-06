@@ -1,6 +1,7 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use chrono::Utc;
 
 use crate::AppError;
@@ -24,7 +25,7 @@ use super::model::{
     MESSAGE_TAG_PROMPT_COMPACTED, MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor,
     SessionListRequest, SessionPendingTool, SessionStatus, SessionSummary,
 };
-use super::processor::SessionRunRequest;
+use super::processor::{SessionEventSink, SessionRunRequest};
 use super::prompt_window::{self, PromptRequestOptions};
 use super::store::{ReservedMessageIds, SessionCommit, SessionStore};
 use super::{Session, SessionEventRecord, SessionProcessor};
@@ -110,6 +111,12 @@ pub struct SessionContinueRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionRewindRequest {
+    pub session_id: i64,
+    pub message_id: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct SessionPermissionReplyRequest {
     pub session_id: i64,
     pub options: SessionRunOptions,
@@ -161,6 +168,26 @@ impl SessionManagerState {
 
     fn cache_policy(&self) -> SessionCachePolicy {
         self.config.cache_policy()
+    }
+}
+
+#[derive(Clone)]
+struct StreamingSessionEventSink {
+    store: Arc<SessionStore>,
+    cache_policy: SessionCachePolicy,
+}
+
+#[async_trait]
+impl SessionEventSink for StreamingSessionEventSink {
+    async fn emit(
+        &self,
+        session_id: i64,
+        message_snapshot: Option<Message>,
+        events: Vec<SessionEvent>,
+    ) -> Result<(), AppError> {
+        self.store
+            .append_client_projection(session_id, message_snapshot, events, self.cache_policy)
+            .await
     }
 }
 
@@ -290,6 +317,13 @@ impl SessionManager {
             .load_session(request.session_id, state.cache_policy())
             .await?;
         self.run_until_stable(session, &request.options, state)
+            .await
+    }
+
+    pub async fn rewind_session(&self, request: SessionRewindRequest) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        self.store
+            .rewind_to_message(request.session_id, request.message_id, state.cache_policy())
             .await
     }
 
@@ -492,11 +526,16 @@ impl SessionManager {
 
         loop {
             let active_messages = prompt_window::active_prompt_messages(&session);
-            let tools = state
-                .tool_executor
-                .available_tools_for_messages(session.messages.as_slice());
+            let tools = state.tool_executor.available_tools_for_messages_and_loaded(
+                active_messages.as_slice(),
+                session.runtime.loaded_deferred_tools(),
+            );
+            let request_tools = tools.clone();
             let prompt_budget =
                 self.prompt_budget_for_turn(&session, options, tools.as_slice(), state.as_ref());
+            let provider_request_shape = state.processor.prompt_cache_shape(&options.model)?;
+            let continuation_supported =
+                state.processor.supports_prompt_continuation(&options.model);
             let prompt_request_options = PromptRequestOptions {
                 provider_id: options.model.provider_id.as_str(),
                 model_id: options.model.model_id.as_str(),
@@ -504,9 +543,8 @@ impl SessionManager {
                 temperature: options.temperature,
                 max_output_tokens: options.max_output_tokens,
                 tools: tools.as_slice(),
-                continuation_supported: state
-                    .processor
-                    .supports_prompt_continuation(&options.model),
+                provider_request_shape: provider_request_shape.as_ref(),
+                continuation_supported,
             };
             let prompt_fingerprints =
                 prompt_window::prompt_request_fingerprints(&prompt_request_options);
@@ -559,6 +597,32 @@ impl SessionManager {
             }
 
             let prepared = prompt_window::build_prepared_prompt(&session, prompt_request_options);
+            let provider_request_shape_fingerprint = prepared
+                .provider_request_shape
+                .as_ref()
+                .map(crate::provider::PromptCacheShape::fingerprint);
+            let provider_shape_change_keys = prepared
+                .continuation_diagnostic
+                .provider_shape_change_keys();
+            tracing::debug!(
+                session_id = session.id,
+                provider_id = %options.model.provider_id,
+                model_id = %options.model.model_id,
+                prompt_window_generation = prepared.prompt_window_generation,
+                prompt_cache_key = %prepared.prompt_cache_key,
+                previous_response_id_present = prepared.previous_response_id.is_some(),
+                continuation_reason = prepared.continuation_reason.as_str(),
+                provider_request_shape_fingerprint = provider_request_shape_fingerprint
+                    .as_deref()
+                    .unwrap_or(""),
+                provider_request_shape_changed = prepared
+                    .continuation_diagnostic
+                    .provider_shape_changed(),
+                provider_request_shape_change_keys = ?provider_shape_change_keys,
+                prompt_message_count = prepared.messages.len(),
+                system_included = prepared.system.is_some(),
+                "prepared prompt for session turn"
+            );
 
             let processor_ids = self.store.reserve_processor_ids().await?;
             let run = SessionRunRequest {
@@ -573,12 +637,27 @@ impl SessionManager {
                     Some(prepared.prompt_window_generation),
                 ),
                 next_message_id: processor_ids.message_id,
-                next_part_id: processor_ids.first_part_id,
+                part_ids: processor_ids.part_ids,
                 next_call_id: session.next_call_id(),
+                event_sink: Some(Arc::new(StreamingSessionEventSink {
+                    store: Arc::clone(&self.store),
+                    cache_policy: state.cache_policy(),
+                })),
             };
+
+            self.store
+                .append_client_events(
+                    session.id,
+                    vec![SessionEvent::RunStarted(RunStartedEvent {
+                        session_id: session.id,
+                        ts_ms: Utc::now().timestamp_millis(),
+                    })],
+                )
+                .await?;
 
             match state.processor.run_turn(run).await {
                 Ok(result) => {
+                    let terminal_error = result.terminal_error;
                     let assistant_message = result
                         .state
                         .into_iter()
@@ -595,14 +674,43 @@ impl SessionManager {
                         transcript_messages.push(assistant_message.clone());
                         prompt_window::prompt_transcript_digest(transcript_messages.as_slice())
                     };
+                    let anchored_provider_request_shape = match state
+                        .processor
+                        .prompt_cache_shape(&options.model)
+                    {
+                        Ok(shape) => shape,
+                        Err(err) => {
+                            tracing::warn!(
+                                session_id = session.id,
+                                provider_id = %options.model.provider_id,
+                                model_id = %options.model.model_id,
+                                error = %err,
+                                "failed to refresh provider request shape after turn; falling back to prepared shape"
+                            );
+                            prepared.provider_request_shape.clone()
+                        }
+                    };
+                    let anchored_prompt_request_options = PromptRequestOptions {
+                        provider_id: options.model.provider_id.as_str(),
+                        model_id: options.model.model_id.as_str(),
+                        system: options.system.as_deref(),
+                        temperature: options.temperature,
+                        max_output_tokens: options.max_output_tokens,
+                        tools: request_tools.as_slice(),
+                        provider_request_shape: anchored_provider_request_shape.as_ref(),
+                        continuation_supported,
+                    };
+                    let anchored_fingerprints = prompt_window::prompt_request_fingerprints(
+                        &anchored_prompt_request_options,
+                    );
                     if let Some(usage) = assistant_message.usage.as_ref() {
                         session.runtime.record_prompt_tokens(
                             assistant_message.id,
                             usage,
                             prepared.prompt_window_generation,
                             prompt_budget.model_context_window_tokens,
-                            prepared.system_fingerprint.clone(),
-                            prepared.request_options_fingerprint.clone(),
+                            anchored_fingerprints.system_fingerprint.clone(),
+                            anchored_fingerprints.request_options_fingerprint.clone(),
                             transcript_digest.clone(),
                         );
                     }
@@ -615,8 +723,10 @@ impl SessionManager {
                             previous_response_id: response_id,
                             assistant_message_id: assistant_message.id,
                             prompt_window_generation: prepared.prompt_window_generation,
-                            system_fingerprint: prepared.system_fingerprint,
-                            request_options_fingerprint: prepared.request_options_fingerprint,
+                            system_fingerprint: anchored_fingerprints.system_fingerprint,
+                            request_options_fingerprint: anchored_fingerprints
+                                .request_options_fingerprint,
+                            provider_request_shape: anchored_provider_request_shape,
                             transcript_digest,
                         });
                     } else {
@@ -626,21 +736,25 @@ impl SessionManager {
                         );
                     }
 
-                    let mut client_events = vec![SessionEvent::RunStarted(RunStartedEvent {
-                        session_id: session.id,
-                        ts_ms: Utc::now().timestamp_millis(),
-                    })];
-                    client_events.extend(result.client_events);
+                    let client_events = result.client_events;
                     session.messages.push(assistant_message.clone());
-                    return self
+                    let persisted_session = self
                         .persist_session_changes(
                             session,
                             vec![assistant_message],
                             client_events,
                             None,
-                            state,
+                            state.clone(),
                         )
-                        .await;
+                        .await?;
+
+                    if let Some(err) = terminal_error {
+                        self.persist_run_failed_event(persisted_session.id, err.to_string(), state)
+                            .await?;
+                        return Err(err);
+                    }
+
+                    return Ok(persisted_session);
                 }
                 Err(err)
                     if state
@@ -765,9 +879,10 @@ impl SessionManager {
         active_messages: &[Message],
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let tools = state
-            .tool_executor
-            .available_tools_for_messages(session.messages.as_slice());
+        let tools = state.tool_executor.available_tools_for_messages_and_loaded(
+            active_messages,
+            session.runtime.loaded_deferred_tools(),
+        );
         let prompt_budget =
             self.prompt_budget_for_turn(&session, options, tools.as_slice(), state.as_ref());
         let Some(plan) = prompt_window::plan_compaction(
@@ -1041,6 +1156,12 @@ impl SessionManager {
             execution.view.attachments.as_slice(),
             blocks.as_slice(),
         );
+        if let ToolOutput::Builtin {
+            output: BuiltinToolOutput::ToolSearch { loaded_tools, .. },
+        } = &tool_output
+        {
+            session.runtime.record_loaded_deferred_tools(loaded_tools);
+        }
 
         {
             let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
@@ -1703,6 +1824,7 @@ mod tests {
 
     use crate::agent::Agent;
     use crate::db::init_schema;
+    use crate::event::{RunFailedEvent, SessionEvent, StreamErrorEvent};
     use crate::message::{
         ApplyPatchToolInput, AskUserToolInput, AttachmentItem, AttachmentSource, BuiltinToolOutput,
         FileChangeKind, McpToolOutput, ToolAttachment, ToolExecutionPart, ToolOutput,
@@ -1746,6 +1868,8 @@ mod tests {
         next_response_id: Arc<Mutex<u64>>,
         metadata: crate::provider::ModelMetadata,
         usage: Option<CompletionUsage>,
+        current_prompt_cache_shape: Arc<Mutex<Option<crate::provider::PromptCacheShape>>>,
+        dynamic_prompt_cache_shape: Option<crate::provider::PromptCacheShape>,
     }
 
     fn scripted_provider_id() -> ProviderId {
@@ -1779,6 +1903,8 @@ mod tests {
                 next_response_id: Arc::new(Mutex::new(0)),
                 metadata: crate::provider::ModelMetadata::default(),
                 usage: None,
+                current_prompt_cache_shape: Arc::new(Mutex::new(None)),
+                dynamic_prompt_cache_shape: None,
             }
         }
 
@@ -1798,6 +1924,14 @@ mod tests {
 
         fn with_usage(mut self, usage: CompletionUsage) -> Self {
             self.usage = Some(usage);
+            self
+        }
+
+        fn with_dynamic_prompt_cache_shape(
+            mut self,
+            shape: crate::provider::PromptCacheShape,
+        ) -> Self {
+            self.dynamic_prompt_cache_shape = Some(shape);
             self
         }
     }
@@ -2116,6 +2250,19 @@ mod tests {
         }
     }
 
+    fn interrupted_model_ref() -> ModelRef {
+        ModelRef::new("interrupted", "interrupted-model")
+    }
+
+    fn interrupted_run_options() -> SessionRunOptions {
+        SessionRunOptions {
+            model: interrupted_model_ref(),
+            system: None,
+            temperature: None,
+            max_output_tokens: Some(128),
+        }
+    }
+
     fn high_recording_usage() -> CompletionUsage {
         CompletionUsage {
             input_tokens: 3_800,
@@ -2124,6 +2271,51 @@ mod tests {
             cache_write_tokens: 0,
             cache_read_tokens: 0,
             total_cost: 0.0,
+        }
+    }
+
+    struct InterruptedStreamProvider;
+
+    #[async_trait]
+    impl ModelProvider for InterruptedStreamProvider {
+        fn id(&self) -> &str {
+            "interrupted"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: std::sync::LazyLock<ModelId> =
+                std::sync::LazyLock::new(|| ModelId::new("interrupted-model"));
+            &DEFAULT_MODEL
+        }
+
+        async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+            Ok(vec![ProviderModel::new("interrupted", "interrupted-model")])
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            Err(AppError::Provider(
+                "interrupted provider only supports streaming".to_string(),
+            ))
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+            AppError,
+        > {
+            Ok(Box::pin(stream::iter(vec![
+                Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: ProviderId::new("interrupted"),
+                    model: ModelId::new("interrupted-model"),
+                    delta: "partial reply".to_string(),
+                }),
+                Err(AppError::Provider("stream interrupted".to_string())),
+            ])))
         }
     }
 
@@ -2147,6 +2339,16 @@ mod tests {
             true
         }
 
+        fn prompt_cache_shape(
+            &self,
+            _model: &ModelId,
+        ) -> Option<crate::provider::PromptCacheShape> {
+            self.current_prompt_cache_shape
+                .lock()
+                .expect("recording provider prompt cache shape lock should succeed")
+                .clone()
+        }
+
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
             Ok(vec![
                 ProviderModel::new("recording", "recording-model").with_display_name("Recording"),
@@ -2161,6 +2363,13 @@ mod tests {
                 .lock()
                 .expect("recording provider request lock should succeed")
                 .push(request);
+            if let Some(shape) = self.dynamic_prompt_cache_shape.clone() {
+                *self
+                    .current_prompt_cache_shape
+                    .lock()
+                    .expect("recording provider prompt cache shape lock should succeed") =
+                    Some(shape);
+            }
 
             Ok(CompletionResponse {
                 provider_id: recording_provider_id(),
@@ -2247,6 +2456,81 @@ mod tests {
                     AttachmentSource::Url { ref url }
                         if url == "https://example.com/audio.mp3"
                 )
+        }));
+    }
+
+    #[tokio::test]
+    async fn failed_stream_persists_partial_assistant_message_and_failure_events() {
+        let workspace = TempWorkspace::new();
+        let manager = build_manager_with_provider(
+            workspace.root.as_path(),
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            InterruptedStreamProvider,
+        )
+        .await;
+
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "Interrupted".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let err = manager
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: session.id,
+                options: interrupted_run_options(),
+                parts: vec![PartContent::text("hello")],
+            })
+            .await
+            .expect_err("turn should fail after partial stream output");
+
+        assert!(err.to_string().contains("stream interrupted"));
+
+        let reloaded = manager
+            .get_session(session.id)
+            .await
+            .expect("session should reload after failed turn");
+        assert_eq!(reloaded.messages.len(), 2);
+
+        let assistant = reloaded
+            .messages
+            .iter()
+            .find(|message| message.role == Role::Assistant)
+            .expect("assistant message should persist");
+        assert_eq!(assistant.state, MessageStatus::Failed);
+        assert_eq!(assistant.as_text_lossy(), "partial reply");
+        assert!(
+            assistant
+                .finish
+                .as_deref()
+                .is_some_and(|finish| finish.contains("stream interrupted"))
+        );
+
+        let events = manager
+            .list_session_events(session.id)
+            .await
+            .expect("session events should load");
+        assert!(events.iter().any(|event| {
+            matches!(
+                event.payload,
+                SessionEvent::StreamError(StreamErrorEvent {
+                    ref error,
+                    ..
+                }) if error.message.contains("stream interrupted")
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event.payload,
+                SessionEvent::RunFailed(RunFailedEvent {
+                    ref error,
+                    ..
+                }) if error.message.contains("stream interrupted")
+            )
         }));
     }
 
@@ -2777,7 +3061,7 @@ mod tests {
             .lock()
             .expect("recording provider request lock should succeed")
             .clone();
-        let expected_cache_key = created.id.to_string();
+        let expected_cache_key = prompt_window::prompt_cache_key_for_session(&created);
 
         assert_eq!(recorded.len(), 2);
         assert_eq!(
@@ -2788,6 +3072,61 @@ mod tests {
             recorded[1].prompt_cache_key.as_deref(),
             Some(expected_cache_key.as_str())
         );
+        assert_eq!(recorded[0].previous_response_id, None);
+        assert_eq!(recorded[1].previous_response_id.as_deref(), Some("resp_1"));
+        assert_eq!(recorded[1].system, None);
+        assert_eq!(recorded[1].messages.len(), 1);
+        assert_eq!(recorded[1].messages[0].as_text_lossy(), "second");
+    }
+
+    #[tokio::test]
+    async fn follow_up_requests_reuse_previous_response_id_when_shape_appears_after_first_response()
+    {
+        let workspace = TempWorkspace::new();
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let service = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(requests.clone()).with_dynamic_prompt_cache_shape(
+                crate::provider::PromptCacheShape::new("recording")
+                    .with_string("runtime_route", "route-a"),
+            ),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "dynamic shape".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let _ = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+                parts: vec![PartContent::text("first")],
+            })
+            .await
+            .expect("submit first turn");
+        let _ = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+                parts: vec![PartContent::text("second")],
+            })
+            .await
+            .expect("submit second turn");
+
+        let recorded = requests
+            .lock()
+            .expect("recording provider request lock should succeed")
+            .clone();
+
+        assert_eq!(recorded.len(), 2);
         assert_eq!(recorded[0].previous_response_id, None);
         assert_eq!(recorded[1].previous_response_id.as_deref(), Some("resp_1"));
         assert_eq!(recorded[1].system, None);
@@ -2857,7 +3196,7 @@ mod tests {
             .lock()
             .expect("recording provider request lock should succeed")
             .clone();
-        let expected_cache_key = first.id.to_string();
+        let expected_cache_key = prompt_window::prompt_cache_key_for_session(&first);
 
         assert_eq!(recorded.len(), 3);
         assert_eq!(
@@ -2973,6 +3312,227 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_search_success_persists_loaded_deferred_tools_in_runtime() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "deferred tools".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let updated = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: run_options(),
+                parts: vec![PartContent::text("please patch the file")],
+            })
+            .await
+            .expect("submit turn that loads apply_patch");
+
+        assert_eq!(
+            updated.runtime.loaded_deferred_tools(),
+            ["apply_patch".to_string()]
+        );
+
+        let state = service.execution_state();
+        let reloaded = service
+            .store
+            .load_session(created.id, state.cache_policy())
+            .await
+            .expect("reload session");
+        assert_eq!(
+            reloaded.runtime.loaded_deferred_tools(),
+            ["apply_patch".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_loaded_deferred_tools_survive_compaction_and_shape_follow_up_requests() {
+        let workspace = TempWorkspace::new();
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let service = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy {
+                max_messages: 2,
+                max_prompt_chars: 96_000,
+                keep_tail_messages: 1,
+                max_compaction_rounds: 2,
+            },
+            RecordingProvider::new(requests.clone()),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "runtime deferred tools".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let state = service.execution_state();
+        let mut session = service
+            .store
+            .load_session(created.id, state.cache_policy())
+            .await
+            .expect("load session");
+        session
+            .runtime
+            .record_loaded_deferred_tools(&["apply_patch".to_string()]);
+        let _ = service
+            .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+            .await
+            .expect("persist runtime deferred tools");
+
+        let _ = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+                parts: vec![PartContent::text("first")],
+            })
+            .await
+            .expect("submit first turn");
+        let compacted = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+                parts: vec![PartContent::text("second")],
+            })
+            .await
+            .expect("submit second turn");
+
+        let recorded = requests
+            .lock()
+            .expect("recording provider request lock should succeed")
+            .clone();
+
+        assert_eq!(recorded.len(), 2);
+        assert!(
+            recorded[0]
+                .tools
+                .iter()
+                .any(|tool| tool.name == "apply_patch")
+        );
+        assert!(
+            recorded[1]
+                .tools
+                .iter()
+                .any(|tool| tool.name == "apply_patch")
+        );
+        assert_eq!(recorded[1].prompt_window_generation, Some(1));
+        assert_eq!(
+            compacted.runtime.loaded_deferred_tools(),
+            ["apply_patch".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn rewind_session_truncates_messages_events_and_bumps_runtime_generation() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "rewind".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let first = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: run_options(),
+                parts: vec![PartContent::text("first")],
+            })
+            .await
+            .expect("submit first turn");
+        let kept_ids = first
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>();
+        let target_id = *kept_ids.last().expect("first turn should persist messages");
+
+        let second = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: run_options(),
+                parts: vec![PartContent::text("second")],
+            })
+            .await
+            .expect("submit second turn");
+        assert!(second.messages.len() > kept_ids.len());
+
+        let events_before = service
+            .list_session_events(created.id)
+            .await
+            .expect("list events before rewind");
+        assert!(!events_before.is_empty());
+
+        let generation_before = second.runtime.prompt_window.generation;
+        let rewound = service
+            .rewind_session(SessionRewindRequest {
+                session_id: created.id,
+                message_id: target_id,
+            })
+            .await
+            .expect("rewind session");
+
+        assert_eq!(
+            rewound
+                .messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            kept_ids
+        );
+        assert_eq!(
+            rewound.runtime.prompt_window.generation,
+            generation_before.saturating_add(1)
+        );
+
+        let events_after = service
+            .list_session_events(created.id)
+            .await
+            .expect("list events after rewind");
+        assert!(events_after.len() < events_before.len());
+
+        let reloaded = service
+            .get_session(created.id)
+            .await
+            .expect("reload rewound session");
+        assert_eq!(
+            reloaded
+                .messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            kept_ids
+        );
+        assert_eq!(
+            reloaded.runtime.prompt_window.generation,
+            generation_before.saturating_add(1)
+        );
+    }
+
+    #[tokio::test]
     async fn tool_result_pruning_preserves_persisted_history_and_projects_placeholder() {
         let workspace = TempWorkspace::new();
         let service = build_manager(
@@ -3003,6 +3563,7 @@ mod tests {
             prompt_window_generation: 0,
             system_fingerprint: "system".to_string(),
             request_options_fingerprint: "request".to_string(),
+            provider_request_shape: None,
             transcript_digest: String::new(),
         });
         session.runtime.record_prompt_tokens(

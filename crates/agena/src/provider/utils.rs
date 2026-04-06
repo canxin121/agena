@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use base64::Engine as _;
 use serde::Deserialize;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, ProviderErrorKind};
 use crate::message::{
@@ -13,6 +15,55 @@ use crate::role::Role;
 use crate::session::{MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_TOOL_RESULT_PRUNED};
 
 pub(crate) const PRUNED_TOOL_RESULT_PLACEHOLDER: &str = "[Old tool result content cleared]";
+
+pub(crate) fn prompt_cache_header_entries(
+    headers: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut entries = headers
+        .iter()
+        .filter_map(|(key, value)| {
+            let normalized_key = key.trim().to_ascii_lowercase();
+            let normalized_value = value.trim();
+            if normalized_key.is_empty()
+                || normalized_value.is_empty()
+                || prompt_cache_ignores_header(normalized_key.as_str())
+            {
+                return None;
+            }
+
+            Some((normalized_key, normalized_value.to_owned()))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_unstable();
+    entries
+}
+
+pub(crate) fn prompt_cache_ignores_header(key: &str) -> bool {
+    let key = key.trim().to_ascii_lowercase();
+    key == "authorization"
+        || key == "proxy-authorization"
+        || key == "cookie"
+        || key == "set-cookie"
+        || key == "x-api-key"
+        || key.contains("request-id")
+        || key.contains("correlation-id")
+        || key.contains("trace")
+        || key.contains("span")
+        || key.contains("baggage")
+        || key.contains("token")
+        || key.contains("secret")
+        || key.contains("signature")
+}
+
+pub(crate) fn request_shape_fingerprint<T>(value: &T) -> String
+where
+    T: Serialize,
+{
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(bytes.as_slice());
+    format!("{:x}", hasher.finalize())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectedSessionPart {
@@ -148,14 +199,17 @@ pub fn projected_parts_text_lossy(parts: &[ProjectedSessionPart]) -> String {
         .join("")
 }
 
-pub fn first_tool_result(parts: &[ProjectedSessionPart]) -> Option<(String, String)> {
-    parts.iter().find_map(|part| match part {
-        ProjectedSessionPart::ToolResult {
-            tool_call_id,
-            output_json,
-        } => Some((tool_call_id.clone(), output_json.clone())),
-        _ => None,
-    })
+pub fn tool_results(parts: &[ProjectedSessionPart]) -> Vec<(String, String)> {
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            ProjectedSessionPart::ToolResult {
+                tool_call_id,
+                output_json,
+            } => Some((tool_call_id.clone(), output_json.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn non_tool_result_parts(parts: &[ProjectedSessionPart]) -> Vec<ProjectedSessionPart> {
@@ -972,6 +1026,8 @@ fn classify_stream_error(provider_id: &str, code: Option<&str>, message: &str) -
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChatStreamChunk {
     #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
     pub choices: Vec<ChatStreamChoice>,
     #[serde(default)]
     pub usage: Option<serde_json::Value>,
@@ -1410,6 +1466,38 @@ mod tests {
         );
         assert_eq!(normalize_optional_text(Some("   ".to_owned())), None);
         assert_eq!(normalize_optional_text(None), None);
+    }
+
+    #[test]
+    fn prompt_cache_header_entries_filters_volatile_and_secret_headers() {
+        let headers = HashMap::from([
+            ("X-Request-Id".to_owned(), "req-1".to_owned()),
+            ("traceparent".to_owned(), "trace-1".to_owned()),
+            ("authorization".to_owned(), "Bearer secret".to_owned()),
+            ("x-route".to_owned(), "stable".to_owned()),
+        ]);
+
+        let entries = prompt_cache_header_entries(&headers);
+
+        assert_eq!(entries, vec![("x-route".to_owned(), "stable".to_owned())]);
+    }
+
+    #[test]
+    fn prompt_cache_header_entries_normalizes_and_sorts_headers() {
+        let headers = HashMap::from([
+            (" X-Zeta ".to_owned(), " z ".to_owned()),
+            ("x-alpha".to_owned(), " a ".to_owned()),
+        ]);
+
+        let entries = prompt_cache_header_entries(&headers);
+
+        assert_eq!(
+            entries,
+            vec![
+                ("x-alpha".to_owned(), "a".to_owned()),
+                ("x-zeta".to_owned(), "z".to_owned()),
+            ]
+        );
     }
 
     #[test]

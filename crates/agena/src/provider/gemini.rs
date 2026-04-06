@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::{
     error::AppError,
@@ -22,6 +23,19 @@ pub struct GeminiProvider {
     api_key: ManagedCredential,
     base_url: String,
     default_model: ModelId,
+    auth_mode: GeminiAuthMode,
+    extra_headers: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GeminiAuthMode {
+    QueryParameter {
+        name: String,
+    },
+    Header {
+        name: String,
+        scheme: Option<String>,
+    },
 }
 
 impl GeminiProvider {
@@ -50,35 +64,92 @@ impl GeminiProvider {
             api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
+            auth_mode: GeminiAuthMode::QueryParameter {
+                name: "key".to_owned(),
+            },
+            extra_headers: HashMap::new(),
         }
     }
 
-    fn list_models_endpoint(&self, api_key: &str) -> String {
-        format!("{}/models?key={api_key}", self.base_url)
+    pub fn with_auth_header(
+        mut self,
+        header: impl Into<String>,
+        scheme: Option<impl Into<String>>,
+    ) -> Self {
+        self.auth_mode = GeminiAuthMode::Header {
+            name: header.into(),
+            scheme: scheme.map(|value| value.into()),
+        };
+        self
     }
 
-    fn generate_endpoint(&self, model: &str, api_key: &str) -> String {
+    pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.extra_headers = headers;
+        self
+    }
+
+    fn list_models_endpoint(&self) -> String {
+        format!("{}/models", self.base_url)
+    }
+
+    fn generate_endpoint(&self, model: &str) -> String {
+        let model_name = if model.starts_with("models/") {
+            model.to_owned()
+        } else {
+            format!("models/{model}")
+        };
+        format!("{}/{}:generateContent", self.base_url, model_name)
+    }
+
+    fn stream_generate_endpoint(&self, model: &str) -> String {
         let model_name = if model.starts_with("models/") {
             model.to_owned()
         } else {
             format!("models/{model}")
         };
         format!(
-            "{}/{}:generateContent?key={api_key}",
+            "{}/{}:streamGenerateContent?alt=sse",
             self.base_url, model_name
         )
     }
 
-    fn stream_generate_endpoint(&self, model: &str, api_key: &str) -> String {
-        let model_name = if model.starts_with("models/") {
-            model.to_owned()
-        } else {
-            format!("models/{model}")
-        };
-        format!(
-            "{}/{}:streamGenerateContent?alt=sse&key={api_key}",
-            self.base_url, model_name
-        )
+    fn endpoint_with_auth(&self, endpoint: String, api_key: &str) -> String {
+        match &self.auth_mode {
+            GeminiAuthMode::QueryParameter { name } => {
+                if let Ok(mut url) = url::Url::parse(endpoint.as_str()) {
+                    url.query_pairs_mut().append_pair(name.as_str(), api_key);
+                    return url.to_string();
+                }
+
+                let query = url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair(name.as_str(), api_key)
+                    .finish();
+                let separator = if endpoint.contains('?') { '&' } else { '?' };
+                format!("{endpoint}{separator}{query}")
+            }
+            GeminiAuthMode::Header { .. } => endpoint,
+        }
+    }
+
+    fn apply_auth(
+        &self,
+        request: reqwest::RequestBuilder,
+        api_key: &str,
+    ) -> reqwest::RequestBuilder {
+        match &self.auth_mode {
+            GeminiAuthMode::QueryParameter { .. } => request,
+            GeminiAuthMode::Header { name, scheme } => request.header(
+                name.as_str(),
+                utils::auth_header_value(scheme.as_deref(), api_key),
+            ),
+        }
+    }
+
+    fn auth_transport_key(&self) -> &'static str {
+        match self.auth_mode {
+            GeminiAuthMode::QueryParameter { .. } => "query_parameter",
+            GeminiAuthMode::Header { .. } => "header",
+        }
     }
 
     fn message_parts(message: &Message) -> Vec<GeminiPart> {
@@ -155,9 +226,50 @@ impl ModelProvider for GeminiProvider {
             .metadata_for_family(crate::provider::CapabilityFamily::Gemini, model.as_str())
     }
 
+    fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
+        Some(
+            crate::provider::PromptCacheShape::new(PROVIDER_ID)
+                .with_string("auth_scope", self.api_key.prompt_cache_scope())
+                .with_string("base_url", self.base_url.as_str())
+                .with_string("default_model", self.default_model.as_str())
+                .with_string("auth_transport", self.auth_transport_key())
+                .with_optional_string(
+                    "auth_query_param",
+                    match &self.auth_mode {
+                        GeminiAuthMode::QueryParameter { name } => Some(name.as_str()),
+                        GeminiAuthMode::Header { .. } => None,
+                    },
+                )
+                .with_optional_string(
+                    "auth_header",
+                    match &self.auth_mode {
+                        GeminiAuthMode::Header { name, .. } => Some(name.as_str()),
+                        GeminiAuthMode::QueryParameter { .. } => None,
+                    },
+                )
+                .with_optional_string(
+                    "auth_scheme",
+                    match &self.auth_mode {
+                        GeminiAuthMode::Header { scheme, .. } => scheme.as_deref(),
+                        GeminiAuthMode::QueryParameter { .. } => None,
+                    },
+                )
+                .with_json(
+                    "extra_headers",
+                    &utils::prompt_cache_header_entries(&self.extra_headers),
+                ),
+        )
+    }
+
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let response = self
-            .send_request(|api_key| self.client.get(self.list_models_endpoint(api_key)))
+            .send_request(|api_key| {
+                let endpoint = self.endpoint_with_auth(self.list_models_endpoint(), api_key);
+                utils::apply_extra_headers(
+                    self.apply_auth(self.client.get(endpoint), api_key),
+                    &self.extra_headers,
+                )
+            })
             .await?;
 
         let payload: GeminiModelListResponse =
@@ -213,10 +325,18 @@ impl ModelProvider for GeminiProvider {
 
         let response = self
             .send_request(|api_key| {
-                self.client
-                    .post(self.generate_endpoint(model.as_str(), api_key))
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .json(&body)
+                let endpoint =
+                    self.endpoint_with_auth(self.generate_endpoint(model.as_str()), api_key);
+                utils::apply_extra_headers(
+                    self.apply_auth(
+                        self.client
+                            .post(endpoint)
+                            .header(reqwest::header::CONTENT_TYPE, "application/json")
+                            .json(&body),
+                        api_key,
+                    ),
+                    &self.extra_headers,
+                )
             })
             .await?;
 
@@ -291,10 +411,18 @@ impl ModelProvider for GeminiProvider {
 
         let response = self
             .send_request(|api_key| {
-                self.client
-                    .post(self.stream_generate_endpoint(model.as_str(), api_key))
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .json(&body)
+                let endpoint =
+                    self.endpoint_with_auth(self.stream_generate_endpoint(model.as_str()), api_key);
+                utils::apply_extra_headers(
+                    self.apply_auth(
+                        self.client
+                            .post(endpoint)
+                            .header(reqwest::header::CONTENT_TYPE, "application/json")
+                            .json(&body),
+                        api_key,
+                    ),
+                    &self.extra_headers,
+                )
             })
             .await?;
 
@@ -557,6 +685,193 @@ mod tests {
 
     use crate::message::Message;
     use crate::provider::CompletionRequest;
+
+    #[test]
+    fn prompt_cache_shape_changes_when_auth_scope_changes() {
+        let provider_a = GeminiProvider::new_managed(
+            reqwest::Client::new(),
+            ManagedCredential::environment("gemini env", "google", "api_key", "GEMINI_API_KEY_A"),
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-flash",
+        );
+        let provider_b = GeminiProvider::new_managed(
+            reqwest::Client::new(),
+            ManagedCredential::environment("gemini env", "google", "api_key", "GEMINI_API_KEY_B"),
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-flash",
+        );
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&crate::model::ModelId::new("gemini-2.5-flash"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&crate::model::ModelId::new("gemini-2.5-flash"))
+            .expect("shape should exist");
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
+    fn prompt_cache_shape_ignores_volatile_or_secret_extra_headers() {
+        let provider_a = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-flash",
+        )
+        .with_extra_headers(HashMap::from([
+            ("x-gemini-route".to_owned(), "backend-a".to_owned()),
+            ("x-request-id".to_owned(), "req-a".to_owned()),
+            ("traceparent".to_owned(), "trace-a".to_owned()),
+            ("authorization".to_owned(), "Bearer secret-a".to_owned()),
+        ]));
+        let provider_b = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-flash",
+        )
+        .with_extra_headers(HashMap::from([
+            ("x-gemini-route".to_owned(), "backend-a".to_owned()),
+            ("x-request-id".to_owned(), "req-b".to_owned()),
+            ("traceparent".to_owned(), "trace-b".to_owned()),
+            ("authorization".to_owned(), "Bearer secret-b".to_owned()),
+        ]));
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&crate::model::ModelId::new("gemini-2.5-flash"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&crate::model::ModelId::new("gemini-2.5-flash"))
+            .expect("shape should exist");
+
+        assert_eq!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
+    fn prompt_cache_shape_changes_when_auth_transport_changes() {
+        let query_provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-flash",
+        );
+        let header_provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-flash",
+        )
+        .with_auth_header("x-goog-api-key", None::<String>);
+
+        let query_shape = query_provider
+            .prompt_cache_shape(&crate::model::ModelId::new("gemini-2.5-flash"))
+            .expect("shape should exist");
+        let header_shape = header_provider
+            .prompt_cache_shape(&crate::model::ModelId::new("gemini-2.5-flash"))
+            .expect("shape should exist");
+
+        assert_ne!(query_shape.fingerprint(), header_shape.fingerprint());
+    }
+
+    #[tokio::test]
+    async fn complete_applies_extra_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "key".to_owned(),
+                "test-key".to_owned(),
+            ))
+            .match_header("x-gemini-route", "backend-a")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "candidates": [{
+                        "content": { "parts": [{ "text": "Hello" }] },
+                        "finishReason": "STOP"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        )
+        .with_extra_headers(HashMap::from([(
+            "x-gemini-route".to_owned(),
+            "backend-a".to_owned(),
+        )]));
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "Hello");
+    }
+
+    #[tokio::test]
+    async fn complete_uses_header_auth_when_configured() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .match_header("x-goog-api-key", "test-key")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "candidates": [{
+                        "content": { "parts": [{ "text": "Hello" }] },
+                        "finishReason": "STOP"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        )
+        .with_auth_header("x-goog-api-key", None::<String>);
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "Hello");
+    }
 
     #[tokio::test]
     async fn complete_stream_parses_typed_gemini_chunks() {

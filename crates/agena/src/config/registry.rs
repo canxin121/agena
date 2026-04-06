@@ -14,8 +14,8 @@ use crate::{
         CapabilityOverrideProvider, CloudflareAiGatewayProvider, CodexProvider, CopilotProvider,
         CopilotProviderOptions as RuntimeCopilotProviderOptions, GeminiProvider, GitlabProvider,
         GitlabProviderConfig, GoogleVertexProvider, ManagedCredential, ModelProvider,
-        NamedProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderAliasRegistration,
-        ProviderRegistry,
+        NamedProvider, OpenAiCompatibleProvider, OpenAiProvider, OpencodeProvider,
+        ProviderAliasRegistration, ProviderRegistry,
         auth::{AuthData, AuthStore},
         parse_sap_ai_core_service_key,
     },
@@ -160,29 +160,51 @@ fn build_provider(
             .with_stream_mode(config.options.stream_mode.into())
             .with_realtime_ws_url(config.options.realtime_ws_url.clone()),
         )),
-        ProviderDefinition::OpenAiCompatible(config) => Ok(register_provider(
-            provider_id,
-            OpenAiCompatibleProvider::new_managed(
+        ProviderDefinition::OpenAiCompatible(config) => {
+            let credential = required_managed_secret(
                 provider_id,
-                client,
-                required_managed_secret(
+                "api_key",
+                config.api_key.as_ref(),
+                config.api_key_env.as_ref(),
+                env,
+            )?;
+            let extra_headers = to_hash_map(&config.extra_headers);
+            if matches!(provider_id, "opencode" | "opencode-go") {
+                Ok(register_provider(
                     provider_id,
-                    "api_key",
-                    config.api_key.as_ref(),
-                    config.api_key_env.as_ref(),
-                    env,
-                )?,
-                config.base_url.clone(),
-                config.default_model.clone(),
-            )
-            .with_auth_header(
-                config.options.auth_header.clone(),
-                config.options.auth_scheme.clone(),
-            )
-            .with_extra_headers(to_hash_map(&config.extra_headers))
-            .with_stream_mode(config.options.stream_mode.into())
-            .with_realtime_ws_url(config.options.realtime_ws_url.clone()),
-        )),
+                    OpencodeProvider::new(
+                        provider_id,
+                        client,
+                        credential,
+                        config.base_url.clone(),
+                        config.default_model.clone(),
+                        config.options.auth_header.clone(),
+                        config.options.auth_scheme.clone(),
+                        extra_headers,
+                        config.options.stream_mode.into(),
+                        config.options.realtime_ws_url.clone(),
+                    ),
+                ))
+            } else {
+                Ok(register_provider(
+                    provider_id,
+                    OpenAiCompatibleProvider::new_managed(
+                        provider_id,
+                        client,
+                        credential,
+                        config.base_url.clone(),
+                        config.default_model.clone(),
+                    )
+                    .with_auth_header(
+                        config.options.auth_header.clone(),
+                        config.options.auth_scheme.clone(),
+                    )
+                    .with_extra_headers(extra_headers)
+                    .with_stream_mode(config.options.stream_mode.into())
+                    .with_realtime_ws_url(config.options.realtime_ws_url.clone()),
+                ))
+            }
+        }
         ProviderDefinition::SapAiCore(config) => Ok(register_provider(
             provider_id,
             build_sap_ai_core_provider(provider_id, client, config, env)?,
@@ -221,7 +243,8 @@ fn build_provider(
                 )?,
                 config.base_url.clone(),
                 config.default_model.clone(),
-            ),
+            )
+            .with_extra_headers(to_hash_map(&config.extra_headers)),
         )),
         ProviderDefinition::Codex(config) => {
             let auth = required_auth(auth_snapshot, config.auth_provider_id.as_str(), provider_id)?;

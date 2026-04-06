@@ -291,7 +291,15 @@ impl ToolExecutor {
     }
 
     pub fn available_tools_for_messages(&self, messages: &[Message]) -> Vec<ToolDefinition> {
-        let loaded_tools = collect_loaded_tool_names(messages);
+        self.available_tools_for_messages_and_loaded(messages, &[])
+    }
+
+    pub fn available_tools_for_messages_and_loaded(
+        &self,
+        messages: &[Message],
+        loaded_tools: &[String],
+    ) -> Vec<ToolDefinition> {
+        let loaded_tools = collect_loaded_tool_names(messages, loaded_tools);
         self.catalogued_tools()
             .into_iter()
             .filter(|definition| {
@@ -863,8 +871,11 @@ fn parse_builtin_input(tool_name: &str, input_json: &str) -> Result<BuiltinToolI
     }
 }
 
-fn collect_loaded_tool_names(messages: &[Message]) -> std::collections::HashSet<String> {
-    messages
+fn collect_loaded_tool_names(
+    messages: &[Message],
+    runtime_loaded_tools: &[String],
+) -> std::collections::HashSet<String> {
+    let mut loaded = messages
         .iter()
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.content.as_ref() {
@@ -878,7 +889,18 @@ fn collect_loaded_tool_names(messages: &[Message]) -> std::collections::HashSet<
             _ => None,
         })
         .flatten()
-        .collect()
+        .collect::<std::collections::HashSet<_>>();
+
+    loaded.extend(
+        runtime_loaded_tools
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned),
+    );
+
+    loaded
 }
 
 fn parse_custom_payload(payload_json: &str) -> Result<StructuredObject, ToolError> {

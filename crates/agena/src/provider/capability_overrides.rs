@@ -8,7 +8,8 @@ use crate::error::AppError;
 use crate::model::{CapabilitySupport, Model, ModelCapabilities, ModelId};
 
 use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider, StreamResumePolicy,
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider, PromptCacheShape,
+    StreamResumePolicy,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -166,6 +167,14 @@ impl ModelProvider for CapabilityOverrideProvider {
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         self.target.stream_resume_policy()
+    }
+
+    fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
+        self.target.supports_prompt_continuation(model)
+    }
+
+    fn prompt_cache_shape(&self, model: &ModelId) -> Option<PromptCacheShape> {
+        self.target.prompt_cache_shape(model)
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {

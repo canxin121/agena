@@ -1,0 +1,234 @@
+% Shared preamble for Agena architecture and process documents.
+\usepackage[a4paper,margin=20mm]{geometry}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{pdflscape}
+\usepackage{tabularx}
+\usepackage{tikz}
+\usepackage[most]{tcolorbox}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{url}
+
+\usetikzlibrary{
+  arrows.meta,
+  backgrounds,
+  calc,
+  fit,
+  positioning,
+  shapes.geometric,
+  shapes.misc,
+  shapes.multipart
+}
+
+\definecolor{agenaBlue}{HTML}{1E5AA8}
+\definecolor{agenaBlueSoft}{HTML}{EAF2FD}
+\definecolor{agenaGreen}{HTML}{1D7A5E}
+\definecolor{agenaGreenSoft}{HTML}{E7F6F1}
+\definecolor{agenaOrange}{HTML}{B85C13}
+\definecolor{agenaOrangeSoft}{HTML}{FCEFE4}
+\definecolor{agenaPurple}{HTML}{5A4FCF}
+\definecolor{agenaPurpleSoft}{HTML}{ECEAFB}
+\definecolor{agenaInk}{HTML}{1D2433}
+\definecolor{agenaMist}{HTML}{F7F9FC}
+\definecolor{agenaSand}{HTML}{FFF9F0}
+\definecolor{agenaGray}{HTML}{5D6678}
+\definecolor{agenaBorder}{HTML}{C8D2E1}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=agenaBlue,
+  urlcolor=agenaBlue,
+  citecolor=agenaGreen,
+  pdftitle={Agena Documentation},
+  pdfauthor={OpenAI Codex}
+}
+
+\ctexset{
+  section = {
+    format = \Large\bfseries\color{agenaInk}
+  },
+  subsection = {
+    format = \large\bfseries\color{agenaInk}
+  },
+  subsubsection = {
+    format = \normalsize\bfseries\color{agenaInk}
+  }
+}
+
+\setlength{\parskip}{0.55em}
+\setlength{\parindent}{0pt}
+\setlength{\headheight}{14.5pt}
+\setlist[itemize]{leftmargin=2.2em}
+\setlist[enumerate]{leftmargin=2.4em}
+\captionsetup{hypcap=false}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{agenaGray}{Agena 文档}}
+\fancyhead[R]{\textcolor{agenaGray}{\leftmark}}
+\fancyfoot[C]{\textcolor{agenaGray}{\thepage}}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\newcommand{\docversion}{2026-04-06}
+\newcommand{\pathinline}[1]{\texttt{\nolinkurl{#1}}}
+\newcommand{\cmdinline}[1]{\texttt{#1}}
+\newcommand{\term}[1]{\textbf{\textcolor{agenaInk}{#1}}}
+\newcommand{\highlight}[1]{\textcolor{agenaBlue}{\textbf{#1}}}
+
+\newtcolorbox{summarybox}[1][]{
+  breakable,
+  colback=agenaBlueSoft,
+  colframe=agenaBlue,
+  boxrule=0.8pt,
+  arc=2pt,
+  left=8pt,
+  right=8pt,
+  top=6pt,
+  bottom=6pt,
+  title=#1,
+  fonttitle=\bfseries
+}
+
+\newtcolorbox{notebox}[1][]{
+  breakable,
+  colback=agenaSand,
+  colframe=agenaOrange,
+  boxrule=0.8pt,
+  arc=2pt,
+  left=8pt,
+  right=8pt,
+  top=6pt,
+  bottom=6pt,
+  title=#1,
+  fonttitle=\bfseries
+}
+
+\newtcolorbox{techbox}[1][]{
+  breakable,
+  colback=agenaGreenSoft,
+  colframe=agenaGreen,
+  boxrule=0.8pt,
+  arc=2pt,
+  left=8pt,
+  right=8pt,
+  top=6pt,
+  bottom=6pt,
+  title=#1,
+  fonttitle=\bfseries
+}
+
+\lstdefinestyle{agenaCode}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{agenaMist},
+  frame=single,
+  rulecolor=\color{agenaBorder},
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  showstringspaces=false
+}
+
+\tikzset{
+  diagram/.style={
+    font=\footnotesize,
+    line join=round,
+    line cap=round
+  },
+  module/.style={
+    rectangle,
+    rounded corners=4pt,
+    draw=agenaInk!85,
+    fill=white,
+    thick,
+    align=left,
+    inner sep=8pt,
+    text width=38mm,
+    minimum height=12mm
+  },
+  modulewide/.style={
+    module,
+    text width=58mm
+  },
+  terminal/.style={
+    module,
+    draw=agenaBlue!80!black,
+    fill=agenaBlueSoft
+  },
+  runtime/.style={
+    module,
+    draw=agenaGreen!80!black,
+    fill=agenaGreenSoft
+  },
+  storage/.style={
+    module,
+    draw=agenaOrange!85!black,
+    fill=agenaOrangeSoft
+  },
+  external/.style={
+    module,
+    draw=agenaPurple!80!black,
+    fill=agenaPurpleSoft
+  },
+  note/.style={
+    rectangle,
+    rounded corners=4pt,
+    draw=agenaBorder,
+    fill=agenaMist,
+    align=left,
+    inner sep=6pt,
+    text width=34mm,
+    font=\scriptsize
+  },
+  decision/.style={
+    diamond,
+    draw=agenaInk!85,
+    fill=agenaSand,
+    aspect=2.2,
+    align=center,
+    inner sep=2pt,
+    text width=24mm
+  },
+  group/.style={
+    draw=agenaBorder,
+    rounded corners=6pt,
+    fill=agenaMist,
+    inner sep=10pt
+  },
+  flow/.style={
+    -{Latex[length=3mm,width=2mm]},
+    thick,
+    draw=agenaInk!85
+  },
+  signal/.style={
+    flow,
+    dashed,
+    draw=agenaBlue!80!black
+  },
+  weakflow/.style={
+    -{Latex[length=2.5mm,width=1.8mm]},
+    semithick,
+    draw=agenaGray
+  },
+  dbentity/.style={
+    rectangle split,
+    rectangle split parts=2,
+    rectangle split part fill={agenaOrangeSoft,white},
+    draw=agenaOrange!85!black,
+    rounded corners=3pt,
+    thick,
+    align=left,
+    text width=43mm,
+    inner sep=6pt
+  }
+}
+
+\newenvironment{diagramlandscape}
+  {\clearpage\begin{landscape}\thispagestyle{plain}\begin{center}\captionsetup{width=0.94\linewidth}}
+  {\end{center}\end{landscape}\clearpage}

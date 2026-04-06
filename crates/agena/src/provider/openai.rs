@@ -217,6 +217,21 @@ impl OpenAiProvider {
         }
     }
 
+    fn api_mode_key(&self) -> &'static str {
+        match self.api_mode {
+            OpenAiApiMode::Responses => "responses",
+            OpenAiApiMode::Chat => "chat",
+            OpenAiApiMode::Auto => "auto",
+        }
+    }
+
+    fn stream_mode_key(&self) -> &'static str {
+        match self.stream_mode {
+            OpenAiStreamMode::Sse => "sse",
+            OpenAiStreamMode::RealtimeWebSocket => "realtime_websocket",
+        }
+    }
+
     fn responses_endpoint_unsupported(status: reqwest::StatusCode) -> bool {
         matches!(
             status,
@@ -867,9 +882,9 @@ impl OpenAiProvider {
                     });
                 }
                 Role::Tool => {
-                    let tool_messages = Self::tool_chat_messages(projected_parts.as_slice());
-                    let extra_parts = utils::non_tool_result_parts(projected_parts.as_slice());
-                    if tool_messages.is_empty() {
+                    let ordered_messages =
+                        Self::ordered_tool_and_user_chat_messages(projected_parts.as_slice());
+                    if ordered_messages.is_empty() {
                         messages.push(OpenAiChatMessage {
                             role: "user".to_owned(),
                             content: Some(Self::chat_content_value(
@@ -881,18 +896,7 @@ impl OpenAiProvider {
                             kind: None,
                         });
                     } else {
-                        messages.extend(tool_messages);
-                        if !extra_parts.is_empty() {
-                            messages.push(OpenAiChatMessage {
-                                role: "user".to_owned(),
-                                content: Some(Self::chat_content_value_from_parts(
-                                    extra_parts.as_slice(),
-                                )),
-                                tool_calls: None,
-                                tool_call_id: None,
-                                kind: None,
-                            });
-                        }
+                        messages.extend(ordered_messages);
                     }
                 }
             }
@@ -1044,6 +1048,19 @@ impl OpenAiProvider {
         }));
     }
 
+    fn flush_assistant_responses_text(
+        input: &mut Vec<OpenAiResponsesInputItem>,
+        text_chunks: &mut Vec<String>,
+    ) {
+        if text_chunks.is_empty() {
+            return;
+        }
+
+        let text = text_chunks.join("");
+        text_chunks.clear();
+        Self::push_responses_text_message(input, "assistant", text);
+    }
+
     fn push_responses_message_from_parts(
         input: &mut Vec<OpenAiResponsesInputItem>,
         role: &str,
@@ -1083,10 +1100,10 @@ impl OpenAiProvider {
                 }
             }
             Role::Assistant => {
-                let mut text_chunks = Vec::new();
                 if projected_parts.is_empty() {
-                    text_chunks.push(message.as_text_lossy());
+                    Self::push_responses_text_message(input, "assistant", message.as_text_lossy());
                 } else {
+                    let mut text_chunks = Vec::new();
                     for part in projected_parts {
                         match part {
                             utils::ProjectedSessionPart::Text { text } => text_chunks.push(text),
@@ -1098,6 +1115,7 @@ impl OpenAiProvider {
                                 name,
                                 arguments_json,
                             } => {
+                                Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 if !id.trim().is_empty() && !name.trim().is_empty() {
                                     input.push(OpenAiResponsesInputItem::FunctionCall(
                                         OpenAiFunctionCallItem {
@@ -1113,6 +1131,7 @@ impl OpenAiProvider {
                                 tool_call_id,
                                 output_json,
                             } => {
+                                Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 if !tool_call_id.trim().is_empty() {
                                     input.push(OpenAiResponsesInputItem::FunctionCallOutput(
                                         OpenAiFunctionCallOutputItem {
@@ -1125,20 +1144,61 @@ impl OpenAiProvider {
                             }
                         }
                     }
-                }
-
-                if !text_chunks.is_empty() {
-                    Self::push_responses_text_message(input, "assistant", text_chunks.join(""));
+                    Self::flush_assistant_responses_text(input, &mut text_chunks);
                 }
             }
             Role::Tool => {
                 if projected_parts.is_empty() {
                     Self::push_responses_text_message(input, "user", message.as_text_lossy());
                 } else {
-                    let tool_result = utils::first_tool_result(projected_parts.as_slice());
+                    let tool_results = utils::tool_results(projected_parts.as_slice());
                     let extra_parts = utils::non_tool_result_parts(projected_parts.as_slice());
 
-                    if let Some((tool_call_id, output_json)) = tool_result {
+                    if tool_results.len() > 1 {
+                        let mut buffered_parts = Vec::new();
+                        for part in projected_parts {
+                            match part {
+                                utils::ProjectedSessionPart::ToolResult {
+                                    tool_call_id,
+                                    output_json,
+                                } => {
+                                    if !buffered_parts.is_empty() {
+                                        Self::push_responses_message_from_parts(
+                                            input,
+                                            "user",
+                                            buffered_parts.as_slice(),
+                                        );
+                                        buffered_parts.clear();
+                                    }
+
+                                    if tool_call_id.trim().is_empty() {
+                                        buffered_parts.push(utils::ProjectedSessionPart::Text {
+                                            text: output_json,
+                                        });
+                                    } else {
+                                        input.push(OpenAiResponsesInputItem::FunctionCallOutput(
+                                            OpenAiFunctionCallOutputItem {
+                                                kind: "function_call_output",
+                                                call_id: tool_call_id,
+                                                output: serde_json::Value::String(output_json),
+                                            },
+                                        ));
+                                    }
+                                }
+                                other => buffered_parts.push(other),
+                            }
+                        }
+
+                        if !buffered_parts.is_empty() {
+                            Self::push_responses_message_from_parts(
+                                input,
+                                "user",
+                                buffered_parts.as_slice(),
+                            );
+                        }
+                    } else if let Some((tool_call_id, output_json)) =
+                        tool_results.into_iter().next()
+                    {
                         if tool_call_id.trim().is_empty() {
                             let mut fallback_parts =
                                 vec![utils::ProjectedSessionPart::Text { text: output_json }];
@@ -1295,29 +1355,72 @@ impl OpenAiProvider {
         (content, tool_calls)
     }
 
-    fn tool_chat_messages(parts: &[utils::ProjectedSessionPart]) -> Vec<OpenAiChatMessage> {
-        parts
-            .iter()
-            .filter_map(|part| match part {
+    fn ordered_tool_and_user_chat_messages(
+        parts: &[utils::ProjectedSessionPart],
+    ) -> Vec<OpenAiChatMessage> {
+        let has_tool_message = parts.iter().any(|part| {
+            matches!(
+                part,
+                utils::ProjectedSessionPart::ToolResult { tool_call_id, .. }
+                    if !tool_call_id.trim().is_empty()
+            )
+        });
+        if !has_tool_message {
+            return Vec::new();
+        }
+
+        let mut messages = Vec::new();
+        let mut buffered_parts = Vec::new();
+
+        for part in parts {
+            match part {
                 utils::ProjectedSessionPart::ToolResult {
                     tool_call_id,
                     output_json,
-                } => {
-                    if tool_call_id.trim().is_empty() {
-                        None
-                    } else {
-                        Some(OpenAiChatMessage {
-                            role: "tool".to_owned(),
-                            content: Some(serde_json::Value::String(output_json.clone())),
+                } if !tool_call_id.trim().is_empty() => {
+                    if !buffered_parts.is_empty() {
+                        messages.push(OpenAiChatMessage {
+                            role: "user".to_owned(),
+                            content: Some(Self::chat_content_value_from_parts(
+                                buffered_parts.as_slice(),
+                            )),
                             tool_calls: None,
-                            tool_call_id: Some(tool_call_id.clone()),
+                            tool_call_id: None,
                             kind: None,
-                        })
+                        });
+                        buffered_parts.clear();
                     }
+
+                    messages.push(OpenAiChatMessage {
+                        role: "tool".to_owned(),
+                        content: Some(serde_json::Value::String(output_json.clone())),
+                        tool_calls: None,
+                        tool_call_id: Some(tool_call_id.clone()),
+                        kind: None,
+                    });
                 }
-                _ => None,
-            })
-            .collect()
+                utils::ProjectedSessionPart::ToolResult { output_json, .. } => {
+                    buffered_parts.push(utils::ProjectedSessionPart::Text {
+                        text: output_json.clone(),
+                    });
+                }
+                other => buffered_parts.push(other.clone()),
+            }
+        }
+
+        if !buffered_parts.is_empty() {
+            messages.push(OpenAiChatMessage {
+                role: "user".to_owned(),
+                content: Some(Self::chat_content_value_from_parts(
+                    buffered_parts.as_slice(),
+                )),
+                tool_calls: None,
+                tool_call_id: None,
+                kind: None,
+            });
+        }
+
+        messages
     }
 
     fn parse_chat_tool_calls(
@@ -1474,6 +1577,22 @@ impl ModelProvider for OpenAiProvider {
     fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
         matches!(self.stream_mode, OpenAiStreamMode::Sse)
             && self.should_use_responses(model.as_str())
+    }
+
+    fn prompt_cache_shape(&self, model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
+        Some(
+            crate::provider::PromptCacheShape::new(PROVIDER_ID)
+                .with_string("auth_scope", self.api_key.prompt_cache_scope())
+                .with_string("base_url", self.base_url.as_str())
+                .with_string("api_mode", self.api_mode_key())
+                .with_string("stream_mode", self.stream_mode_key())
+                .with_bool("uses_responses", self.should_use_responses(model.as_str()))
+                .with_optional_string("realtime_ws_url", self.realtime_ws_url.as_deref())
+                .with_json(
+                    "extra_headers",
+                    &utils::prompt_cache_header_entries(&self.extra_headers),
+                ),
+        )
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -2229,6 +2348,32 @@ mod tests {
         message
     }
 
+    fn multi_tool_result_message(tool_call_ids: &[&str]) -> Message {
+        let mut parts = Vec::new();
+        for (index, _) in tool_call_ids.iter().enumerate() {
+            parts.push(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                call_id: index as i64,
+                invocation: ToolInvocation::Custom {
+                    name: format!("tool_{index}"),
+                    input: StructuredObject::default(),
+                },
+                output_text: format!("{{\"result\":{index}}}"),
+                blocks: Vec::new(),
+                attachments: Vec::new(),
+                details: ToolOutput::default(),
+                lifecycle: TimeRange::default(),
+            }));
+        }
+
+        let mut message = Message::prompt_parts(crate::role::Role::Tool, parts);
+        for (index, tool_call_id) in tool_call_ids.iter().enumerate() {
+            if let Some(part) = message.parts.get_mut(index) {
+                part.operation_id = Some((*tool_call_id).to_owned());
+            }
+        }
+        message
+    }
+
     #[tokio::test]
     async fn complete_falls_back_to_chat_when_responses_unsupported() {
         let mut server = mockito::Server::new_async().await;
@@ -2610,6 +2755,194 @@ mod tests {
         assert_eq!(items[0]["output"][1]["type"], "input_file");
         assert_eq!(items[0]["output"][1]["file_data"], sample_pdf_data_url());
         assert_eq!(items[0]["output"][1]["filename"], "report.pdf");
+    }
+
+    #[test]
+    fn responses_input_preserves_assistant_part_order_around_tool_calls() {
+        let mut assistant = Message::prompt_text(crate::role::Role::Assistant, "Before ");
+        assistant.push_part(crate::message::MessagePart::with_content(
+            2,
+            assistant.id,
+            assistant.created_at,
+            crate::message::ExecutionStatus::Completed,
+            crate::message::PartContent::ToolExecution(
+                crate::message::ToolExecutionPart::Completed {
+                    call_id: 1,
+                    invocation: crate::message::ToolInvocation::Custom {
+                        name: "search".to_owned(),
+                        input: crate::message::StructuredObject::default(),
+                    },
+                    output_text: String::new(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: crate::message::ToolOutput::default(),
+                    lifecycle: crate::message::TimeRange::default(),
+                },
+            ),
+        ));
+        if let Some(part) = assistant.parts.last_mut() {
+            part.operation_id = Some("call_1".to_owned());
+        }
+        assistant.push_part(crate::message::MessagePart::with_content(
+            3,
+            assistant.id,
+            assistant.created_at,
+            crate::message::ExecutionStatus::Completed,
+            crate::message::PartContent::text("After"),
+        ));
+
+        let request = CompletionRequest {
+            model: ModelId::new("gpt-5"),
+            system: None,
+            messages: vec![assistant],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+        };
+
+        let input = OpenAiProvider::to_responses_input(&request);
+        let json = serde_json::to_value(&input).expect("responses input should serialize");
+        let items = json.as_array().expect("responses input should be an array");
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0]["role"], "assistant");
+        assert_eq!(items[0]["content"][0]["text"], "Before ");
+        assert_eq!(items[1]["type"], "function_call");
+        assert_eq!(items[1]["call_id"], "call_1");
+        assert_eq!(items[1]["name"], "search");
+        assert_eq!(items[2]["role"], "assistant");
+        assert_eq!(items[2]["content"][0]["text"], "After");
+    }
+
+    #[test]
+    fn chat_messages_preserve_interleaved_tool_result_and_follow_up_order() {
+        let mut message = Message::prompt_parts(
+            crate::role::Role::Tool,
+            vec![
+                PartContent::text("Before"),
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 1,
+                    invocation: ToolInvocation::Custom {
+                        name: "tool_one".to_owned(),
+                        input: StructuredObject::default(),
+                    },
+                    output_text: "{\"result\":1}".to_owned(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: ToolOutput::default(),
+                    lifecycle: TimeRange::default(),
+                }),
+                PartContent::text("Middle"),
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 2,
+                    invocation: ToolInvocation::Custom {
+                        name: "tool_two".to_owned(),
+                        input: StructuredObject::default(),
+                    },
+                    output_text: "{\"result\":2}".to_owned(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: ToolOutput::default(),
+                    lifecycle: TimeRange::default(),
+                }),
+                PartContent::text("After"),
+            ],
+        );
+        message.parts[1].operation_id = Some("call_1".to_owned());
+        message.parts[3].operation_id = Some("call_2".to_owned());
+
+        let messages = OpenAiProvider::to_chat_messages(&CompletionRequest {
+            model: ModelId::new("gpt-4o"),
+            system: None,
+            messages: vec![message],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+        });
+        let json = serde_json::to_value(&messages).expect("chat messages should serialize");
+        let items = json.as_array().expect("chat messages should be an array");
+
+        assert_eq!(items.len(), 5);
+        assert_eq!(items[0]["role"], "user");
+        assert_eq!(items[0]["content"][0]["text"], "Before");
+        assert_eq!(items[1]["role"], "tool");
+        assert_eq!(items[1]["tool_call_id"], "call_1");
+        assert_eq!(items[1]["content"], "{\"result\":1}");
+        assert_eq!(items[2]["role"], "user");
+        assert_eq!(items[2]["content"][0]["text"], "Middle");
+        assert_eq!(items[3]["role"], "tool");
+        assert_eq!(items[3]["tool_call_id"], "call_2");
+        assert_eq!(items[3]["content"], "{\"result\":2}");
+        assert_eq!(items[4]["role"], "user");
+        assert_eq!(items[4]["content"][0]["text"], "After");
+    }
+
+    #[test]
+    fn responses_input_emits_all_tool_results_from_single_tool_message() {
+        let request = CompletionRequest {
+            model: ModelId::new("gpt-5"),
+            system: None,
+            messages: vec![multi_tool_result_message(&["call_1", "call_2"])],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+        };
+
+        let input = OpenAiProvider::to_responses_input(&request);
+        let json = serde_json::to_value(&input).expect("responses input should serialize");
+        let items = json.as_array().expect("responses input should be an array");
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["type"], "function_call_output");
+        assert_eq!(items[0]["call_id"], "call_1");
+        assert_eq!(items[0]["output"], "{\"result\":0}");
+        assert_eq!(items[1]["type"], "function_call_output");
+        assert_eq!(items[1]["call_id"], "call_2");
+        assert_eq!(items[1]["output"], "{\"result\":1}");
+    }
+
+    #[test]
+    fn prompt_cache_shape_changes_when_auth_scope_changes() {
+        let provider_a = OpenAiProvider::new_managed(
+            reqwest::Client::new(),
+            crate::provider::ManagedCredential::environment(
+                "openai env",
+                "openai",
+                "api_key",
+                "OPENAI_API_KEY_A",
+            ),
+            "https://api.openai.com/v1",
+            "gpt-5",
+        );
+        let provider_b = OpenAiProvider::new_managed(
+            reqwest::Client::new(),
+            crate::provider::ManagedCredential::environment(
+                "openai env",
+                "openai",
+                "api_key",
+                "OPENAI_API_KEY_B",
+            ),
+            "https://api.openai.com/v1",
+            "gpt-5",
+        );
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&ModelId::new("gpt-5"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&ModelId::new("gpt-5"))
+            .expect("shape should exist");
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
     }
 
     #[tokio::test]

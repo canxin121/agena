@@ -100,6 +100,7 @@ impl fmt::Display for ConfigModeName {
 pub struct ResolvedConfig {
     pub tracing: TracingConfig,
     pub auth: AuthConfig,
+    pub ui: UiConfig,
     pub runtime: RuntimeConfig,
     pub permission: PermissionConfig,
     pub plugins: PluginConfig,
@@ -146,6 +147,12 @@ pub struct TracingConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuthConfig {
     pub store_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UiConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

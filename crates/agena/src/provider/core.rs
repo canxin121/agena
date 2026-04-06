@@ -5,7 +5,7 @@ use futures_util::stream;
 use crate::error::AppError;
 use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata};
 
-use super::{CompletionRequest, CompletionResponse, CompletionStreamEvent};
+use super::{CompletionRequest, CompletionResponse, CompletionStreamEvent, PromptCacheShape};
 
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
@@ -29,6 +29,16 @@ pub trait ModelProvider: Send + Sync {
     fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
         let _ = model;
         false
+    }
+
+    fn prompt_cache_shape(&self, model: &ModelId) -> Option<PromptCacheShape> {
+        let _ = model;
+        None
+    }
+
+    fn prompt_cache_shape_fingerprint(&self, model: &ModelId) -> Option<String> {
+        self.prompt_cache_shape(model)
+            .map(|shape| shape.fingerprint())
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError>;

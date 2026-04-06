@@ -30,6 +30,7 @@ pub struct OpenAiCompatibleProvider {
     extra_headers: HashMap<String, String>,
     stream_mode: OpenAiCompatibleStreamMode,
     realtime_ws_url: Option<String>,
+    top_level_prompt_cache_override: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +74,7 @@ impl OpenAiCompatibleProvider {
             extra_headers: HashMap::new(),
             stream_mode: OpenAiCompatibleStreamMode::Sse,
             realtime_ws_url: None,
+            top_level_prompt_cache_override: None,
         }
     }
 
@@ -101,6 +103,11 @@ impl OpenAiCompatibleProvider {
         self
     }
 
+    pub fn with_top_level_prompt_cache(mut self, enabled: bool) -> Self {
+        self.top_level_prompt_cache_override = Some(enabled);
+        self
+    }
+
     fn models_endpoint(&self) -> String {
         format!("{}/models", self.base_url)
     }
@@ -110,7 +117,20 @@ impl OpenAiCompatibleProvider {
     }
 
     fn supports_top_level_prompt_cache(&self) -> bool {
-        matches!(self.id.as_str(), "openrouter" | "zenmux" | "kilo")
+        if let Some(enabled) = self.top_level_prompt_cache_override {
+            return enabled;
+        }
+        matches!(
+            self.id.as_str(),
+            "openrouter" | "zenmux" | "kilo" | "opencode" | "opencode-go"
+        )
+    }
+
+    fn stream_mode_key(&self) -> &'static str {
+        match self.stream_mode {
+            OpenAiCompatibleStreamMode::Sse => "sse",
+            OpenAiCompatibleStreamMode::RealtimeWebSocket => "realtime_websocket",
+        }
     }
 
     fn realtime_ws_endpoint(&self, model: &str) -> Result<url::Url, AppError> {
@@ -167,6 +187,7 @@ impl OpenAiCompatibleProvider {
         &self,
         endpoint: &url::Url,
         api_key: &str,
+        session_affinity: Option<&str>,
     ) -> Result<http::Request<()>, AppError> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -189,6 +210,18 @@ impl OpenAiCompatibleProvider {
         request
             .headers_mut()
             .insert(auth_header_name, auth_header_value);
+
+        if let Some(session_affinity) = session_affinity.filter(|value| !value.trim().is_empty()) {
+            request.headers_mut().insert(
+                http::header::HeaderName::from_static("x-session-affinity"),
+                http::header::HeaderValue::from_str(session_affinity).map_err(|err| {
+                    AppError::Config(format!(
+                        "{} session affinity header value is invalid: {err}",
+                        self.id
+                    ))
+                })?,
+            );
+        }
 
         if endpoint
             .host_str()
@@ -226,12 +259,24 @@ impl OpenAiCompatibleProvider {
 
     fn apply_auth_headers(
         &self,
+        req: reqwest::RequestBuilder,
+        api_key: &str,
+    ) -> reqwest::RequestBuilder {
+        self.apply_request_headers(req, api_key, None)
+    }
+
+    fn apply_request_headers(
+        &self,
         mut req: reqwest::RequestBuilder,
         api_key: &str,
+        session_affinity: Option<&str>,
     ) -> reqwest::RequestBuilder {
         let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
 
         req = req.header(self.auth_header.as_str(), auth_value);
+        if let Some(session_affinity) = session_affinity.filter(|value| !value.trim().is_empty()) {
+            req = req.header("x-session-affinity", session_affinity);
+        }
         utils::apply_extra_headers(req, &self.extra_headers)
     }
 
@@ -326,9 +371,9 @@ impl OpenAiCompatibleProvider {
                     });
                 }
                 Role::Tool => {
-                    let tool_messages = tool_messages_from_parts(projected_parts.as_slice());
-                    let extra_parts = utils::non_tool_result_parts(projected_parts.as_slice());
-                    if tool_messages.is_empty() {
+                    let ordered_messages =
+                        ordered_tool_and_user_messages_from_parts(projected_parts.as_slice());
+                    if ordered_messages.is_empty() {
                         result.push(ChatMessage {
                             role: "tool".to_owned(),
                             content: Some(Value::String(session_text_lossy(
@@ -339,17 +384,7 @@ impl OpenAiCompatibleProvider {
                             tool_calls: None,
                         });
                     } else {
-                        result.extend(tool_messages);
-                        if !extra_parts.is_empty() {
-                            result.push(ChatMessage {
-                                role: "user".to_owned(),
-                                content: Some(projected_parts_to_openai_value(
-                                    extra_parts.as_slice(),
-                                )),
-                                tool_call_id: None,
-                                tool_calls: None,
-                            });
-                        }
+                        result.extend(ordered_messages);
                     }
                 }
             }
@@ -403,6 +438,7 @@ impl OpenAiCompatibleProvider {
         }
 
         let usage = payload.usage.map(usage_to_completion_usage);
+        let response_id = payload.id.clone();
 
         Ok(CompletionResponse {
             provider_id: ProviderId::new(self.id.clone()),
@@ -415,7 +451,7 @@ impl OpenAiCompatibleProvider {
             finish_reason,
             tool_calls,
             usage,
-            provider_metadata: None,
+            provider_metadata: response_id_metadata(response_id),
         })
     }
 
@@ -427,10 +463,15 @@ impl OpenAiCompatibleProvider {
         AppError,
     > {
         let model = request.model.clone();
+        let prompt_cache_key = request.prompt_cache_key.clone();
 
         let ws_endpoint = self.realtime_ws_endpoint(model.as_str())?;
         let api_key = self.api_key.resolve().await?;
-        let handshake = self.realtime_handshake_request(&ws_endpoint, api_key.as_str())?;
+        let handshake = self.realtime_handshake_request(
+            &ws_endpoint,
+            api_key.as_str(),
+            prompt_cache_key.as_deref(),
+        )?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(handshake)
             .await
             .map_err(|err| {
@@ -530,6 +571,7 @@ impl OpenAiCompatibleProvider {
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
             let mut completed_emitted = false;
+            let mut response_id: Option<String> = None;
 
             while let Some(message) = ws_reader.next().await {
                 let message = message.map_err(|err| {
@@ -673,6 +715,10 @@ impl OpenAiCompatibleProvider {
                     stream_finish_reason = utils::responses_finish_reason(&event);
                 }
 
+                if let Some(next_response_id) = utils::responses_response_id(&event) {
+                    response_id = Some(next_response_id);
+                }
+
                 if utils::responses_is_completed(&event) {
                     yield CompletionStreamEvent::Completed {
                         provider_id: provider_id.clone(),
@@ -681,7 +727,7 @@ impl OpenAiCompatibleProvider {
                             stream_finish_reason.as_deref(),
                         ),
                         usage: stream_usage.clone(),
-                        provider_metadata: None,
+                        provider_metadata: response_id_metadata(response_id.clone()),
                     };
                     completed_emitted = true;
                     break;
@@ -700,7 +746,7 @@ impl OpenAiCompatibleProvider {
                         stream_finish_reason.as_deref(),
                     ),
                     usage: stream_usage,
-                    provider_metadata: None,
+                    provider_metadata: response_id_metadata(response_id),
                 };
             }
         };
@@ -730,6 +776,10 @@ impl OpenAiCompatibleProvider {
             return Ok(response);
         }
     }
+}
+
+fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
+    response_id.map(|response_id| serde_json::json!({ "response_id": response_id }))
 }
 
 fn usage_to_completion_usage(usage: ChatUsage) -> CompletionUsage {
@@ -913,28 +963,65 @@ fn assistant_content_and_tool_calls(
     (content, tool_calls)
 }
 
-fn tool_messages_from_parts(parts: &[utils::ProjectedSessionPart]) -> Vec<ChatMessage> {
-    parts
-        .iter()
-        .filter_map(|part| match part {
+fn ordered_tool_and_user_messages_from_parts(
+    parts: &[utils::ProjectedSessionPart],
+) -> Vec<ChatMessage> {
+    let has_tool_message = parts.iter().any(|part| {
+        matches!(
+            part,
+            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. }
+                if !tool_call_id.trim().is_empty()
+        )
+    });
+    if !has_tool_message {
+        return Vec::new();
+    }
+
+    let mut messages = Vec::new();
+    let mut buffered_parts = Vec::new();
+
+    for part in parts {
+        match part {
             utils::ProjectedSessionPart::ToolResult {
                 tool_call_id,
                 output_json,
-            } => {
-                if tool_call_id.trim().is_empty() {
-                    None
-                } else {
-                    Some(ChatMessage {
-                        role: "tool".to_owned(),
-                        content: Some(Value::String(output_json.clone())),
-                        tool_call_id: Some(tool_call_id.clone()),
+            } if !tool_call_id.trim().is_empty() => {
+                if !buffered_parts.is_empty() {
+                    messages.push(ChatMessage {
+                        role: "user".to_owned(),
+                        content: Some(projected_parts_to_openai_value(buffered_parts.as_slice())),
+                        tool_call_id: None,
                         tool_calls: None,
-                    })
+                    });
+                    buffered_parts.clear();
                 }
+
+                messages.push(ChatMessage {
+                    role: "tool".to_owned(),
+                    content: Some(Value::String(output_json.clone())),
+                    tool_call_id: Some(tool_call_id.clone()),
+                    tool_calls: None,
+                });
             }
-            _ => None,
-        })
-        .collect()
+            utils::ProjectedSessionPart::ToolResult { output_json, .. } => {
+                buffered_parts.push(utils::ProjectedSessionPart::Text {
+                    text: output_json.clone(),
+                });
+            }
+            other => buffered_parts.push(other.clone()),
+        }
+    }
+
+    if !buffered_parts.is_empty() {
+        messages.push(ChatMessage {
+            role: "user".to_owned(),
+            content: Some(projected_parts_to_openai_value(buffered_parts.as_slice())),
+            tool_call_id: None,
+            tool_calls: None,
+        });
+    }
+
+    messages
 }
 
 fn session_text_lossy(
@@ -1011,6 +1098,26 @@ impl ModelProvider for OpenAiCompatibleProvider {
         StreamResumePolicy::ReplaySafePrefix
     }
 
+    fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
+        Some(
+            crate::provider::PromptCacheShape::new(self.id.as_str())
+                .with_string("auth_scope", self.api_key.prompt_cache_scope())
+                .with_string("base_url", self.base_url.as_str())
+                .with_string("auth_header", self.auth_header.as_str())
+                .with_optional_string("auth_scheme", self.auth_scheme.as_deref())
+                .with_string("stream_mode", self.stream_mode_key())
+                .with_optional_string("realtime_ws_url", self.realtime_ws_url.as_deref())
+                .with_bool(
+                    "supports_top_level_prompt_cache",
+                    self.supports_top_level_prompt_cache(),
+                )
+                .with_json(
+                    "extra_headers",
+                    &utils::prompt_cache_header_entries(&self.extra_headers),
+                ),
+        )
+    }
+
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let response = self
             .send_request(|api_key| {
@@ -1023,6 +1130,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
+        let prompt_cache_key = request.prompt_cache_key.clone();
 
         let tools = (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice()));
         let messages = Self::convert_messages(request.system, request.messages);
@@ -1036,15 +1144,21 @@ impl ModelProvider for OpenAiCompatibleProvider {
             cache_control: self
                 .supports_top_level_prompt_cache()
                 .then(prompt_cache::PromptCacheControl::ephemeral),
+            prompt_cache_key: prompt_cache_key.clone(),
+            prompt_cache_key_camel_case: prompt_cache_key.clone(),
             stream: false,
             stream_options: None,
         };
 
         let response = self
             .send_request(|api_key| {
-                self.apply_auth_headers(self.client.post(self.completions_endpoint()), api_key)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .json(&body)
+                self.apply_request_headers(
+                    self.client.post(self.completions_endpoint()),
+                    api_key,
+                    prompt_cache_key.as_deref(),
+                )
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .json(&body)
             })
             .await?;
         let payload: ChatCompletionResponse =
@@ -1067,6 +1181,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
         }
 
         let model = request.model.clone();
+        let prompt_cache_key = request.prompt_cache_key.clone();
 
         let tools = (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice()));
         let messages = Self::convert_messages(request.system, request.messages);
@@ -1080,6 +1195,8 @@ impl ModelProvider for OpenAiCompatibleProvider {
             cache_control: self
                 .supports_top_level_prompt_cache()
                 .then(prompt_cache::PromptCacheControl::ephemeral),
+            prompt_cache_key: prompt_cache_key.clone(),
+            prompt_cache_key_camel_case: prompt_cache_key.clone(),
             stream: true,
             stream_options: Some(ChatStreamOptions {
                 include_usage: true,
@@ -1088,9 +1205,13 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
         let response = self
             .send_request(|api_key| {
-                self.apply_auth_headers(self.client.post(self.completions_endpoint()), api_key)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .json(&body)
+                self.apply_request_headers(
+                    self.client.post(self.completions_endpoint()),
+                    api_key,
+                    prompt_cache_key.as_deref(),
+                )
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .json(&body)
             })
             .await?;
         if !response.status().is_success() {
@@ -1106,11 +1227,15 @@ impl ModelProvider for OpenAiCompatibleProvider {
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
+            let mut response_id: Option<String> = None;
 
             while let Some(event) = events.next().await {
                 let event = event?;
                 let chunk: utils::ChatStreamChunk =
                     utils::parse_json_value(provider_id.as_str(), "chat stream chunk", event)?;
+                if let Some(next_response_id) = chunk.id.clone() {
+                    response_id = Some(next_response_id);
+                }
                 let choice = chunk.choices.first();
 
                 let delta = choice
@@ -1205,7 +1330,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
                         stream_finish_reason.as_deref(),
                     ),
                     usage: stream_usage,
-                    provider_metadata: None,
+                    provider_metadata: response_id_metadata(response_id),
                 };
             }
         };
@@ -1245,6 +1370,10 @@ struct ChatCompletionRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_control: Option<prompt_cache::PromptCacheControl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
+    #[serde(rename = "promptCacheKey", skip_serializing_if = "Option::is_none")]
+    prompt_cache_key_camel_case: Option<String>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<ChatStreamOptions>,
@@ -1306,6 +1435,8 @@ struct RealtimeToolDefinition {
 
 #[derive(Debug, Deserialize)]
 struct ChatCompletionResponse {
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
@@ -1426,6 +1557,105 @@ mod tests {
 
     fn sample_png_data_url() -> &'static str {
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W7tYAAAAASUVORK5CYII="
+    }
+
+    #[test]
+    fn prompt_cache_shape_changes_when_env_secret_changes() {
+        let key = format!("AGENA_TEST_OPENAI_COMPAT_SCOPE_{}", std::process::id());
+        unsafe { std::env::set_var(key.as_str(), "sk-first") };
+
+        let provider = OpenAiCompatibleProvider::new_managed(
+            "opencode",
+            reqwest::Client::new(),
+            ManagedCredential::environment("opencode env", "opencode", "api_key", key.as_str()),
+            "https://opencode.ai/zen/v1",
+            "gemini-3-pro",
+        );
+        let shape_a = provider
+            .prompt_cache_shape(&ModelId::new("gemini-3-pro"))
+            .expect("shape should exist");
+
+        unsafe { std::env::set_var(key.as_str(), "sk-second") };
+        let shape_b = provider
+            .prompt_cache_shape(&ModelId::new("gemini-3-pro"))
+            .expect("shape should exist");
+        unsafe { std::env::remove_var(key.as_str()) };
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
+    fn prompt_cache_shape_ignores_volatile_or_secret_extra_headers() {
+        let provider_a = OpenAiCompatibleProvider::new(
+            "opencode",
+            reqwest::Client::new(),
+            "sk-test",
+            "https://opencode.ai/zen/v1",
+            "gemini-3-pro",
+        )
+        .with_extra_headers(HashMap::from([
+            ("x-opencode-route".to_owned(), "backend-a".to_owned()),
+            ("x-request-id".to_owned(), "req-a".to_owned()),
+            ("traceparent".to_owned(), "trace-a".to_owned()),
+            ("authorization".to_owned(), "Bearer secret-a".to_owned()),
+        ]));
+        let provider_b = OpenAiCompatibleProvider::new(
+            "opencode",
+            reqwest::Client::new(),
+            "sk-test",
+            "https://opencode.ai/zen/v1",
+            "gemini-3-pro",
+        )
+        .with_extra_headers(HashMap::from([
+            ("x-opencode-route".to_owned(), "backend-a".to_owned()),
+            ("x-request-id".to_owned(), "req-b".to_owned()),
+            ("traceparent".to_owned(), "trace-b".to_owned()),
+            ("authorization".to_owned(), "Bearer secret-b".to_owned()),
+        ]));
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&ModelId::new("gemini-3-pro"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&ModelId::new("gemini-3-pro"))
+            .expect("shape should exist");
+
+        assert_eq!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
+    fn prompt_cache_shape_changes_when_stable_extra_headers_change() {
+        let provider_a = OpenAiCompatibleProvider::new(
+            "opencode",
+            reqwest::Client::new(),
+            "sk-test",
+            "https://opencode.ai/zen/v1",
+            "gemini-3-pro",
+        )
+        .with_extra_headers(HashMap::from([(
+            "x-opencode-route".to_owned(),
+            "backend-a".to_owned(),
+        )]));
+        let provider_b = OpenAiCompatibleProvider::new(
+            "opencode",
+            reqwest::Client::new(),
+            "sk-test",
+            "https://opencode.ai/zen/v1",
+            "gemini-3-pro",
+        )
+        .with_extra_headers(HashMap::from([(
+            "x-opencode-route".to_owned(),
+            "backend-b".to_owned(),
+        )]));
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&ModelId::new("gemini-3-pro"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&ModelId::new("gemini-3-pro"))
+            .expect("shape should exist");
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
     }
 
     fn tool_result_message_with_image(tool_call_id: &str) -> Message {
@@ -1570,6 +1800,75 @@ mod tests {
         assert_eq!(content[0]["image_url"]["url"], sample_png_data_url());
     }
 
+    #[test]
+    fn convert_messages_preserves_interleaved_tool_result_and_follow_up_order() {
+        let mut message = Message::prompt_parts(
+            crate::role::Role::Tool,
+            vec![
+                PartContent::text("Before"),
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 1,
+                    invocation: ToolInvocation::Custom {
+                        name: "tool_one".to_owned(),
+                        input: StructuredObject::default(),
+                    },
+                    output_text: "{\"result\":1}".to_owned(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: ToolOutput::default(),
+                    lifecycle: TimeRange::default(),
+                }),
+                PartContent::text("Middle"),
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 2,
+                    invocation: ToolInvocation::Custom {
+                        name: "tool_two".to_owned(),
+                        input: StructuredObject::default(),
+                    },
+                    output_text: "{\"result\":2}".to_owned(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: ToolOutput::default(),
+                    lifecycle: TimeRange::default(),
+                }),
+                PartContent::text("After"),
+            ],
+        );
+        message.parts[1].operation_id = Some("call_1".to_owned());
+        message.parts[3].operation_id = Some("call_2".to_owned());
+
+        let messages = OpenAiCompatibleProvider::convert_messages(None, vec![message]);
+
+        assert_eq!(messages.len(), 5);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(
+            messages[0].content,
+            Some(serde_json::json!([{ "type": "text", "text": "Before" }]))
+        );
+        assert_eq!(messages[1].role, "tool");
+        assert_eq!(messages[1].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(
+            messages[1].content,
+            Some(Value::String("{\"result\":1}".to_owned()))
+        );
+        assert_eq!(messages[2].role, "user");
+        assert_eq!(
+            messages[2].content,
+            Some(serde_json::json!([{ "type": "text", "text": "Middle" }]))
+        );
+        assert_eq!(messages[3].role, "tool");
+        assert_eq!(messages[3].tool_call_id.as_deref(), Some("call_2"));
+        assert_eq!(
+            messages[3].content,
+            Some(Value::String("{\"result\":2}".to_owned()))
+        );
+        assert_eq!(messages[4].role, "user");
+        assert_eq!(
+            messages[4].content,
+            Some(serde_json::json!([{ "type": "text", "text": "After" }]))
+        );
+    }
+
     #[tokio::test]
     async fn complete_includes_tool_definitions_in_chat_request() {
         let mut server = mockito::Server::new_async().await;
@@ -1626,17 +1925,78 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn openrouter_requests_include_top_level_cache_control() {
+    async fn generic_requests_include_prompt_cache_key_aliases_and_session_affinity() {
         let mut server = mockito::Server::new_async().await;
         let _mock = server
             .mock("POST", "/chat/completions")
+            .match_header("x-session-affinity", "session-42")
             .match_body(mockito::Matcher::Regex(
-                "\\\"cache_control\\\":\\{\\\"type\\\":\\\"ephemeral\\\"\\}".to_owned(),
+                "\\\"prompt_cache_key\\\":\\\"session-42\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"promptCacheKey\\\":\\\"session-42\\\"".to_owned(),
             ))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
                 serde_json::json!({
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "message": { "content": "ok" },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "mock-provider",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "gpt-4o-mini",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("gpt-4o-mini"),
+                system: Some("system".to_string()),
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: Some("session-42".to_string()),
+                previous_response_id: None,
+                prompt_window_generation: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
+    }
+
+    #[tokio::test]
+    async fn openrouter_requests_include_top_level_cache_control_and_prompt_cache_key() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .match_header("x-session-affinity", "session-42")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"cache_control\\\":\\{\\\"type\\\":\\\"ephemeral\\\"\\}".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"prompt_cache_key\\\":\\\"session-42\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"promptCacheKey\\\":\\\"session-42\\\"".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "id": "resp_next",
                     "model": "gpt-4o-mini",
                     "choices": [{
                         "message": { "content": "ok" },
@@ -1664,7 +2024,71 @@ mod tests {
                 tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(32),
-                prompt_cache_key: None,
+                prompt_cache_key: Some("session-42".to_string()),
+                previous_response_id: None,
+                prompt_window_generation: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
+        assert_eq!(
+            response
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("response_id"))
+                .and_then(|value| value.as_str()),
+            Some("resp_next")
+        );
+    }
+
+    #[tokio::test]
+    async fn opencode_requests_include_top_level_cache_control_and_prompt_cache_key() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .match_header("x-session-affinity", "session-42")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"cache_control\\\":\\{\\\"type\\\":\\\"ephemeral\\\"\\}".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"prompt_cache_key\\\":\\\"session-42\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"promptCacheKey\\\":\\\"session-42\\\"".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "message": { "content": "ok" },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "opencode",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "gpt-4o-mini",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("gpt-4o-mini"),
+                system: Some("system".to_string()),
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: Some("session-42".to_string()),
                 previous_response_id: None,
                 prompt_window_generation: None,
             })
@@ -1710,7 +2134,7 @@ mod tests {
     async fn complete_stream_emits_text_tool_delta_and_completed() {
         let mut server = mockito::Server::new_async().await;
         let body = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_stream\",\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"search\",\"arguments\":\"{\"}}]}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"}\"}}]}}]}\n\n",
@@ -1752,6 +2176,7 @@ mod tests {
         let mut saw_text = false;
         let mut saw_tool_delta = false;
         let mut saw_completed = false;
+        let mut completed_metadata = None;
 
         while let Some(item) = stream.next().await {
             match item.expect("stream event should parse") {
@@ -1776,12 +2201,14 @@ mod tests {
                 CompletionStreamEvent::Completed {
                     finish_reason,
                     usage,
+                    provider_metadata,
                     ..
                 } => {
                     assert!(matches!(finish_reason, Some(CompletionFinishReason::Stop)));
                     let usage = usage.expect("usage should be present");
                     assert_eq!(usage.input_tokens, 3);
                     assert_eq!(usage.output_tokens, 2);
+                    completed_metadata = provider_metadata;
                     saw_completed = true;
                 }
             }
@@ -1790,6 +2217,13 @@ mod tests {
         assert!(saw_text);
         assert!(saw_tool_delta);
         assert!(saw_completed);
+        assert_eq!(
+            completed_metadata
+                .as_ref()
+                .and_then(|value| value.get("response_id"))
+                .and_then(|value| value.as_str()),
+            Some("chatcmpl_stream")
+        );
     }
 
     #[test]
@@ -1829,6 +2263,8 @@ mod tests {
 
         let auth_header = Arc::new(Mutex::new(None::<String>));
         let auth_header_server = auth_header.clone();
+        let session_affinity_header = Arc::new(Mutex::new(None::<String>));
+        let session_affinity_header_server = session_affinity_header.clone();
 
         let server = tokio::spawn(async move {
             let (tcp, _) = listener
@@ -1845,9 +2281,17 @@ mod tests {
                         .get("authorization")
                         .and_then(|v| v.to_str().ok())
                         .map(ToOwned::to_owned);
+                    let session_affinity = request
+                        .headers()
+                        .get("x-session-affinity")
+                        .and_then(|v| v.to_str().ok())
+                        .map(ToOwned::to_owned);
                     *auth_header_server
                         .lock()
                         .expect("auth header lock should succeed") = value;
+                    *session_affinity_header_server
+                        .lock()
+                        .expect("session affinity header lock should succeed") = session_affinity;
                     Ok(response)
                 },
             )
@@ -1919,6 +2363,7 @@ mod tests {
                     serde_json::json!({
                         "type": "response.done",
                         "response": {
+                            "id": "resp_stream",
                             "status": "completed",
                             "usage": {
                                 "input_tokens": 3,
@@ -1951,7 +2396,7 @@ mod tests {
                 tools: Vec::new(),
                 temperature: Some(0.2),
                 max_output_tokens: Some(64),
-                prompt_cache_key: None,
+                prompt_cache_key: Some("session-42".to_owned()),
                 previous_response_id: None,
                 prompt_window_generation: None,
             })
@@ -1961,6 +2406,7 @@ mod tests {
         let mut saw_text = false;
         let mut saw_tool = false;
         let mut saw_completed = false;
+        let mut completed_metadata = None;
 
         while let Some(item) = stream.next().await {
             match item.expect("event should parse") {
@@ -1985,12 +2431,14 @@ mod tests {
                 CompletionStreamEvent::Completed {
                     finish_reason,
                     usage,
+                    provider_metadata,
                     ..
                 } => {
                     assert!(matches!(finish_reason, Some(CompletionFinishReason::Stop)));
                     let usage = usage.expect("usage should be present");
                     assert_eq!(usage.input_tokens, 3);
                     assert_eq!(usage.output_tokens, 2);
+                    completed_metadata = provider_metadata;
                     saw_completed = true;
                 }
             }
@@ -1999,6 +2447,13 @@ mod tests {
         assert!(saw_text);
         assert!(saw_tool);
         assert!(saw_completed);
+        assert_eq!(
+            completed_metadata
+                .as_ref()
+                .and_then(|value| value.get("response_id"))
+                .and_then(|value| value.as_str()),
+            Some("resp_stream")
+        );
 
         server.await.expect("server task should finish");
         assert_eq!(
@@ -2007,6 +2462,13 @@ mod tests {
                 .expect("auth header lock should succeed")
                 .as_deref(),
             Some("Bearer sk-test")
+        );
+        assert_eq!(
+            session_affinity_header
+                .lock()
+                .expect("session affinity header lock should succeed")
+                .as_deref(),
+            Some("session-42")
         );
     }
 

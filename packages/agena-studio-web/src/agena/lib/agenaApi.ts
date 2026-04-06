@@ -1,4 +1,6 @@
-import { apiJson } from '@/lib/api'
+import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from '@/lib/authEvents'
+import { apiJson, apiUrl } from '@/lib/api'
+import { buildActiveUiAuthHeaders } from '@/lib/uiAuthToken'
 
 export type StudioHealth = {
   status: string
@@ -144,6 +146,21 @@ export type SessionExecutionResource = {
   pending_user_input_requests: UserInputRequest[]
 }
 
+export type SessionEventRecord = {
+  event_id?: number | null
+  session_id: number
+  seq: number
+  event_type: string
+  payload: Record<string, unknown>
+  causation_id?: number | null
+  correlation_id?: number | null
+  created_at: string
+}
+
+export type SessionEventStreamHandle = {
+  close: () => void
+}
+
 type PaginatedResponse<T> = {
   items: T[]
   page?: {
@@ -153,6 +170,105 @@ type PaginatedResponse<T> = {
     next_cursor?: string | null
     order: 'asc' | 'desc'
   }
+}
+
+async function collectPagedItems<T>(
+  fetchPage: (cursor?: string) => Promise<PaginatedResponse<T>>,
+  options?: {
+    merge?: 'append' | 'prepend'
+    maxPages?: number
+    resourceName?: string
+  },
+): Promise<T[]> {
+  const merge = options?.merge ?? 'append'
+  const maxPages = Math.max(1, Math.trunc(options?.maxPages ?? 100))
+  const resourceName = options?.resourceName ?? 'paged resource'
+  let cursor: string | undefined
+  let items: T[] = []
+  const seenCursors = new Set<string>()
+
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+    const response = await fetchPage(cursor)
+    const chunk = response.items ?? []
+    items = merge === 'prepend' ? chunk.concat(items) : items.concat(chunk)
+
+    const nextCursor = response.page?.next_cursor ?? undefined
+    if (!response.page?.has_more || !nextCursor) {
+      return items
+    }
+
+    if (seenCursors.has(nextCursor)) {
+      throw new Error(`Pagination cursor repeated while loading ${resourceName}`)
+    }
+    seenCursors.add(nextCursor)
+    cursor = nextCursor
+  }
+
+  throw new Error(`Pagination exceeded ${maxPages} pages while loading ${resourceName}`)
+}
+
+function normalizeSseBuffer(buffer: string): string {
+  return buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+}
+
+function parseSseEventBlock(block: string): {
+  event: string
+  id: string
+  data: string
+} {
+  let event = 'message'
+  let id = ''
+  const data: string[] = []
+
+  for (const rawLine of block.split('\n')) {
+    if (!rawLine || rawLine.startsWith(':')) continue
+
+    const separator = rawLine.indexOf(':')
+    const field = separator >= 0 ? rawLine.slice(0, separator) : rawLine
+    const value = separator >= 0 ? rawLine.slice(separator + 1).replace(/^ /, '') : ''
+
+    switch (field) {
+      case 'event':
+        event = value || 'message'
+        break
+      case 'id':
+        id = value
+        break
+      case 'data':
+        data.push(value)
+        break
+      default:
+        break
+    }
+  }
+
+  return {
+    event,
+    id,
+    data: data.join('\n'),
+  }
+}
+
+function extractErrorCode(bodyText: string): string {
+  const txt = String(bodyText || '').trim()
+  if (!txt) return ''
+
+  try {
+    const parsed = JSON.parse(txt) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return ''
+    const record = parsed as Record<string, unknown>
+    if (typeof record.code === 'string') return record.code.trim()
+
+    const nested = record.error
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const nestedCode = (nested as Record<string, unknown>).code
+      if (typeof nestedCode === 'string') return nestedCode.trim()
+    }
+  } catch {
+    // ignore non-json payloads
+  }
+
+  return ''
 }
 
 export async function fetchStudioHealth(): Promise<StudioHealth> {
@@ -198,8 +314,13 @@ export async function refreshProviderCredential(providerId: string): Promise<voi
 }
 
 export async function listWorkspaces(): Promise<WorkspaceResource[]> {
-  const response = await apiJson<PaginatedResponse<WorkspaceResource>>('/api/v1/workspaces?limit=100')
-  return response.items ?? []
+  return await collectPagedItems(
+    (cursor) =>
+      apiJson<PaginatedResponse<WorkspaceResource>>(
+        `/api/v1/workspaces?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      ),
+    { resourceName: 'workspaces' },
+  )
 }
 
 export async function resolveWorkspace(path: string, createIfMissing: boolean): Promise<WorkspaceResource> {
@@ -222,10 +343,15 @@ export async function createWorkspace(path: string): Promise<WorkspaceResource> 
 }
 
 export async function listSessions(workspaceId: number): Promise<SessionResource[]> {
-  const response = await apiJson<PaginatedResponse<SessionResource>>(
-    `/api/v1/sessions?workspace_id=${encodeURIComponent(String(workspaceId))}&limit=100`,
+  return await collectPagedItems(
+    (cursor) =>
+      apiJson<PaginatedResponse<SessionResource>>(
+        `/api/v1/sessions?workspace_id=${encodeURIComponent(String(workspaceId))}&limit=100${
+          cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+        }`,
+      ),
+    { resourceName: 'sessions' },
   )
-  return response.items ?? []
 }
 
 export async function createSession(input: {
@@ -249,10 +375,161 @@ export async function getSessionState(sessionId: number): Promise<SessionExecuti
 }
 
 export async function listMessages(sessionId: number): Promise<MessageResource[]> {
-  const response = await apiJson<PaginatedResponse<MessageResource>>(
-    `/api/v1/sessions/${sessionId}/messages?parts=full&limit=100`,
+  return await collectPagedItems(
+    (cursor) =>
+      apiJson<PaginatedResponse<MessageResource>>(
+        `/api/v1/sessions/${sessionId}/messages?parts=full&limit=100${
+          cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+        }`,
+      ),
+    { merge: 'prepend', maxPages: 1000, resourceName: 'session messages' },
   )
-  return response.items ?? []
+}
+
+export function streamSessionEvents(
+  sessionId: number,
+  options: {
+    afterSeq?: number | null
+    pollIntervalMs?: number
+    onEvent: (event: SessionEventRecord) => void
+    onError?: (error: Error) => void
+    onOpen?: () => void
+  },
+): SessionEventStreamHandle {
+  const controller = new AbortController()
+  const decoder = new TextDecoder()
+  const pollIntervalMs = Math.max(50, Math.trunc(options.pollIntervalMs ?? 250))
+  let closed = false
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let afterSeq = Math.max(0, Math.trunc(options.afterSeq ?? 0))
+
+  const scheduleReconnect = (delayMs: number) => {
+    if (closed || reconnectTimer) return
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      void connect()
+    }, delayMs)
+  }
+
+  const close = () => {
+    closed = true
+    controller.abort()
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+  }
+
+  const handleEventBlock = (block: string) => {
+    const parsed = parseSseEventBlock(block)
+    if (!parsed.data) return
+
+    if (parsed.event === 'error') {
+      options.onError?.(new Error(parsed.data))
+      return
+    }
+
+    if (parsed.event !== 'session_event') return
+
+    const record = JSON.parse(parsed.data) as SessionEventRecord
+    if (typeof record.seq === 'number' && Number.isFinite(record.seq)) {
+      afterSeq = Math.max(afterSeq, record.seq)
+    } else if (parsed.id) {
+      const seq = Number(parsed.id)
+      if (Number.isFinite(seq)) {
+        afterSeq = Math.max(afterSeq, seq)
+      }
+    }
+    options.onEvent(record)
+  }
+
+  const readResponseStream = async (response: Response) => {
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Session event stream response body is unavailable')
+    }
+
+    let buffer = ''
+    while (!closed) {
+      const { done, value } = await reader.read()
+      buffer = normalizeSseBuffer(buffer + decoder.decode(value ?? new Uint8Array(), { stream: !done }))
+
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary).trim()
+        buffer = buffer.slice(boundary + 2)
+        if (block) {
+          handleEventBlock(block)
+        }
+        boundary = buffer.indexOf('\n\n')
+      }
+
+      if (done) {
+        const trailing = buffer.trim()
+        if (trailing) {
+          handleEventBlock(trailing)
+        }
+        return
+      }
+    }
+  }
+
+  const connect = async () => {
+    if (closed) return
+
+    try {
+      const authHeaders = buildActiveUiAuthHeaders()
+      const url = new URL(apiUrl(`/api/v1/sessions/${sessionId}/events/stream`))
+      if (afterSeq > 0) {
+        url.searchParams.set('after_seq', String(afterSeq))
+      }
+      url.searchParams.set('poll_interval_ms', String(pollIntervalMs))
+
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        signal: controller.signal,
+        credentials: authHeaders.authorization ? 'omit' : 'include',
+        headers: {
+          accept: 'text/event-stream',
+          ...(authHeaders.authorization ? authHeaders : {}),
+        },
+      })
+
+      if (!response.ok) {
+        const bodyText = await response.text().catch(() => '')
+        const extractedMessage = extractAuthRequiredMessageFromBodyText(bodyText)
+        const message = extractedMessage || bodyText.trim() || `Request failed (${response.status})`
+        const code = extractErrorCode(bodyText)
+        const isUiAuthRequired =
+          response.status === 401 &&
+          (code === 'auth_required' || message.trim().toLowerCase() === 'ui authentication required')
+        if (isUiAuthRequired) {
+          emitAuthRequired({
+            message,
+            status: response.status,
+            code: code || 'auth_required',
+            url: url.toString(),
+          })
+        }
+        throw new Error(message)
+      }
+
+      options.onOpen?.()
+      await readResponseStream(response)
+
+      if (!closed) {
+        scheduleReconnect(250)
+      }
+    } catch (error) {
+      if (closed || controller.signal.aborted) return
+      options.onError?.(error instanceof Error ? error : new Error(String(error)))
+      scheduleReconnect(1_000)
+    }
+  }
+
+  void connect()
+
+  return { close }
 }
 
 export async function submitTurn(input: {
@@ -290,20 +567,17 @@ export async function replyPermission(input: {
   kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always'
   reason?: string
 }): Promise<SessionExecutionResource> {
-  return await apiJson<SessionExecutionResource>(
-    `/api/v1/sessions/${input.sessionId}/permission-replies`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        reply: {
-          request_id: input.requestId,
-          kind: input.kind,
-          ...(input.reason ? { reason: input.reason } : {}),
-        },
-      }),
-    },
-  )
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/permission-replies`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      reply: {
+        request_id: input.requestId,
+        kind: input.kind,
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+    }),
+  })
 }
 
 export async function replyUserInput(input: {
@@ -311,20 +585,17 @@ export async function replyUserInput(input: {
   requestId: string
   answers: Record<string, string[]>
 }): Promise<SessionExecutionResource> {
-  return await apiJson<SessionExecutionResource>(
-    `/api/v1/sessions/${input.sessionId}/user-input-replies`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        reply: {
-          request_id: input.requestId,
-          kind: 'submit',
-          answers: input.answers,
-        },
-      }),
-    },
-  )
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/user-input-replies`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      reply: {
+        request_id: input.requestId,
+        kind: 'submit',
+        answers: input.answers,
+      },
+    }),
+  })
 }
 
 export async function cancelUserInput(input: {
@@ -332,18 +603,15 @@ export async function cancelUserInput(input: {
   requestId: string
   reason?: string
 }): Promise<SessionExecutionResource> {
-  return await apiJson<SessionExecutionResource>(
-    `/api/v1/sessions/${input.sessionId}/user-input-replies`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        reply: {
-          request_id: input.requestId,
-          kind: 'cancel',
-          ...(input.reason ? { reason: input.reason } : {}),
-        },
-      }),
-    },
-  )
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/user-input-replies`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      reply: {
+        request_id: input.requestId,
+        kind: 'cancel',
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+    }),
+  })
 }

@@ -299,6 +299,19 @@ impl CodexProvider {
         }));
     }
 
+    fn flush_assistant_responses_text(
+        input: &mut Vec<OpenAiResponsesInputItem>,
+        text_chunks: &mut Vec<String>,
+    ) {
+        if text_chunks.is_empty() {
+            return;
+        }
+
+        let text = text_chunks.join("");
+        text_chunks.clear();
+        Self::push_responses_text_message(input, "assistant", text);
+    }
+
     fn push_responses_message_from_parts(
         input: &mut Vec<OpenAiResponsesInputItem>,
         role: &str,
@@ -354,6 +367,7 @@ impl CodexProvider {
                                 name,
                                 arguments_json,
                             } => {
+                                Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 if !id.trim().is_empty() && !name.trim().is_empty() {
                                     input.push(OpenAiResponsesInputItem::FunctionCall(
                                         OpenAiFunctionCallItem {
@@ -369,6 +383,7 @@ impl CodexProvider {
                                 tool_call_id,
                                 output_json,
                             } => {
+                                Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 if !tool_call_id.trim().is_empty() {
                                     input.push(OpenAiResponsesInputItem::FunctionCallOutput(
                                         OpenAiFunctionCallOutputItem {
@@ -382,19 +397,61 @@ impl CodexProvider {
                         }
                     }
 
-                    if !text_chunks.is_empty() {
-                        Self::push_responses_text_message(input, "assistant", text_chunks.join(""));
-                    }
+                    Self::flush_assistant_responses_text(input, &mut text_chunks);
                 }
             }
             Role::Tool => {
                 if projected_parts.is_empty() {
                     Self::push_responses_text_message(input, "user", message.as_text_lossy());
                 } else {
-                    let tool_result = utils::first_tool_result(projected_parts.as_slice());
+                    let tool_results = utils::tool_results(projected_parts.as_slice());
                     let extra_parts = utils::non_tool_result_parts(projected_parts.as_slice());
 
-                    if let Some((tool_call_id, output_json)) = tool_result {
+                    if tool_results.len() > 1 {
+                        let mut buffered_parts = Vec::new();
+                        for part in projected_parts {
+                            match part {
+                                utils::ProjectedSessionPart::ToolResult {
+                                    tool_call_id,
+                                    output_json,
+                                } => {
+                                    if !buffered_parts.is_empty() {
+                                        Self::push_responses_message_from_parts(
+                                            input,
+                                            "user",
+                                            buffered_parts.as_slice(),
+                                        );
+                                        buffered_parts.clear();
+                                    }
+
+                                    if tool_call_id.trim().is_empty() {
+                                        buffered_parts.push(utils::ProjectedSessionPart::Text {
+                                            text: output_json,
+                                        });
+                                    } else {
+                                        input.push(OpenAiResponsesInputItem::FunctionCallOutput(
+                                            OpenAiFunctionCallOutputItem {
+                                                kind: "function_call_output",
+                                                call_id: tool_call_id,
+                                                output: serde_json::Value::String(output_json),
+                                            },
+                                        ));
+                                    }
+                                }
+                                other => buffered_parts.push(other),
+                            }
+                        }
+
+                        if !buffered_parts.is_empty() {
+                            Self::push_responses_message_from_parts(
+                                input,
+                                "user",
+                                buffered_parts.as_slice(),
+                            );
+                        }
+                    } else if let Some((tool_call_id, output_json)) =
+                        tool_results.into_iter().next()
+                    {
                         if tool_call_id.trim().is_empty() {
                             let mut fallback_parts =
                                 vec![utils::ProjectedSessionPart::Text { text: output_json }];
@@ -544,6 +601,21 @@ impl ModelProvider for CodexProvider {
 
     fn supports_prompt_continuation(&self, _model: &ModelId) -> bool {
         true
+    }
+
+    fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
+        let auth_account_id = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| utils::normalize_optional_text(state.account_id.clone()));
+        Some(
+            crate::provider::PromptCacheShape::new(PROVIDER_ID)
+                .with_string("auth_provider_id", self.auth_provider_id.as_str())
+                .with_optional_string("auth_account_id", auth_account_id)
+                .with_string("default_model", self.default_model.as_str())
+                .with_string("endpoint", CODEX_API_ENDPOINT),
+        )
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -1024,12 +1096,61 @@ fn map_openai_usage(u: OpenAiUsage) -> CompletionUsage {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, sync::Mutex};
+
     use super::*;
     use crate::message::{
         AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, StructuredObject,
         TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
     };
     use crate::tool::{ToolBehavior, ToolDefinition};
+
+    #[derive(Default)]
+    struct MemoryAuthStore {
+        values: Mutex<HashMap<String, crate::provider::auth::AuthData>>,
+    }
+
+    impl crate::provider::auth::AuthStore for MemoryAuthStore {
+        fn all(&self) -> Result<HashMap<String, crate::provider::auth::AuthData>, AppError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("auth store lock should succeed")
+                .clone())
+        }
+
+        fn get(
+            &self,
+            provider_id: &str,
+        ) -> Result<Option<crate::provider::auth::AuthData>, AppError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("auth store lock should succeed")
+                .get(provider_id)
+                .cloned())
+        }
+
+        fn set(
+            &self,
+            provider_id: &str,
+            auth: crate::provider::auth::AuthData,
+        ) -> Result<(), AppError> {
+            self.values
+                .lock()
+                .expect("auth store lock should succeed")
+                .insert(provider_id.to_owned(), auth);
+            Ok(())
+        }
+
+        fn remove(&self, provider_id: &str) -> Result<(), AppError> {
+            self.values
+                .lock()
+                .expect("auth store lock should succeed")
+                .remove(provider_id);
+            Ok(())
+        }
+    }
 
     fn sample_tool_definition() -> ToolDefinition {
         ToolDefinition::plugin(
@@ -1090,6 +1211,32 @@ mod tests {
         message
     }
 
+    fn multi_tool_result_message(tool_call_ids: &[&str]) -> Message {
+        let mut parts = Vec::new();
+        for (index, _) in tool_call_ids.iter().enumerate() {
+            parts.push(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                call_id: index as i64,
+                invocation: ToolInvocation::Custom {
+                    name: format!("tool_{index}"),
+                    input: StructuredObject::default(),
+                },
+                output_text: format!("{{\"result\":{index}}}"),
+                blocks: Vec::new(),
+                attachments: Vec::new(),
+                details: ToolOutput::default(),
+                lifecycle: TimeRange::default(),
+            }));
+        }
+
+        let mut message = Message::prompt_parts(crate::role::Role::Tool, parts);
+        for (index, tool_call_id) in tool_call_ids.iter().enumerate() {
+            if let Some(part) = message.parts.get_mut(index) {
+                part.operation_id = Some((*tool_call_id).to_owned());
+            }
+        }
+        message
+    }
+
     #[test]
     fn responses_request_serializes_tools() {
         let request = OpenAiResponsesRequest::new(
@@ -1133,6 +1280,48 @@ mod tests {
     }
 
     #[test]
+    fn prompt_cache_shape_changes_when_account_id_changes() {
+        let auth_store = Arc::new(MemoryAuthStore::default());
+        let provider_a = CodexProvider::from_auth_with_options(
+            reqwest::Client::new(),
+            auth_store.clone(),
+            &crate::provider::auth::AuthData::OAuth {
+                refresh: "refresh-a".to_owned(),
+                access: "access-a".to_owned(),
+                expires_at_ms: 0,
+                account_id: Some("acct-a".to_owned()),
+                enterprise_url: None,
+            },
+            "gpt-5.3-codex",
+            "openai",
+        )
+        .expect("codex provider should construct");
+        let provider_b = CodexProvider::from_auth_with_options(
+            reqwest::Client::new(),
+            auth_store,
+            &crate::provider::auth::AuthData::OAuth {
+                refresh: "refresh-b".to_owned(),
+                access: "access-b".to_owned(),
+                expires_at_ms: 0,
+                account_id: Some("acct-b".to_owned()),
+                enterprise_url: None,
+            },
+            "gpt-5.3-codex",
+            "openai",
+        )
+        .expect("codex provider should construct");
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&crate::model::ModelId::new("gpt-5.3-codex"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&crate::model::ModelId::new("gpt-5.3-codex"))
+            .expect("shape should exist");
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
     fn responses_input_encodes_tool_result_images_as_multimodal_function_output() {
         let request = CompletionRequest {
             model: crate::model::ModelId::new("gpt-5.3-codex"),
@@ -1158,5 +1347,92 @@ mod tests {
         assert_eq!(items[0]["output"][0]["text"], "{\"ok\":true}");
         assert_eq!(items[0]["output"][1]["type"], "input_image");
         assert_eq!(items[0]["output"][1]["image_url"], sample_png_data_url());
+    }
+
+    #[test]
+    fn responses_input_preserves_assistant_part_order_around_tool_calls() {
+        let mut assistant = Message::prompt_text(crate::role::Role::Assistant, "Before ");
+        assistant.push_part(crate::message::MessagePart::with_content(
+            2,
+            assistant.id,
+            assistant.created_at,
+            crate::message::ExecutionStatus::Completed,
+            crate::message::PartContent::ToolExecution(
+                crate::message::ToolExecutionPart::Completed {
+                    call_id: 1,
+                    invocation: crate::message::ToolInvocation::Custom {
+                        name: "search".to_owned(),
+                        input: crate::message::StructuredObject::default(),
+                    },
+                    output_text: String::new(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: crate::message::ToolOutput::default(),
+                    lifecycle: crate::message::TimeRange::default(),
+                },
+            ),
+        ));
+        if let Some(part) = assistant.parts.last_mut() {
+            part.operation_id = Some("call_1".to_owned());
+        }
+        assistant.push_part(crate::message::MessagePart::with_content(
+            3,
+            assistant.id,
+            assistant.created_at,
+            crate::message::ExecutionStatus::Completed,
+            crate::message::PartContent::text("After"),
+        ));
+
+        let request = CompletionRequest {
+            model: crate::model::ModelId::new("gpt-5.3-codex"),
+            system: None,
+            messages: vec![assistant],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+        };
+
+        let input = CodexProvider::to_responses_input(&request);
+        let json = serde_json::to_value(&input).expect("responses input should serialize");
+        let items = json.as_array().expect("responses input should be an array");
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0]["role"], "assistant");
+        assert_eq!(items[0]["content"][0]["text"], "Before ");
+        assert_eq!(items[1]["type"], "function_call");
+        assert_eq!(items[1]["call_id"], "call_1");
+        assert_eq!(items[1]["name"], "search");
+        assert_eq!(items[2]["role"], "assistant");
+        assert_eq!(items[2]["content"][0]["text"], "After");
+    }
+
+    #[test]
+    fn responses_input_emits_all_tool_results_from_single_tool_message() {
+        let request = CompletionRequest {
+            model: crate::model::ModelId::new("gpt-5.3-codex"),
+            system: None,
+            messages: vec![multi_tool_result_message(&["call_1", "call_2"])],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+        };
+
+        let input = CodexProvider::to_responses_input(&request);
+        let json = serde_json::to_value(&input).expect("responses input should serialize");
+        let items = json.as_array().expect("responses input should be an array");
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["type"], "function_call_output");
+        assert_eq!(items[0]["call_id"], "call_1");
+        assert_eq!(items[0]["output"], "{\"result\":0}");
+        assert_eq!(items[1]["type"], "function_call_output");
+        assert_eq!(items[1]["call_id"], "call_2");
+        assert_eq!(items[1]["output"], "{\"result\":1}");
     }
 }

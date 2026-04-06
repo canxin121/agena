@@ -14,7 +14,9 @@ import {
   replyPermission,
   replyUserInput,
   resolveWorkspace,
+  streamSessionEvents,
   submitTurn,
+  type SessionEventStreamHandle,
   type MessagePart,
   type MessageResource,
   type ProviderSummary,
@@ -45,9 +47,25 @@ const errorMessage = ref('')
 const userInputDrafts = reactive<Record<string, Record<string, string>>>({})
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+let refreshInFlight = false
+let refreshQueued = false
+let eventStream: SessionEventStreamHandle | null = null
 
 function providerDefaultModel(providerId: string): string {
   return providers.value.find((provider) => provider.provider_id === providerId)?.default_model || ''
+}
+
+function stopEventStream() {
+  eventStream?.close()
+  eventStream = null
+}
+
+function clearScheduledConversationRefresh() {
+  refreshQueued = false
+  if (!refreshTimer) return
+  clearTimeout(refreshTimer)
+  refreshTimer = null
 }
 
 function stopPolling() {
@@ -64,6 +82,11 @@ function ensurePolling() {
 }
 
 function syncPolling() {
+  if (eventStream) {
+    stopPolling()
+    return
+  }
+
   if (!sessionState.value) {
     stopPolling()
     return
@@ -75,6 +98,57 @@ function syncPolling() {
   }
 
   stopPolling()
+}
+
+function scheduleConversationRefresh(delayMs = 120) {
+  if (!selectedSessionId.value || refreshTimer) return
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null
+    void refreshConversation(false)
+  }, delayMs)
+}
+
+function syncEventStream() {
+  const sessionId = selectedSessionId.value
+  if (!sessionId) {
+    stopEventStream()
+    stopPolling()
+    return
+  }
+
+  if (typeof ReadableStream === 'undefined' || typeof TextDecoder === 'undefined') {
+    stopEventStream()
+    syncPolling()
+    return
+  }
+
+  if (eventStream) {
+    return
+  }
+
+  eventStream = streamSessionEvents(sessionId, {
+    afterSeq: sessionState.value?.latest_event_seq ?? 0,
+    pollIntervalMs: 250,
+    onOpen: () => {
+      stopPolling()
+    },
+    onEvent: (event) => {
+      if (selectedSessionId.value !== sessionId) return
+      if (sessionState.value) {
+        sessionState.value = {
+          ...sessionState.value,
+          latest_event_seq: Math.max(sessionState.value.latest_event_seq ?? 0, event.seq),
+        }
+      }
+      if (applySessionEvent(event)) {
+        scheduleConversationRefresh()
+      }
+    },
+    onError: (error) => {
+      if (selectedSessionId.value !== sessionId) return
+      console.warn('session event stream failed', error)
+    },
+  })
 }
 
 function formatMessageTime(value: string): string {
@@ -100,7 +174,7 @@ function partBody(part: MessagePart): string {
   if (type === 'command_execution') {
     const command = typeof content.command === 'string' ? content.command : ''
     const output = typeof content.output === 'string' ? content.output : ''
-    return [command, output].filter((item) => item.trim().length > 0).join('\n\n') || (part.summary || '')
+    return [command, output].filter((item) => item.trim().length > 0).join('\n\n') || part.summary || ''
   }
 
   if (type === 'error') {
@@ -116,6 +190,180 @@ function messageBlocks(message: MessageResource): string[] {
   const parts = Array.isArray(message.parts) ? message.parts : []
   if (!parts.length) return []
   return parts.map((part) => partBody(part)).filter((block) => block.trim().length > 0)
+}
+
+function messageTags(message: MessageResource): string[] {
+  const metadata = message.metadata as { tags?: unknown } | null
+  const tags = metadata?.tags
+  if (!Array.isArray(tags)) return []
+  return tags.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
+}
+
+function messageUsageFacts(message: MessageResource): string[] {
+  const usage = message.usage as Record<string, unknown> | null | undefined
+  if (!usage) return []
+
+  const facts: string[] = []
+  const pushFact = (label: string, key: string) => {
+    const value = usage[key]
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      facts.push(`${label} ${value}`)
+    }
+  }
+
+  pushFact('in', 'input_tokens')
+  pushFact('out', 'output_tokens')
+  pushFact('reasoning', 'reasoning_tokens')
+  pushFact('cache read', 'cache_read_tokens')
+  pushFact('cache write', 'cache_write_tokens')
+
+  return facts
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function sortMessages(items: MessageResource[]): MessageResource[] {
+  return [...items].sort((left, right) => {
+    const leftTime = Date.parse(left.created_at)
+    const rightTime = Date.parse(right.created_at)
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return leftTime - rightTime
+    }
+    return left.id - right.id
+  })
+}
+
+function sortMessageParts(items: MessagePart[]): MessagePart[] {
+  return [...items].sort((left, right) => {
+    if (left.part_index !== right.part_index) {
+      return left.part_index - right.part_index
+    }
+    return left.id - right.id
+  })
+}
+
+function applyMessagePartUpdatedEvent(payload: Record<string, unknown>): boolean {
+  const sessionId = selectedSessionId.value
+  const messageId = readFiniteNumber(payload.message_id)
+  const messageRole = readString(payload.message_role) as MessageResource['role'] | null
+  const messageState = readString(payload.message_state)
+  const messageCreatedAt = readString(payload.message_created_at)
+  const part = asRecord(payload.part) as MessagePart | null
+
+  if (!sessionId || messageId === null || !messageRole || !messageState || !messageCreatedAt || !part) {
+    return true
+  }
+
+  const nextMessages = messages.value.slice()
+  const messageIndex = nextMessages.findIndex((message) => message.id === messageId)
+  if (messageIndex < 0) {
+    nextMessages.push({
+      id: messageId,
+      session_id: sessionId,
+      role: messageRole,
+      state: messageState,
+      created_at: messageCreatedAt,
+      updated_at: messageCreatedAt,
+      metadata: {},
+      usage: null,
+      finish: null,
+      part_count: 1,
+      parts: [part],
+    })
+    messages.value = sortMessages(nextMessages)
+    return part.status !== 'pending' || messageState !== 'pending'
+  }
+
+  const existing = nextMessages[messageIndex]
+  const nextParts = Array.isArray(existing.parts) ? existing.parts.slice() : []
+  const partIndex = nextParts.findIndex((item) => item.id === part.id)
+  if (partIndex >= 0) {
+    nextParts[partIndex] = part
+  } else {
+    nextParts.push(part)
+  }
+
+  nextMessages[messageIndex] = {
+    ...existing,
+    role: messageRole,
+    state: messageState,
+    created_at: messageCreatedAt,
+    part_count: Math.max(existing.part_count, nextParts.length),
+    parts: sortMessageParts(nextParts),
+  }
+  messages.value = sortMessages(nextMessages)
+  return part.status !== 'pending' || messageState !== 'pending'
+}
+
+function applyMessagePartDeltaEvent(payload: Record<string, unknown>): boolean {
+  const messageId = readFiniteNumber(payload.message_id)
+  const partId = readFiniteNumber(payload.part_id)
+  const field = readString(payload.field)
+  const delta = typeof payload.delta === 'string' ? payload.delta : ''
+
+  if (messageId === null || partId === null || !field) {
+    return true
+  }
+  if (field !== 'text') {
+    return true
+  }
+
+  const nextMessages = messages.value.slice()
+  const messageIndex = nextMessages.findIndex((message) => message.id === messageId)
+  if (messageIndex < 0) {
+    return true
+  }
+
+  const existing = nextMessages[messageIndex]
+  const nextParts = Array.isArray(existing.parts) ? existing.parts.slice() : []
+  const targetIndex = nextParts.findIndex((part) => part.id === partId)
+  if (targetIndex < 0) {
+    return true
+  }
+
+  const target = nextParts[targetIndex]
+  const content = asRecord(target.content)
+  if (!content || content.type !== 'text') {
+    return true
+  }
+
+  nextParts[targetIndex] = {
+    ...target,
+    content: {
+      ...content,
+      text: `${typeof content.text === 'string' ? content.text : ''}${delta}`,
+    },
+  }
+  nextMessages[messageIndex] = {
+    ...existing,
+    parts: sortMessageParts(nextParts),
+  }
+  messages.value = sortMessages(nextMessages)
+  return false
+}
+
+function applySessionEvent(event: SessionEventRecord): boolean {
+  const payload = asRecord(event.payload)
+  if (!payload) return true
+
+  switch (event.event_type) {
+    case 'message_part_updated':
+      return applyMessagePartUpdatedEvent(payload)
+    case 'message_part_delta':
+      return applyMessagePartDeltaEvent(payload)
+    default:
+      return true
+  }
 }
 
 function readUserAnswer(requestId: string, questionId: string): string {
@@ -177,6 +425,8 @@ async function loadSessionsForWorkspace(workspaceId: number, preserveSelection =
   selectedSessionId.value = null
   messages.value = []
   sessionState.value = null
+  stopEventStream()
+  clearScheduledConversationRefresh()
   stopPolling()
 }
 
@@ -185,6 +435,8 @@ async function selectWorkspace(workspaceId: number) {
 }
 
 async function selectSession(sessionId: number) {
+  stopEventStream()
+  clearScheduledConversationRefresh()
   selectedSessionId.value = sessionId
   await refreshConversation(true)
 }
@@ -193,19 +445,33 @@ async function refreshConversation(foreground: boolean) {
   const sessionId = selectedSessionId.value
   if (!sessionId) return
 
+  if (refreshInFlight) {
+    refreshQueued = true
+    return
+  }
+
   if (foreground) {
     loading.value = true
   }
+  refreshInFlight = true
 
   try {
     const [state, messageItems] = await Promise.all([getSessionState(sessionId), listMessages(sessionId)])
+    if (selectedSessionId.value !== sessionId) return
     sessionState.value = state
     messages.value = messageItems
+    syncEventStream()
     syncPolling()
   } catch (err) {
+    if (selectedSessionId.value !== sessionId) return
     errorMessage.value = err instanceof Error ? err.message : String(err)
     stopPolling()
   } finally {
+    refreshInFlight = false
+    if (refreshQueued && selectedSessionId.value === sessionId) {
+      refreshQueued = false
+      scheduleConversationRefresh(0)
+    }
     if (foreground) {
       loading.value = false
     }
@@ -268,7 +534,7 @@ async function sendPrompt() {
     })
     sessionState.value = state
     composer.value = ''
-    ensurePolling()
+    syncEventStream()
     await refreshConversation(false)
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : String(err)
@@ -287,7 +553,7 @@ async function approvePermission(requestId: string, kind: 'allow_once' | 'allow_
       requestId,
       kind,
     })
-    ensurePolling()
+    syncEventStream()
     await refreshConversation(false)
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : String(err)
@@ -306,7 +572,12 @@ async function submitUserAnswers(requestId: string) {
   for (const question of request.questions) {
     const raw = String(draft[question.id] || '').trim()
     if (!raw) continue
-    answers[question.id] = question.multiple ? raw.split(',').map((item) => item.trim()).filter(Boolean) : [raw]
+    answers[question.id] = question.multiple
+      ? raw
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : [raw]
   }
 
   try {
@@ -315,7 +586,7 @@ async function submitUserAnswers(requestId: string) {
       requestId,
       answers,
     })
-    ensurePolling()
+    syncEventStream()
     await refreshConversation(false)
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : String(err)
@@ -332,20 +603,18 @@ async function cancelUserAnswers(requestId: string) {
       requestId,
       reason: 'Cancelled from Agena Studio',
     })
-    ensurePolling()
+    syncEventStream()
     await refreshConversation(false)
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : String(err)
   }
 }
 
-const selectedWorkspace = computed(() =>
-  workspaces.value.find((workspace) => workspace.id === selectedWorkspaceId.value) || null,
+const selectedWorkspace = computed(
+  () => workspaces.value.find((workspace) => workspace.id === selectedWorkspaceId.value) || null,
 )
 
-const selectedSession = computed(() =>
-  sessions.value.find((session) => session.id === selectedSessionId.value) || null,
-)
+const selectedSession = computed(() => sessions.value.find((session) => session.id === selectedSessionId.value) || null)
 
 onMounted(() => {
   void loadSidebar().catch((err) => {
@@ -354,7 +623,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopEventStream()
   stopPolling()
+  clearScheduledConversationRefresh()
 })
 </script>
 
@@ -378,15 +649,14 @@ onBeforeUnmount(() => {
           <h3>Workspace</h3>
           <div class="field">
             <label class="label" for="workspace-path">Path</label>
-            <input
-              id="workspace-path"
-              v-model="workspacePath"
-              class="input mono"
-              placeholder="D:/git/ai/project"
-            />
+            <input id="workspace-path" v-model="workspacePath" class="input mono" placeholder="D:/git/ai/project" />
           </div>
           <div class="button-row" style="margin-top: 12px">
-            <button class="button primary" :disabled="loading || !workspacePath.trim()" @click="resolveWorkspaceAction(true)">
+            <button
+              class="button primary"
+              :disabled="loading || !workspacePath.trim()"
+              @click="resolveWorkspaceAction(true)"
+            >
               Resolve or Create
             </button>
             <button class="button" :disabled="loading || !workspacePath.trim()" @click="resolveWorkspaceAction(false)">
@@ -405,7 +675,9 @@ onBeforeUnmount(() => {
               :class="{ active: workspace.id === selectedWorkspaceId }"
               @click="selectWorkspace(workspace.id)"
             >
-              <div><strong>{{ workspace.path }}</strong></div>
+              <div>
+                <strong>{{ workspace.path }}</strong>
+              </div>
               <div class="muted">{{ workspace.session_count ?? 0 }} session(s)</div>
             </button>
           </div>
@@ -431,7 +703,9 @@ onBeforeUnmount(() => {
               :class="{ active: session.id === selectedSessionId }"
               @click="selectSession(session.id)"
             >
-              <div><strong>{{ session.title }}</strong></div>
+              <div>
+                <strong>{{ session.title }}</strong>
+              </div>
               <div class="muted">
                 {{ session.message_count }} message(s) · updated {{ formatMessageTime(session.updated_at) }}
               </div>
@@ -445,10 +719,14 @@ onBeforeUnmount(() => {
         <section class="card">
           <h3>Active Session</h3>
           <div v-if="selectedSession">
-            <div><strong>{{ selectedSession.title }}</strong></div>
+            <div>
+              <strong>{{ selectedSession.title }}</strong>
+            </div>
             <div class="muted">workspace={{ selectedWorkspace?.path || 'unknown' }}</div>
             <div class="muted">
-              run_state={{ sessionState?.run_state || 'unknown' }}, blocked={{ sessionState?.blocked ? 'true' : 'false' }}
+              run_state={{ sessionState?.run_state || 'unknown' }}, blocked={{
+                sessionState?.blocked ? 'true' : 'false'
+              }}
             </div>
           </div>
           <p v-else class="muted">Pick or create a session to start chatting.</p>
@@ -494,10 +772,27 @@ onBeforeUnmount(() => {
                 <div class="message-role">{{ message.role }}</div>
                 <div>{{ formatMessageTime(message.created_at) }}</div>
               </div>
+              <div
+                v-if="messageTags(message).length || messageUsageFacts(message).length || message.finish"
+                class="stack"
+              >
+                <div v-if="messageTags(message).length" class="button-row">
+                  <span v-for="tag in messageTags(message)" :key="`${message.id}-tag-${tag}`" class="badge">
+                    {{ tag }}
+                  </span>
+                </div>
+                <div v-if="messageUsageFacts(message).length" class="muted mono">
+                  usage={{ messageUsageFacts(message).join(' · ') }}
+                </div>
+                <div v-if="message.finish" class="muted mono">finish={{ message.finish }}</div>
+              </div>
               <div v-if="messageBlocks(message).length" class="stack">
-                <pre v-for="(block, index) in messageBlocks(message)" :key="`${message.id}-${index}`" class="message-block mono">{{
-                  block
-                }}</pre>
+                <pre
+                  v-for="(block, index) in messageBlocks(message)"
+                  :key="`${message.id}-${index}`"
+                  class="message-block mono"
+                  >{{ block }}</pre
+                >
               </div>
               <div v-else class="muted">No renderable parts.</div>
             </article>
@@ -513,12 +808,18 @@ onBeforeUnmount(() => {
               :key="request.request_id"
               class="list-item"
             >
-              <div><strong>{{ request.request_id }}</strong></div>
+              <div>
+                <strong>{{ request.request_id }}</strong>
+              </div>
               <div class="muted">{{ request.reason }}</div>
               <pre class="message-block mono">{{ JSON.stringify(request.action, null, 2) }}</pre>
               <div class="button-row">
-                <button class="button primary" @click="approvePermission(request.request_id, 'allow_once')">Allow Once</button>
-                <button class="button" @click="approvePermission(request.request_id, 'allow_always')">Allow Always</button>
+                <button class="button primary" @click="approvePermission(request.request_id, 'allow_once')">
+                  Allow Once
+                </button>
+                <button class="button" @click="approvePermission(request.request_id, 'allow_always')">
+                  Allow Always
+                </button>
                 <button class="button danger" @click="approvePermission(request.request_id, 'deny_once')">Deny</button>
               </div>
             </div>
@@ -533,7 +834,9 @@ onBeforeUnmount(() => {
               :key="request.request_id"
               class="list-item"
             >
-              <div><strong>{{ request.request_id }}</strong></div>
+              <div>
+                <strong>{{ request.request_id }}</strong>
+              </div>
               <div class="stack" style="margin-top: 10px">
                 <div v-for="question in request.questions" :key="question.id" class="field">
                   <label class="label" :for="`${request.request_id}-${question.id}`">
@@ -548,7 +851,7 @@ onBeforeUnmount(() => {
                       updateUserAnswer(
                         request.request_id,
                         question.id,
-                        (($event.target as HTMLTextAreaElement | null)?.value || '')
+                        ($event.target as HTMLTextAreaElement | null)?.value || '',
                       )
                     "
                   />

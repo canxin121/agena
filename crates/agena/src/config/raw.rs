@@ -15,7 +15,7 @@ use crate::{
 use super::{
     AuthConfig, ConfigEnvironment, ConfigError, OpenAiApiModeConfig, PermissionConfig,
     PluginConfig, ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig,
-    RuntimeConfig, StreamTransportMode, TracingConfig, provider_presets,
+    RuntimeConfig, StreamTransportMode, TracingConfig, UiConfig, provider_presets,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -96,6 +96,7 @@ pub(crate) struct RawConfig {
     pub(crate) mode: Option<String>,
     pub(crate) tracing: Option<RawTracingConfig>,
     pub(crate) auth: Option<RawAuthConfig>,
+    pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
     pub(crate) plugins: Option<RawPluginConfig>,
@@ -108,6 +109,7 @@ impl RawConfig {
         merge_option(&mut self.mode, overlay.mode);
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.auth, overlay.auth);
+        merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
@@ -118,6 +120,7 @@ impl RawConfig {
     pub(crate) fn merge_mode(&mut self, overlay: RawModeConfig) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.auth, overlay.auth);
+        merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
@@ -128,6 +131,7 @@ impl RawConfig {
         self.mode.is_none()
             && self.tracing.is_none()
             && self.auth.is_none()
+            && self.ui.is_none()
             && self.runtime.is_none()
             && self.permission.is_none()
             && self.plugins.is_none()
@@ -153,6 +157,9 @@ impl RawConfig {
                 .tracing
                 .get_or_insert_with(RawTracingConfig::default)
                 .filter = Some(filter);
+        }
+        if let Some(locale) = env.var("AGENA_LOCALE") {
+            config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale);
         }
         if let Some(enabled) = env.var("AGENA_PLUGIN_ENABLED") {
             config
@@ -297,6 +304,13 @@ impl RawConfig {
                 .and_then(|value| value.store_path)
                 .unwrap_or_else(FileAuthStore::default_path),
         };
+        let ui = UiConfig {
+            locale: self
+                .ui
+                .and_then(|value| value.locale)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+        };
 
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
         let permission = PermissionConfig::from_raw(self.permission.unwrap_or_default());
@@ -311,6 +325,7 @@ impl RawConfig {
         Ok(ResolvedConfig {
             tracing,
             auth,
+            ui,
             runtime,
             permission,
             plugins,
@@ -325,6 +340,7 @@ pub(crate) struct RawModeConfig {
     pub(crate) extends: Option<String>,
     pub(crate) tracing: Option<RawTracingConfig>,
     pub(crate) auth: Option<RawAuthConfig>,
+    pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
     pub(crate) plugins: Option<RawPluginConfig>,
@@ -336,6 +352,7 @@ impl RawModeConfig {
         merge_option(&mut self.extends, overlay.extends);
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.auth, overlay.auth);
+        merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
@@ -384,6 +401,18 @@ pub(crate) struct RawAuthConfig {
 impl Merge for RawAuthConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.store_path, overlay.store_path);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct RawUiConfig {
+    pub(crate) locale: Option<String>,
+}
+
+impl Merge for RawUiConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.locale, overlay.locale);
     }
 }
 

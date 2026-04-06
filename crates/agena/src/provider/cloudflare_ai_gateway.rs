@@ -74,6 +74,10 @@ impl ModelProvider for CloudflareAiGatewayProvider {
         self.inner.stream_resume_policy()
     }
 
+    fn prompt_cache_shape(&self, model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
+        self.inner.prompt_cache_shape(model)
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         self.inner.list_models().await
     }

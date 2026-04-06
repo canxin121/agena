@@ -1,11 +1,15 @@
 use std::{fmt, sync::Arc};
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use crate::{
     error::AppError,
-    provider::auth::{AuthData, AuthStore, refresh_gitlab_token},
+    provider::{
+        auth::{AuthData, AuthStore, refresh_gitlab_token},
+        utils,
+    },
 };
 
 const EAGER_REFRESH_BUFFER_MS: i64 = 5 * 60 * 1_000;
@@ -157,6 +161,14 @@ impl ManagedCredential {
         Ok(self.resolve_cached(true).await?.secret)
     }
 
+    pub(crate) fn prompt_cache_scope(&self) -> String {
+        format!(
+            "label={};source={}",
+            self.inner.label,
+            self.inner.source.prompt_cache_scope()
+        )
+    }
+
     fn new(label: String, source: CredentialSource) -> Self {
         Self {
             inner: Arc::new(ManagedCredentialInner {
@@ -226,6 +238,63 @@ impl CachedCredential {
 }
 
 impl CredentialSource {
+    fn prompt_cache_scope(&self) -> String {
+        match self {
+            Self::Static(secret) => format!(
+                "static:sha256={}",
+                prompt_cache_secret_fingerprint(secret.as_str())
+            ),
+            Self::Env {
+                provider_id,
+                field,
+                env_key,
+            } => {
+                let mut scope = format!("env:{provider_id}:{field}:{env_key}");
+                if let Ok(secret) = std::env::var(env_key) {
+                    let secret = secret.trim();
+                    if !secret.is_empty() {
+                        scope.push_str(":sha256=");
+                        scope.push_str(prompt_cache_secret_fingerprint(secret).as_str());
+                    }
+                }
+                scope
+            }
+            Self::AuthStore {
+                auth_store,
+                provider_id,
+                selector,
+                refresh,
+            } => {
+                let mut scope = format!(
+                    "auth_store:{provider_id}:{}:{}",
+                    auth_secret_selector_key(*selector),
+                    auth_refresh_strategy_key(refresh)
+                );
+                if let Some(identity) = auth_store
+                    .get(provider_id.as_str())
+                    .ok()
+                    .flatten()
+                    .as_ref()
+                    .and_then(auth_data_prompt_cache_identity)
+                {
+                    scope.push(':');
+                    scope.push_str(identity.as_str());
+                }
+                scope
+            }
+            Self::GoogleAdc { provider_id } => google_adc_prompt_cache_scope(provider_id.as_str()),
+            Self::SapAiCore {
+                provider_id,
+                service_key,
+                ..
+            } => format!(
+                "sap_ai_core:{provider_id}:{}:clientid={}",
+                service_key.url.trim_end_matches('/'),
+                service_key.clientid.trim()
+            ),
+        }
+    }
+
     async fn resolve(&self, force_refresh: bool) -> Result<CachedCredential, AppError> {
         match self {
             Self::Static(secret) => Ok(CachedCredential {
@@ -300,6 +369,191 @@ impl CredentialSource {
         }
 
         matches!(self, Self::Static(_) | Self::SapAiCore { .. })
+    }
+}
+
+fn prompt_cache_secret_fingerprint(secret: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(secret.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn google_adc_prompt_cache_scope(provider_id: &str) -> String {
+    let mut scope = format!("google_adc:{provider_id}");
+    if let Some(identity) = google_adc_prompt_cache_identity() {
+        scope.push(':');
+        scope.push_str(identity.as_str());
+    }
+    scope
+}
+
+fn google_adc_prompt_cache_identity() -> Option<String> {
+    if let Some(path) = std::env::var("GOOGLE_APPLICATION_CREDENTIALS")
+        .ok()
+        .and_then(normalize_optional_text)
+    {
+        let mut parts = vec![
+            "source=application_credentials_env".to_owned(),
+            format!("path={path}"),
+        ];
+        if let Some((payload_fingerprint, fields)) =
+            prompt_cache_json_identity(std::path::Path::new(path.as_str()))
+        {
+            parts.push(format!("payload_sha256={payload_fingerprint}"));
+            parts.extend(fields);
+        }
+        return Some(parts.join(";"));
+    }
+
+    if let Some(path) = google_adc_default_credentials_path() {
+        let path_text = path.to_string_lossy().trim().to_owned();
+        let mut parts = vec![
+            "source=config_default_credentials".to_owned(),
+            format!("path={path_text}"),
+        ];
+        if let Some((payload_fingerprint, fields)) = prompt_cache_json_identity(path.as_path()) {
+            parts.push(format!("payload_sha256={payload_fingerprint}"));
+            parts.extend(fields);
+        }
+        return Some(parts.join(";"));
+    }
+
+    let mut parts = Vec::new();
+    for (env_key, field_key) in [
+        ("GOOGLE_CLOUD_PROJECT", "google_cloud_project"),
+        ("GCLOUD_PROJECT", "gcloud_project"),
+        ("GCP_PROJECT", "gcp_project"),
+        ("GOOGLE_PROJECT_ID", "google_project_id"),
+        ("CLOUDSDK_CORE_PROJECT", "cloudsdk_core_project"),
+    ] {
+        if let Some(value) = std::env::var(env_key)
+            .ok()
+            .and_then(normalize_optional_text)
+        {
+            parts.push(format!("{field_key}={value}"));
+        }
+    }
+
+    (!parts.is_empty()).then(|| {
+        let mut identity = vec!["source=ambient".to_owned()];
+        identity.extend(parts);
+        identity.join(";")
+    })
+}
+
+fn google_adc_default_credentials_path() -> Option<std::path::PathBuf> {
+    #[cfg(target_family = "unix")]
+    {
+        let home = std::env::var("HOME")
+            .ok()
+            .and_then(normalize_optional_text)?;
+        let mut path = std::path::PathBuf::from(home);
+        path.push(".config/gcloud/application_default_credentials.json");
+        path.exists().then_some(path)
+    }
+
+    #[cfg(target_family = "windows")]
+    {
+        let app_data = std::env::var("APPDATA")
+            .ok()
+            .and_then(normalize_optional_text)?;
+        let mut path = std::path::PathBuf::from(app_data);
+        path.push("gcloud/application_default_credentials.json");
+        path.exists().then_some(path)
+    }
+}
+
+fn prompt_cache_json_identity(path: &std::path::Path) -> Option<(String, Vec<String>)> {
+    let payload = std::fs::read_to_string(path).ok()?;
+    let fingerprint = utils::request_shape_fingerprint(&payload);
+    let json: serde_json::Value = serde_json::from_str(payload.as_str()).ok()?;
+
+    let mut fields = Vec::new();
+    if let Some(project_id) = json
+        .get("project_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_optional_text(value.to_owned()))
+    {
+        fields.push(format!("project_id={project_id}"));
+    }
+    if let Some(quota_project_id) = json
+        .get("quota_project_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_optional_text(value.to_owned()))
+    {
+        fields.push(format!("quota_project_id={quota_project_id}"));
+    }
+    if let Some(client_email) = json
+        .get("client_email")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_optional_text(value.to_owned()))
+    {
+        fields.push(format!("client_email={client_email}"));
+    }
+    if let Some(client_id) = json
+        .get("client_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_optional_text(value.to_owned()))
+    {
+        fields.push(format!(
+            "client_id_sha256={}",
+            utils::request_shape_fingerprint(&client_id)
+        ));
+    }
+
+    Some((fingerprint, fields))
+}
+
+fn auth_secret_selector_key(selector: AuthSecretSelector) -> &'static str {
+    match selector {
+        AuthSecretSelector::AccessOrApiKey => "access_or_api_key",
+        AuthSecretSelector::RefreshOrAccess => "refresh_or_access",
+    }
+}
+
+fn auth_refresh_strategy_key(strategy: &AuthRefreshStrategy) -> String {
+    match strategy {
+        AuthRefreshStrategy::None => "none".to_owned(),
+        AuthRefreshStrategy::ReloadFromStore => "reload_from_store".to_owned(),
+        AuthRefreshStrategy::GitlabOAuth { instance_url } => {
+            format!("gitlab_oauth:{}", instance_url.trim_end_matches('/'))
+        }
+    }
+}
+
+fn auth_data_prompt_cache_identity(auth: &AuthData) -> Option<String> {
+    match auth {
+        AuthData::Api { key } => Some(format!(
+            "api;key_sha256={}",
+            prompt_cache_secret_fingerprint(key.as_str())
+        )),
+        AuthData::WellKnown { key, .. } => Some(format!(
+            "well_known;key_sha256={}",
+            prompt_cache_secret_fingerprint(key.as_str())
+        )),
+        AuthData::OAuth {
+            account_id,
+            enterprise_url,
+            ..
+        } => {
+            let mut parts = vec!["oauth".to_owned()];
+            if let Some(account_id) = account_id
+                .as_ref()
+                .and_then(|value| normalize_optional_text(value.clone()))
+            {
+                parts.push(format!("account_id={account_id}"));
+            }
+            if let Some(enterprise_url) = enterprise_url
+                .as_ref()
+                .and_then(|value| normalize_optional_text(value.clone()))
+            {
+                parts.push(format!(
+                    "enterprise_url={}",
+                    enterprise_url.trim_end_matches('/')
+                ));
+            }
+            Some(parts.join(";"))
+        }
     }
 }
 
@@ -467,6 +721,8 @@ fn normalize_expires_at_ms(value: i64) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    static GOOGLE_ADC_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     use std::{collections::HashMap, sync::Mutex};
 
     use super::*;
@@ -578,6 +834,202 @@ mod tests {
                 .expect("reload should pick up updated auth"),
             "refresh-2"
         );
+    }
+
+    #[test]
+    fn prompt_cache_scope_tracks_auth_store_oauth_identity() {
+        let store = Arc::new(MemoryStore::default());
+        store
+            .set(
+                "openai",
+                AuthData::OAuth {
+                    refresh: "refresh-1".to_owned(),
+                    access: "access-1".to_owned(),
+                    expires_at_ms: 0,
+                    account_id: Some("acct-a".to_owned()),
+                    enterprise_url: Some("https://chatgpt.example.com".to_owned()),
+                },
+            )
+            .expect("initial auth");
+
+        let credential = ManagedCredential::auth_store(
+            "openai oauth",
+            store.clone(),
+            "openai",
+            AuthSecretSelector::RefreshOrAccess,
+            AuthRefreshStrategy::ReloadFromStore,
+        );
+        let first_scope = credential.prompt_cache_scope();
+
+        store
+            .set(
+                "openai",
+                AuthData::OAuth {
+                    refresh: "refresh-2".to_owned(),
+                    access: "access-2".to_owned(),
+                    expires_at_ms: 0,
+                    account_id: Some("acct-b".to_owned()),
+                    enterprise_url: Some("https://chatgpt.example.com".to_owned()),
+                },
+            )
+            .expect("updated auth");
+        let second_scope = credential.prompt_cache_scope();
+
+        assert_ne!(first_scope, second_scope);
+        assert!(first_scope.contains("account_id=acct-a"));
+        assert!(second_scope.contains("account_id=acct-b"));
+    }
+
+    #[test]
+    fn prompt_cache_scope_tracks_auth_store_api_key_fingerprint() {
+        let store = Arc::new(MemoryStore::default());
+        store
+            .set(
+                "openai",
+                AuthData::Api {
+                    key: "sk-first".to_owned(),
+                },
+            )
+            .expect("initial auth");
+
+        let credential = ManagedCredential::auth_store(
+            "openai api",
+            store.clone(),
+            "openai",
+            AuthSecretSelector::AccessOrApiKey,
+            AuthRefreshStrategy::ReloadFromStore,
+        );
+        let first_scope = credential.prompt_cache_scope();
+
+        store
+            .set(
+                "openai",
+                AuthData::Api {
+                    key: "sk-second".to_owned(),
+                },
+            )
+            .expect("updated auth");
+        let second_scope = credential.prompt_cache_scope();
+
+        assert_ne!(first_scope, second_scope);
+        assert!(first_scope.contains("key_sha256="));
+        assert!(second_scope.contains("key_sha256="));
+    }
+
+    #[test]
+    fn prompt_cache_scope_tracks_static_secret_fingerprint() {
+        let first =
+            ManagedCredential::static_value("openai static", "sk-first").prompt_cache_scope();
+        let second =
+            ManagedCredential::static_value("openai static", "sk-second").prompt_cache_scope();
+
+        assert_ne!(first, second);
+        assert!(first.contains("sha256="));
+        assert!(second.contains("sha256="));
+    }
+
+    #[test]
+    fn prompt_cache_scope_tracks_env_secret_value() {
+        let key = format!("AGENA_TEST_PROMPT_CACHE_SCOPE_{}", std::process::id());
+        unsafe { std::env::set_var(key.as_str(), "first-secret") };
+
+        let credential =
+            ManagedCredential::environment("test env", "openai", "api_key", key.as_str());
+        let first_scope = credential.prompt_cache_scope();
+
+        unsafe { std::env::set_var(key.as_str(), "second-secret") };
+        let second_scope = credential.prompt_cache_scope();
+        unsafe { std::env::remove_var(key.as_str()) };
+
+        assert_ne!(first_scope, second_scope);
+        assert!(first_scope.contains("sha256="));
+        assert!(second_scope.contains("sha256="));
+    }
+
+    #[test]
+    fn prompt_cache_scope_tracks_sap_ai_core_client_id() {
+        let first = ManagedCredential::sap_ai_core(
+            "sap ai core",
+            reqwest::Client::new(),
+            "sap-ai-core",
+            SapAiCoreServiceKey {
+                clientid: "client-a".to_owned(),
+                clientsecret: "secret-a".to_owned(),
+                url: "https://auth.example.com".to_owned(),
+                serviceurls: SapAiCoreServiceUrls {
+                    ai_api_url: "https://api.example.com/v2".to_owned(),
+                },
+            },
+        )
+        .prompt_cache_scope();
+        let second = ManagedCredential::sap_ai_core(
+            "sap ai core",
+            reqwest::Client::new(),
+            "sap-ai-core",
+            SapAiCoreServiceKey {
+                clientid: "client-b".to_owned(),
+                clientsecret: "secret-b".to_owned(),
+                url: "https://auth.example.com".to_owned(),
+                serviceurls: SapAiCoreServiceUrls {
+                    ai_api_url: "https://api.example.com/v2".to_owned(),
+                },
+            },
+        )
+        .prompt_cache_scope();
+
+        assert_ne!(first, second);
+        assert!(first.contains("clientid=client-a"));
+        assert!(second.contains("clientid=client-b"));
+    }
+
+    #[test]
+    fn prompt_cache_scope_tracks_google_adc_credentials_file_content() {
+        let _guard = GOOGLE_ADC_ENV_LOCK
+            .lock()
+            .expect("google adc env lock should succeed");
+        let path = std::env::temp_dir().join(format!(
+            "agena-google-adc-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+
+        std::fs::write(
+            &path,
+            r#"{
+                "type": "service_account",
+                "project_id": "project-a",
+                "client_email": "svc-a@example.com"
+            }"#,
+        )
+        .expect("first credentials payload should write");
+        unsafe { std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", path.as_os_str()) };
+
+        let credential = ManagedCredential::google_adc("vertex adc", "google-vertex");
+        let first_scope = credential.prompt_cache_scope();
+
+        std::fs::write(
+            &path,
+            r#"{
+                "type": "service_account",
+                "project_id": "project-b",
+                "client_email": "svc-b@example.com"
+            }"#,
+        )
+        .expect("second credentials payload should write");
+        let second_scope = credential.prompt_cache_scope();
+
+        unsafe { std::env::remove_var("GOOGLE_APPLICATION_CREDENTIALS") };
+        let _ = std::fs::remove_file(&path);
+
+        assert_ne!(first_scope, second_scope);
+        assert!(first_scope.contains("source=application_credentials_env"));
+        assert!(first_scope.contains("project_id=project-a"));
+        assert!(second_scope.contains("project_id=project-b"));
+        assert!(first_scope.contains("payload_sha256="));
+        assert!(second_scope.contains("payload_sha256="));
     }
 
     #[test]

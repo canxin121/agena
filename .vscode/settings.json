@@ -1,0 +1,72 @@
+{
+  "files.watcherExclude": {
+    "**/docs/tex/build/**": true
+  },
+  "search.exclude": {
+    "**/docs/tex/build/**": true
+  },
+  "latex-workshop.view.pdf.viewer": "tab",
+  "latex-workshop.latex.autoBuild.run": "onSave",
+  "latex-workshop.synctex.afterBuild.enabled": true,
+  "latex-workshop.latex.outDir": "%DIR%/build",
+  "latex-workshop.latex.rootFile.doNotPrompt": true,
+  "latex-workshop.latex.search.rootFiles.include": [
+    "docs/tex/*.tex"
+  ],
+  "latex-workshop.latex.recipes": [
+    {
+      "name": "latexmk (xelatex)",
+      "tools": [
+        "latexmk_xelatex"
+      ]
+    },
+    {
+      "name": "xelatex x2",
+      "tools": [
+        "xelatex",
+        "xelatex"
+      ]
+    }
+  ],
+  "latex-workshop.latex.tools": [
+    {
+      "name": "latexmk_xelatex",
+      "command": "latexmk",
+      "args": [
+        "-xelatex",
+        "-synctex=1",
+        "-interaction=nonstopmode",
+        "-file-line-error",
+        "-outdir=%DIR%/build",
+        "%DOC%"
+      ]
+    },
+    {
+      "name": "xelatex",
+      "command": "xelatex",
+      "args": [
+        "-synctex=1",
+        "-interaction=nonstopmode",
+        "-file-line-error",
+        "-output-directory=%DIR%/build",
+        "%DOC%"
+      ]
+    }
+  ],
+  "latex-workshop.latex.clean.fileTypes": [
+    "*.aux",
+    "*.bbl",
+    "*.bcf",
+    "*.blg",
+    "*.fdb_latexmk",
+    "*.fls",
+    "*.log",
+    "*.nav",
+    "*.out",
+    "*.run.xml",
+    "*.snm",
+    "*.synctex.gz",
+    "*.toc",
+    "*.xdv"
+  ]
+}

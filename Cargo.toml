@@ -4,6 +4,7 @@ members = [
     "apps/agena-cli",
     "apps/agena-http-api-server",
     "apps/agena-studio-server",
+    "apps/agena-tui",
     "crates/agena",
     "crates/agena-http-api",
 ]

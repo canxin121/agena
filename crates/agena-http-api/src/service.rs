@@ -1038,7 +1038,7 @@ impl ApiService {
                         generated_by_call_id: row.generated_by_call_id,
                         model_provider_id: row.model_provider_id.clone(),
                         model_id: row.model_id.clone(),
-                        tags: Vec::new(),
+                        tags: message_tags_from_json(row.tags.as_ref()),
                     },
                     usage: row.usage.clone(),
                     finish: row.finish.clone(),
@@ -1340,6 +1340,13 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     })
 }
 
+fn message_tags_from_json(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default()
+}
+
 fn normalize_workspace_path(workspace_path: &str) -> Result<String, DbErr> {
     let raw = workspace_path.trim();
     if raw.is_empty() {
@@ -1434,4 +1441,93 @@ fn pending_user_input_requests(session: &Session) -> Vec<UserInputRequest> {
             reply.is_none().then_some(request.clone())
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use agena::{
+        db::init_schema,
+        message::{MessageSource, PartContent},
+        role::Role,
+    };
+    use sea_orm::Database;
+
+    use super::*;
+    use crate::dto::{MessageWriteRequest, WorkspaceWriteRequest};
+
+    async fn build_service() -> ApiService {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("sqlite memory db should connect");
+        init_schema(&db).await.expect("schema should initialize");
+        ApiService::new(Arc::new(db))
+    }
+
+    #[tokio::test]
+    async fn list_messages_preserves_metadata_tags() {
+        let service = build_service().await;
+        let workspace = service
+            .create_workspace(WorkspaceWriteRequest {
+                path: "/tmp/agena-http-api-tags".to_string(),
+            })
+            .await
+            .expect("workspace should be created");
+        let session = service
+            .create_session(SessionCreateRequest {
+                workspace_id: workspace.id,
+                title: "tags".to_string(),
+                parent_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let created = service
+            .create_message(
+                session.id,
+                MessageWriteRequest {
+                    role: Role::System,
+                    state: None,
+                    parts: vec![MessagePartWriteRequest {
+                        content: PartContent::text("summary"),
+                        status: None,
+                        operation_id: None,
+                        created_at: None,
+                    }],
+                    metadata: Some(MessageMetadata {
+                        source: MessageSource::System,
+                        parent_message_id: None,
+                        generated_by_call_id: None,
+                        model_provider_id: "openai".to_string(),
+                        model_id: "gpt-5".to_string(),
+                        tags: vec!["prompt_summary".to_string(), "prompt_compacted".to_string()],
+                    }),
+                    usage: None,
+                    finish: None,
+                    created_at: None,
+                },
+            )
+            .await
+            .expect("message should be created");
+
+        let page = service
+            .list_messages(
+                session.id,
+                MessageListQuery {
+                    cursor: None,
+                    limit: Some(10),
+                    parts: PartLoadMode::Summary,
+                },
+            )
+            .await
+            .expect("messages should load");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, created.id);
+        assert_eq!(
+            page.items[0].metadata.tags,
+            vec!["prompt_summary".to_string(), "prompt_compacted".to_string()]
+        );
+    }
 }

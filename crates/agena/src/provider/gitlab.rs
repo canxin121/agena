@@ -405,6 +405,20 @@ impl GitlabProvider {
         })? = None;
         Ok(())
     }
+
+    fn prompt_cache_direct_access_shape(&self) -> Option<crate::provider::PromptCacheShape> {
+        let cached = self.direct_access_cache.lock().ok()?.clone()?;
+        if cached.expires_at_ms <= now_ms() {
+            return None;
+        }
+
+        let route_headers = utils::prompt_cache_header_entries(&cached.headers);
+        let mut shape = crate::provider::PromptCacheShape::new(PROVIDER_ID);
+        if !route_headers.is_empty() {
+            shape = shape.with_json("direct_access_route_headers", &route_headers);
+        }
+        Some(shape)
+    }
 }
 
 #[async_trait]
@@ -425,6 +439,47 @@ impl ModelProvider for GitlabProvider {
     fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
         crate::provider::default_model_metadata_registry()
             .metadata_for_family(crate::provider::CapabilityFamily::Gitlab, model.as_str())
+    }
+
+    fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
+        let mapped = Self::mapped_model(model.as_str());
+        Self::use_openai_backend(mapped.as_str()) && Self::use_responses_api(mapped.as_str())
+    }
+
+    fn prompt_cache_shape(&self, model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
+        let mapped_model = Self::mapped_model(model.as_str());
+        let mut feature_flags = self
+            .feature_flags
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect::<Vec<_>>();
+        feature_flags.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+
+        let runtime_shape = self.prompt_cache_direct_access_shape();
+        let mut shape = crate::provider::PromptCacheShape::new(PROVIDER_ID)
+            .with_string("auth_scope", self.api_key.prompt_cache_scope())
+            .with_string("instance_url", self.instance_url.clone())
+            .with_string("ai_gateway_url", self.ai_gateway_url.clone())
+            .with_json(
+                "ai_gateway_headers",
+                &utils::prompt_cache_header_entries(&self.ai_gateway_headers),
+            )
+            .with_json("feature_flags", &feature_flags)
+            .with_string("mapped_model", mapped_model.as_str())
+            .with_bool(
+                "openai_backend",
+                Self::use_openai_backend(mapped_model.as_str()),
+            )
+            .with_bool(
+                "responses_api",
+                Self::use_responses_api(mapped_model.as_str()),
+            )
+            .with_bool("direct_access_cached", runtime_shape.is_some());
+        if let Some(runtime_shape) = runtime_shape {
+            shape.extend_prefixed("runtime", &runtime_shape);
+        }
+
+        Some(shape)
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -673,6 +728,182 @@ mod tests {
         completions.assert();
         assert!(saw_delta);
         assert!(saw_done);
+    }
+
+    #[test]
+    fn codex_models_support_prompt_continuation() {
+        let provider = GitlabProvider::from_token(
+            reqwest::Client::new(),
+            "gl-token",
+            Some("https://gitlab.example.com".to_owned()),
+        )
+        .expect("gitlab provider should be created from token");
+
+        assert!(provider.supports_prompt_continuation(&ModelId::new("duo-chat-gpt-5-codex")));
+        assert!(!provider.supports_prompt_continuation(&ModelId::new("claude-sonnet-4-5")));
+    }
+
+    #[test]
+    fn prompt_cache_shape_changes_when_auth_scope_changes() {
+        let provider_a = GitlabProvider::from_managed_token_with_config(
+            reqwest::Client::new(),
+            ManagedCredential::environment("gitlab env", "gitlab", "token", "GITLAB_TOKEN_A"),
+            GitlabProviderConfig::default(),
+        )
+        .expect("gitlab provider should be created from managed token");
+        let provider_b = GitlabProvider::from_managed_token_with_config(
+            reqwest::Client::new(),
+            ManagedCredential::environment("gitlab env", "gitlab", "token", "GITLAB_TOKEN_B"),
+            GitlabProviderConfig::default(),
+        )
+        .expect("gitlab provider should be created from managed token");
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&ModelId::new("duo-chat-gpt-5-codex"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&ModelId::new("duo-chat-gpt-5-codex"))
+            .expect("shape should exist");
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
+    fn prompt_cache_shape_changes_when_direct_access_route_headers_change() {
+        let provider_a = GitlabProvider::from_token_with_urls(
+            reqwest::Client::new(),
+            "gl-token",
+            Some("https://gitlab.example.com".to_owned()),
+            Some("https://cloud.gitlab.example.com".to_owned()),
+        )
+        .expect("gitlab provider should be created from token");
+        let provider_b = GitlabProvider::from_token_with_urls(
+            reqwest::Client::new(),
+            "gl-token",
+            Some("https://gitlab.example.com".to_owned()),
+            Some("https://cloud.gitlab.example.com".to_owned()),
+        )
+        .expect("gitlab provider should be created from token");
+
+        *provider_a
+            .direct_access_cache
+            .lock()
+            .expect("direct access cache lock should succeed") = Some(DirectAccessToken {
+            token: "direct-a".to_owned(),
+            headers: HashMap::from([("x-gitlab-route".to_owned(), "backend-a".to_owned())]),
+            expires_at_ms: now_ms() + 60_000,
+        });
+        *provider_b
+            .direct_access_cache
+            .lock()
+            .expect("direct access cache lock should succeed") = Some(DirectAccessToken {
+            token: "direct-b".to_owned(),
+            headers: HashMap::from([("x-gitlab-route".to_owned(), "backend-b".to_owned())]),
+            expires_at_ms: now_ms() + 60_000,
+        });
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&ModelId::new("duo-chat-gpt-5-codex"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&ModelId::new("duo-chat-gpt-5-codex"))
+            .expect("shape should exist");
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
+    fn prompt_cache_shape_ignores_volatile_or_secret_ai_gateway_headers() {
+        let config_a = GitlabProviderConfig {
+            ai_gateway_headers: HashMap::from([
+                ("x-gitlab-route".to_owned(), "backend-a".to_owned()),
+                ("x-request-id".to_owned(), "req-a".to_owned()),
+                ("traceparent".to_owned(), "trace-a".to_owned()),
+                ("authorization".to_owned(), "Bearer secret-a".to_owned()),
+            ]),
+            ..GitlabProviderConfig::default()
+        };
+        let config_b = GitlabProviderConfig {
+            ai_gateway_headers: HashMap::from([
+                ("x-gitlab-route".to_owned(), "backend-a".to_owned()),
+                ("x-request-id".to_owned(), "req-b".to_owned()),
+                ("traceparent".to_owned(), "trace-b".to_owned()),
+                ("authorization".to_owned(), "Bearer secret-b".to_owned()),
+            ]),
+            ..GitlabProviderConfig::default()
+        };
+
+        let provider_a =
+            GitlabProvider::from_token_with_config(reqwest::Client::new(), "gl-token", config_a)
+                .expect("gitlab provider should be created from token");
+        let provider_b =
+            GitlabProvider::from_token_with_config(reqwest::Client::new(), "gl-token", config_b)
+                .expect("gitlab provider should be created from token");
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&ModelId::new("duo-chat-gpt-5-codex"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&ModelId::new("duo-chat-gpt-5-codex"))
+            .expect("shape should exist");
+
+        assert_eq!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
+    fn prompt_cache_shape_ignores_volatile_or_secret_direct_access_headers() {
+        let provider_a = GitlabProvider::from_token_with_urls(
+            reqwest::Client::new(),
+            "gl-token",
+            Some("https://gitlab.example.com".to_owned()),
+            Some("https://cloud.gitlab.example.com".to_owned()),
+        )
+        .expect("gitlab provider should be created from token");
+        let provider_b = GitlabProvider::from_token_with_urls(
+            reqwest::Client::new(),
+            "gl-token",
+            Some("https://gitlab.example.com".to_owned()),
+            Some("https://cloud.gitlab.example.com".to_owned()),
+        )
+        .expect("gitlab provider should be created from token");
+
+        *provider_a
+            .direct_access_cache
+            .lock()
+            .expect("direct access cache lock should succeed") = Some(DirectAccessToken {
+            token: "direct-a".to_owned(),
+            headers: HashMap::from([
+                ("x-gitlab-route".to_owned(), "backend-a".to_owned()),
+                ("x-request-id".to_owned(), "req-a".to_owned()),
+                ("x-api-key".to_owned(), "secret-a".to_owned()),
+                ("traceparent".to_owned(), "trace-a".to_owned()),
+                ("authorization".to_owned(), "Bearer secret-a".to_owned()),
+            ]),
+            expires_at_ms: now_ms() + 60_000,
+        });
+        *provider_b
+            .direct_access_cache
+            .lock()
+            .expect("direct access cache lock should succeed") = Some(DirectAccessToken {
+            token: "direct-b".to_owned(),
+            headers: HashMap::from([
+                ("x-gitlab-route".to_owned(), "backend-a".to_owned()),
+                ("x-request-id".to_owned(), "req-b".to_owned()),
+                ("x-api-key".to_owned(), "secret-b".to_owned()),
+                ("traceparent".to_owned(), "trace-b".to_owned()),
+                ("authorization".to_owned(), "Bearer secret-b".to_owned()),
+            ]),
+            expires_at_ms: now_ms() + 60_000,
+        });
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&ModelId::new("duo-chat-gpt-5-codex"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&ModelId::new("duo-chat-gpt-5-codex"))
+            .expect("shape should exist");
+
+        assert_eq!(shape_a.fingerprint(), shape_b.fingerprint());
     }
 
     #[test]

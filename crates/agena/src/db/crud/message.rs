@@ -251,6 +251,31 @@ where
     Ok(deleted.rows_affected)
 }
 
+pub async fn delete_messages_after_cursor<C>(
+    db: &C,
+    session_id: i64,
+    created_at_ms: i64,
+    message_id: i64,
+) -> Result<u64, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let deleted = entities::message::Entity::delete_many()
+        .filter(entities::message::Column::SessionId.eq(session_id))
+        .filter(
+            sea_orm::Condition::any()
+                .add(entities::message::Column::CreatedAtMs.gt(created_at_ms))
+                .add(
+                    sea_orm::Condition::all()
+                        .add(entities::message::Column::CreatedAtMs.eq(created_at_ms))
+                        .add(entities::message::Column::Id.gt(message_id)),
+                ),
+        )
+        .exec(db)
+        .await?;
+    Ok(deleted.rows_affected)
+}
+
 async fn insert_part(
     db: &impl ConnectionTrait,
     message_id: i64,

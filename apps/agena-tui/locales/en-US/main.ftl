@@ -1,0 +1,312 @@
+cli-about = Agena terminal chat application
+
+pane-sessions = Sessions
+pane-sessions-search = Sessions [{$query}]
+pane-transcript = Transcript
+pane-messages = Messages
+pane-composer = Composer [{$session}]
+session-view-all = all
+session-view-roots = roots
+session-view-subtree = subtree
+session-view-subtree-root = subtree #{$id}
+
+session-meta = #{$id}  {$message_count} msg  {$updated}
+session-running = running
+session-tag-parent = parent
+session-tag-child = child
+session-tag-current = current
+session-tag-ancestor = ancestor
+session-tag-sibling = sibling
+session-tag-leaf = leaf
+session-summary-root = root #{$id}
+session-summary-depth = depth {$depth}
+session-summary-side-branches = {$count} branches
+session-summary-descendants = {$count} descendants
+session-summary-parent = parent #{$id}
+session-summary-children = {$count} child
+sessions-empty = No sessions found
+sessions-loading-more = Loading more sessions...
+sessions-more = More sessions available
+
+transcript-header-lines = lines {$first}-{$last}/{$total} ({$percent}%)
+transcript-header-find = find={$query} ({$current}/{$total})
+transcript-header-tail = tail
+transcript-header-loading = loading
+transcript-header-loading-older = loading older
+transcript-header-busy = busy
+transcript-loading-older = Loading older messages...
+transcript-more-older = Older messages available. Scroll up or press PageUp to load more.
+transcript-empty-session = No messages in this session yet.
+
+no-session-selected = No session selected.
+no-session-selected-hint = Use the session pane or start typing in the composer to create one.
+composer-session-new = new session
+composer-placeholder = Enter sends. / runs slash commands. Alt+P opens command palette. F3 attach file. Alt/Shift+Enter or Ctrl+J inserts newline. F4 external edit. F6 clipboard image.
+
+status-sessions = Tab switch pane | s resume | b branches | / search | 1 all | 2 roots | 3 subtree | m cycle | Enter open | [ parent | ] children | R rename | t timeline | v pager | q quit
+status-transcript = Tab switch pane | s resume | b branches | / or Ctrl+F search | Alt+P commands | 1/2/3 session views | [ parent | ] children | R rename | t timeline | e export | v pager | y/Y copy | q quit
+status-composer = Enter send | / command | Alt+P palette | F3 attach | F4 edit | F6 image | Tab switch pane | q quit
+
+help-title = Help
+help-header = Agena TUI
+help-section-sessions = Sessions pane
+help-sessions-line-1 = Up/Down, PageUp/PageDown move selection
+help-sessions-line-2 = Enter opens the selected session
+help-sessions-line-3 = / opens backend session search
+help-sessions-line-4 = R renames the current or selected session, t opens its event timeline, b opens branch history
+help-sessions-line-5 = 1/2/3 switch all, roots, and subtree views; m cycles between them
+help-section-transcript = Transcript pane
+help-transcript-line-1 = j/k or arrows scroll
+help-transcript-line-2 = Space / Shift+Space / Ctrl+F / Ctrl+B page
+help-transcript-line-3 = Ctrl+D / Ctrl+U half-page
+help-transcript-line-4 = PageUp or scrolling near top loads older messages
+help-transcript-line-5 = g/G jump to top or bottom
+help-transcript-line-6 = / or Ctrl+F searches loaded transcript, n/N jump matches
+help-transcript-line-7 = y copies the loaded transcript, Y copies the visible viewport
+help-transcript-line-8 = R renames the session, t opens timeline, b opens branch history, e exports markdown, v opens the loaded transcript in a pager
+help-section-composer = Composer
+help-composer-line-1 = Enter sends
+help-composer-line-2 = Alt/Shift+Enter or Ctrl+J inserts newline
+help-composer-line-3 = Ctrl+A/E/B/F/P/N move, Alt+B/F or Alt/Ctrl+Left/Right jump by word
+help-composer-line-4 = Ctrl+H/D/W/U/K/Y edit like a shell or editor
+help-composer-line-5 = Ctrl+A/E at a line boundary can continue to the previous/next line
+help-composer-line-6 = F3 or Ctrl+O or Alt+O searches workspace files to attach
+help-composer-line-7 = F4 or Alt+E opens $VISUAL/$EDITOR for the composer
+help-composer-line-8 = F6 or Alt+I attaches a clipboard image
+help-composer-line-9 = Pasting a single file path attaches it, large pastes become inline placeholders, and attachments stay atomic inline elements
+help-composer-line-10 = Alt+P opens the command palette, and slash commands like /model, /fork, or /rewind run from the composer
+help-section-actions = Actions
+help-actions-line-1 = n create session, s opens the resume picker, b opens branch history, [ opens parent session, ] opens child sessions
+help-actions-line-2 = r continue a blocked or pending session
+help-actions-line-3 = a/A/d/D reply to the first pending permission request
+help-actions-line-4 = u open the first pending user-input request
+help-actions-line-5 = Mouse capture is disabled so terminal selection/copy still works
+help-actions-line-6 = q or Ctrl+C exit
+
+overlay-session-search-title = Session Search
+overlay-session-search-prompt = Search session titles
+overlay-transcript-search-title = Transcript Search
+overlay-transcript-search-prompt = Search within loaded messages
+overlay-rename-title = Rename Session
+overlay-rename-prompt = Edit the session title
+overlay-line-footer = Enter apply | Esc close
+
+overlay-attach-title = Attach File
+overlay-attach-prompt = Type a path or search term. Enter attaches the selected file.
+overlay-attach-no-match = No matching files
+overlay-attach-matches = Matches
+overlay-attach-footer = Enter attach | Tab fill selected path | Up/Down move | Esc close
+
+overlay-user-input-title = Pending User Input
+overlay-user-input-request-id = request_id: {$request_id}
+overlay-user-input-custom-allowed = custom value allowed
+overlay-user-input-reply-format = Reply format: question_id=value;other_id=value1,value2
+overlay-user-input-cancel-hint = Ctrl+D cancels the request
+overlay-user-input-footer = Enter submit | Esc close | Ctrl+D cancel
+
+overlay-commands-title = Command Palette
+overlay-commands-prompt = Search commands or pick an action
+overlay-resume-title = Resume Session
+overlay-resume-prompt = Type to filter sessions by title, id, or lineage
+overlay-resume-empty = No matching sessions
+overlay-lineage-title = Branch History [#{$session}]
+overlay-lineage-prompt = Explore the current branch tree and jump to an ancestor, sibling, or child session
+overlay-lineage-empty = No related branch sessions found
+overlay-rewind-title = Rewind Session [#{$session}]
+overlay-rewind-prompt = Pick the last message to keep in this session
+overlay-rewind-empty = No rewindable messages found
+overlay-rewind-confirm-title = Confirm Rewind
+overlay-rewind-confirm-keep = Keep through {$target}
+overlay-rewind-confirm-warning = Later messages in this session will be removed.
+overlay-rewind-confirm-draft = The current composer draft will be kept.
+overlay-confirm-footer = Enter/Y confirm | Esc cancel
+overlay-picker-loading = Loading...
+overlay-picker-empty = No matching items
+overlay-picker-footer = Enter select | Tab fill selected label | Up/Down move | Esc close
+overlay-providers-title = Providers
+overlay-providers-prompt = Pick a provider to use its default model
+overlay-model-providers-title = Model Providers
+overlay-model-providers-prompt = Pick a provider before selecting a model
+overlay-models-title = Models [{$provider}]
+overlay-models-prompt = Pick a model for provider {$provider}
+overlay-children-title = Child Sessions [#{$session}]
+overlay-children-prompt = Pick a child session to open
+overlay-children-empty = No child sessions found
+overlay-timeline-title = Timeline [#{$session}]
+overlay-timeline-prompt = Filter by event type, command, or message metadata
+overlay-timeline-empty = No matching events
+overlay-timeline-footer = Type to filter | Up/Down move | PageUp/PageDown jump | Ctrl+Y copy event | Esc close
+overlay-timeline-events = Events
+overlay-timeline-detail = Detail
+
+flash-terminal-event-error = terminal event error: {$error}
+flash-created-session = created session {$title}
+flash-session-view-mode = session view: {$mode}
+flash-session-title-empty = session title cannot be empty
+flash-session-renamed = renamed session to {$title}
+flash-session-rewound = rewound session to {$target}
+flash-permission-reply-sent = permission reply sent: {$label}
+flash-user-input-reply-sent = user input reply sent
+flash-large-paste-staged = large paste staged in composer
+flash-attached = attached {$path}
+flash-composer-updated = composer updated from external editor
+flash-external-editor-failed = external editor failed: {$error}
+flash-clipboard-image-attached = clipboard image attached: {$width}x{$height} {$format}
+flash-clipboard-image-attach-failed = clipboard image attach failed: {$error}
+flash-no-loaded-transcript = no loaded transcript to copy
+flash-copied-loaded-transcript = copied loaded transcript to clipboard
+flash-no-visible-transcript = no visible transcript text to copy
+flash-copied-visible-transcript = copied visible transcript to clipboard
+flash-transcript-exported = exported transcript to {$path}
+flash-transcript-export-failed = transcript export failed: {$error}
+flash-transcript-pager-failed = transcript pager failed: {$error}
+flash-timeline-event-copied = copied selected timeline event
+flash-clipboard-copy-failed = clipboard copy failed: {$error}
+flash-command-requires-session = this action requires an open session
+flash-session-busy = session is busy
+flash-no-permission-request = no pending permission request
+flash-no-user-input-request = no pending user input request
+flash-provider-selected = provider selected: {$provider} (default {$model})
+flash-provider-cleared = provider/model override cleared
+flash-provider-not-found = provider not found: {$provider}
+flash-model-selected = model selected: {$model}
+flash-model-cleared = model override cleared
+flash-model-provider-required = provider is required; select a provider first or use provider/model
+flash-parent-session-missing = current session has no parent
+flash-command-usage = usage: {$usage}
+flash-command-does-not-support-attachments = slash commands do not support staged attachments
+flash-command-prefill-requires-empty-composer = clear the composer before prefilling a command
+flash-temperature-set = temperature set to {$value}
+flash-temperature-cleared = temperature override cleared
+flash-temperature-invalid = invalid temperature value
+flash-max-output-set = max output tokens set to {$value}
+flash-max-output-cleared = max output override cleared
+flash-max-output-invalid = invalid max output token value
+flash-system-set = system prompt override updated
+flash-system-cleared = system prompt override cleared
+flash-runtime-status = runtime overrides: {$summary}
+runtime-status-default = session defaults
+
+message-role-user = user
+message-role-assistant = assistant
+message-role-system = system
+message-role-tool = tool
+
+message-state-pending = pending
+message-state-in-progress = in_progress
+message-state-completed = completed
+message-state-failed = failed
+
+message-parts-not-loaded = {$count} parts not loaded
+message-usage = usage: in={$input} out={$output} reasoning={$reasoning}
+message-finish = finish: {$finish}
+message-empty = (empty message)
+message-thinking = thinking: {$summary}
+message-command-status = status: {$status}, exit={$exit}
+message-file-changes = file changes
+message-search = search: {$query}
+message-todo-list = todo list
+message-error = error [{$code}]: {$message}
+message-attachments = attachments
+message-awaiting-user-input = awaiting user input: {$request_id}
+message-question-line = - {$question} ({$id})
+message-part-detail-unavailable = part detail unavailable
+message-tool-pending = tool pending: {$label}
+message-tool-running = tool running: {$label}
+message-tool-done = tool done: {$label}
+message-tool-failed = tool failed: {$label}
+message-tool-result-blocks = {$count} result blocks
+
+todo-status-pending = pending
+todo-status-in-progress = in_progress
+todo-status-completed = completed
+todo-status-cancelled = cancelled
+
+todo-priority-high = high
+todo-priority-medium = medium
+todo-priority-low = low
+
+file-change-added = added
+file-change-updated = updated
+file-change-deleted = deleted
+
+time-just-now = just now
+time-minutes-ago = {$count}m ago
+time-hours-ago = {$count}h ago
+time-days-ago = {$count}d ago
+
+session-default-title = New session {$time}
+session-default-base = New session
+session-fallback-title = Session {$id}
+
+user-input-error-empty = reply cannot be empty
+user-input-error-invalid-segment = invalid reply segment: {$segment}
+user-input-error-unknown-question = unknown question id: {$question_id}
+user-input-error-missing-answer = question {$question_id} must have at least one answer
+user-input-error-no-answers = reply did not contain any answers
+
+attachment-kind-image = image
+attachment-kind-audio = audio
+attachment-kind-video = video
+attachment-kind-pdf = pdf
+attachment-kind-file = file
+attachment-generic = attachment
+attachment-chip-image = {$kind}: {$filename} ({$width}x{$height}, {$size})
+attachment-chip-other = {$kind}: {$filename} ({$size})
+attachment-placeholder = [{$kind} {$filename}]
+
+bytes-gb = {$value} GB
+bytes-mb = {$value} MB
+bytes-kb = {$value} KB
+bytes-b = {$value} B
+
+paste-label = paste {$count} chars
+paste-label-append = paste {$count} chars, append on send
+paste-placeholder = [paste {$count} chars]
+
+permission-label-allow-once = allow once
+permission-label-allow-always = allow always
+permission-label-deny-once = deny once
+permission-label-deny-always = deny always
+
+permission-summary-pending = Awaiting permission: {$reason}
+permission-summary-allow-once = Permission allowed once: {$reason}
+permission-summary-allow-always = Permission allowed always: {$reason}
+permission-summary-deny-once = Permission denied once: {$reason}
+permission-summary-deny-always = Permission denied always: {$reason}
+
+command-help-summary = Show help
+command-commands-summary = Open the command palette
+command-new-summary = Create a new session
+command-sessions-summary = Focus sessions or switch view with all, roots, or subtree
+command-resume-summary = Open a global session switcher to resume recent work
+command-lineage-summary = Open a branch-history picker for the current or selected session
+command-rewind-summary = Open a message picker to rewind the current session
+command-search-summary = Search sessions or open the session search dialog
+command-find-summary = Search transcript or open the transcript search dialog
+command-rename-summary = Rename the current or selected session
+command-timeline-summary = Open a searchable event timeline for the current or selected session
+command-export-summary = Export the loaded transcript as markdown and open it in the editor
+command-pager-summary = Open the loaded transcript in a terminal pager
+command-continue-summary = Continue the current blocked or pending session
+command-user-input-summary = Reply to the first pending user-input request
+command-allow-summary = Allow the first pending permission request once
+command-allow-always-summary = Always allow the first pending permission request
+command-deny-summary = Deny the first pending permission request once
+command-deny-always-summary = Always deny the first pending permission request
+command-attach-summary = Open the file attach overlay
+command-editor-summary = Open the external editor for the composer
+command-image-summary = Attach an image from the clipboard
+command-copy-summary = Copy the loaded transcript
+command-copy-visible-summary = Copy the visible transcript viewport
+command-providers-summary = List configured providers
+command-provider-summary = Select a provider or clear the current provider/model override
+command-models-summary = List models for a provider
+command-model-summary = Select a model or clear the current model override
+command-temperature-summary = Set or clear the temperature override
+command-max-output-summary = Set or clear the max output token override
+command-system-summary = Set or clear the system prompt override
+command-fork-summary = Create a child session from the current session
+command-children-summary = Open the child-session picker
+command-parent-summary = Jump to the parent session
+command-status-summary = Show the current runtime override summary

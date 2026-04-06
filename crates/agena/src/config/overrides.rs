@@ -3,7 +3,7 @@ use std::{path::PathBuf, str::FromStr};
 use super::{
     ConfigError, ConfigModeName, RawAuthConfig, RawConfig, RawPermissionConfig,
     RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig, RawStreamReplayConfig,
-    RawTracingConfig, parse_numeric, parse_permission_mode,
+    RawTracingConfig, RawUiConfig, parse_numeric, parse_permission_mode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +11,7 @@ pub enum ConfigOverride {
     Mode(ConfigModeName),
     AuthStorePath(PathBuf),
     TracingFilter(String),
+    UiLocale(String),
     PermissionDefaultRead(crate::permission::PermissionMode),
     PermissionDefaultWrite(crate::permission::PermissionMode),
     PermissionDefaultExternalDirectory(crate::permission::PermissionMode),
@@ -42,6 +43,7 @@ impl FromStr for ConfigOverride {
             "mode" => Ok(Self::Mode(ConfigModeName::new(raw_value)?)),
             "auth.store_path" => Ok(Self::AuthStorePath(PathBuf::from(raw_value))),
             "tracing.filter" => Ok(Self::TracingFilter(raw_value.to_owned())),
+            "ui.locale" => Ok(Self::UiLocale(raw_value.to_owned())),
             "permission.default_read" => Ok(Self::PermissionDefaultRead(parse_permission_mode(
                 raw_value,
             )?)),
@@ -92,6 +94,9 @@ impl ConfigOverride {
                     .tracing
                     .get_or_insert_with(RawTracingConfig::default)
                     .filter = Some(filter.clone());
+            }
+            Self::UiLocale(locale) => {
+                config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale.clone());
             }
             Self::PermissionDefaultRead(mode) => {
                 config

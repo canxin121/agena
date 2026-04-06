@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryOrder};
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder};
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
 use crate::{
@@ -25,8 +25,6 @@ use super::{
     model::{SessionListRequest, SessionSummary},
 };
 
-const PROCESSOR_PART_ID_BLOCK: i64 = 1024;
-
 pub(crate) struct SessionCommit {
     pub(crate) session: Session,
     pub(crate) touched_messages: Vec<Message>,
@@ -34,12 +32,47 @@ pub(crate) struct SessionCommit {
     pub(crate) persisted_rule: Option<(String, PermissionMode)>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ProcessorPartIdAllocator {
+    ids: Arc<AsyncMutex<GlobalIdAllocator>>,
+}
+
+impl ProcessorPartIdAllocator {
+    fn new(ids: Arc<AsyncMutex<GlobalIdAllocator>>) -> Self {
+        Self { ids }
+    }
+
+    pub(crate) async fn reserve(&self) -> Result<i64, AppError> {
+        let mut allocator = self.ids.lock().await;
+        if !allocator.initialized {
+            return Err(AppError::Internal(
+                "processor part allocator used before initialization".to_string(),
+            ));
+        }
+
+        let part_id = allocator.next_part_id;
+        allocator.next_part_id += 1;
+        Ok(part_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(next_part_id: i64) -> Self {
+        Self {
+            ids: Arc::new(AsyncMutex::new(GlobalIdAllocator {
+                initialized: true,
+                next_message_id: 1,
+                next_part_id,
+            })),
+        }
+    }
+}
+
 pub(crate) struct SessionStore {
     db: DatabaseConnection,
     workspace_path: String,
     workspace_id: OnceCell<i64>,
     cache: Arc<Mutex<SessionCache>>,
-    ids: AsyncMutex<GlobalIdAllocator>,
+    ids: Arc<AsyncMutex<GlobalIdAllocator>>,
 }
 
 impl SessionStore {
@@ -49,7 +82,7 @@ impl SessionStore {
             workspace_path: workspace_root.to_string_lossy().replace('\\', "/"),
             workspace_id: OnceCell::new(),
             cache: Arc::new(Mutex::new(SessionCache::default())),
-            ids: AsyncMutex::new(GlobalIdAllocator::default()),
+            ids: Arc::new(AsyncMutex::new(GlobalIdAllocator::default())),
         }
     }
 
@@ -196,6 +229,131 @@ impl SessionStore {
         Ok(session)
     }
 
+    pub(crate) async fn rewind_to_message(
+        &self,
+        session_id: i64,
+        message_id: i64,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Session, AppError> {
+        let cache = Arc::clone(&self.cache);
+        let session = with_transaction_and_effects(&self.db, move |txn, effects| {
+            let cache = Arc::clone(&cache);
+            Box::pin(async move {
+                let Some(existing) = session::get_session_by_id(txn, session_id).await? else {
+                    return Err(DbErr::Custom(format!("session not found: {session_id}")));
+                };
+                let target = entities::message::Entity::find_by_id(message_id)
+                    .one(txn)
+                    .await?
+                    .ok_or_else(|| {
+                        DbErr::Custom(format!("message not found for rewind: {message_id}"))
+                    })?;
+                if target.session_id != session_id {
+                    return Err(DbErr::Custom(format!(
+                        "message {message_id} does not belong to session {session_id}"
+                    )));
+                }
+
+                let message_rows = entities::message::Entity::find()
+                    .filter(entities::message::Column::SessionId.eq(session_id))
+                    .order_by_asc(entities::message::Column::CreatedAtMs)
+                    .order_by_asc(entities::message::Column::Id)
+                    .all(txn)
+                    .await?;
+                let target_index = message_rows
+                    .iter()
+                    .position(|row| row.id == message_id)
+                    .ok_or_else(|| {
+                        DbErr::Custom(format!(
+                            "rewind target {message_id} was not found in ordered session history"
+                        ))
+                    })?;
+                let will_delete_messages = target_index + 1 < message_rows.len();
+
+                let session_events = session_runtime::list_session_events(txn, session_id).await?;
+                let max_keep_seq = session_events
+                    .iter()
+                    .filter_map(|record| {
+                        event_message_id(&record.payload).filter(|id| *id == message_id)?;
+                        Some(record.seq)
+                    })
+                    .max()
+                    .or_else(|| {
+                        session_events
+                            .iter()
+                            .filter(|record| {
+                                record.created_at.timestamp_millis() <= target.updated_at_ms
+                            })
+                            .map(|record| record.seq)
+                            .max()
+                    });
+                let latest_seq = session_events.last().map(|record| record.seq);
+                let will_delete_events = match (max_keep_seq, latest_seq) {
+                    (Some(keep_seq), Some(last_seq)) => keep_seq < last_seq,
+                    (None, Some(_)) => true,
+                    _ => false,
+                };
+
+                if !will_delete_messages && !will_delete_events {
+                    let mut session = session_from_model_db(existing)?;
+                    session.replace_messages(
+                        message::list_messages_with_parts(txn, session_id).await?,
+                    );
+                    let session_for_cache = session.clone();
+                    effects.push(async move {
+                        with_cache(cache.as_ref(), |guard| {
+                            guard.insert(session_for_cache, cache_policy);
+                        });
+                    });
+                    return Ok(session);
+                }
+
+                if will_delete_messages {
+                    message::delete_messages_after_cursor(
+                        txn,
+                        session_id,
+                        target.created_at_ms,
+                        target.id,
+                    )
+                    .await?;
+                }
+
+                match max_keep_seq {
+                    Some(keep_seq) => {
+                        session_runtime::delete_session_events_after_seq(txn, session_id, keep_seq)
+                            .await?;
+                    }
+                    None => {
+                        session_runtime::delete_session_events_by_session_id(txn, session_id)
+                            .await?;
+                    }
+                }
+
+                let next_runtime =
+                    rewind_runtime_state(existing.runtime_state.clone().unwrap_or_default());
+                let updated = session::touch_session_updated_at(txn, session_id, next_runtime)
+                    .await?
+                    .ok_or_else(|| {
+                        DbErr::Custom(format!("session disappeared while rewinding: {session_id}"))
+                    })?;
+                let mut session = session_from_model_db(updated)?;
+                session.replace_messages(message::list_messages_with_parts(txn, session_id).await?);
+
+                let session_for_cache = session.clone();
+                effects.push(async move {
+                    with_cache(cache.as_ref(), |guard| {
+                        guard.insert(session_for_cache, cache_policy);
+                    });
+                });
+
+                Ok(session)
+            })
+        })
+        .await?;
+
+        Ok(session)
+    }
+
     pub(crate) async fn persist(
         &self,
         commit: SessionCommit,
@@ -208,11 +366,7 @@ impl SessionStore {
             persisted_rule,
         } = commit;
         let session_id = session.id;
-        let mut unique_messages = std::collections::HashMap::new();
-        for message in touched_messages {
-            unique_messages.insert(message.id, message);
-        }
-        let touched_messages = unique_messages.into_values().collect::<Vec<_>>();
+        let touched_messages = ordered_unique_touched_messages(&session, touched_messages);
         let now = Utc::now();
         let ts_ms = now.timestamp_millis();
         for message in &touched_messages {
@@ -220,6 +374,9 @@ impl SessionStore {
                 client_events.push(SessionEvent::MessagePartUpdated(MessagePartUpdatedEvent {
                     session_id,
                     message_id: message.id,
+                    message_role: message.role,
+                    message_state: message.state,
+                    message_created_at: message.created_at,
                     part: part.clone(),
                     ts_ms,
                 }));
@@ -275,6 +432,87 @@ impl SessionStore {
         Ok(session)
     }
 
+    pub(crate) async fn append_client_events(
+        &self,
+        session_id: i64,
+        client_events: Vec<SessionEvent>,
+    ) -> Result<(), AppError> {
+        if client_events.is_empty() {
+            return Ok(());
+        }
+
+        let now = Utc::now();
+        with_transaction_and_effects(&self.db, move |txn, _effects| {
+            let events = client_events.clone();
+            Box::pin(async move {
+                let mut next_seq = session_runtime::latest_event_seq(txn, session_id)
+                    .await?
+                    .unwrap_or(0);
+                for event in events {
+                    next_seq += 1;
+                    session_runtime::append_session_event(txn, session_id, next_seq, event, now)
+                        .await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn append_client_projection(
+        &self,
+        session_id: i64,
+        message_snapshot: Option<Message>,
+        client_events: Vec<SessionEvent>,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<(), AppError> {
+        if client_events.is_empty() && message_snapshot.is_none() {
+            return Ok(());
+        }
+
+        let now = Utc::now();
+        let cache = Arc::clone(&self.cache);
+        with_transaction_and_effects(&self.db, move |txn, effects| {
+            let events = client_events.clone();
+            let message_snapshot = message_snapshot.clone();
+            let cache = Arc::clone(&cache);
+            Box::pin(async move {
+                if let Some(message) = message_snapshot.as_ref() {
+                    message::upsert_message_with_parts(txn, session_id, message).await?;
+                }
+
+                let mut next_seq = session_runtime::latest_event_seq(txn, session_id)
+                    .await?
+                    .unwrap_or(0);
+                for event in events {
+                    next_seq += 1;
+                    session_runtime::append_session_event(txn, session_id, next_seq, event, now)
+                        .await?;
+                }
+
+                if let Some(message) = message_snapshot {
+                    effects.push(async move {
+                        with_cache(cache.as_ref(), |guard| {
+                            let Some(mut cached_session) = guard.get(session_id, cache_policy)
+                            else {
+                                return;
+                            };
+                            upsert_session_message(&mut cached_session, message);
+                            guard.insert(cached_session, cache_policy);
+                        });
+                    });
+                }
+
+                Ok(())
+            })
+        })
+        .await?;
+
+        Ok(())
+    }
+
     pub(crate) async fn resolve_permission_mode(
         &self,
         action_key: &str,
@@ -325,10 +563,9 @@ impl SessionStore {
 
         let ids = ReservedProcessorIds {
             message_id: allocator.next_message_id,
-            first_part_id: allocator.next_part_id,
+            part_ids: ProcessorPartIdAllocator::new(Arc::clone(&self.ids)),
         };
         allocator.next_message_id += 1;
-        allocator.next_part_id += PROCESSOR_PART_ID_BLOCK;
         Ok(ids)
     }
 
@@ -397,10 +634,10 @@ pub(crate) struct ReservedMessageIds {
     pub(crate) part_ids: Vec<i64>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ReservedProcessorIds {
     pub(crate) message_id: i64,
-    pub(crate) first_part_id: i64,
+    pub(crate) part_ids: ProcessorPartIdAllocator,
 }
 
 fn with_cache<T>(
@@ -446,4 +683,152 @@ fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError>
 fn timestamp_millis_to_utc_db(timestamp_ms: i64) -> Result<DateTime<Utc>, DbErr> {
     DateTime::from_timestamp_millis(timestamp_ms)
         .ok_or_else(|| DbErr::Custom(format!("invalid timestamp millis: {timestamp_ms}")))
+}
+
+fn rewind_runtime_state(
+    mut runtime: crate::session::SessionRuntimeState,
+) -> crate::session::SessionRuntimeState {
+    let next_generation = runtime.prompt_window.generation.saturating_add(1);
+    runtime = crate::session::SessionRuntimeState::default();
+    runtime.prompt_window.generation = next_generation;
+    runtime
+}
+
+fn event_message_id(event: &SessionEvent) -> Option<i64> {
+    match event {
+        SessionEvent::MessagePartUpdated(event) => Some(event.message_id),
+        SessionEvent::MessagePartDelta(event) => Some(event.message_id),
+        SessionEvent::CommandBegin(event) => event.context.message_id,
+        SessionEvent::CommandOutputDelta(event) => event.context.message_id,
+        SessionEvent::CommandEnd(event) => event.context.message_id,
+        SessionEvent::RunStarted(_) | SessionEvent::RunFailed(_) | SessionEvent::StreamError(_) => {
+            None
+        }
+    }
+}
+
+fn ordered_unique_touched_messages(
+    session: &Session,
+    touched_messages: Vec<Message>,
+) -> Vec<Message> {
+    let session_order = session
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| (message.id, index))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut latest_by_id = std::collections::HashMap::new();
+    for message in touched_messages {
+        latest_by_id.insert(message.id, message);
+    }
+
+    let mut ordered = latest_by_id.into_values().collect::<Vec<_>>();
+    ordered.sort_by_key(|message| {
+        (
+            session_order
+                .get(&message.id)
+                .copied()
+                .unwrap_or(usize::MAX),
+            message.id,
+        )
+    });
+    ordered
+}
+
+fn upsert_session_message(session: &mut Session, message: Message) {
+    if let Some(index) = session
+        .messages
+        .iter()
+        .position(|item| item.id == message.id)
+    {
+        session.messages[index] = message;
+    } else {
+        session.messages.push(message);
+        session
+            .messages
+            .sort_by_key(|item| (item.created_at, item.id));
+    }
+    session.refresh_derived();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use chrono::Utc;
+    use sea_orm::Database;
+
+    use super::{SessionStore, ordered_unique_touched_messages};
+    use crate::{db::init_schema, message::Message, role::Role, session::Session};
+
+    #[test]
+    fn ordered_unique_touched_messages_preserves_session_order_and_latest_snapshot() {
+        let now = Utc::now();
+        let mut first = Message::prompt_text(Role::User, "first");
+        first.id = 1;
+        let mut second_old = Message::prompt_text(Role::Assistant, "second-old");
+        second_old.id = 2;
+        let mut second_new = Message::prompt_text(Role::Assistant, "second-new");
+        second_new.id = 2;
+        second_new.finish = Some("done".to_string());
+        let mut third = Message::prompt_text(Role::Tool, "third");
+        third.id = 3;
+
+        let session = Session::new(99, 1, "ordered", now).with_messages(vec![
+            first.clone(),
+            second_new.clone(),
+            third.clone(),
+        ]);
+
+        let ordered = ordered_unique_touched_messages(
+            &session,
+            vec![third, second_old, first, second_new.clone()],
+        );
+
+        assert_eq!(
+            ordered.iter().map(|message| message.id).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(ordered[1].finish.as_deref(), Some("done"));
+        assert_eq!(ordered[1].as_text_lossy(), "second-new");
+    }
+
+    #[tokio::test]
+    async fn processor_part_allocator_does_not_reuse_ids_after_large_stream() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("failed to create sqlite db");
+        init_schema(&db).await.expect("failed to init schema");
+
+        let workspace_root = std::env::temp_dir();
+        let store = SessionStore::new(db, workspace_root.as_path());
+        let reserved = store
+            .reserve_processor_ids()
+            .await
+            .expect("processor ids should reserve");
+
+        let mut allocated = Vec::new();
+        for _ in 0..1_100 {
+            allocated.push(
+                reserved
+                    .part_ids
+                    .reserve()
+                    .await
+                    .expect("processor part id should reserve"),
+            );
+        }
+
+        let unique = allocated.iter().copied().collect::<HashSet<_>>();
+        let next_part_id = store
+            .reserve_part_id()
+            .await
+            .expect("subsequent part id should reserve");
+
+        assert_eq!(allocated.first().copied(), Some(1));
+        assert_eq!(allocated.last().copied(), Some(1_100));
+        assert_eq!(unique.len(), allocated.len());
+        assert_eq!(next_part_id, 1_101);
+        assert!(!unique.contains(&next_part_id));
+    }
 }

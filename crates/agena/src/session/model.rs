@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use sea_orm::FromJsonQueryResult;
@@ -9,8 +9,8 @@ use strum::{AsRefStr, Display, EnumString};
 use crate::{
     event::SessionEvent,
     message::{
-        ExecutionStatus, Message, MessagePart, PartContent, PermissionRequestPart, TimeRange,
-        ToolExecutionPart, ToolInvocation, UserInputRequest, UserInputRequestPart,
+        ExecutionStatus, Message, MessagePart, MessageStatus, PartContent, PermissionRequestPart,
+        TimeRange, ToolExecutionPart, ToolInvocation, UserInputRequest, UserInputRequestPart,
     },
     role::Role,
 };
@@ -198,6 +198,8 @@ pub struct ProviderPromptAnchor {
     pub system_fingerprint: String,
     #[serde(default)]
     pub request_options_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_request_shape: Option<crate::provider::PromptCacheShape>,
     #[serde(default)]
     pub transcript_digest: String,
 }
@@ -210,6 +212,8 @@ pub struct SessionRuntimeState {
     pub prompt_tokens: PromptTokenRuntime,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_anchors: BTreeMap<String, ProviderPromptAnchor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loaded_deferred_tools: Vec<String>,
 }
 
 impl SessionRuntimeState {
@@ -244,6 +248,31 @@ impl SessionRuntimeState {
 
     pub fn clear_prompt_tokens(&mut self) {
         self.prompt_tokens.clear();
+    }
+
+    pub fn loaded_deferred_tools(&self) -> &[String] {
+        self.loaded_deferred_tools.as_slice()
+    }
+
+    pub fn record_loaded_deferred_tools(&mut self, loaded_tools: &[String]) {
+        let mut merged = self
+            .loaded_deferred_tools
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+
+        merged.extend(
+            loaded_tools
+                .iter()
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(ToOwned::to_owned),
+        );
+
+        self.loaded_deferred_tools = merged.into_iter().collect();
     }
 
     pub fn record_prompt_tokens(
@@ -426,8 +455,13 @@ impl Session {
 
     fn should_run_model(&self) -> bool {
         matches!(
-            self.last_conversation_message().map(|message| message.role),
-            Some(Role::User | Role::Tool)
+            self.last_conversation_message()
+                .map(|message| (message.role, message.state)),
+            Some((Role::User | Role::Tool, _))
+                | Some((
+                    Role::Assistant,
+                    MessageStatus::Pending | MessageStatus::InProgress
+                ))
         )
     }
 
@@ -763,6 +797,17 @@ mod tests {
         assert_eq!(pending.request.part_id, 204);
         assert_eq!(pending.tool.part.part_id, 203);
         assert!(session.blocked());
+    }
+
+    #[test]
+    fn pending_assistant_message_keeps_session_awaiting_model() {
+        let mut assistant = assistant_message(31, vec![]);
+        assistant.state = MessageStatus::Pending;
+
+        let session = Session::new(1, 1, "awaiting-model", Utc::now())
+            .with_messages(vec![Message::prompt_text(Role::User, "hello"), assistant]);
+
+        assert_eq!(session.status(), SessionStatus::AwaitingModel);
     }
 
     fn assistant_message(id: i64, mut parts: Vec<MessagePart>) -> Message {

@@ -57,6 +57,10 @@ pub enum MessageUpdate {
         message_id: i64,
         part: MessagePart,
     },
+    SetPartOperationId {
+        part_id: i64,
+        operation_id: String,
+    },
     ReplacePartContent {
         part_id: i64,
         content: PartContent,
@@ -209,6 +213,14 @@ impl MessageStateStore {
             }
             MessageUpdate::InsertPart { message_id, part } => {
                 self.insert_part_inner(message_id, part)
+            }
+            MessageUpdate::SetPartOperationId {
+                part_id,
+                operation_id,
+            } => {
+                let (_, part) = self.part_mut(part_id)?;
+                part.operation_id = Some(operation_id);
+                Ok(())
             }
             MessageUpdate::ReplacePartContent { part_id, content } => {
                 let (message_id, part) = self.part_mut(part_id)?;

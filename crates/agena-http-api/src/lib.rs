@@ -39,13 +39,14 @@ pub use dto::{
     PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
     ProviderModelsResponse, ProviderSummaryResource, RuntimeReloadResponse, RuntimeStatusResponse,
     RuntimeTaskResource, SessionContinueRequestBody, SessionCreateRequest, SessionEventListQuery,
-    SessionEventStreamQuery, SessionExecutionResource, SessionPermissionReplyRequestBody,
-    SessionReplaceRequest, SessionResource, SessionTurnRequest, SessionUserInputReplyRequestBody,
+    SessionEventStreamQuery, SessionExecutionResource, SessionListQuery,
+    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionResource,
+    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
     WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource, WorkspaceWriteRequest,
 };
 pub use error::ApiError;
 pub use pagination::{PageInfo, PaginatedResponse};
-use service::ApiService;
+pub use service::ApiService;
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -1394,15 +1395,18 @@ mod tests {
         body::{Body, to_bytes},
         http::{Method, Request, StatusCode},
     };
+    use chrono::{Duration as ChronoDuration, Utc};
     use futures_util::{Stream, stream};
     use sea_orm::{Database, DatabaseConnection};
     use serde_json::{Value, json};
+    use tokio::sync::Notify;
     use tower::ServiceExt;
     use uuid::Uuid;
 
     use agena::{
         agent::Agent,
-        db::init_schema,
+        db::{crud::session_runtime, init_schema},
+        event::{RunStartedEvent, SessionEvent},
         message::{
             AskUserToolInput, BuiltinToolOutput, Message, MessageSource, PartContent,
             ToolExecutionPart, UserInputOption, UserInputQuestion,
@@ -1573,6 +1577,228 @@ mod tests {
         assert_eq!(full.status(), StatusCode::OK);
         let full_json = response_json(full).await;
         assert_eq!(full_json["parts"][0]["content"]["type"], json!("text"));
+    }
+
+    #[tokio::test]
+    async fn messages_endpoint_pages_latest_window_in_ascending_order() {
+        let (app, state) = test_app().await;
+        let workspace = state
+            .service()
+            .create_workspace(WorkspaceWriteRequest {
+                path: "/tmp/messages-pagination".to_string(),
+            })
+            .await
+            .expect("workspace should be created");
+        let session = state
+            .service()
+            .create_session(SessionCreateRequest {
+                workspace_id: workspace.id,
+                title: "messages pagination".to_string(),
+                parent_id: None,
+            })
+            .await
+            .expect("session should be created");
+        let base = Utc::now();
+        let mut created_ids = Vec::new();
+
+        for idx in 0..3 {
+            let created = state
+                .service()
+                .create_message(
+                    session.id,
+                    MessageWriteRequest {
+                        role: Role::User,
+                        state: None,
+                        metadata: None,
+                        usage: None,
+                        finish: None,
+                        created_at: Some(base + ChronoDuration::seconds(idx)),
+                        parts: vec![dto::MessagePartWriteRequest {
+                            content: PartContent::text(format!("message-{idx}")),
+                            status: None,
+                            operation_id: None,
+                            created_at: None,
+                        }],
+                    },
+                )
+                .await
+                .expect("message should be created");
+            created_ids.push(created.id);
+        }
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/api/v1/sessions/{}/messages?parts=summary&limit=2",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let first_status = first.status();
+        let first_json = response_json(first).await;
+
+        assert_eq!(
+            first_status,
+            StatusCode::OK,
+            "unexpected body: {first_json}"
+        );
+        assert_eq!(first_json["page"]["order"], json!("asc"));
+        assert_eq!(first_json["page"]["has_more"], json!(true));
+        assert_eq!(
+            first_json["items"]
+                .as_array()
+                .expect("items should be an array")
+                .iter()
+                .map(|item| item["id"].as_i64().expect("message id should exist"))
+                .collect::<Vec<_>>(),
+            vec![created_ids[1], created_ids[2]]
+        );
+        let cursor = first_json["page"]["next_cursor"]
+            .as_str()
+            .expect("next cursor should exist");
+
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/api/v1/sessions/{}/messages?parts=summary&limit=2&cursor={cursor}",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let second_status = second.status();
+        let second_json = response_json(second).await;
+
+        assert_eq!(
+            second_status,
+            StatusCode::OK,
+            "unexpected body: {second_json}"
+        );
+        assert_eq!(second_json["page"]["order"], json!("asc"));
+        assert_eq!(second_json["page"]["has_more"], json!(false));
+        assert_eq!(
+            second_json["items"]
+                .as_array()
+                .expect("items should be an array")
+                .iter()
+                .map(|item| item["id"].as_i64().expect("message id should exist"))
+                .collect::<Vec<_>>(),
+            vec![created_ids[0]]
+        );
+    }
+
+    #[tokio::test]
+    async fn session_events_endpoint_pages_latest_window_in_ascending_order() {
+        let (app, state, db) = test_app_with_db().await;
+        let workspace = state
+            .service()
+            .create_workspace(WorkspaceWriteRequest {
+                path: "/tmp/events-pagination".to_string(),
+            })
+            .await
+            .expect("workspace should be created");
+        let session = state
+            .service()
+            .create_session(SessionCreateRequest {
+                workspace_id: workspace.id,
+                title: "events pagination".to_string(),
+                parent_id: None,
+            })
+            .await
+            .expect("session should be created");
+        let base = Utc::now();
+
+        for seq in 1..=3 {
+            session_runtime::append_session_event(
+                db.as_ref(),
+                session.id,
+                seq,
+                SessionEvent::RunStarted(RunStartedEvent {
+                    session_id: session.id,
+                    ts_ms: (base + ChronoDuration::seconds(seq)).timestamp_millis(),
+                }),
+                base + ChronoDuration::seconds(seq),
+            )
+            .await
+            .expect("session event should be appended");
+        }
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/v1/sessions/{}/events?limit=2", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let first_status = first.status();
+        let first_json = response_json(first).await;
+
+        assert_eq!(
+            first_status,
+            StatusCode::OK,
+            "unexpected body: {first_json}"
+        );
+        assert_eq!(first_json["page"]["order"], json!("asc"));
+        assert_eq!(first_json["page"]["has_more"], json!(true));
+        assert_eq!(
+            first_json["items"]
+                .as_array()
+                .expect("items should be an array")
+                .iter()
+                .map(|item| item["seq"].as_i64().expect("event seq should exist"))
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        let cursor = first_json["page"]["next_cursor"]
+            .as_str()
+            .expect("next cursor should exist");
+
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/api/v1/sessions/{}/events?limit=2&cursor={cursor}",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let second_status = second.status();
+        let second_json = response_json(second).await;
+
+        assert_eq!(
+            second_status,
+            StatusCode::OK,
+            "unexpected body: {second_json}"
+        );
+        assert_eq!(second_json["page"]["order"], json!("asc"));
+        assert_eq!(second_json["page"]["has_more"], json!(false));
+        assert_eq!(
+            second_json["items"]
+                .as_array()
+                .expect("items should be an array")
+                .iter()
+                .map(|item| item["seq"].as_i64().expect("event seq should exist"))
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
     }
 
     #[tokio::test]
@@ -2207,6 +2433,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn messages_endpoint_shows_partial_assistant_before_turn_finishes() {
+        let first_delta_sent = Arc::new(Notify::new());
+        let release_completion = Arc::new(Notify::new());
+        let (app, state, _workspace) = test_app_with_provider(BlockingApiProvider {
+            first_delta_sent: Arc::clone(&first_delta_sent),
+            release_completion: Arc::clone(&release_completion),
+        })
+        .await;
+        let workspace = state
+            .service()
+            .create_workspace(WorkspaceWriteRequest {
+                path: "/tmp/runtime-partial-message".to_string(),
+            })
+            .await
+            .expect("workspace should be created");
+        let session = state
+            .service()
+            .create_session(SessionCreateRequest {
+                workspace_id: workspace.id,
+                title: "runtime partial".to_string(),
+                parent_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let app_for_turn = app.clone();
+        let turn_request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/v1/sessions/{}/turns", session.id))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "parts": [
+                        {
+                            "type": "text",
+                            "text": "hello"
+                        }
+                    ]
+                })
+                .to_string(),
+            ))
+            .expect("request should build");
+        let turn_task = tokio::spawn(async move {
+            app_for_turn
+                .oneshot(turn_request)
+                .await
+                .expect("turn request should succeed")
+        });
+
+        first_delta_sent.notified().await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/v1/sessions/{}/messages?limit=50", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let status = response.status();
+        let payload = response_json(response).await;
+
+        assert_eq!(status, StatusCode::OK, "unexpected body: {payload}");
+        let items = payload["items"]
+            .as_array()
+            .expect("items should be an array");
+        let assistant = items
+            .iter()
+            .find(|item| item["role"] == json!("assistant"))
+            .expect("assistant message should be visible before completion");
+        assert!(
+            matches!(assistant["state"].as_str(), Some("pending" | "in_progress")),
+            "unexpected payload: {payload}"
+        );
+        assert!(
+            assistant["parts"]
+                .as_array()
+                .is_some_and(|parts| parts.iter().any(|part| {
+                    part["summary"] == json!("Hel")
+                        || (part["content"]["type"] == json!("text")
+                            && part["content"]["text"] == json!("Hel"))
+                })),
+            "unexpected payload: {payload}"
+        );
+
+        release_completion.notify_one();
+
+        let turn_response = turn_task
+            .await
+            .expect("turn task should finish without join errors");
+        let turn_status = turn_response.status();
+        let turn_payload = response_json(turn_response).await;
+
+        assert_eq!(
+            turn_status,
+            StatusCode::OK,
+            "unexpected body: {turn_payload}"
+        );
+    }
+
+    #[tokio::test]
     async fn turn_endpoint_rejects_if_match_version_mismatch() {
         let (app, state) = test_app().await;
         let workspace = state
@@ -2270,7 +2600,29 @@ mod tests {
         (app, state)
     }
 
+    async fn test_app_with_db() -> (Router, ApiState, Arc<DatabaseConnection>) {
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("database should connect"),
+        );
+        init_schema(db.as_ref())
+            .await
+            .expect("schema should initialize");
+        let runtime = test_runtime(db.clone()).await;
+        let state = ApiState::new(runtime, db.clone());
+        let app = router(state.clone());
+        (app, state, db)
+    }
+
     async fn test_app_with_scripted_manager() -> (Router, ApiState, TempWorkspace) {
+        test_app_with_provider(ScriptedApiProvider).await
+    }
+
+    async fn test_app_with_provider<P>(provider: P) -> (Router, ApiState, TempWorkspace)
+    where
+        P: ModelProvider + 'static,
+    {
         let db = Arc::new(
             Database::connect("sqlite::memory:")
                 .await
@@ -2281,7 +2633,8 @@ mod tests {
             .expect("schema should initialize");
         let runtime = test_runtime(db.clone()).await;
         let workspace = TempWorkspace::new();
-        let manager = scripted_session_manager(db.clone(), workspace.root.as_path()).await;
+        let manager =
+            session_manager_with_provider(db.clone(), workspace.root.as_path(), provider).await;
         let state = ApiState::new(runtime, db).with_session_manager_override(manager);
         let app = router(state.clone());
         (app, state, workspace)
@@ -2306,6 +2659,12 @@ mod tests {
     }
 
     struct ScriptedApiProvider;
+
+    #[derive(Clone)]
+    struct BlockingApiProvider {
+        first_delta_sent: Arc<Notify>,
+        release_completion: Arc<Notify>,
+    }
 
     #[async_trait]
     impl ModelProvider for ScriptedApiProvider {
@@ -2459,12 +2818,81 @@ mod tests {
         }
     }
 
-    async fn scripted_session_manager(
+    #[async_trait]
+    impl ModelProvider for BlockingApiProvider {
+        fn id(&self) -> &str {
+            "openai"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: std::sync::LazyLock<ModelId> =
+                std::sync::LazyLock::new(|| ModelId::new("gpt-4.1-mini"));
+            &DEFAULT_MODEL
+        }
+
+        async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+            Ok(vec![ProviderModel::new("openai", "gpt-4.1-mini")])
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            Ok(CompletionResponse {
+                provider_id: agena::model::ProviderId::new("openai"),
+                model: ModelId::new("gpt-4.1-mini"),
+                text: String::new(),
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+            AppError,
+        > {
+            let first_delta_sent = Arc::clone(&self.first_delta_sent);
+            let release_completion = Arc::clone(&self.release_completion);
+
+            Ok(Box::pin(async_stream::stream! {
+                yield Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: agena::model::ProviderId::new("openai"),
+                    model: ModelId::new("gpt-4.1-mini"),
+                    delta: "Hel".to_string(),
+                });
+                first_delta_sent.notify_one();
+                release_completion.notified().await;
+                yield Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: agena::model::ProviderId::new("openai"),
+                    model: ModelId::new("gpt-4.1-mini"),
+                    delta: "lo".to_string(),
+                });
+                yield Ok(CompletionStreamEvent::Completed {
+                    provider_id: agena::model::ProviderId::new("openai"),
+                    model: ModelId::new("gpt-4.1-mini"),
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                });
+            }))
+        }
+    }
+
+    async fn session_manager_with_provider<P>(
         db: Arc<DatabaseConnection>,
         workspace_root: &Path,
-    ) -> Arc<SessionManager> {
+        provider: P,
+    ) -> Arc<SessionManager>
+    where
+        P: ModelProvider + 'static,
+    {
         let mut registry = ProviderRegistry::new();
-        registry.register(ScriptedApiProvider);
+        registry.register(provider);
         let processor = SessionProcessor::new(
             Arc::new(registry),
             ContextGovernor::new(ContextPolicy::default()),

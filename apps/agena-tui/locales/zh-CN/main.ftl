@@ -1,0 +1,312 @@
+cli-about = Agena 终端聊天应用
+
+pane-sessions = 会话
+pane-sessions-search = 会话 [{$query}]
+pane-transcript = 对话记录
+pane-messages = 消息
+pane-composer = 输入框 [{$session}]
+session-view-all = 全部
+session-view-roots = 根会话
+session-view-subtree = 当前子树
+session-view-subtree-root = 子树 #{$id}
+
+session-meta = #{$id}  {$message_count} 条消息  {$updated}
+session-running = 运行中
+session-tag-parent = 父
+session-tag-child = 子
+session-tag-current = 当前
+session-tag-ancestor = 祖先
+session-tag-sibling = 兄弟分支
+session-tag-leaf = 叶子
+session-summary-root = 根 #{$id}
+session-summary-depth = 深度 {$depth}
+session-summary-side-branches = {$count} 个旁支
+session-summary-descendants = {$count} 个后代分支
+session-summary-parent = 父 #{$id}
+session-summary-children = {$count} 个子会话
+sessions-empty = 未找到会话
+sessions-loading-more = 正在加载更多会话...
+sessions-more = 还有更多会话可加载
+
+transcript-header-lines = 行 {$first}-{$last}/{$total} ({$percent}%)
+transcript-header-find = 搜索={$query} ({$current}/{$total})
+transcript-header-tail = 尾随
+transcript-header-loading = 加载中
+transcript-header-loading-older = 正在加载更早消息
+transcript-header-busy = 忙碌
+transcript-loading-older = 正在加载更早的消息...
+transcript-more-older = 还有更早的消息。向上滚动或按 PageUp 继续加载。
+transcript-empty-session = 当前会话还没有消息。
+
+no-session-selected = 尚未选择会话。
+no-session-selected-hint = 请在会话面板中选择，或直接在输入框中开始输入以创建新会话。
+composer-session-new = 新会话
+composer-placeholder = Enter 发送。/ 执行 slash 命令。Alt+P 打开命令面板。F3 附加文件。Alt/Shift+Enter 或 Ctrl+J 插入换行。F4 外部编辑。F6 剪贴板图片。
+
+status-sessions = Tab 切换面板 | s 恢复会话 | b 分支历史 | / 搜索 | 1 全部 | 2 根 | 3 子树 | m 循环 | Enter 打开 | [ 父会话 | ] 子会话 | R 重命名 | t 时间线 | v 分页查看 | q 退出
+status-transcript = Tab 切换面板 | s 恢复会话 | b 分支历史 | / 或 Ctrl+F 搜索 | Alt+P 命令 | 1/2/3 切视图 | [ 父会话 | ] 子会话 | R 重命名 | t 时间线 | e 导出 | v 分页查看 | y/Y 复制 | q 退出
+status-composer = Enter 发送 | / 命令 | Alt+P 面板 | F3 附加 | F4 编辑 | F6 图片 | Tab 切换面板 | q 退出
+
+help-title = 帮助
+help-header = Agena TUI
+help-section-sessions = 会话面板
+help-sessions-line-1 = Up/Down、PageUp/PageDown 移动选择
+help-sessions-line-2 = Enter 打开所选会话
+help-sessions-line-3 = / 打开后端会话搜索
+help-sessions-line-4 = R 重命名当前或选中的会话，t 打开它的事件时间线，b 打开分支历史
+help-sessions-line-5 = 1/2/3 切换全部、根会话和子树视图，m 用于循环切换
+help-section-transcript = 对话记录面板
+help-transcript-line-1 = j/k 或方向键滚动
+help-transcript-line-2 = Space / Shift+Space / Ctrl+F / Ctrl+B 翻页
+help-transcript-line-3 = Ctrl+D / Ctrl+U 半页滚动
+help-transcript-line-4 = PageUp 或在顶部附近滚动会加载更早消息
+help-transcript-line-5 = g/G 跳到顶部或底部
+help-transcript-line-6 = / 或 Ctrl+F 搜索已加载内容，n/N 跳转结果
+help-transcript-line-7 = y 复制已加载全文，Y 复制当前可见视口
+help-transcript-line-8 = R 重命名会话，t 打开时间线，b 打开分支历史，e 导出已加载记录为 markdown，v 用分页器打开已加载记录
+help-section-composer = 输入框
+help-composer-line-1 = Enter 发送
+help-composer-line-2 = Alt/Shift+Enter 或 Ctrl+J 插入换行
+help-composer-line-3 = Ctrl+A/E/B/F/P/N 移动，Alt+B/F 或 Alt/Ctrl+Left/Right 按词跳转
+help-composer-line-4 = Ctrl+H/D/W/U/K/Y 按 shell 或编辑器习惯编辑
+help-composer-line-5 = 在行边界处，Ctrl+A/E 可继续跨到上一行或下一行
+help-composer-line-6 = F3、Ctrl+O 或 Alt+O 搜索工作区文件并附加
+help-composer-line-7 = F4 或 Alt+E 用 $VISUAL/$EDITOR 打开外部编辑器
+help-composer-line-8 = F6 或 Alt+I 附加剪贴板图片
+help-composer-line-9 = 粘贴单个文件路径会直接附加，大段粘贴会变成内联占位符，附件保持原子化
+help-composer-line-10 = Alt+P 打开命令面板，/model、/fork、/rewind 这类 slash 命令可直接在输入框执行
+help-section-actions = 操作
+help-actions-line-1 = n 创建会话，s 打开恢复会话列表，b 打开分支历史，[ 打开父会话，] 打开子会话列表
+help-actions-line-2 = r 继续被阻塞或待处理的会话
+help-actions-line-3 = a/A/d/D 回复第一个待处理权限请求
+help-actions-line-4 = u 打开第一个待处理用户输入请求
+help-actions-line-5 = 已禁用鼠标捕获，终端原生选择和复制仍可使用
+help-actions-line-6 = q 或 Ctrl+C 退出
+
+overlay-session-search-title = 会话搜索
+overlay-session-search-prompt = 搜索会话标题
+overlay-transcript-search-title = 记录搜索
+overlay-transcript-search-prompt = 在已加载消息中搜索
+overlay-rename-title = 重命名会话
+overlay-rename-prompt = 编辑会话标题
+overlay-line-footer = Enter 应用 | Esc 关闭
+
+overlay-attach-title = 附加文件
+overlay-attach-prompt = 输入路径或搜索词。Enter 会附加当前选中的文件。
+overlay-attach-no-match = 没有匹配的文件
+overlay-attach-matches = 匹配结果
+overlay-attach-footer = Enter 附加 | Tab 填入选中路径 | Up/Down 移动 | Esc 关闭
+
+overlay-user-input-title = 待处理用户输入
+overlay-user-input-request-id = request_id: {$request_id}
+overlay-user-input-custom-allowed = 允许自定义值
+overlay-user-input-reply-format = 回复格式：question_id=value;other_id=value1,value2
+overlay-user-input-cancel-hint = Ctrl+D 取消此请求
+overlay-user-input-footer = Enter 提交 | Esc 关闭 | Ctrl+D 取消
+
+overlay-commands-title = 命令面板
+overlay-commands-prompt = 搜索命令或选择操作
+overlay-resume-title = 恢复会话
+overlay-resume-prompt = 输入以按标题、ID 或分支关系过滤会话
+overlay-resume-empty = 没有匹配的会话
+overlay-lineage-title = 分支历史 [#{$session}]
+overlay-lineage-prompt = 浏览当前分支树，并跳转到祖先、兄弟分支或子分支会话
+overlay-lineage-empty = 没有找到相关分支会话
+overlay-rewind-title = 回退会话 [#{$session}]
+overlay-rewind-prompt = 选择这个会话里要保留到哪一条消息
+overlay-rewind-empty = 没有可回退到的消息
+overlay-rewind-confirm-title = 确认回退
+overlay-rewind-confirm-keep = 保留到 {$target}
+overlay-rewind-confirm-warning = 这个会话里后续的消息都会被移除。
+overlay-rewind-confirm-draft = 当前输入框草稿会被保留。
+overlay-confirm-footer = Enter/Y 确认 | Esc 取消
+overlay-picker-loading = 正在加载...
+overlay-picker-empty = 没有匹配项
+overlay-picker-footer = Enter 选择 | Tab 填入选中标签 | Up/Down 移动 | Esc 关闭
+overlay-providers-title = Provider 列表
+overlay-providers-prompt = 选择一个 provider，并使用它的默认模型
+overlay-model-providers-title = 模型 Provider
+overlay-model-providers-prompt = 先选择 provider，再选择模型
+overlay-models-title = 模型 [{$provider}]
+overlay-models-prompt = 为 provider {$provider} 选择模型
+overlay-children-title = 子会话 [#{$session}]
+overlay-children-prompt = 选择一个子会话并打开
+overlay-children-empty = 没有子会话
+overlay-timeline-title = 时间线 [#{$session}]
+overlay-timeline-prompt = 按事件类型、命令或消息元数据过滤
+overlay-timeline-empty = 没有匹配的事件
+overlay-timeline-footer = 输入以过滤 | Up/Down 移动 | PageUp/PageDown 跳转 | Ctrl+Y 复制事件 | Esc 关闭
+overlay-timeline-events = 事件
+overlay-timeline-detail = 详情
+
+flash-terminal-event-error = 终端事件错误：{$error}
+flash-created-session = 已创建会话 {$title}
+flash-session-view-mode = 会话视图：{$mode}
+flash-session-title-empty = 会话标题不能为空
+flash-session-renamed = 已将会话重命名为 {$title}
+flash-session-rewound = 已将会话回退到 {$target}
+flash-permission-reply-sent = 权限回复已发送：{$label}
+flash-user-input-reply-sent = 用户输入回复已发送
+flash-large-paste-staged = 大段粘贴已暂存到输入框
+flash-attached = 已附加 {$path}
+flash-composer-updated = 输入框内容已从外部编辑器更新
+flash-external-editor-failed = 外部编辑器失败：{$error}
+flash-clipboard-image-attached = 已附加剪贴板图片：{$width}x{$height} {$format}
+flash-clipboard-image-attach-failed = 附加剪贴板图片失败：{$error}
+flash-no-loaded-transcript = 没有可复制的已加载内容
+flash-copied-loaded-transcript = 已将已加载内容复制到剪贴板
+flash-no-visible-transcript = 没有可复制的当前可见文本
+flash-copied-visible-transcript = 已将当前可见内容复制到剪贴板
+flash-transcript-exported = 已将记录导出到 {$path}
+flash-transcript-export-failed = 导出记录失败：{$error}
+flash-transcript-pager-failed = 用分页器打开记录失败：{$error}
+flash-timeline-event-copied = 已复制当前时间线事件
+flash-clipboard-copy-failed = 剪贴板复制失败：{$error}
+flash-command-requires-session = 此操作需要先打开一个会话
+flash-session-busy = 当前会话正忙
+flash-no-permission-request = 没有待处理的权限请求
+flash-no-user-input-request = 没有待处理的用户输入请求
+flash-provider-selected = 已选择 provider：{$provider}（默认模型 {$model}）
+flash-provider-cleared = 已清除 provider/模型覆盖
+flash-provider-not-found = 未找到 provider：{$provider}
+flash-model-selected = 已选择模型：{$model}
+flash-model-cleared = 已清除模型覆盖
+flash-model-provider-required = 需要先确定 provider；请先选择 provider，或直接使用 provider/model
+flash-parent-session-missing = 当前会话没有父会话
+flash-command-usage = 用法：{$usage}
+flash-command-does-not-support-attachments = slash 命令不支持暂存附件
+flash-command-prefill-requires-empty-composer = 请先清空输入框，再预填命令
+flash-temperature-set = temperature 已设置为 {$value}
+flash-temperature-cleared = temperature 覆盖已清除
+flash-temperature-invalid = 无效的 temperature 值
+flash-max-output-set = max output tokens 已设置为 {$value}
+flash-max-output-cleared = max output 覆盖已清除
+flash-max-output-invalid = 无效的 max output token 值
+flash-system-set = system prompt 覆盖已更新
+flash-system-cleared = system prompt 覆盖已清除
+flash-runtime-status = 运行时覆盖：{$summary}
+runtime-status-default = 使用会话默认设置
+
+message-role-user = 用户
+message-role-assistant = 助手
+message-role-system = 系统
+message-role-tool = 工具
+
+message-state-pending = 待处理
+message-state-in-progress = 进行中
+message-state-completed = 已完成
+message-state-failed = 失败
+
+message-parts-not-loaded = 还有 {$count} 个分段未加载
+message-usage = 用量：输入={$input} 输出={$output} 推理={$reasoning}
+message-finish = 结束原因：{$finish}
+message-empty = （空消息）
+message-thinking = 思考：{$summary}
+message-command-status = 状态：{$status}，退出码={$exit}
+message-file-changes = 文件变更
+message-search = 搜索：{$query}
+message-todo-list = 待办列表
+message-error = 错误 [{$code}]：{$message}
+message-attachments = 附件
+message-awaiting-user-input = 等待用户输入：{$request_id}
+message-question-line = - {$question} ({$id})
+message-part-detail-unavailable = 该分段详情不可用
+message-tool-pending = 工具待执行：{$label}
+message-tool-running = 工具运行中：{$label}
+message-tool-done = 工具已完成：{$label}
+message-tool-failed = 工具失败：{$label}
+message-tool-result-blocks = {$count} 个结果块
+
+todo-status-pending = 待处理
+todo-status-in-progress = 进行中
+todo-status-completed = 已完成
+todo-status-cancelled = 已取消
+
+todo-priority-high = 高
+todo-priority-medium = 中
+todo-priority-low = 低
+
+file-change-added = 新增
+file-change-updated = 更新
+file-change-deleted = 删除
+
+time-just-now = 刚刚
+time-minutes-ago = {$count} 分钟前
+time-hours-ago = {$count} 小时前
+time-days-ago = {$count} 天前
+
+session-default-title = 新会话 {$time}
+session-default-base = 新会话
+session-fallback-title = 会话 {$id}
+
+user-input-error-empty = 回复不能为空
+user-input-error-invalid-segment = 回复片段无效：{$segment}
+user-input-error-unknown-question = 未知的问题 ID：{$question_id}
+user-input-error-missing-answer = 问题 {$question_id} 至少需要一个答案
+user-input-error-no-answers = 回复中没有任何答案
+
+attachment-kind-image = 图片
+attachment-kind-audio = 音频
+attachment-kind-video = 视频
+attachment-kind-pdf = PDF
+attachment-kind-file = 文件
+attachment-generic = 附件
+attachment-chip-image = {$kind}：{$filename} ({$width}x{$height}, {$size})
+attachment-chip-other = {$kind}：{$filename} ({$size})
+attachment-placeholder = [{$kind} {$filename}]
+
+bytes-gb = {$value} GB
+bytes-mb = {$value} MB
+bytes-kb = {$value} KB
+bytes-b = {$value} B
+
+paste-label = 粘贴 {$count} 个字符
+paste-label-append = 粘贴 {$count} 个字符，发送时追加
+paste-placeholder = [粘贴 {$count} 个字符]
+
+permission-label-allow-once = 允许一次
+permission-label-allow-always = 始终允许
+permission-label-deny-once = 拒绝一次
+permission-label-deny-always = 始终拒绝
+
+permission-summary-pending = 等待权限：{$reason}
+permission-summary-allow-once = 已允许一次：{$reason}
+permission-summary-allow-always = 已始终允许：{$reason}
+permission-summary-deny-once = 已拒绝一次：{$reason}
+permission-summary-deny-always = 已始终拒绝：{$reason}
+
+command-help-summary = 显示帮助
+command-commands-summary = 打开命令面板
+command-new-summary = 创建新会话
+command-sessions-summary = 聚焦会话面板，或切换到 all、roots、subtree 视图
+command-resume-summary = 打开全局会话切换器，快速恢复最近工作
+command-lineage-summary = 为当前或选中的会话打开分支历史选择器
+command-rewind-summary = 打开消息选择器，将当前会话回退到某条消息
+command-search-summary = 搜索会话或打开会话搜索框
+command-find-summary = 搜索对话记录或打开记录搜索框
+command-rename-summary = 重命名当前或选中的会话
+command-timeline-summary = 为当前或选中的会话打开可搜索的事件时间线
+command-export-summary = 将已加载的对话记录导出为 markdown，并在编辑器中打开
+command-pager-summary = 用终端分页器打开已加载的对话记录
+command-continue-summary = 继续当前被阻塞或待处理的会话
+command-user-input-summary = 回复第一个待处理用户输入请求
+command-allow-summary = 单次允许第一个待处理权限请求
+command-allow-always-summary = 始终允许第一个待处理权限请求
+command-deny-summary = 单次拒绝第一个待处理权限请求
+command-deny-always-summary = 始终拒绝第一个待处理权限请求
+command-attach-summary = 打开文件附加面板
+command-editor-summary = 为输入框打开外部编辑器
+command-image-summary = 从剪贴板附加图片
+command-copy-summary = 复制已加载的对话记录
+command-copy-visible-summary = 复制当前可见视口
+command-providers-summary = 列出已配置的 provider
+command-provider-summary = 选择 provider，或清除当前 provider/模型覆盖
+command-models-summary = 列出某个 provider 的模型
+command-model-summary = 选择模型，或清除当前模型覆盖
+command-temperature-summary = 设置或清除 temperature 覆盖
+command-max-output-summary = 设置或清除 max output token 覆盖
+command-system-summary = 设置或清除 system prompt 覆盖
+command-fork-summary = 从当前会话创建一个子会话
+command-children-summary = 打开子会话选择器
+command-parent-summary = 跳转到父会话
+command-status-summary = 显示当前运行时覆盖摘要

@@ -19,6 +19,9 @@ use crate::{
 
 const PROVIDER_ID: &str = "anthropic";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const FIRST_PARTY_ANTHROPIC_HOSTS: &[&str] = &["api.anthropic.com", "api-staging.anthropic.com"];
+const DEFAULT_ANTHROPIC_BETA_HEADER: &str =
+    "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
 
 #[derive(Clone)]
 pub struct AnthropicProvider {
@@ -53,19 +56,24 @@ impl AnthropicProvider {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        let base_url = utils::normalize_base_url(base_url.into().as_str());
+        let mut extra_headers = HashMap::new();
+        if Self::is_first_party_base_url(base_url.as_str()) {
+            extra_headers.insert(
+                "anthropic-beta".to_owned(),
+                DEFAULT_ANTHROPIC_BETA_HEADER.to_owned(),
+            );
+        }
+
         Self {
             client,
             api_key,
-            base_url: utils::normalize_base_url(base_url.into().as_str()),
+            base_url,
             default_model: ModelId::new(default_model),
             include_thinking: false,
             auth_header: "x-api-key".to_owned(),
             auth_scheme: None,
-            extra_headers: HashMap::from([(
-                "anthropic-beta".to_owned(),
-                "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
-                    .to_owned(),
-            )]),
+            extra_headers,
         }
     }
 
@@ -182,37 +190,58 @@ impl AnthropicProvider {
             .map(|(media_type, data)| AnthropicBinarySource::base64(media_type, data))
     }
 
-    fn tools(tools: &[crate::tool::ToolDefinition]) -> Vec<AnthropicToolDefinition> {
+    fn is_first_party_base_url(base_url: &str) -> bool {
+        url::Url::parse(base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(|host| host.to_owned()))
+            .map(|host| {
+                FIRST_PARTY_ANTHROPIC_HOSTS
+                    .iter()
+                    .any(|candidate| host.eq_ignore_ascii_case(candidate))
+            })
+            .unwrap_or(false)
+    }
+
+    fn supports_eager_input_streaming(&self) -> bool {
+        Self::is_first_party_base_url(self.base_url.as_str())
+    }
+
+    fn tools(&self, tools: &[crate::tool::ToolDefinition]) -> Vec<AnthropicToolDefinition> {
         tools
             .iter()
             .map(|tool| AnthropicToolDefinition {
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input_schema: tool.input_schema.clone(),
+                cache_control: None,
+                eager_input_streaming: self.supports_eager_input_streaming().then_some(true),
             })
             .collect()
     }
 
     fn apply_prompt_cache_hints(
         system: &mut [AnthropicTextBlock],
+        tools: &mut [AnthropicToolDefinition],
         messages: &mut [AnthropicMessage],
     ) {
-        let mut flags = vec![true; system.len()];
-        flags.extend(messages.iter().map(|_| false));
+        // Keep Anthropic cache markers within the documented four-breakpoint
+        // envelope: up to two system blocks, the final tool schema, and the
+        // last message block. Claude Code also deliberately uses a single
+        // message-level marker to avoid unstable intermediate breakpoints.
+        for block in system.iter_mut().take(2) {
+            block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
+        }
 
-        for index in prompt_cache::select_cache_target_indices(flags.as_slice()) {
-            if let Some(block) = system.get_mut(index) {
-                block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
-                continue;
-            }
+        if let Some(tool) = tools.last_mut() {
+            tool.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
+        }
 
-            let message_index = index.saturating_sub(system.len());
-            if let Some(block) = messages
-                .get_mut(message_index)
-                .and_then(|message| message.content.last_mut())
-            {
-                block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
-            }
+        if let Some(block) = messages
+            .iter_mut()
+            .rev()
+            .find_map(|message| message.content.last_mut())
+        {
+            block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
         }
     }
 
@@ -290,6 +319,29 @@ impl ModelProvider for AnthropicProvider {
             .metadata_for_family(crate::provider::CapabilityFamily::Anthropic, model.as_str())
     }
 
+    fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
+        Some(
+            crate::provider::PromptCacheShape::new(PROVIDER_ID)
+                .with_string("auth_scope", self.api_key.prompt_cache_scope())
+                .with_string("base_url", self.base_url.as_str())
+                .with_bool("include_thinking", self.include_thinking)
+                .with_string("auth_header", self.auth_header.as_str())
+                .with_optional_string("auth_scheme", self.auth_scheme.as_deref())
+                .with_bool(
+                    "first_party_base_url",
+                    Self::is_first_party_base_url(self.base_url.as_str()),
+                )
+                .with_bool(
+                    "eager_input_streaming",
+                    self.supports_eager_input_streaming(),
+                )
+                .with_json(
+                    "extra_headers",
+                    &utils::prompt_cache_header_entries(&self.extra_headers),
+                ),
+        )
+    }
+
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let response = self
             .send_request(|api_key| {
@@ -324,7 +376,7 @@ impl ModelProvider for AnthropicProvider {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
-        let tools = (!request.tools.is_empty()).then(|| Self::tools(request.tools.as_slice()));
+        let mut tools = (!request.tools.is_empty()).then(|| self.tools(request.tools.as_slice()));
 
         let mut messages = Vec::new();
         for msg in request.messages {
@@ -345,7 +397,11 @@ impl ModelProvider for AnthropicProvider {
                 }),
             }
         }
-        Self::apply_prompt_cache_hints(system_chunks.as_mut_slice(), messages.as_mut_slice());
+        Self::apply_prompt_cache_hints(
+            system_chunks.as_mut_slice(),
+            tools.as_mut().map(Vec::as_mut_slice).unwrap_or(&mut []),
+            messages.as_mut_slice(),
+        );
 
         let body = AnthropicMessagesRequest {
             model: model.to_string(),
@@ -424,7 +480,7 @@ impl ModelProvider for AnthropicProvider {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
-        let tools = (!request.tools.is_empty()).then(|| Self::tools(request.tools.as_slice()));
+        let mut tools = (!request.tools.is_empty()).then(|| self.tools(request.tools.as_slice()));
 
         let mut messages = Vec::new();
         for msg in request.messages {
@@ -445,7 +501,11 @@ impl ModelProvider for AnthropicProvider {
                 }),
             }
         }
-        Self::apply_prompt_cache_hints(system_chunks.as_mut_slice(), messages.as_mut_slice());
+        Self::apply_prompt_cache_hints(
+            system_chunks.as_mut_slice(),
+            tools.as_mut().map(Vec::as_mut_slice).unwrap_or(&mut []),
+            messages.as_mut_slice(),
+        );
 
         let body = AnthropicMessagesRequest {
             model: model.to_string(),
@@ -491,6 +551,12 @@ impl ModelProvider for AnthropicProvider {
                     utils::parse_json_value(provider_id.as_str(), "stream event", event)?;
 
                 match parsed {
+                    AnthropicSseEvent::MessageStart { message } => {
+                        if let Some(usage) = message.usage {
+                            stream_usage =
+                                Some(merge_anthropic_usage(stream_usage.take(), usage));
+                        }
+                    }
                     AnthropicSseEvent::ContentBlockStart {
                         index,
                         content_block,
@@ -609,7 +675,8 @@ impl ModelProvider for AnthropicProvider {
                         }
 
                         if let Some(usage) = usage.or_else(|| message.and_then(|item| item.usage)) {
-                            stream_usage = Some(usage);
+                            stream_usage =
+                                Some(merge_anthropic_usage(stream_usage.take(), usage));
                         }
                     }
                     AnthropicSseEvent::MessageStop { usage, message } => {
@@ -620,7 +687,8 @@ impl ModelProvider for AnthropicProvider {
                         }
 
                         if let Some(usage) = usage.or_else(|| message.and_then(|item| item.usage)) {
-                            stream_usage = Some(usage);
+                            stream_usage =
+                                Some(merge_anthropic_usage(stream_usage.take(), usage));
                         }
 
                         break;
@@ -666,6 +734,10 @@ struct AnthropicToolDefinition {
     name: String,
     description: String,
     input_schema: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_control: Option<prompt_cache::PromptCacheControl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    eager_input_streaming: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -797,15 +869,65 @@ fn parse_json_or_string(raw: String) -> Value {
 }
 
 fn map_anthropic_usage(u: AnthropicUsage) -> CompletionUsage {
+    let cache_write_tokens = u.cache_creation_input_tokens.unwrap_or_else(|| {
+        u.cache_creation
+            .as_ref()
+            .map(AnthropicCacheCreationUsage::total_input_tokens)
+            .unwrap_or_default()
+    });
+
     MessageUsage {
         input_tokens: u.input_tokens.unwrap_or_default(),
         output_tokens: u.output_tokens.unwrap_or_default(),
         reasoning_tokens: 0,
-        cache_write_tokens: u.cache_creation_input_tokens.unwrap_or_default(),
+        cache_write_tokens,
         cache_read_tokens: u.cache_read_input_tokens.unwrap_or_default(),
         total_cost: 0.0,
     }
     .into()
+}
+
+fn merge_anthropic_usage(
+    current: Option<AnthropicUsage>,
+    update: AnthropicUsage,
+) -> AnthropicUsage {
+    let Some(current) = current else {
+        return update;
+    };
+
+    AnthropicUsage {
+        input_tokens: update.input_tokens.or(current.input_tokens),
+        output_tokens: update.output_tokens.or(current.output_tokens),
+        cache_creation_input_tokens: update
+            .cache_creation_input_tokens
+            .or(current.cache_creation_input_tokens),
+        cache_read_input_tokens: update
+            .cache_read_input_tokens
+            .or(current.cache_read_input_tokens),
+        cache_creation: merge_anthropic_cache_creation_usage(
+            current.cache_creation,
+            update.cache_creation,
+        ),
+    }
+}
+
+fn merge_anthropic_cache_creation_usage(
+    current: Option<AnthropicCacheCreationUsage>,
+    update: Option<AnthropicCacheCreationUsage>,
+) -> Option<AnthropicCacheCreationUsage> {
+    match (current, update) {
+        (Some(current), Some(update)) => Some(AnthropicCacheCreationUsage {
+            ephemeral_1h_input_tokens: update
+                .ephemeral_1h_input_tokens
+                .or(current.ephemeral_1h_input_tokens),
+            ephemeral_5m_input_tokens: update
+                .ephemeral_5m_input_tokens
+                .or(current.ephemeral_5m_input_tokens),
+        }),
+        (None, Some(update)) => Some(update),
+        (Some(current), None) => Some(current),
+        (None, None) => None,
+    }
 }
 
 fn json_value_to_string(value: &Value) -> String {
@@ -848,11 +970,32 @@ struct AnthropicUsage {
     cache_creation_input_tokens: Option<u64>,
     #[serde(default)]
     cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation: Option<AnthropicCacheCreationUsage>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct AnthropicCacheCreationUsage {
+    #[serde(default)]
+    ephemeral_1h_input_tokens: Option<u64>,
+    #[serde(default)]
+    ephemeral_5m_input_tokens: Option<u64>,
+}
+
+impl AnthropicCacheCreationUsage {
+    fn total_input_tokens(&self) -> u64 {
+        self.ephemeral_1h_input_tokens.unwrap_or_default()
+            + self.ephemeral_5m_input_tokens.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicSseEvent {
+    MessageStart {
+        #[serde(default)]
+        message: AnthropicSseMessage,
+    },
     ContentBlockStart {
         #[serde(default)]
         index: Option<usize>,
@@ -956,15 +1099,157 @@ mod tests {
         )
     }
 
+    #[test]
+    fn apply_prompt_cache_hints_limits_breakpoints_and_marks_last_tool() {
+        let mut system = vec![
+            AnthropicTextBlock::text("system-1"),
+            AnthropicTextBlock::text("system-2"),
+            AnthropicTextBlock::text("system-3"),
+        ];
+        let mut tools = vec![
+            AnthropicToolDefinition {
+                name: "tool_a".to_owned(),
+                description: "first".to_owned(),
+                input_schema: serde_json::json!({ "type": "object" }),
+                cache_control: None,
+                eager_input_streaming: None,
+            },
+            AnthropicToolDefinition {
+                name: "tool_b".to_owned(),
+                description: "second".to_owned(),
+                input_schema: serde_json::json!({ "type": "object" }),
+                cache_control: None,
+                eager_input_streaming: None,
+            },
+        ];
+        let mut messages = vec![
+            AnthropicMessage {
+                role: "user".to_owned(),
+                content: vec![AnthropicTextBlock::text("older-user")],
+            },
+            AnthropicMessage {
+                role: "assistant".to_owned(),
+                content: vec![AnthropicTextBlock::text("assistant")],
+            },
+            AnthropicMessage {
+                role: "user".to_owned(),
+                content: vec![AnthropicTextBlock::text("latest-user")],
+            },
+        ];
+
+        AnthropicProvider::apply_prompt_cache_hints(
+            system.as_mut_slice(),
+            tools.as_mut_slice(),
+            messages.as_mut_slice(),
+        );
+
+        assert!(system[0].cache_control.is_some());
+        assert!(system[1].cache_control.is_some());
+        assert!(system[2].cache_control.is_none());
+
+        assert!(tools[0].cache_control.is_none());
+        assert!(tools[1].cache_control.is_some());
+
+        assert!(messages[0].content[0].cache_control.is_none());
+        assert!(messages[1].content[0].cache_control.is_none());
+        assert!(messages[2].content[0].cache_control.is_some());
+    }
+
+    #[test]
+    fn prompt_cache_shape_changes_when_auth_scope_changes() {
+        let provider_a = AnthropicProvider::new_managed(
+            reqwest::Client::new(),
+            ManagedCredential::environment(
+                "anthropic env",
+                "anthropic",
+                "api_key",
+                "ANTHROPIC_API_KEY_A",
+            ),
+            "https://api.anthropic.com",
+            "claude-3-7-sonnet-latest",
+        );
+        let provider_b = AnthropicProvider::new_managed(
+            reqwest::Client::new(),
+            ManagedCredential::environment(
+                "anthropic env",
+                "anthropic",
+                "api_key",
+                "ANTHROPIC_API_KEY_B",
+            ),
+            "https://api.anthropic.com",
+            "claude-3-7-sonnet-latest",
+        );
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&crate::model::ModelId::new("claude-3-7-sonnet-latest"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&crate::model::ModelId::new("claude-3-7-sonnet-latest"))
+            .expect("shape should exist");
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
+    fn first_party_base_url_enables_default_beta_headers_and_eager_input_streaming() {
+        let provider = AnthropicProvider::new(
+            reqwest::Client::new(),
+            "ak-test",
+            "https://api.anthropic.com/v1",
+            "claude-3-7-sonnet-latest",
+        );
+        let tools = provider.tools(&[sample_tool_definition()]);
+
+        assert_eq!(
+            provider
+                .extra_headers
+                .get("anthropic-beta")
+                .map(String::as_str),
+            Some(DEFAULT_ANTHROPIC_BETA_HEADER)
+        );
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].eager_input_streaming, Some(true));
+    }
+
+    #[test]
+    fn proxy_base_url_disables_default_beta_headers_and_eager_input_streaming() {
+        let provider = AnthropicProvider::new(
+            reqwest::Client::new(),
+            "ak-test",
+            "https://gateway.example.com/anthropic/v1",
+            "claude-3-7-sonnet-latest",
+        );
+        let tools = provider.tools(&[sample_tool_definition()]);
+
+        assert!(provider.extra_headers.get("anthropic-beta").is_none());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].eager_input_streaming, None);
+    }
+
+    #[test]
+    fn map_anthropic_usage_falls_back_to_nested_cache_creation_details() {
+        let usage = map_anthropic_usage(AnthropicUsage {
+            input_tokens: Some(10),
+            output_tokens: Some(5),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(3),
+            cache_creation: Some(AnthropicCacheCreationUsage {
+                ephemeral_1h_input_tokens: Some(7),
+                ephemeral_5m_input_tokens: Some(11),
+            }),
+        });
+
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 5);
+        assert_eq!(usage.cache_write_tokens, 18);
+        assert_eq!(usage.cache_read_tokens, 3);
+    }
+
     #[tokio::test]
     async fn complete_parses_tool_use_object_input() {
         let mut server = mockito::Server::new_async().await;
         let _mock = server
             .mock("POST", "/messages")
-            .match_header(
-                "anthropic-beta",
-                "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
-            )
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -1148,9 +1433,11 @@ mod tests {
     async fn complete_stream_parses_typed_anthropic_events() {
         let mut server = mockito::Server::new_async().await;
         let body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3}}}\n\n",
             "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}\n\n",
             "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}\n\n",
-            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":1}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2,\"cache_creation\":{\"ephemeral_5m_input_tokens\":1},\"cache_read_input_tokens\":1}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
             "data: [DONE]\n\n"
         );
 

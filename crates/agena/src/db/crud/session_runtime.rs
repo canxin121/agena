@@ -64,6 +64,33 @@ where
     Ok(row.map(|row| row.seq))
 }
 
+pub async fn delete_session_events_by_session_id<C>(db: &C, session_id: i64) -> Result<u64, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let deleted = entities::session_event::Entity::delete_many()
+        .filter(entities::session_event::Column::SessionId.eq(session_id))
+        .exec(db)
+        .await?;
+    Ok(deleted.rows_affected)
+}
+
+pub async fn delete_session_events_after_seq<C>(
+    db: &C,
+    session_id: i64,
+    seq: i64,
+) -> Result<u64, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let deleted = entities::session_event::Entity::delete_many()
+        .filter(entities::session_event::Column::SessionId.eq(session_id))
+        .filter(entities::session_event::Column::Seq.gt(seq))
+        .exec(db)
+        .await?;
+    Ok(deleted.rows_affected)
+}
+
 fn to_session_event_record(
     row: entities::session_event::Model,
 ) -> Result<SessionEventRecord, DbErr> {

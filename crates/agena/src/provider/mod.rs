@@ -15,7 +15,9 @@ mod google_vertex;
 mod model_metadata;
 mod openai;
 mod openai_compatible;
+mod opencode;
 mod prompt_cache;
+mod prompt_cache_shape;
 mod registry;
 mod runtime;
 mod sse;
@@ -47,6 +49,8 @@ pub use google_vertex::GoogleVertexProvider;
 pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
 pub use openai::{OpenAiApiMode, OpenAiProvider, OpenAiStreamMode};
 pub use openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleStreamMode};
+pub use opencode::OpencodeProvider;
+pub use prompt_cache_shape::{PromptCacheShape, PromptCacheShapeChange, PromptCacheShapeDiff};
 pub use registry::{NamedProvider, ProviderAliasRegistration, ProviderRegistry};
 pub use runtime::{
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,

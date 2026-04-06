@@ -12,7 +12,10 @@ use crate::{
         AttachmentSource, Message, MessagePart, MessageSource, PartContent, ToolExecutionPart,
         ToolInvocation,
     },
-    provider::{PRUNED_TOOL_RESULT_PLACEHOLDER, project_session_parts, project_session_text_lossy},
+    provider::{
+        PRUNED_TOOL_RESULT_PLACEHOLDER, PromptCacheShape, PromptCacheShapeDiff,
+        project_session_parts, project_session_text_lossy,
+    },
     role::Role,
     tool::ToolDefinition,
 };
@@ -32,7 +35,7 @@ const MIN_PROMPT_BUDGET_TOKENS: u32 = 512;
 const MIN_CONTEXT_RESERVE_TOKENS: u32 = 1_024;
 const MAX_CONTEXT_RESERVE_TOKENS: u32 = 20_000;
 const PROMPT_PROTOCOL_OVERHEAD_CHARS: usize = 2_048;
-const PROMPT_REQUEST_SHAPE_VERSION: u32 = 2;
+const PROMPT_REQUEST_SHAPE_VERSION: u32 = 3;
 const SYNTHETIC_TOOL_COMPLETED_PLACEHOLDER: &str =
     "[Tool execution completed without persisted output]";
 const SYNTHETIC_TOOL_INTERRUPTED_PLACEHOLDER: &str = "[Tool execution was interrupted]";
@@ -65,6 +68,9 @@ pub(crate) struct PreparedPrompt {
     pub prompt_window_generation: u64,
     pub system_fingerprint: String,
     pub request_options_fingerprint: String,
+    pub provider_request_shape: Option<PromptCacheShape>,
+    pub continuation_reason: PromptContinuationReason,
+    pub continuation_diagnostic: PromptContinuationDiagnostic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +87,52 @@ pub(crate) struct PromptRequestOptions<'a> {
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub tools: &'a [ToolDefinition],
+    pub provider_request_shape: Option<&'a PromptCacheShape>,
     pub continuation_supported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct PromptContinuationDiagnostic {
+    pub provider_shape_diff: PromptCacheShapeDiff,
+}
+
+impl PromptContinuationDiagnostic {
+    pub(crate) fn provider_shape_changed(&self) -> bool {
+        !self.provider_shape_diff.is_empty()
+    }
+
+    pub(crate) fn provider_shape_change_keys(&self) -> Vec<&str> {
+        self.provider_shape_diff.changed_keys()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptContinuationReason {
+    Unsupported,
+    MissingProviderAnchor,
+    PromptWindowGenerationMismatch,
+    SystemFingerprintMismatch,
+    RequestOptionsFingerprintMismatch,
+    AnchorAssistantMissing,
+    TranscriptDigestMismatch,
+    NoDeltaMessages,
+    ReusedPreviousResponseId,
+}
+
+impl PromptContinuationReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Unsupported => "unsupported",
+            Self::MissingProviderAnchor => "missing_provider_anchor",
+            Self::PromptWindowGenerationMismatch => "prompt_window_generation_mismatch",
+            Self::SystemFingerprintMismatch => "system_fingerprint_mismatch",
+            Self::RequestOptionsFingerprintMismatch => "request_options_fingerprint_mismatch",
+            Self::AnchorAssistantMissing => "anchor_assistant_missing",
+            Self::TranscriptDigestMismatch => "transcript_digest_mismatch",
+            Self::NoDeltaMessages => "no_delta_messages",
+            Self::ReusedPreviousResponseId => "reused_previous_response_id",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -319,13 +370,26 @@ pub(crate) fn normalize_prompt_messages(messages: &[Message]) -> Vec<Message> {
     for message in messages {
         match message.role {
             Role::Tool => {
-                if let Some(tool_call_id) = primary_tool_result_id(message) {
-                    if let Some(index) = pending_tool_outputs
-                        .iter()
-                        .position(|pending| pending.tool_call_id == tool_call_id)
-                    {
-                        pending_tool_outputs.remove(index);
-                        normalized.push(normalized_prompt_tool_message(message));
+                let tool_call_ids = tool_result_ids(message);
+                if !tool_call_ids.is_empty() {
+                    let matched_tool_call_ids = tool_call_ids
+                        .into_iter()
+                        .filter(|tool_call_id| {
+                            pending_tool_outputs
+                                .iter()
+                                .any(|pending| pending.tool_call_id == *tool_call_id)
+                        })
+                        .collect::<HashSet<_>>();
+                    if !matched_tool_call_ids.is_empty() {
+                        pending_tool_outputs.retain(|pending| {
+                            !matched_tool_call_ids.contains(pending.tool_call_id.as_str())
+                        });
+                        append_normalized_prompt_tool_messages(
+                            &mut normalized,
+                            message,
+                            &matched_tool_call_ids,
+                            &mut next_synthetic_message_id,
+                        );
                     }
                 } else {
                     flush_synthetic_tool_results(
@@ -359,31 +423,63 @@ pub(crate) fn normalize_prompt_messages(messages: &[Message]) -> Vec<Message> {
     normalized
 }
 
-fn normalized_prompt_tool_message(message: &Message) -> Message {
-    let Some(tool_call_id) = primary_tool_result_id(message) else {
-        return message.clone();
-    };
+fn append_normalized_prompt_tool_messages(
+    normalized: &mut Vec<Message>,
+    message: &Message,
+    matched_tool_call_ids: &HashSet<String>,
+    next_synthetic_message_id: &mut i64,
+) {
+    if matched_tool_call_ids.is_empty() {
+        normalized.push(message.clone());
+        return;
+    }
 
     let projected_parts = project_session_parts(message);
     let has_visible_payload = projected_parts.iter().any(prompt_part_has_visible_payload);
     if has_visible_payload {
-        return message.clone();
+        normalized.push(message.clone());
+        return;
     }
 
-    let fallback_output = message.parts.iter().find_map(|part| {
+    let mut synthetic_results = Vec::new();
+    let mut seen = HashSet::new();
+    for part in &message.parts {
         let Some(PartContent::ToolExecution(exec)) = part.content.as_ref() else {
-            return None;
+            continue;
         };
-        let call_id = tool_execution_call_id(part, exec)?;
-        (call_id == tool_call_id).then(|| fallback_tool_result_output(exec))
-    });
-    let Some(output_text) = fallback_output.filter(|text| !text.trim().is_empty()) else {
-        return message.clone();
-    };
+        let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
+            continue;
+        };
+        if !matched_tool_call_ids.contains(tool_call_id.as_str())
+            || !seen.insert(tool_call_id.clone())
+        {
+            continue;
+        }
 
-    let mut normalized = synthetic_tool_result_message(message.id, tool_call_id, output_text);
-    normalized.created_at = message.created_at;
-    normalized
+        let output_text = fallback_tool_result_output(exec);
+        if output_text.trim().is_empty() {
+            continue;
+        }
+        synthetic_results.push((tool_call_id, output_text));
+    }
+
+    if synthetic_results.is_empty() {
+        normalized.push(message.clone());
+        return;
+    }
+
+    for (index, (tool_call_id, output_text)) in synthetic_results.into_iter().enumerate() {
+        let message_id = if index == 0 {
+            message.id
+        } else {
+            let synthetic_message_id = *next_synthetic_message_id;
+            *next_synthetic_message_id -= 1;
+            synthetic_message_id
+        };
+        let mut synthetic = synthetic_tool_result_message(message_id, tool_call_id, output_text);
+        synthetic.created_at = message.created_at;
+        normalized.push(synthetic);
+    }
 }
 
 fn message_has_visible_prompt_payload(message: &Message) -> bool {
@@ -432,6 +528,7 @@ pub(crate) fn prompt_request_fingerprints(
             options.temperature,
             options.max_output_tokens,
             options.tools,
+            options.provider_request_shape,
         ),
     }
 }
@@ -629,52 +726,172 @@ pub(crate) fn build_prepared_prompt(
 ) -> PreparedPrompt {
     let active_messages = active_prompt_messages(session);
     let prompt_messages = normalize_prompt_messages(active_messages.as_slice());
+    let provider_request_shape = options.provider_request_shape.cloned();
     let PromptRequestFingerprint {
         system_fingerprint,
         request_options_fingerprint,
     } = prompt_request_fingerprints(&options);
 
-    if options.continuation_supported
-        && let Some(anchor) = session
-            .runtime
-            .provider_anchor(options.provider_id, options.model_id)
-        && anchor.prompt_window_generation == session.runtime.prompt_window.generation
-        && anchor.system_fingerprint == system_fingerprint
-        && anchor.request_options_fingerprint == request_options_fingerprint
-        && let Some(anchor_index) = prompt_messages
-            .iter()
-            .position(|message| message.id == anchor.assistant_message_id)
-        && (anchor.transcript_digest.is_empty()
-            || prompt_prefix_transcript_digest(prompt_messages.as_slice(), anchor_index)
-                == anchor.transcript_digest)
+    let continuation = evaluate_prompt_continuation(
+        session,
+        prompt_messages.as_slice(),
+        &options,
+        system_fingerprint.as_str(),
+        request_options_fingerprint.as_str(),
+    );
+
+    if let PromptContinuationOutcome::Reuse {
+        previous_response_id,
+        delta_messages,
+    } = continuation
     {
-        let delta_messages = prompt_messages[anchor_index + 1..].to_vec();
-        if !delta_messages.is_empty() {
-            return PreparedPrompt {
-                system: None,
-                messages: delta_messages,
-                prompt_cache_key: prompt_cache_key_for_session(session.id),
-                previous_response_id: Some(anchor.previous_response_id.clone()),
-                prompt_window_generation: session.runtime.prompt_window.generation,
-                system_fingerprint,
-                request_options_fingerprint,
-            };
-        }
+        return PreparedPrompt {
+            system: None,
+            messages: delta_messages,
+            prompt_cache_key: prompt_cache_key_for_session(session),
+            previous_response_id: Some(previous_response_id),
+            prompt_window_generation: session.runtime.prompt_window.generation,
+            system_fingerprint,
+            request_options_fingerprint,
+            provider_request_shape,
+            continuation_reason: PromptContinuationReason::ReusedPreviousResponseId,
+            continuation_diagnostic: PromptContinuationDiagnostic::default(),
+        };
     }
 
     PreparedPrompt {
         system: options.system.map(ToOwned::to_owned),
         messages: prompt_messages,
-        prompt_cache_key: prompt_cache_key_for_session(session.id),
+        prompt_cache_key: prompt_cache_key_for_session(session),
         previous_response_id: None,
         prompt_window_generation: session.runtime.prompt_window.generation,
         system_fingerprint,
         request_options_fingerprint,
+        provider_request_shape,
+        continuation_reason: continuation.reason(),
+        continuation_diagnostic: continuation.diagnostic(),
     }
 }
 
-pub(crate) fn prompt_cache_key_for_session(session_id: i64) -> String {
-    session_id.to_string()
+#[derive(Debug, Clone, PartialEq)]
+enum PromptContinuationOutcome {
+    Restart {
+        reason: PromptContinuationReason,
+        diagnostic: PromptContinuationDiagnostic,
+    },
+    Reuse {
+        previous_response_id: String,
+        delta_messages: Vec<Message>,
+    },
+}
+
+impl PromptContinuationOutcome {
+    fn reason(&self) -> PromptContinuationReason {
+        match self {
+            Self::Restart { reason, .. } => *reason,
+            Self::Reuse { .. } => PromptContinuationReason::ReusedPreviousResponseId,
+        }
+    }
+
+    fn diagnostic(&self) -> PromptContinuationDiagnostic {
+        match self {
+            Self::Restart { diagnostic, .. } => diagnostic.clone(),
+            Self::Reuse { .. } => PromptContinuationDiagnostic::default(),
+        }
+    }
+}
+
+fn evaluate_prompt_continuation(
+    session: &Session,
+    prompt_messages: &[Message],
+    options: &PromptRequestOptions<'_>,
+    system_fingerprint: &str,
+    request_options_fingerprint: &str,
+) -> PromptContinuationOutcome {
+    if !options.continuation_supported {
+        return PromptContinuationOutcome::Restart {
+            reason: PromptContinuationReason::Unsupported,
+            diagnostic: PromptContinuationDiagnostic::default(),
+        };
+    }
+
+    let Some(anchor) = session
+        .runtime
+        .provider_anchor(options.provider_id, options.model_id)
+    else {
+        return PromptContinuationOutcome::Restart {
+            reason: PromptContinuationReason::MissingProviderAnchor,
+            diagnostic: PromptContinuationDiagnostic::default(),
+        };
+    };
+
+    if anchor.prompt_window_generation != session.runtime.prompt_window.generation {
+        return PromptContinuationOutcome::Restart {
+            reason: PromptContinuationReason::PromptWindowGenerationMismatch,
+            diagnostic: PromptContinuationDiagnostic::default(),
+        };
+    }
+
+    if anchor.system_fingerprint != system_fingerprint {
+        return PromptContinuationOutcome::Restart {
+            reason: PromptContinuationReason::SystemFingerprintMismatch,
+            diagnostic: PromptContinuationDiagnostic::default(),
+        };
+    }
+
+    if anchor.request_options_fingerprint != request_options_fingerprint {
+        return PromptContinuationOutcome::Restart {
+            reason: PromptContinuationReason::RequestOptionsFingerprintMismatch,
+            diagnostic: PromptContinuationDiagnostic {
+                provider_shape_diff: PromptCacheShape::diff(
+                    anchor.provider_request_shape.as_ref(),
+                    options.provider_request_shape,
+                ),
+            },
+        };
+    }
+
+    let Some(anchor_index) = prompt_messages
+        .iter()
+        .position(|message| message.id == anchor.assistant_message_id)
+    else {
+        return PromptContinuationOutcome::Restart {
+            reason: PromptContinuationReason::AnchorAssistantMissing,
+            diagnostic: PromptContinuationDiagnostic::default(),
+        };
+    };
+
+    if !anchor.transcript_digest.is_empty()
+        && prompt_prefix_transcript_digest(prompt_messages, anchor_index)
+            != anchor.transcript_digest
+    {
+        return PromptContinuationOutcome::Restart {
+            reason: PromptContinuationReason::TranscriptDigestMismatch,
+            diagnostic: PromptContinuationDiagnostic::default(),
+        };
+    }
+
+    let delta_messages = prompt_messages[anchor_index + 1..].to_vec();
+    if delta_messages.is_empty() {
+        return PromptContinuationOutcome::Restart {
+            reason: PromptContinuationReason::NoDeltaMessages,
+            diagnostic: PromptContinuationDiagnostic::default(),
+        };
+    }
+
+    PromptContinuationOutcome::Reuse {
+        previous_response_id: anchor.previous_response_id.clone(),
+        delta_messages,
+    }
+}
+
+pub(crate) fn prompt_cache_key_for_session(session: &Session) -> String {
+    format!(
+        "agena:w{}:s{}:c{}",
+        session.workspace_id,
+        session.id,
+        session.created_at.timestamp_millis()
+    )
 }
 
 pub(crate) fn fingerprint_optional_text(value: Option<&str>) -> String {
@@ -1047,18 +1264,30 @@ fn synthetic_tool_result_message(
     message
 }
 
-fn primary_tool_result_id(message: &Message) -> Option<String> {
+fn tool_result_ids(message: &Message) -> Vec<String> {
     if message.role != Role::Tool {
-        return None;
+        return Vec::new();
     }
 
-    message.parts.iter().find_map(|part| {
-        let exec = match part.content.as_ref() {
-            Some(PartContent::ToolExecution(exec)) => exec,
-            _ => return None,
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
+    for part in &message.parts {
+        let Some(PartContent::ToolExecution(exec)) = part.content.as_ref() else {
+            continue;
         };
-        tool_execution_call_id(part, exec)
-    })
+        let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
+            continue;
+        };
+        if seen.insert(tool_call_id.clone()) {
+            ids.push(tool_call_id);
+        }
+    }
+    ids
+}
+
+#[cfg(test)]
+fn primary_tool_result_id(message: &Message) -> Option<String> {
+    tool_result_ids(message).into_iter().next()
 }
 
 fn fallback_tool_result_output(exec: &ToolExecutionPart) -> String {
@@ -1174,6 +1403,7 @@ fn fingerprint_request_options(
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
     tools: &[ToolDefinition],
+    provider_request_shape: Option<&PromptCacheShape>,
 ) -> String {
     #[derive(Serialize)]
     struct RequestOptionsFingerprint<'a> {
@@ -1183,7 +1413,11 @@ fn fingerprint_request_options(
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
         tools: &'a [ToolDefinition],
+        provider_request_shape_fingerprint: Option<String>,
     }
+
+    let provider_request_shape_fingerprint =
+        provider_request_shape.map(PromptCacheShape::fingerprint);
 
     fingerprint_value(&RequestOptionsFingerprint {
         prompt_request_shape_version: PROMPT_REQUEST_SHAPE_VERSION,
@@ -1192,6 +1426,7 @@ fn fingerprint_request_options(
         temperature,
         max_output_tokens,
         tools,
+        provider_request_shape_fingerprint,
     })
 }
 
@@ -1273,12 +1508,15 @@ mod tests {
                         Some(0.2),
                         Some(256),
                         &[],
+                        None,
                     ),
+                    provider_request_shape: None,
                     transcript_digest: String::new(),
                 },
             )]
             .into_iter()
             .collect(),
+            loaded_deferred_tools: Vec::new(),
         };
 
         let prepared = build_prepared_prompt(
@@ -1290,6 +1528,7 @@ mod tests {
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],
+                provider_request_shape: None,
                 continuation_supported: true,
             },
         );
@@ -1298,6 +1537,10 @@ mod tests {
         assert_eq!(prepared.system, None);
         assert_eq!(prepared.messages.len(), 1);
         assert_eq!(prepared.messages[0].id, 12);
+        assert_eq!(
+            prepared.continuation_reason,
+            PromptContinuationReason::ReusedPreviousResponseId
+        );
     }
 
     #[test]
@@ -1324,7 +1567,7 @@ mod tests {
             2,
             Some(4_096),
             fingerprint_optional_text(Some("system")),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[]),
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None),
             transcript_digest,
         );
 
@@ -1333,7 +1576,8 @@ mod tests {
             &session,
             active_messages.as_slice(),
             fingerprint_optional_text(Some("system")).as_str(),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[]).as_str(),
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None)
+                .as_str(),
         )
         .expect("runtime prompt token estimate should be available");
 
@@ -1368,7 +1612,7 @@ mod tests {
             2,
             Some(4_096),
             fingerprint_optional_text(Some("system")),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[]),
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None),
             transcript_digest,
         );
 
@@ -1377,7 +1621,8 @@ mod tests {
             &session,
             active_messages.as_slice(),
             fingerprint_optional_text(Some("different system")).as_str(),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[]).as_str(),
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None)
+                .as_str(),
         );
 
         assert!(estimate.is_none());
@@ -1410,7 +1655,9 @@ mod tests {
                         Some(0.2),
                         Some(256),
                         &[],
+                        None,
                     ),
+                    provider_request_shape: None,
                     transcript_digest: prompt_transcript_digest(&[Message::prompt_text(
                         Role::Assistant,
                         "different",
@@ -1419,6 +1666,7 @@ mod tests {
             )]
             .into_iter()
             .collect(),
+            loaded_deferred_tools: Vec::new(),
         };
 
         let prepared = build_prepared_prompt(
@@ -1430,6 +1678,7 @@ mod tests {
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],
+                provider_request_shape: None,
                 continuation_supported: true,
             },
         );
@@ -1437,6 +1686,10 @@ mod tests {
         assert_eq!(prepared.previous_response_id, None);
         assert_eq!(prepared.system.as_deref(), Some("system"));
         assert_eq!(prepared.messages.len(), 2);
+        assert_eq!(
+            prepared.continuation_reason,
+            PromptContinuationReason::TranscriptDigestMismatch
+        );
     }
 
     #[test]
@@ -1462,7 +1715,7 @@ mod tests {
             2,
             Some(4_096),
             fingerprint_optional_text(Some("system")),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[]),
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None),
             prompt_transcript_digest(&[Message::prompt_text(Role::Assistant, "different")]),
         );
 
@@ -1471,7 +1724,8 @@ mod tests {
             &session,
             active_messages.as_slice(),
             fingerprint_optional_text(Some("system")).as_str(),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[]).as_str(),
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None)
+                .as_str(),
         );
 
         assert!(estimate.is_none());
@@ -1648,6 +1902,91 @@ mod tests {
     }
 
     #[test]
+    fn normalize_prompt_messages_matches_multi_tool_result_message_without_synthesizing_duplicates()
+    {
+        let invocation = ToolInvocation::Custom {
+            name: "edit".to_string(),
+            input: crate::message::StructuredObject::try_from(
+                serde_json::json!({ "path": "src/main.rs" }),
+            )
+            .expect("structured tool input"),
+        };
+        let mut assistant = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 17,
+                    invocation: invocation.clone(),
+                    output_text: "patched main".to_string(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: crate::message::ToolOutput::None,
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 18,
+                    invocation: invocation.clone(),
+                    output_text: "patched lib".to_string(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: crate::message::ToolOutput::None,
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+            ],
+        );
+        assistant.id = 1;
+        assistant.parts[0].operation_id = Some("call_edit_main".to_string());
+        assistant.parts[1].operation_id = Some("call_edit_lib".to_string());
+
+        let mut tool = Message::prompt_parts(
+            Role::Tool,
+            vec![
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 17,
+                    invocation: invocation.clone(),
+                    output_text: "patched main".to_string(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: crate::message::ToolOutput::None,
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+                PartContent::ToolExecution(ToolExecutionPart::Completed {
+                    call_id: 18,
+                    invocation,
+                    output_text: "patched lib".to_string(),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: crate::message::ToolOutput::None,
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+            ],
+        );
+        tool.id = 2;
+        tool.parts[0].operation_id = Some("call_edit_main".to_string());
+        tool.parts[1].operation_id = Some("call_edit_lib".to_string());
+
+        let mut user = Message::prompt_text(Role::User, "continue");
+        user.id = 3;
+
+        let normalized = normalize_prompt_messages(&[assistant, tool.clone(), user.clone()]);
+        assert_eq!(normalized.len(), 3);
+        assert_eq!(normalized[1].id, tool.id);
+        assert_eq!(normalized[2].id, user.id);
+
+        let projected = project_session_parts(&normalized[1]);
+        let tool_result_ids = projected
+            .iter()
+            .filter_map(|part| match part {
+                crate::provider::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                    Some(tool_call_id.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(tool_result_ids, vec!["call_edit_main", "call_edit_lib"]);
+    }
+
+    #[test]
     fn normalize_prompt_messages_drops_orphan_tool_results() {
         let orphan = Message::prompt_tool_result("call_missing", "stale output");
         let normalized = normalize_prompt_messages(&[orphan]);
@@ -1724,6 +2063,84 @@ mod tests {
     }
 
     #[test]
+    fn normalize_prompt_messages_expands_empty_multi_tool_results_into_placeholders() {
+        let invocation = ToolInvocation::Custom {
+            name: "edit".to_string(),
+            input: crate::message::StructuredObject::try_from(
+                serde_json::json!({ "path": "src/main.rs" }),
+            )
+            .expect("structured tool input"),
+        };
+        let mut assistant = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::ToolExecution(ToolExecutionPart::Pending {
+                    call_id: 17,
+                    invocation: invocation.clone(),
+                    title: "editing main".to_string(),
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+                PartContent::ToolExecution(ToolExecutionPart::Pending {
+                    call_id: 18,
+                    invocation: invocation.clone(),
+                    title: "editing lib".to_string(),
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+            ],
+        );
+        assistant.id = 1;
+        assistant.parts[0].operation_id = Some("call_edit_main".to_string());
+        assistant.parts[1].operation_id = Some("call_edit_lib".to_string());
+
+        let mut tool = Message::prompt_parts(
+            Role::Tool,
+            vec![
+                PartContent::ToolExecution(ToolExecutionPart::InProgress {
+                    call_id: 17,
+                    invocation: invocation.clone(),
+                    title: String::new(),
+                    output_text: String::new(),
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+                PartContent::ToolExecution(ToolExecutionPart::InProgress {
+                    call_id: 18,
+                    invocation,
+                    title: String::new(),
+                    output_text: String::new(),
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+            ],
+        );
+        tool.id = 2;
+        tool.parts[0].operation_id = Some("call_edit_main".to_string());
+        tool.parts[1].operation_id = Some("call_edit_lib".to_string());
+
+        let mut user = Message::prompt_text(Role::User, "continue");
+        user.id = 3;
+
+        let normalized = normalize_prompt_messages(&[assistant, tool, user]);
+        assert_eq!(normalized.len(), 4);
+        assert_eq!(
+            normalized
+                .iter()
+                .filter(|message| message.role == Role::Tool)
+                .map(|message| primary_tool_result_id(message).expect("tool result id"))
+                .collect::<Vec<_>>(),
+            vec!["call_edit_main", "call_edit_lib"]
+        );
+        assert!(
+            normalized[1]
+                .as_text_lossy()
+                .contains(SYNTHETIC_TOOL_INTERRUPTED_PLACEHOLDER)
+        );
+        assert!(
+            normalized[2]
+                .as_text_lossy()
+                .contains(SYNTHETIC_TOOL_INTERRUPTED_PLACEHOLDER)
+        );
+    }
+
+    #[test]
     fn prompt_transcript_digest_treats_empty_tool_results_like_synthesized_placeholders() {
         let invocation = ToolInvocation::Custom {
             name: "edit".to_string(),
@@ -1756,6 +2173,68 @@ mod tests {
         );
         empty_tool.id = 2;
         empty_tool.parts[0].operation_id = Some("call_edit".to_string());
+
+        let mut user = Message::prompt_text(Role::User, "continue");
+        user.id = 3;
+
+        let digest_without_tool = prompt_transcript_digest(&[assistant.clone(), user.clone()]);
+        let digest_with_empty_tool = prompt_transcript_digest(&[assistant, empty_tool, user]);
+
+        assert_eq!(digest_with_empty_tool, digest_without_tool);
+    }
+
+    #[test]
+    fn prompt_transcript_digest_treats_empty_multi_tool_results_like_synthesized_placeholders() {
+        let invocation = ToolInvocation::Custom {
+            name: "edit".to_string(),
+            input: crate::message::StructuredObject::try_from(
+                serde_json::json!({ "path": "src/main.rs" }),
+            )
+            .expect("structured tool input"),
+        };
+        let mut assistant = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::ToolExecution(ToolExecutionPart::Pending {
+                    call_id: 17,
+                    invocation: invocation.clone(),
+                    title: "editing main".to_string(),
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+                PartContent::ToolExecution(ToolExecutionPart::Pending {
+                    call_id: 18,
+                    invocation: invocation.clone(),
+                    title: "editing lib".to_string(),
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+            ],
+        );
+        assistant.id = 1;
+        assistant.parts[0].operation_id = Some("call_edit_main".to_string());
+        assistant.parts[1].operation_id = Some("call_edit_lib".to_string());
+
+        let mut empty_tool = Message::prompt_parts(
+            Role::Tool,
+            vec![
+                PartContent::ToolExecution(ToolExecutionPart::InProgress {
+                    call_id: 17,
+                    invocation: invocation.clone(),
+                    title: String::new(),
+                    output_text: String::new(),
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+                PartContent::ToolExecution(ToolExecutionPart::InProgress {
+                    call_id: 18,
+                    invocation,
+                    title: String::new(),
+                    output_text: String::new(),
+                    lifecycle: crate::message::TimeRange::default(),
+                }),
+            ],
+        );
+        empty_tool.id = 2;
+        empty_tool.parts[0].operation_id = Some("call_edit_main".to_string());
+        empty_tool.parts[1].operation_id = Some("call_edit_lib".to_string());
 
         let mut user = Message::prompt_text(Role::User, "continue");
         user.id = 3;
@@ -1821,6 +2300,7 @@ mod tests {
                 temperature: None,
                 max_output_tokens: None,
                 tools: &[],
+                provider_request_shape: None,
                 continuation_supported: false,
             },
         );
@@ -1833,6 +2313,7 @@ mod tests {
                 temperature: None,
                 max_output_tokens: None,
                 tools: &[tool],
+                provider_request_shape: None,
                 continuation_supported: false,
             },
         );
@@ -1840,6 +2321,120 @@ mod tests {
         assert_ne!(
             baseline.request_options_fingerprint,
             with_tool.request_options_fingerprint
+        );
+    }
+
+    #[test]
+    fn fingerprint_request_options_changes_when_provider_shape_changes() {
+        let baseline_shape =
+            PromptCacheShape::new("openai").with_string("base_url", "https://api.openai.com/v1");
+        let changed_shape =
+            PromptCacheShape::new("openai").with_string("base_url", "https://proxy.example/v1");
+        let baseline =
+            fingerprint_request_options("openai", "gpt-5", None, None, &[], Some(&baseline_shape));
+        let changed =
+            fingerprint_request_options("openai", "gpt-5", None, None, &[], Some(&changed_shape));
+
+        assert_ne!(baseline, changed);
+    }
+
+    #[test]
+    fn build_prepared_prompt_reports_provider_shape_diff_on_request_mismatch() {
+        let current_shape = PromptCacheShape::new("openai")
+            .with_string("base_url", "https://proxy.example/v1")
+            .with_string("stream_mode", "sse");
+        let previous_shape = PromptCacheShape::new("openai")
+            .with_string("base_url", "https://api.openai.com/v1")
+            .with_string("stream_mode", "sse");
+
+        let mut assistant = Message::prompt_text(Role::Assistant, "done");
+        assistant.id = 11;
+        let mut user = Message::prompt_text(Role::User, "follow up");
+        user.id = 12;
+
+        let mut session =
+            Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
+        session.runtime = SessionRuntimeState {
+            prompt_window: PromptWindowRuntime { generation: 2 },
+            prompt_tokens: Default::default(),
+            provider_anchors: [(
+                SessionRuntimeState::provider_anchor_key("openai", "gpt-5"),
+                ProviderPromptAnchor {
+                    provider_id: "openai".to_string(),
+                    model_id: "gpt-5".to_string(),
+                    previous_response_id: "resp_123".to_string(),
+                    assistant_message_id: 11,
+                    prompt_window_generation: 2,
+                    system_fingerprint: fingerprint_optional_text(Some("system")),
+                    request_options_fingerprint: fingerprint_request_options(
+                        "openai",
+                        "gpt-5",
+                        Some(0.2),
+                        Some(256),
+                        &[],
+                        Some(&previous_shape),
+                    ),
+                    provider_request_shape: Some(previous_shape),
+                    transcript_digest: String::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            loaded_deferred_tools: Vec::new(),
+        };
+
+        let prepared = build_prepared_prompt(
+            &session,
+            PromptRequestOptions {
+                provider_id: "openai",
+                model_id: "gpt-5",
+                system: Some("system"),
+                temperature: Some(0.2),
+                max_output_tokens: Some(256),
+                tools: &[],
+                provider_request_shape: Some(&current_shape),
+                continuation_supported: true,
+            },
+        );
+
+        assert_eq!(
+            prepared.continuation_reason,
+            PromptContinuationReason::RequestOptionsFingerprintMismatch
+        );
+        assert!(prepared.continuation_diagnostic.provider_shape_changed());
+        assert_eq!(
+            prepared
+                .continuation_diagnostic
+                .provider_shape_change_keys(),
+            vec!["base_url"]
+        );
+    }
+
+    #[test]
+    fn build_prepared_prompt_reports_missing_anchor_when_continuation_cannot_start() {
+        let session = Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![
+            Message::prompt_text(Role::Assistant, "done"),
+            Message::prompt_text(Role::User, "follow up"),
+        ]);
+
+        let prepared = build_prepared_prompt(
+            &session,
+            PromptRequestOptions {
+                provider_id: "openai",
+                model_id: "gpt-5",
+                system: Some("system"),
+                temperature: Some(0.2),
+                max_output_tokens: Some(256),
+                tools: &[],
+                provider_request_shape: None,
+                continuation_supported: true,
+            },
+        );
+
+        assert_eq!(prepared.previous_response_id, None);
+        assert_eq!(
+            prepared.continuation_reason,
+            PromptContinuationReason::MissingProviderAnchor
         );
     }
 

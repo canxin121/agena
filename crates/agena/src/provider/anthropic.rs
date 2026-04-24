@@ -109,6 +109,101 @@ impl AnthropicProvider {
         usage.map(map_anthropic_usage)
     }
 
+    async fn complete_by_aggregating_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        let fallback_model = request.model.clone();
+        let mut stream = ModelProvider::complete_stream(self, request).await?;
+        let mut text = String::new();
+        let mut tool_calls: std::collections::BTreeMap<String, AnthropicAggregatedToolCallState> =
+            std::collections::BTreeMap::new();
+        let mut completed: Option<(
+            ProviderId,
+            ModelId,
+            Option<CompletionFinishReason>,
+            Option<CompletionUsage>,
+            Option<serde_json::Value>,
+        )> = None;
+
+        while let Some(item) = stream.next().await {
+            match item? {
+                CompletionStreamEvent::TextDelta { delta, .. } => {
+                    text.push_str(delta.as_str());
+                }
+                CompletionStreamEvent::ToolCallDelta {
+                    stream_key,
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
+                    let state = tool_calls.entry(stream_key).or_default();
+                    if let Some(id) = id {
+                        state.id = Some(id);
+                    }
+                    if let Some(name) = name {
+                        state.name = Some(name);
+                    }
+                    state.arguments.push_str(arguments_delta.as_str());
+                }
+                CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason,
+                    usage,
+                    provider_metadata,
+                } => {
+                    completed = Some((provider_id, model, finish_reason, usage, provider_metadata));
+                }
+            }
+        }
+
+        let (provider_id, model, finish_reason, usage, provider_metadata) = completed
+            .unwrap_or_else(|| {
+                (
+                    ProviderId::new(PROVIDER_ID),
+                    fallback_model,
+                    None,
+                    None,
+                    None,
+                )
+            });
+
+        let tool_calls = tool_calls
+            .into_iter()
+            .map(|(stream_key, state)| {
+                let id = utils::normalize_optional_text(state.id).unwrap_or(stream_key);
+                let name = utils::normalize_optional_text(state.name).ok_or_else(|| {
+                    AppError::Provider(
+                        "anthropic stream ended with tool call without name".to_owned(),
+                    )
+                })?;
+                Ok(CompletionToolCall::Function {
+                    id,
+                    name,
+                    arguments_json: state.arguments,
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+
+        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
+            return Err(AppError::Provider(
+                "anthropic stream fallback produced empty completion".to_owned(),
+            ));
+        }
+
+        Ok(CompletionResponse {
+            provider_id,
+            model,
+            text,
+            finish_reason,
+            tool_calls,
+            usage,
+            provider_metadata,
+        })
+    }
+
     fn content_to_blocks(message: &Message) -> Vec<AnthropicTextBlock> {
         let projected = utils::project_session_parts(message);
         if projected.is_empty() {
@@ -371,6 +466,7 @@ impl ModelProvider for AnthropicProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
+        let stream_fallback_request = request.clone();
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -450,10 +546,10 @@ impl ModelProvider for AnthropicProvider {
 
         let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
 
-        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
-            return Err(AppError::Provider(
-                "anthropic completion payload was empty without finish reason".to_owned(),
-            ));
+        if text.is_empty() && tool_calls.is_empty() {
+            return self
+                .complete_by_aggregating_stream(stream_fallback_request)
+                .await;
         }
 
         Ok(CompletionResponse {
@@ -1074,6 +1170,13 @@ struct AnthropicToolCallState {
     name: String,
 }
 
+#[derive(Debug, Default)]
+struct AnthropicAggregatedToolCallState {
+    id: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
 #[cfg(test)]
 mod tests {
     use futures_util::StreamExt;
@@ -1427,6 +1530,77 @@ mod tests {
             .expect("completion should succeed");
 
         assert_eq!(response.text, "ok");
+    }
+
+    #[tokio::test]
+    async fn complete_falls_back_to_stream_when_message_payload_is_empty() {
+        let mut server = mockito::Server::new_async().await;
+        let _message = server
+            .mock("POST", "/messages")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "claude-3-7-sonnet-latest",
+                    "stop_reason": "end_turn",
+                    "content": [],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let _stream = server
+            .mock("POST", "/messages")
+            .expect(1)
+            .match_body(mockito::Matcher::Regex("\\\"stream\\\":true".to_owned()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(concat!(
+                "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n",
+                "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"fallback \"}}\n\n",
+                "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"stream text\"}}\n\n",
+                "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n",
+                "data: {\"type\":\"message_stop\"}\n\n",
+                "data: [DONE]\n\n"
+            ))
+            .create_async()
+            .await;
+
+        let provider = AnthropicProvider::new(
+            reqwest::Client::new(),
+            "ak-test",
+            server.url(),
+            "claude-3-7-sonnet-latest",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: crate::model::ModelId::new("claude-3-7-sonnet-latest"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(128),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+            })
+            .await
+            .expect("empty message payload should fall back to stream aggregation");
+
+        assert_eq!(response.text, "fallback stream text");
+        assert!(matches!(
+            response.finish_reason,
+            Some(CompletionFinishReason::Stop)
+        ));
+        let usage = response.usage.expect("usage should be present");
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 5);
     }
 
     #[tokio::test]

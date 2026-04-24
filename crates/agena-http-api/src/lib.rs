@@ -37,8 +37,9 @@ pub use dto::{
     AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
     AuthProviderResource, HealthResponse, MessageListQuery, MessageResource, PartLoadMode,
     PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
-    ProviderModelsResponse, ProviderSummaryResource, RuntimeReloadResponse, RuntimeStatusResponse,
-    RuntimeTaskResource, SessionContinueRequestBody, SessionCreateRequest, SessionEventListQuery,
+    ProviderModelsResponse, ProviderSummaryResource, RuntimeReloadResponse,
+    RuntimeSessionCacheResource, RuntimeStatusResponse, RuntimeTaskResource,
+    SessionContinueRequestBody, SessionCreateRequest, SessionEventListQuery,
     SessionEventStreamQuery, SessionExecutionResource, SessionListQuery,
     SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionResource,
     SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
@@ -1175,6 +1176,20 @@ fn runtime_status_response(state: &ApiState) -> RuntimeStatusResponse {
     let resolution = snapshot.config_resolution();
     let mut provider_ids = snapshot.provider_registry().provider_ids();
     provider_ids.sort();
+    let session_cache = snapshot.session_manager().map(|manager| {
+        let stats = manager.cache_stats();
+        RuntimeSessionCacheResource {
+            max_sessions: resolution.config.runtime.session_cache.max_sessions,
+            ttl_secs: resolution.config.runtime.session_cache.ttl_secs,
+            max_bytes: resolution.config.runtime.session_cache.max_bytes,
+            entry_count: stats.entry_count,
+            total_bytes: stats.total_bytes,
+            hits: stats.hits,
+            misses: stats.misses,
+            inserts: stats.inserts,
+            evictions: stats.evictions,
+        }
+    });
 
     RuntimeStatusResponse {
         generation: snapshot.generation(),
@@ -1205,6 +1220,7 @@ fn runtime_status_response(state: &ApiState) -> RuntimeStatusResponse {
             enabled: snapshot.janitor_enabled(),
             interval_secs: snapshot.janitor_interval().as_secs(),
         },
+        session_cache,
     }
 }
 
@@ -1408,11 +1424,13 @@ mod tests {
         db::{crud::session_runtime, init_schema},
         event::{RunStartedEvent, SessionEvent},
         message::{
-            AskUserToolInput, BuiltinToolOutput, Message, MessageSource, PartContent,
-            ToolExecutionPart, UserInputOption, UserInputQuestion,
+            ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolOutput, GlobToolInput,
+            GrepToolInput, Message, MessageSource, PartContent, ReadToolInput, TodoItem,
+            TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolOutput,
+            ToolSearchToolInput, UserInputOption, UserInputQuestion,
         },
         model::ModelId,
-        permission::PermissionPolicy,
+        permission::{PermissionMode, PermissionPolicy},
         provider::{
             CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
             ModelProvider, ProviderModel, ProviderRegistry,
@@ -2019,6 +2037,10 @@ mod tests {
             .expect("generation should exist");
         assert_eq!(before_json["provider_ids"], json!(["openai"]));
         assert_eq!(before_json["session_runtime_available"], json!(true));
+        assert_eq!(before_json["session_cache"]["hits"], json!(0));
+        assert_eq!(before_json["session_cache"]["misses"], json!(0));
+        assert_eq!(before_json["session_cache"]["inserts"], json!(0));
+        assert_eq!(before_json["session_cache"]["entry_count"], json!(0));
 
         let reloaded = app
             .oneshot(
@@ -2041,6 +2063,790 @@ mod tests {
         assert_eq!(reload_json["cause"], json!("manual"));
         assert_eq!(reload_json["previous_generation"], json!(before_generation));
         assert_eq!(reload_json["generation"], json!(before_generation + 1));
+    }
+
+    #[tokio::test]
+    async fn session_state_endpoint_records_session_cache_hits_and_misses() {
+        let (app, state) = test_app().await;
+        let workspace = state
+            .service()
+            .create_workspace(WorkspaceWriteRequest {
+                path: format!("/tmp/cache-state-{}", Uuid::new_v4()),
+            })
+            .await
+            .expect("workspace should be created");
+        let session = state
+            .service()
+            .create_session(SessionCreateRequest {
+                workspace_id: workspace.id,
+                title: "cache stats".to_string(),
+                parent_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let before = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/runtime")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(before.status(), StatusCode::OK);
+        let before_json = response_json(before).await;
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::GET)
+                        .uri(format!("/api/v1/sessions/{}/state", session.id))
+                        .body(Body::empty())
+                        .expect("request should build"),
+                )
+                .await
+                .expect("request should succeed");
+            let status = response.status();
+            let payload = response_json(response).await;
+            assert_eq!(status, StatusCode::OK, "unexpected body: {payload}");
+        }
+
+        let after = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/runtime")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(after.status(), StatusCode::OK);
+        let after_json = response_json(after).await;
+
+        let before_cache = &before_json["session_cache"];
+        let after_cache = &after_json["session_cache"];
+        assert!(
+            after_cache["misses"].as_u64().unwrap_or_default()
+                >= before_cache["misses"].as_u64().unwrap_or_default() + 1,
+            "unexpected before={before_json} after={after_json}"
+        );
+        assert!(
+            after_cache["hits"].as_u64().unwrap_or_default()
+                >= before_cache["hits"].as_u64().unwrap_or_default() + 1,
+            "unexpected before={before_json} after={after_json}"
+        );
+        assert!(
+            after_cache["inserts"].as_u64().unwrap_or_default()
+                >= before_cache["inserts"].as_u64().unwrap_or_default() + 1,
+            "unexpected before={before_json} after={after_json}"
+        );
+        assert!(
+            after_cache["entry_count"].as_u64().unwrap_or_default() >= 1,
+            "unexpected body: {after_json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn crud_endpoints_roundtrip_for_workspaces_sessions_and_permission_rules() {
+        let (app, _state) = test_app().await;
+        let workspace_path = format!("/tmp/api-crud-{}", Uuid::new_v4());
+        let renamed_workspace_path = format!("{workspace_path}-renamed");
+
+        let created_workspace = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/workspaces")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "path": workspace_path.clone() }).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let workspace_status = created_workspace.status();
+        let workspace_json = response_json(created_workspace).await;
+        assert_eq!(
+            workspace_status,
+            StatusCode::OK,
+            "unexpected body: {workspace_json}"
+        );
+        let workspace_id = workspace_json["id"]
+            .as_i64()
+            .expect("workspace id should exist");
+
+        let resolved_workspace = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/workspaces/resolve")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "path": workspace_path.clone(),
+                            "create_if_missing": true
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let resolved_status = resolved_workspace.status();
+        let resolved_json = response_json(resolved_workspace).await;
+        assert_eq!(
+            resolved_status,
+            StatusCode::OK,
+            "unexpected body: {resolved_json}"
+        );
+        assert_eq!(resolved_json["id"], json!(workspace_id));
+
+        let replaced_workspace = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!("/api/v1/workspaces/{workspace_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "path": renamed_workspace_path.clone() }).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let replaced_workspace_status = replaced_workspace.status();
+        let replaced_workspace_json = response_json(replaced_workspace).await;
+        assert_eq!(
+            replaced_workspace_status,
+            StatusCode::OK,
+            "unexpected body: {replaced_workspace_json}"
+        );
+        assert_eq!(
+            replaced_workspace_json["path"],
+            json!(renamed_workspace_path)
+        );
+
+        let root_session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "workspace_id": workspace_id,
+                            "title": "Root Session"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let root_status = root_session.status();
+        let root_json = response_json(root_session).await;
+        assert_eq!(root_status, StatusCode::OK, "unexpected body: {root_json}");
+        let root_session_id = root_json["id"]
+            .as_i64()
+            .expect("root session id should exist");
+
+        let child_session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "workspace_id": workspace_id,
+                            "title": "Child Session",
+                            "parent_id": root_session_id
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let child_status = child_session.status();
+        let child_json = response_json(child_session).await;
+        assert_eq!(
+            child_status,
+            StatusCode::OK,
+            "unexpected body: {child_json}"
+        );
+        let child_session_id = child_json["id"]
+            .as_i64()
+            .expect("child session id should exist");
+
+        let listed_workspaces = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/workspaces?include_session_count=true")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let listed_workspaces_status = listed_workspaces.status();
+        let listed_workspaces_json = response_json(listed_workspaces).await;
+        assert_eq!(
+            listed_workspaces_status,
+            StatusCode::OK,
+            "unexpected body: {listed_workspaces_json}"
+        );
+        let workspace_items = listed_workspaces_json["items"]
+            .as_array()
+            .expect("workspace items should be an array");
+        let listed_workspace = workspace_items
+            .iter()
+            .find(|item| item["id"] == json!(workspace_id))
+            .expect("created workspace should be listed");
+        assert_eq!(listed_workspace["session_count"], json!(2));
+
+        let listed_sessions = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/api/v1/sessions?workspace_id={workspace_id}&limit=10"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let listed_sessions_status = listed_sessions.status();
+        let listed_sessions_json = response_json(listed_sessions).await;
+        assert_eq!(
+            listed_sessions_status,
+            StatusCode::OK,
+            "unexpected body: {listed_sessions_json}"
+        );
+        let session_items = listed_sessions_json["items"]
+            .as_array()
+            .expect("session items should be an array");
+        assert_eq!(session_items.len(), 2);
+
+        let replaced_session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!("/api/v1/sessions/{child_session_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "Child Session Updated",
+                            "parent_id": root_session_id
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let replaced_session_status = replaced_session.status();
+        let replaced_session_json = response_json(replaced_session).await;
+        assert_eq!(
+            replaced_session_status,
+            StatusCode::OK,
+            "unexpected body: {replaced_session_json}"
+        );
+        assert_eq!(
+            replaced_session_json["title"],
+            json!("Child Session Updated")
+        );
+
+        let fetched_session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/v1/sessions/{child_session_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let fetched_session_status = fetched_session.status();
+        let fetched_session_json = response_json(fetched_session).await;
+        assert_eq!(
+            fetched_session_status,
+            StatusCode::OK,
+            "unexpected body: {fetched_session_json}"
+        );
+        assert_eq!(
+            fetched_session_json["title"],
+            json!("Child Session Updated")
+        );
+
+        let created_rule = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/permission-rules")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "action_key": "tool:bash",
+                            "mode": "ask"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let created_rule_status = created_rule.status();
+        let created_rule_json = response_json(created_rule).await;
+        assert_eq!(
+            created_rule_status,
+            StatusCode::OK,
+            "unexpected body: {created_rule_json}"
+        );
+        let rule_id = created_rule_json["id"]
+            .as_i64()
+            .expect("rule id should exist");
+
+        let listed_rules = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/permission-rules?search=tool%3Abash")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let listed_rules_status = listed_rules.status();
+        let listed_rules_json = response_json(listed_rules).await;
+        assert_eq!(
+            listed_rules_status,
+            StatusCode::OK,
+            "unexpected body: {listed_rules_json}"
+        );
+        let rule_items = listed_rules_json["items"]
+            .as_array()
+            .expect("rule items should be an array");
+        assert!(
+            rule_items
+                .iter()
+                .any(|item| item["id"] == json!(rule_id) && item["mode"] == json!("ask")),
+            "unexpected body: {listed_rules_json}"
+        );
+
+        let replaced_rule = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!("/api/v1/permission-rules/{rule_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "action_key": "tool:bash",
+                            "mode": "allow"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let replaced_rule_status = replaced_rule.status();
+        let replaced_rule_json = response_json(replaced_rule).await;
+        assert_eq!(
+            replaced_rule_status,
+            StatusCode::OK,
+            "unexpected body: {replaced_rule_json}"
+        );
+        assert_eq!(replaced_rule_json["mode"], json!("allow"));
+
+        let fetched_rule = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/v1/permission-rules/{rule_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let fetched_rule_status = fetched_rule.status();
+        let fetched_rule_json = response_json(fetched_rule).await;
+        assert_eq!(
+            fetched_rule_status,
+            StatusCode::OK,
+            "unexpected body: {fetched_rule_json}"
+        );
+        assert_eq!(fetched_rule_json["mode"], json!("allow"));
+
+        let deleted_rule = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/api/v1/permission-rules/{rule_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let deleted_rule_status = deleted_rule.status();
+        let deleted_rule_json = response_json(deleted_rule).await;
+        assert_eq!(
+            deleted_rule_status,
+            StatusCode::OK,
+            "unexpected body: {deleted_rule_json}"
+        );
+        assert_eq!(deleted_rule_json["id"], json!(rule_id));
+
+        let deleted_child = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/api/v1/sessions/{child_session_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let deleted_child_status = deleted_child.status();
+        let deleted_child_json = response_json(deleted_child).await;
+        assert_eq!(
+            deleted_child_status,
+            StatusCode::OK,
+            "unexpected body: {deleted_child_json}"
+        );
+        assert_eq!(deleted_child_json["id"], json!(child_session_id));
+
+        let deleted_root = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/api/v1/sessions/{root_session_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let deleted_root_status = deleted_root.status();
+        let deleted_root_json = response_json(deleted_root).await;
+        assert_eq!(
+            deleted_root_status,
+            StatusCode::OK,
+            "unexpected body: {deleted_root_json}"
+        );
+        assert_eq!(deleted_root_json["id"], json!(root_session_id));
+
+        let deleted_workspace = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/api/v1/workspaces/{workspace_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let deleted_workspace_status = deleted_workspace.status();
+        let deleted_workspace_json = response_json(deleted_workspace).await;
+        assert_eq!(
+            deleted_workspace_status,
+            StatusCode::OK,
+            "unexpected body: {deleted_workspace_json}"
+        );
+        assert_eq!(deleted_workspace_json["id"], json!(workspace_id));
+    }
+
+    #[tokio::test]
+    async fn tool_suite_turn_executes_read_write_and_search_tools() {
+        let (app, state, workspace) = test_app_with_provider(ToolSuiteApiProvider).await;
+        fs::write(
+            workspace.root.join("README.md"),
+            "# Agena\ncache marker in README\n",
+        )
+        .expect("README should be written");
+        fs::create_dir_all(workspace.root.join("docs")).expect("docs directory should be created");
+        fs::write(
+            workspace.root.join("docs/notes.md"),
+            "cache marker in docs\n",
+        )
+        .expect("notes should be written");
+
+        let workspace_resource = state
+            .service()
+            .create_workspace(WorkspaceWriteRequest {
+                path: workspace.root.display().to_string(),
+            })
+            .await
+            .expect("workspace should be created");
+        let session = state
+            .service()
+            .create_session(SessionCreateRequest {
+                workspace_id: workspace_resource.id,
+                title: "tool suite".to_string(),
+                parent_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/v1/sessions/{}/turns", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "text": "run tool suite"
+                                }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let status = response.status();
+        let payload = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "unexpected body: {payload}");
+        assert_eq!(payload["blocked"], json!(false));
+
+        let bash_output = fs::read_to_string(workspace.root.join("bash_output.txt"))
+            .expect("bash tool should create output file");
+        assert_eq!(bash_output, "bash-created\n");
+        let patched_output = fs::read_to_string(workspace.root.join("patched.txt"))
+            .expect("apply_patch should create patched file");
+        assert_eq!(patched_output, "patched\n");
+
+        let messages = state
+            .service()
+            .list_messages(
+                session.id,
+                MessageListQuery {
+                    cursor: None,
+                    limit: None,
+                    parts: PartLoadMode::Full,
+                },
+            )
+            .await
+            .expect("messages should load");
+
+        match completed_builtin_output(messages.items.as_slice(), "call_tool_search_1") {
+            Some(BuiltinToolOutput::ToolSearch { loaded_tools, .. }) => {
+                assert!(loaded_tools.iter().any(|tool| tool == "bash"));
+                assert!(loaded_tools.iter().any(|tool| tool == "apply_patch"));
+            }
+            other => panic!("expected tool_search output, got {other:?}"),
+        }
+        match completed_builtin_output(messages.items.as_slice(), "call_glob_1") {
+            Some(BuiltinToolOutput::Glob { count }) => {
+                assert!(count.unwrap_or_default() >= 2);
+            }
+            other => panic!("expected glob output, got {other:?}"),
+        }
+        match completed_builtin_output(messages.items.as_slice(), "call_grep_1") {
+            Some(BuiltinToolOutput::Grep { matches }) => {
+                assert!(matches.unwrap_or_default() >= 2);
+            }
+            other => panic!("expected grep output, got {other:?}"),
+        }
+        match completed_builtin_output(messages.items.as_slice(), "call_read_1") {
+            Some(BuiltinToolOutput::Read { preview, .. }) => {
+                assert!(
+                    preview
+                        .as_deref()
+                        .is_some_and(|text| text.contains("cache marker")),
+                    "unexpected preview: {preview:?}"
+                );
+            }
+            other => panic!("expected read output, got {other:?}"),
+        }
+        match completed_builtin_output(messages.items.as_slice(), "call_todo_write_1") {
+            Some(BuiltinToolOutput::TodoWrite { items }) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0].content, "Inspect workspace");
+            }
+            other => panic!("expected todo_write output, got {other:?}"),
+        }
+        match completed_builtin_output(messages.items.as_slice(), "call_bash_1") {
+            Some(BuiltinToolOutput::Bash { output, .. }) => {
+                assert!(
+                    output
+                        .as_deref()
+                        .is_some_and(|text| text.contains("Command exited with code 0")),
+                    "unexpected bash output: {output:?}"
+                );
+            }
+            other => panic!("expected bash output, got {other:?}"),
+        }
+        match completed_builtin_output(messages.items.as_slice(), "call_apply_patch_1") {
+            Some(BuiltinToolOutput::ApplyPatch { changes, .. }) => {
+                assert!(
+                    !changes.is_empty(),
+                    "apply_patch should report file changes"
+                );
+            }
+            other => panic!("expected apply_patch output, got {other:?}"),
+        }
+        assert!(
+            assistant_text(messages.items.as_slice())
+                .is_some_and(|text| text.contains("tool suite completed")),
+            "unexpected messages: {:?}",
+            messages.items
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_reply_endpoint_resumes_apply_patch_after_confirmation() {
+        let agent = Agent::new(
+            "api-permission",
+            PermissionPolicy::new(PermissionMode::Allow, PermissionMode::Ask),
+        );
+        let (app, state, workspace) =
+            test_app_with_provider_and_agent(PermissionPatchApiProvider, agent).await;
+        let workspace_resource = state
+            .service()
+            .create_workspace(WorkspaceWriteRequest {
+                path: workspace.root.display().to_string(),
+            })
+            .await
+            .expect("workspace should be created");
+        let session = state
+            .service()
+            .create_session(SessionCreateRequest {
+                workspace_id: workspace_resource.id,
+                title: "permission patch".to_string(),
+                parent_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let initial = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/v1/sessions/{}/turns", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "text": "please patch a file"
+                                }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let initial_status = initial.status();
+        let initial_json = response_json(initial).await;
+        assert_eq!(
+            initial_status,
+            StatusCode::OK,
+            "unexpected body: {initial_json}"
+        );
+        assert_eq!(initial_json["blocked"], json!(true));
+        assert_eq!(
+            initial_json["pending_permission_requests"][0]["request_id"],
+            json!("call_apply_patch_1")
+        );
+        let version = initial_json["session"]["version"]
+            .as_i64()
+            .expect("session version should exist");
+
+        let resumed = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/api/v1/sessions/{}/permission-replies",
+                        session.id
+                    ))
+                    .header("content-type", "application/json")
+                    .header("if-match", version.to_string())
+                    .body(Body::from(
+                        json!({
+                            "reply": {
+                                "request_id": "call_apply_patch_1",
+                                "kind": "allow_once"
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let resumed_status = resumed.status();
+        let resumed_json = response_json(resumed).await;
+        assert_eq!(
+            resumed_status,
+            StatusCode::OK,
+            "unexpected body: {resumed_json}"
+        );
+        assert_eq!(resumed_json["blocked"], json!(false));
+        assert_eq!(resumed_json["pending_permission_requests"], json!([]));
+
+        let file_text = fs::read_to_string(workspace.root.join("result.txt"))
+            .expect("permission-approved patch should create result file");
+        assert_eq!(file_text, "approved\n");
+
+        let messages = state
+            .service()
+            .list_messages(
+                session.id,
+                MessageListQuery {
+                    cursor: None,
+                    limit: None,
+                    parts: PartLoadMode::Full,
+                },
+            )
+            .await
+            .expect("messages should load");
+        assert!(
+            assistant_text(messages.items.as_slice())
+                .is_some_and(|text| text.contains("patch done")),
+            "unexpected messages: {:?}",
+            messages.items
+        );
+        match completed_builtin_output(messages.items.as_slice(), "call_apply_patch_1") {
+            Some(BuiltinToolOutput::ApplyPatch { changes, .. }) => {
+                assert!(!changes.is_empty(), "expected file change entries");
+            }
+            other => panic!("expected apply_patch output, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -2623,6 +3429,20 @@ mod tests {
     where
         P: ModelProvider + 'static,
     {
+        test_app_with_provider_and_agent(
+            provider,
+            Agent::new("api-test", PermissionPolicy::allow_all()),
+        )
+        .await
+    }
+
+    async fn test_app_with_provider_and_agent<P>(
+        provider: P,
+        agent: Agent,
+    ) -> (Router, ApiState, TempWorkspace)
+    where
+        P: ModelProvider + 'static,
+    {
         let db = Arc::new(
             Database::connect("sqlite::memory:")
                 .await
@@ -2633,8 +3453,13 @@ mod tests {
             .expect("schema should initialize");
         let runtime = test_runtime(db.clone()).await;
         let workspace = TempWorkspace::new();
-        let manager =
-            session_manager_with_provider(db.clone(), workspace.root.as_path(), provider).await;
+        let manager = session_manager_with_provider_and_agent(
+            db.clone(),
+            workspace.root.as_path(),
+            provider,
+            agent,
+        )
+        .await;
         let state = ApiState::new(runtime, db).with_session_manager_override(manager);
         let app = router(state.clone());
         (app, state, workspace)
@@ -2665,6 +3490,10 @@ mod tests {
         first_delta_sent: Arc<Notify>,
         release_completion: Arc<Notify>,
     }
+
+    struct ToolSuiteApiProvider;
+
+    struct PermissionPatchApiProvider;
 
     #[async_trait]
     impl ModelProvider for ScriptedApiProvider {
@@ -2883,10 +3712,417 @@ mod tests {
         }
     }
 
-    async fn session_manager_with_provider<P>(
+    #[async_trait]
+    impl ModelProvider for ToolSuiteApiProvider {
+        fn id(&self) -> &str {
+            "openai"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: std::sync::LazyLock<ModelId> =
+                std::sync::LazyLock::new(|| ModelId::new("gpt-4.1-mini"));
+            &DEFAULT_MODEL
+        }
+
+        async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+            Ok(vec![ProviderModel::new("openai", "gpt-4.1-mini")])
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            Ok(CompletionResponse {
+                provider_id: agena::model::ProviderId::new("openai"),
+                model: ModelId::new("gpt-4.1-mini"),
+                text: String::new(),
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+
+        async fn complete_stream(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+            AppError,
+        > {
+            let last_user_text = request
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == Role::User)
+                .map(Message::as_text_lossy)
+                .unwrap_or_default();
+            let is_tool_suite = last_user_text.contains("tool suite");
+            let apply_patch_loaded =
+                request_loaded_deferred_tool(request.messages.as_slice(), "apply_patch");
+            let bash_loaded = request_loaded_deferred_tool(request.messages.as_slice(), "bash");
+
+            let events = if is_tool_suite && (!apply_patch_loaded || !bash_loaded) {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        stream_key: "call_tool_search_1".to_string(),
+                        id: Some("call_tool_search_1".to_string()),
+                        name: Some("tool_search".to_string()),
+                        arguments_delta: serde_json::to_string(&ToolSearchToolInput {
+                            query: "load deferred write tools".to_string(),
+                            load: vec!["bash".to_string(), "apply_patch".to_string()],
+                            limit: None,
+                        })
+                        .expect("tool_search input should serialize"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if is_tool_suite
+                && request_tool_result(request.messages.as_slice(), "call_glob_1").is_none()
+            {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        stream_key: "call_glob_1".to_string(),
+                        id: Some("call_glob_1".to_string()),
+                        name: Some("glob".to_string()),
+                        arguments_delta: serde_json::to_string(&GlobToolInput {
+                            pattern: "**/*.md".to_string(),
+                            path: None,
+                        })
+                        .expect("glob input should serialize"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if is_tool_suite
+                && request_tool_result(request.messages.as_slice(), "call_grep_1").is_none()
+            {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        stream_key: "call_grep_1".to_string(),
+                        id: Some("call_grep_1".to_string()),
+                        name: Some("grep".to_string()),
+                        arguments_delta: serde_json::to_string(&GrepToolInput {
+                            pattern: "cache marker".to_string(),
+                            path: None,
+                            include: Some("**/*.md".to_string()),
+                        })
+                        .expect("grep input should serialize"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if is_tool_suite
+                && request_tool_result(request.messages.as_slice(), "call_read_1").is_none()
+            {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        stream_key: "call_read_1".to_string(),
+                        id: Some("call_read_1".to_string()),
+                        name: Some("read".to_string()),
+                        arguments_delta: serde_json::to_string(&ReadToolInput {
+                            file_path: "README.md".to_string(),
+                            offset: None,
+                            limit: None,
+                        })
+                        .expect("read input should serialize"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if is_tool_suite
+                && request_tool_result(request.messages.as_slice(), "call_todo_write_1").is_none()
+            {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        stream_key: "call_todo_write_1".to_string(),
+                        id: Some("call_todo_write_1".to_string()),
+                        name: Some("todo_write".to_string()),
+                        arguments_delta: serde_json::to_string(&TodoWriteToolInput {
+                            items: vec![
+                                TodoItem {
+                                    content: "Inspect workspace".to_string(),
+                                    status: TodoStatus::Completed,
+                                    priority: TodoPriority::High,
+                                },
+                                TodoItem {
+                                    content: "Patch output files".to_string(),
+                                    status: TodoStatus::InProgress,
+                                    priority: TodoPriority::Medium,
+                                },
+                            ],
+                        })
+                        .expect("todo_write input should serialize"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if is_tool_suite
+                && request_tool_result(request.messages.as_slice(), "call_bash_1").is_none()
+            {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        stream_key: "call_bash_1".to_string(),
+                        id: Some("call_bash_1".to_string()),
+                        name: Some("bash".to_string()),
+                        arguments_delta: serde_json::to_string(&BashToolInput {
+                            command: "printf 'bash-created\\n' > bash_output.txt".to_string(),
+                            description: "Create a file via bash.".to_string(),
+                            timeout_ms: None,
+                            workdir: None,
+                        })
+                        .expect("bash input should serialize"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if is_tool_suite
+                && request_tool_result(request.messages.as_slice(), "call_apply_patch_1").is_none()
+            {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        stream_key: "call_apply_patch_1".to_string(),
+                        id: Some("call_apply_patch_1".to_string()),
+                        name: Some("apply_patch".to_string()),
+                        arguments_delta: serde_json::to_string(&ApplyPatchToolInput {
+                            patch: "*** Begin Patch\n*** Add File: patched.txt\n+patched\n*** End Patch"
+                                .to_string(),
+                        })
+                        .expect("apply_patch input should serialize"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if is_tool_suite {
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        delta: "tool suite completed".to_string(),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        delta: format!("echo:{last_user_text}"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            };
+
+            Ok(Box::pin(stream::iter(events)))
+        }
+    }
+
+    #[async_trait]
+    impl ModelProvider for PermissionPatchApiProvider {
+        fn id(&self) -> &str {
+            "openai"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: std::sync::LazyLock<ModelId> =
+                std::sync::LazyLock::new(|| ModelId::new("gpt-4.1-mini"));
+            &DEFAULT_MODEL
+        }
+
+        async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+            Ok(vec![ProviderModel::new("openai", "gpt-4.1-mini")])
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            Ok(CompletionResponse {
+                provider_id: agena::model::ProviderId::new("openai"),
+                model: ModelId::new("gpt-4.1-mini"),
+                text: String::new(),
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+
+        async fn complete_stream(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+            AppError,
+        > {
+            let last_user_text = request
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == Role::User)
+                .map(Message::as_text_lossy)
+                .unwrap_or_default();
+            let apply_patch_loaded =
+                request_loaded_deferred_tool(request.messages.as_slice(), "apply_patch");
+            let apply_patch_result =
+                request_tool_result(request.messages.as_slice(), "call_apply_patch_1");
+
+            let events = if last_user_text.contains("patch")
+                && apply_patch_result.is_none()
+                && !apply_patch_loaded
+            {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        stream_key: "call_tool_search_1".to_string(),
+                        id: Some("call_tool_search_1".to_string()),
+                        name: Some("tool_search".to_string()),
+                        arguments_delta: serde_json::to_string(&ToolSearchToolInput {
+                            query: "patch file".to_string(),
+                            load: vec!["apply_patch".to_string()],
+                            limit: None,
+                        })
+                        .expect("tool_search input should serialize"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if last_user_text.contains("patch") && apply_patch_result.is_none() {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        stream_key: "call_apply_patch_1".to_string(),
+                        id: Some("call_apply_patch_1".to_string()),
+                        name: Some("apply_patch".to_string()),
+                        arguments_delta: serde_json::to_string(&ApplyPatchToolInput {
+                            patch: "*** Begin Patch\n*** Add File: result.txt\n+approved\n*** End Patch"
+                                .to_string(),
+                        })
+                        .expect("apply_patch input should serialize"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if let Some(result) = apply_patch_result {
+                let delta = if result.is_ok() {
+                    "patch done"
+                } else {
+                    "patch denied"
+                };
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        delta: delta.to_string(),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        delta: format!("echo:{last_user_text}"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: agena::model::ProviderId::new("openai"),
+                        model: ModelId::new("gpt-4.1-mini"),
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            };
+
+            Ok(Box::pin(stream::iter(events)))
+        }
+    }
+
+    async fn session_manager_with_provider_and_agent<P>(
         db: Arc<DatabaseConnection>,
         workspace_root: &Path,
         provider: P,
+        agent: Agent,
     ) -> Arc<SessionManager>
     where
         P: ModelProvider + 'static,
@@ -2897,10 +4133,7 @@ mod tests {
             Arc::new(registry),
             ContextGovernor::new(ContextPolicy::default()),
         );
-        let executor = ToolExecutor::new(
-            workspace_root.to_path_buf(),
-            Agent::new("api-test", PermissionPolicy::allow_all()),
-        );
+        let executor = ToolExecutor::new(workspace_root.to_path_buf(), agent);
         Arc::new(SessionManager::new(
             db.as_ref().clone(),
             processor,
@@ -2944,6 +4177,86 @@ api_key = "test"
             .build()
             .await
             .expect("runtime should build")
+    }
+
+    fn request_loaded_deferred_tool(messages: &[Message], tool_name: &str) -> bool {
+        messages.iter().any(|message| {
+            message.parts.iter().any(|part| {
+                matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                        details:
+                            ToolOutput::Builtin {
+                                output: BuiltinToolOutput::ToolSearch { loaded_tools, .. },
+                            },
+                        ..
+                    })) if loaded_tools.iter().any(|loaded| loaded == tool_name)
+                )
+            })
+        })
+    }
+
+    fn request_tool_result(
+        messages: &[Message],
+        operation_id: &str,
+    ) -> Option<Result<BuiltinToolOutput, String>> {
+        messages.iter().find_map(|message| {
+            if message.role != Role::Tool {
+                return None;
+            }
+            message.parts.iter().find_map(|part| {
+                if part.operation_id.as_deref() != Some(operation_id) {
+                    return None;
+                }
+                match part.content.as_ref() {
+                    Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                        details: ToolOutput::Builtin { output },
+                        ..
+                    })) => Some(Ok(output.clone())),
+                    Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
+                        error_message,
+                        ..
+                    })) => Some(Err(error_message.clone())),
+                    _ => None,
+                }
+            })
+        })
+    }
+
+    fn completed_builtin_output(
+        messages: &[MessageResource],
+        operation_id: &str,
+    ) -> Option<BuiltinToolOutput> {
+        messages.iter().find_map(|message| {
+            message.parts.as_ref().and_then(|parts| {
+                parts.iter().find_map(|part| {
+                    if part.operation_id.as_deref() != Some(operation_id) {
+                        return None;
+                    }
+                    match part.content.as_ref() {
+                        Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                            details: ToolOutput::Builtin { output },
+                            ..
+                        })) => Some(output.clone()),
+                        _ => None,
+                    }
+                })
+            })
+        })
+    }
+
+    fn assistant_text(messages: &[MessageResource]) -> Option<String> {
+        messages.iter().rev().find_map(|message| {
+            if message.role != Role::Assistant {
+                return None;
+            }
+            message.parts.as_ref().and_then(|parts| {
+                parts.iter().find_map(|part| match part.content.as_ref() {
+                    Some(PartContent::Text(text)) => Some(text.text.clone()),
+                    _ => None,
+                })
+            })
+        })
     }
 
     async fn response_json(response: axum::response::Response) -> Value {

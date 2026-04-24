@@ -5,6 +5,7 @@ use super::m20260330_000002_runtime;
 use super::m20260404_000003_drop_checkpoints;
 use super::m20260404_000004_session_version;
 use super::m20260405_000005_prompt_runtime;
+use super::m20260425_000006_append_only_history;
 
 pub struct Migrator;
 
@@ -17,6 +18,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260404_000003_drop_checkpoints::Migration),
             Box::new(m20260404_000004_session_version::Migration),
             Box::new(m20260405_000005_prompt_runtime::Migration),
+            Box::new(m20260425_000006_append_only_history::Migration),
         ]
     }
 }

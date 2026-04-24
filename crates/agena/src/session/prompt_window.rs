@@ -912,6 +912,7 @@ pub(crate) fn provider_metadata_with_response_id(
     response_id.map(|response_id| serde_json::json!({ "response_id": response_id }))
 }
 
+#[cfg(test)]
 pub(crate) fn prune_tool_result_message(message: &mut Message) -> bool {
     if message.role != Role::Tool || message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
         return false;
@@ -925,6 +926,7 @@ pub(crate) fn prune_tool_result_message(message: &mut Message) -> bool {
     false
 }
 
+#[cfg(test)]
 pub(crate) fn strip_attachment_payloads(message: &mut Message) -> bool {
     if message
         .metadata

@@ -1244,8 +1244,9 @@ pub fn responses_usage_value(event: &serde_json::Value) -> Option<serde_json::Va
     event
         .get("response")
         .and_then(|r| r.get("usage"))
+        .filter(|value| !value.is_null())
         .cloned()
-        .or_else(|| event.get("usage").cloned())
+        .or_else(|| event.get("usage").filter(|value| !value.is_null()).cloned())
 }
 
 pub fn responses_response_id(event: &serde_json::Value) -> Option<String> {
@@ -1439,6 +1440,26 @@ mod tests {
             }))
             .as_deref(),
             Some("max_output_tokens")
+        );
+    }
+
+    #[test]
+    fn responses_usage_value_ignores_null_payloads() {
+        assert_eq!(
+            responses_usage_value(&serde_json::json!({
+                "type": "response.done",
+                "response": {
+                    "usage": null
+                }
+            })),
+            None
+        );
+        assert_eq!(
+            responses_usage_value(&serde_json::json!({
+                "type": "response.done",
+                "usage": null
+            })),
+            None
         );
     }
 

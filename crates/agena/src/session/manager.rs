@@ -21,9 +21,14 @@ use crate::role::Role;
 use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissionCheck};
 
 use super::cache::SessionCachePolicy;
+pub use super::cache::SessionCacheStats;
 use super::model::{
-    MESSAGE_TAG_PROMPT_COMPACTED, MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor,
-    SessionListRequest, SessionPendingTool, SessionStatus, SessionSummary,
+    MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionListRequest, SessionPendingTool,
+    SessionStatus, SessionSummary,
+};
+use super::history::{
+    AttachmentPayloadStripped, HistoryItem, PromptCompactionApplied, PromptWindowInvalidationReason,
+    PromptWindowInvalidated, ToolResultPruned,
 };
 use super::processor::{SessionEventSink, SessionRunRequest};
 use super::prompt_window::{self, PromptRequestOptions};
@@ -234,6 +239,10 @@ impl SessionManager {
     pub fn prune_cache(&self) {
         let state = self.execution_state();
         self.store.prune_cache(state.cache_policy());
+    }
+
+    pub fn cache_stats(&self) -> SessionCacheStats {
+        self.store.cache_stats()
     }
 
     pub async fn create_session(&self, request: SessionCreateRequest) -> Result<Session, AppError> {
@@ -825,21 +834,32 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let pruned_ids = plan.pruned_message_ids.into_iter().collect::<HashSet<_>>();
-        let mut touched_messages = Vec::new();
+        let mut items = Vec::new();
 
-        for message in &mut session.messages {
-            if pruned_ids.contains(&message.id) && prompt_window::prune_tool_result_message(message)
-            {
-                touched_messages.push(message.clone());
+        for message in &session.messages {
+            if !pruned_ids.contains(&message.id) {
+                continue;
+            }
+            for part in &message.parts {
+                if matches!(part.content, Some(PartContent::ToolExecution(_))) {
+                    items.push(HistoryItem::ToolResultPruned(ToolResultPruned {
+                        message_id: message.id,
+                        part_id: part.id,
+                        replacement_text: crate::provider::PRUNED_TOOL_RESULT_PLACEHOLDER.to_string(),
+                        original_digest: None,
+                    }));
+                }
             }
         }
 
-        if touched_messages.is_empty() {
+        if items.is_empty() {
             return Ok(session);
         }
 
         self.invalidate_prompt_window_runtime(&mut session);
-        self.persist_session_changes(session, touched_messages, Vec::new(), None, state)
+        items.push(prompt_window_invalidated_item(&session, PromptWindowInvalidationReason::ToolResultPruning));
+        self.store
+            .append_history_items(session, items, state.cache_policy())
             .await
     }
 
@@ -853,22 +873,36 @@ impl SessionManager {
             .stripped_message_ids
             .into_iter()
             .collect::<HashSet<_>>();
-        let mut touched_messages = Vec::new();
+        let mut items = Vec::new();
 
-        for message in &mut session.messages {
-            if stripped_ids.contains(&message.id)
-                && prompt_window::strip_attachment_payloads(message)
-            {
-                touched_messages.push(message.clone());
+        for message in &session.messages {
+            if !stripped_ids.contains(&message.id) {
+                continue;
+            }
+            for part in &message.parts {
+                if matches!(part.content, Some(PartContent::Attachment(_))) {
+                    items.push(HistoryItem::AttachmentPayloadStripped(
+                        AttachmentPayloadStripped {
+                            message_id: message.id,
+                            part_id: part.id,
+                            original_digest: None,
+                        },
+                    ));
+                }
             }
         }
 
-        if touched_messages.is_empty() {
+        if items.is_empty() {
             return Ok(session);
         }
 
         self.invalidate_prompt_window_runtime(&mut session);
-        self.persist_session_changes(session, touched_messages, Vec::new(), None, state)
+        items.push(prompt_window_invalidated_item(
+            &session,
+            PromptWindowInvalidationReason::AttachmentPayloadStripping,
+        ));
+        self.store
+            .append_history_items(session, items, state.cache_policy())
             .await
     }
 
@@ -895,18 +929,7 @@ impl SessionManager {
             ));
         };
 
-        let compacted_ids = plan
-            .compacted_message_ids
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
-        let mut touched_messages = Vec::new();
-        for message in &mut session.messages {
-            if compacted_ids.contains(&message.id) {
-                message.metadata.add_tag(MESSAGE_TAG_PROMPT_COMPACTED);
-                touched_messages.push(message.clone());
-            }
-        }
+        let compacted_message_ids = plan.compacted_message_ids.clone();
 
         let summary_message = build_message(
             self.store.reserve_message_ids(1).await?,
@@ -925,9 +948,17 @@ impl SessionManager {
 
         session.messages.push(summary_message.clone());
         self.invalidate_prompt_window_runtime(&mut session);
-        touched_messages.push(summary_message);
+        let mut items = vec![
+            HistoryItem::PromptCompactionApplied(PromptCompactionApplied {
+                compacted_message_ids,
+                summary_message_id: summary_message.id,
+            }),
+            prompt_window_invalidated_item(&session, PromptWindowInvalidationReason::Compaction),
+        ];
+        items.extend(super::history::history_items_from_message_snapshot(&summary_message));
 
-        self.persist_session_changes(session, touched_messages, Vec::new(), None, state)
+        self.store
+            .append_history_items(session, items, state.cache_policy())
             .await
     }
 
@@ -1375,6 +1406,16 @@ fn build_message(
     }
 
     message
+}
+
+fn prompt_window_invalidated_item(
+    session: &Session,
+    reason: PromptWindowInvalidationReason,
+) -> HistoryItem {
+    HistoryItem::PromptWindowInvalidated(PromptWindowInvalidated {
+        generation: session.runtime.prompt_window.generation,
+        reason,
+    })
 }
 
 fn resolve_pending_tool(
@@ -1837,7 +1878,7 @@ mod tests {
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ModelProvider, ProviderModel, ProviderRegistry,
     };
-    use crate::session::{ContextGovernor, ContextPolicy};
+    use crate::session::{ContextGovernor, ContextPolicy, MESSAGE_TAG_PROMPT_COMPACTED};
 
     use super::*;
     use crate::session::cache::{SessionCache, SessionCachePolicy};
@@ -3512,7 +3553,17 @@ mod tests {
             .list_session_events(created.id)
             .await
             .expect("list events after rewind");
-        assert!(events_after.len() < events_before.len());
+        assert_eq!(events_after.len(), events_before.len());
+        let history = crate::db::crud::session_history::list_history_records(
+            service.store.db(),
+            created.id,
+        )
+        .await
+        .expect("history should load");
+        assert!(history.iter().any(|record| matches!(
+            record.item,
+            HistoryItem::SessionRolledBack(_)
+        )));
 
         let reloaded = service
             .get_session(created.id)
@@ -3793,11 +3844,23 @@ mod tests {
                 .metadata
                 .has_tag(crate::session::MESSAGE_TAG_TOOL_RESULT_PRUNED)
         );
-        assert_eq!(pruned_message.as_text_lossy(), old_output);
         assert_eq!(
             crate::provider::project_session_text_lossy(pruned_message),
-            "[tool_result:1]".to_string()
+            crate::provider::PRUNED_TOOL_RESULT_PLACEHOLDER.to_string()
         );
+        let records = crate::db::crud::session_history::list_history_records(
+            service.store.db(),
+            created.id,
+        )
+        .await
+        .expect("history should load");
+        let raw_tool_snapshot = records.iter().find_map(|record| match &record.item {
+            HistoryItem::MessageSnapshotRecorded(snapshot) if snapshot.message.id == old_tool.id => {
+                Some(snapshot.message.as_text_lossy())
+            }
+            _ => None,
+        });
+        assert_eq!(raw_tool_snapshot.as_deref(), Some(old_output.as_str()));
     }
 
     #[tokio::test]
@@ -4022,7 +4085,7 @@ mod tests {
         assert!(compacted.messages.iter().any(|message| {
             message
                 .metadata
-                .has_tag(super::MESSAGE_TAG_PROMPT_COMPACTED)
+                .has_tag(MESSAGE_TAG_PROMPT_COMPACTED)
         }));
     }
 

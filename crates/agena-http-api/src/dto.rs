@@ -33,6 +33,19 @@ pub struct RuntimeTaskResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RuntimeSessionCacheResource {
+    pub max_sessions: usize,
+    pub ttl_secs: u64,
+    pub max_bytes: usize,
+    pub entry_count: usize,
+    pub total_bytes: usize,
+    pub hits: u64,
+    pub misses: u64,
+    pub inserts: u64,
+    pub evictions: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RuntimeStatusResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
@@ -50,6 +63,8 @@ pub struct RuntimeStatusResponse {
     pub watch_paths: Vec<String>,
     pub reload: RuntimeTaskResource,
     pub janitor: RuntimeTaskResource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_cache: Option<RuntimeSessionCacheResource>,
 }
 
 #[derive(Debug, Clone, Serialize)]

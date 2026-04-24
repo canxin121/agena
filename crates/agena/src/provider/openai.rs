@@ -773,6 +773,102 @@ impl OpenAiProvider {
             .join("")
     }
 
+    async fn complete_by_aggregating_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        let fallback_model = request.model.clone();
+        let mut stream = ModelProvider::complete_stream(self, request).await?;
+        let mut text = String::new();
+        let mut tool_calls: std::collections::BTreeMap<String, ResponsesToolState> =
+            std::collections::BTreeMap::new();
+        let mut completed: Option<(
+            ProviderId,
+            ModelId,
+            Option<CompletionFinishReason>,
+            Option<CompletionUsage>,
+            Option<serde_json::Value>,
+        )> = None;
+
+        while let Some(item) = stream.next().await {
+            match item? {
+                CompletionStreamEvent::TextDelta { delta, .. } => {
+                    text.push_str(delta.as_str());
+                }
+                CompletionStreamEvent::ToolCallDelta {
+                    stream_key,
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
+                    let state = tool_calls.entry(stream_key).or_default();
+                    if let Some(id) = id {
+                        state.id = Some(id);
+                    }
+                    if let Some(name) = name {
+                        state.name = Some(name);
+                    }
+                    state.arguments.push_str(arguments_delta.as_str());
+                }
+                CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason,
+                    usage,
+                    provider_metadata,
+                } => {
+                    completed = Some((provider_id, model, finish_reason, usage, provider_metadata));
+                }
+            }
+        }
+
+        let (provider_id, model, finish_reason, usage, provider_metadata) = completed
+            .unwrap_or_else(|| {
+                (
+                    ProviderId::new(PROVIDER_ID),
+                    fallback_model,
+                    None,
+                    None,
+                    None,
+                )
+            });
+
+        let tool_calls = tool_calls
+            .into_iter()
+            .map(|(stream_key, state)| {
+                let id = utils::normalize_optional_text(state.id).unwrap_or(stream_key);
+                let name = utils::normalize_optional_text(state.name).ok_or_else(|| {
+                    AppError::Provider(
+                        "openai responses stream ended with function_call without name".to_owned(),
+                    )
+                })?;
+
+                Ok(CompletionToolCall::Function {
+                    id,
+                    name,
+                    arguments_json: state.arguments,
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+
+        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
+            return Err(AppError::Provider(
+                "openai responses stream fallback produced empty completion".to_owned(),
+            ));
+        }
+
+        Ok(CompletionResponse {
+            provider_id,
+            model,
+            text,
+            finish_reason,
+            tool_calls,
+            usage,
+            provider_metadata,
+        })
+    }
+
     fn map_usage(usage: Option<OpenAiUsage>) -> Option<CompletionUsage> {
         usage.map(|u| {
             MessageUsage {
@@ -1657,9 +1753,7 @@ impl ModelProvider for OpenAiProvider {
         let tool_calls = Self::parse_responses_tool_calls(response.output.as_ref())?;
 
         if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
-            return Err(AppError::Provider(
-                "openai responses payload was empty without finish reason".to_owned(),
-            ));
+            return self.complete_by_aggregating_stream(request).await;
         }
 
         let usage = Self::map_usage(response.usage);
@@ -2592,6 +2686,81 @@ mod tests {
                 .and_then(|value| value.get("response_id"))
                 .and_then(|value| value.as_str()),
             Some("resp_next")
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_responses_falls_back_to_stream_when_non_stream_payload_is_empty() {
+        let mut server = mockito::Server::new_async().await;
+        let _responses_empty = server
+            .mock("POST", "/responses")
+            .expect(1)
+            .match_body(mockito::Matcher::Regex("\\\"stream\\\":false".to_owned()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "id": "resp_empty",
+                    "model": "gpt-5",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 4,
+                        "output_tokens": 0
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let _responses_stream = server
+            .mock("POST", "/responses")
+            .expect(1)
+            .match_body(mockito::Matcher::Regex("\\\"stream\\\":true".to_owned()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(concat!(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"fallback \"}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"stream response\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream\",\"stop_reason\":\"stop\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}}\n\n",
+                "data: [DONE]\n\n"
+            ))
+            .create_async()
+            .await;
+
+        let provider =
+            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("gpt-5"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+            })
+            .await
+            .expect("empty responses payload should fall back to stream aggregation");
+
+        assert_eq!(response.text, "fallback stream response");
+        assert!(matches!(
+            response.finish_reason,
+            Some(CompletionFinishReason::Stop)
+        ));
+        let usage = response.usage.expect("usage should be present");
+        assert_eq!(usage.input_tokens, 4);
+        assert_eq!(usage.output_tokens, 2);
+        assert_eq!(
+            response
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("response_id"))
+                .and_then(|value| value.as_str()),
+            Some("resp_stream")
         );
     }
 

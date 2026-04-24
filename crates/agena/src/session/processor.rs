@@ -658,11 +658,7 @@ fn canonical_builtin_tool_name(name: &str) -> &str {
 }
 
 fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {
-    let value = if arguments_json.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(arguments_json)?
-    };
+    let value = parse_json_body::<serde_json::Value>(arguments_json)?;
     StructuredObject::try_from(value)
         .map_err(|err| AppError::Internal(format!("invalid custom tool input: {err}")))
 }
@@ -671,12 +667,32 @@ pub(crate) fn parse_input<T>(arguments_json: &str) -> Result<T, AppError>
 where
     T: serde::de::DeserializeOwned,
 {
+    parse_json_body(arguments_json)
+}
+
+fn parse_json_body<T>(arguments_json: &str) -> Result<T, AppError>
+where
+    T: serde::de::DeserializeOwned,
+{
     let body = if arguments_json.trim().is_empty() {
         "{}"
     } else {
         arguments_json
     };
-    serde_json::from_str::<T>(body).map_err(AppError::from)
+
+    let mut deserializer = serde_json::Deserializer::from_str(body);
+    let parsed =
+        <T as serde::Deserialize>::deserialize(&mut deserializer).map_err(AppError::from)?;
+
+    if let Err(err) = deserializer.end() {
+        tracing::warn!(
+            error = %err,
+            arguments_len = body.len(),
+            "tool arguments included trailing content; ignored suffix after valid JSON prefix"
+        );
+    }
+
+    Ok(parsed)
 }
 
 #[cfg(test)]
@@ -761,6 +777,43 @@ mod tests {
             .expect_err("unexpected builtin should be rejected");
 
         assert!(err.to_string().contains("unsupported tool call from model"));
+    }
+
+    #[test]
+    fn parse_input_accepts_trailing_text_after_valid_json_prefix() {
+        let parsed =
+            parse_input::<GlobToolInput>("{\"pattern\":\"**/*.md\"}\nPlease use glob first.")
+                .expect("valid JSON prefix should parse");
+
+        assert_eq!(parsed.pattern, "**/*.md");
+        assert_eq!(parsed.path, None);
+    }
+
+    #[test]
+    fn parse_tool_invocation_accepts_builtin_arguments_with_trailing_text() {
+        let tools = vec![ToolDefinition::builtin::<GrepToolInput>(
+            "grep",
+            "Search files for a pattern.",
+            ToolBehavior::ReadOnly,
+        )];
+
+        let invocation = parse_tool_invocation(
+            "grep",
+            "{\"pattern\":\"cache marker\"}\nThen report the result.",
+            tools.as_slice(),
+        )
+        .expect("valid JSON prefix should parse for builtin tools");
+
+        match invocation {
+            ToolInvocation::Builtin {
+                input: BuiltinToolInput::Grep(payload),
+            } => {
+                assert_eq!(payload.pattern, "cache marker");
+                assert_eq!(payload.path, None);
+                assert_eq!(payload.include, None);
+            }
+            other => panic!("expected grep builtin invocation, got {other:?}"),
+        }
     }
 
     #[derive(Clone)]

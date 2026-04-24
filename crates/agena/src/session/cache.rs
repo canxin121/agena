@@ -10,6 +10,16 @@ pub(crate) struct SessionCachePolicy {
     pub(crate) max_bytes: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub inserts: u64,
+    pub evictions: u64,
+    pub entry_count: usize,
+    pub total_bytes: usize,
+}
+
 #[derive(Debug, Clone)]
 struct CachedSessionEntry {
     session: Session,
@@ -21,6 +31,7 @@ pub(crate) struct SessionCache {
     entries: HashMap<i64, CachedSessionEntry>,
     access_order: VecDeque<i64>,
     total_bytes: usize,
+    stats: SessionCacheStats,
 }
 
 impl SessionCache {
@@ -30,10 +41,16 @@ impl SessionCache {
         cache_policy: SessionCachePolicy,
     ) -> Option<Session> {
         self.prune(cache_policy);
-        let session = {
-            let entry = self.entries.get_mut(&session_id)?;
-            entry.last_accessed = Instant::now();
-            entry.session.clone()
+        let session = match self.entries.get_mut(&session_id) {
+            Some(entry) => {
+                self.stats.hits = self.stats.hits.saturating_add(1);
+                entry.last_accessed = Instant::now();
+                entry.session.clone()
+            }
+            None => {
+                self.stats.misses = self.stats.misses.saturating_add(1);
+                return None;
+            }
         };
         self.bump(session_id);
         Some(session)
@@ -43,7 +60,7 @@ impl SessionCache {
         self.prune(cache_policy);
         session.refresh_derived();
         let session_id = session.id;
-        self.remove(session_id);
+        self.remove(session_id, false);
         let approx_bytes = session.approx_bytes();
         if approx_bytes > cache_policy.max_bytes.max(1) {
             return;
@@ -57,6 +74,7 @@ impl SessionCache {
             },
         );
         self.total_bytes = self.total_bytes.saturating_add(approx_bytes);
+        self.stats.inserts = self.stats.inserts.saturating_add(1);
         self.bump(session_id);
         self.enforce_limit(cache_policy);
     }
@@ -72,7 +90,15 @@ impl SessionCache {
             })
             .collect::<Vec<_>>();
         for session_id in expired {
-            self.remove(session_id);
+            self.remove(session_id, true);
+        }
+    }
+
+    pub(crate) fn stats(&self) -> SessionCacheStats {
+        SessionCacheStats {
+            entry_count: self.entries.len(),
+            total_bytes: self.total_bytes,
+            ..self.stats
         }
     }
 
@@ -92,6 +118,7 @@ impl SessionCache {
                 self.total_bytes = self
                     .total_bytes
                     .saturating_sub(entry.session.approx_bytes());
+                self.stats.evictions = self.stats.evictions.saturating_add(1);
             }
         }
     }
@@ -101,11 +128,14 @@ impl SessionCache {
         self.access_order.push_back(session_id);
     }
 
-    fn remove(&mut self, session_id: i64) {
+    fn remove(&mut self, session_id: i64, count_eviction: bool) {
         if let Some(entry) = self.entries.remove(&session_id) {
             self.total_bytes = self
                 .total_bytes
                 .saturating_sub(entry.session.approx_bytes());
+            if count_eviction {
+                self.stats.evictions = self.stats.evictions.saturating_add(1);
+            }
         }
         self.access_order.retain(|item| *item != session_id);
     }

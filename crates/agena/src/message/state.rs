@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use super::{
     ExecutionStatus, Message, MessagePart, MessageStateTransitionError, MessageStatus,
-    MessageUsage, PartContent, PartKind, PartStateTransitionError,
+    MessageMetadata, MessageUsage, PartContent, PartKind, PartStateTransitionError,
 };
 
 #[derive(Debug, Clone)]
@@ -41,6 +41,9 @@ pub enum MessageUpdate {
     InsertMessage {
         message: Message,
     },
+    ReplaceMessageSnapshot {
+        message: Message,
+    },
     TransitionMessage {
         message_id: i64,
         to: MessageStatus,
@@ -52,6 +55,10 @@ pub enum MessageUpdate {
     SetMessageUsage {
         message_id: i64,
         usage: MessageUsage,
+    },
+    SetMessageMetadata {
+        message_id: i64,
+        metadata: MessageMetadata,
     },
     InsertPart {
         message_id: i64,
@@ -180,6 +187,23 @@ impl MessageStateStore {
     pub fn apply(&mut self, update: MessageUpdate) -> Result<(), MessageStateStoreError> {
         match update {
             MessageUpdate::InsertMessage { message } => self.insert_message(message),
+            MessageUpdate::ReplaceMessageSnapshot { mut message } => {
+                let message_id = message.id;
+                let initial_parts = std::mem::take(&mut message.parts);
+                self.messages.insert(
+                    message_id,
+                    MessageEntry {
+                        message,
+                        part_order: Vec::new(),
+                        parts: HashMap::new(),
+                    },
+                );
+                self.part_owner.retain(|_, owner| *owner != message_id);
+                for part in initial_parts {
+                    self.insert_part_inner(message_id, part)?;
+                }
+                Ok(())
+            }
             MessageUpdate::TransitionMessage { message_id, to } => {
                 let entry = self
                     .messages
@@ -209,6 +233,17 @@ impl MessageStateStore {
                     .get_mut(&message_id)
                     .ok_or(MessageStateStoreError::MessageNotFound(message_id))?;
                 entry.message.usage = Some(usage);
+                Ok(())
+            }
+            MessageUpdate::SetMessageMetadata {
+                message_id,
+                metadata,
+            } => {
+                let entry = self
+                    .messages
+                    .get_mut(&message_id)
+                    .ok_or(MessageStateStoreError::MessageNotFound(message_id))?;
+                entry.message.metadata = metadata;
                 Ok(())
             }
             MessageUpdate::InsertPart { message_id, part } => {

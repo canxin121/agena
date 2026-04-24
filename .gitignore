@@ -17,3 +17,5 @@ apps/agena-studio-desktop/src-tauri-cef/binaries/agena-studio-*
 /.tmp-artifacts
 /.tmp-dmgs
 docs/tex/build/
+__pycache__/
+*.py[cod]

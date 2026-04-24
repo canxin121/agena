@@ -10,7 +10,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ManagedCredential, ModelProvider, ProviderModel, should_retry_credential, sse, utils,
+        CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, should_retry_credential,
+        sse, utils,
     },
     role::Role,
 };
@@ -204,6 +205,67 @@ impl GeminiProvider {
             return Ok(response);
         }
     }
+
+    async fn complete_by_aggregating_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        let fallback_model = request.model.clone();
+        let mut stream = ModelProvider::complete_stream(self, request).await?;
+        let mut text = String::new();
+        let mut completed: Option<(
+            ProviderId,
+            ModelId,
+            Option<CompletionFinishReason>,
+            Option<CompletionUsage>,
+            Option<serde_json::Value>,
+        )> = None;
+
+        while let Some(item) = stream.next().await {
+            match item? {
+                CompletionStreamEvent::TextDelta { delta, .. } => {
+                    text.push_str(delta.as_str());
+                }
+                CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason,
+                    usage,
+                    provider_metadata,
+                } => {
+                    completed = Some((provider_id, model, finish_reason, usage, provider_metadata));
+                }
+                CompletionStreamEvent::ToolCallDelta { .. } => {}
+            }
+        }
+
+        let (provider_id, model, finish_reason, usage, provider_metadata) = completed
+            .unwrap_or_else(|| {
+                (
+                    ProviderId::new(PROVIDER_ID),
+                    fallback_model,
+                    None,
+                    None,
+                    None,
+                )
+            });
+
+        if text.is_empty() && finish_reason.is_none() {
+            return Err(AppError::Provider(
+                "gemini stream fallback produced empty completion".to_owned(),
+            ));
+        }
+
+        Ok(CompletionResponse {
+            provider_id,
+            model,
+            text,
+            finish_reason,
+            tool_calls: Vec::new(),
+            usage,
+            provider_metadata,
+        })
+    }
 }
 
 #[async_trait]
@@ -290,6 +352,7 @@ impl ModelProvider for GeminiProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
+        let stream_fallback_request = request.clone();
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -353,6 +416,12 @@ impl ModelProvider for GeminiProvider {
             .first()
             .and_then(|c| c.finish_reason.clone());
         let usage = payload.usage_metadata.map(map_gemini_usage);
+
+        if text.is_empty() {
+            return self
+                .complete_by_aggregating_stream(stream_fallback_request)
+                .await;
+        }
 
         Ok(CompletionResponse {
             provider_id: ProviderId::new(PROVIDER_ID),
@@ -436,17 +505,32 @@ impl ModelProvider for GeminiProvider {
 
         let stream = async_stream::try_stream! {
             let mut emitted = String::new();
+            let mut saw_content = false;
+            let mut fallback_usage: Option<crate::provider::CompletionUsage> = None;
+            let mut fallback_provider_metadata: Option<serde_json::Value> = None;
+            let mut completed_emitted = false;
 
             while let Some(event) = events.next().await {
                 let event = event?;
 
                 let chunk: GeminiGenerateResponse =
                     utils::parse_json_value(provider_id.as_str(), "stream chunk", event)?;
+                if let Some(usage) = chunk.usage_metadata.as_ref().cloned().map(map_gemini_usage) {
+                    fallback_usage = Some(usage);
+                }
+                if let Some(metadata) = chunk
+                    .candidates
+                    .first()
+                    .and_then(GeminiCandidate::provider_metadata)
+                {
+                    fallback_provider_metadata = Some(metadata);
+                }
                 let mut done = false;
 
                 for stream_event in GeminiStreamEvent::from_chunk(chunk, &mut emitted) {
                     match stream_event {
                         GeminiStreamEvent::TextDelta(delta) => {
+                            saw_content = true;
                             yield CompletionStreamEvent::TextDelta {
                                 provider_id: provider_id.clone(),
                                 model: model_name.clone(),
@@ -458,14 +542,16 @@ impl ModelProvider for GeminiProvider {
                             usage,
                             provider_metadata,
                         } => {
+                            completed_emitted = true;
                             yield CompletionStreamEvent::Completed {
                                 provider_id: provider_id.clone(),
                                 model: model_name.clone(),
                                 finish_reason: CompletionFinishReason::from_provider(
                                     Some(finish_reason.as_str()),
                                 ),
-                                usage,
-                                provider_metadata,
+                                usage: usage.or_else(|| fallback_usage.clone()),
+                                provider_metadata: provider_metadata
+                                    .or_else(|| fallback_provider_metadata.clone()),
                             };
                             done = true;
                             break;
@@ -476,6 +562,18 @@ impl ModelProvider for GeminiProvider {
                 if done {
                     break;
                 }
+            }
+
+            if !completed_emitted
+                && (saw_content || fallback_usage.is_some() || fallback_provider_metadata.is_some())
+            {
+                yield CompletionStreamEvent::Completed {
+                    provider_id: provider_id.clone(),
+                    model: model_name.clone(),
+                    finish_reason: None,
+                    usage: fallback_usage,
+                    provider_metadata: fallback_provider_metadata,
+                };
             }
         };
 
@@ -665,7 +763,7 @@ impl GeminiStreamEvent {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct GeminiUsageMetadata {
     #[serde(default, rename = "promptTokenCount")]
     prompt_token_count: Option<u64>,
@@ -874,6 +972,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complete_falls_back_to_stream_when_candidate_text_is_empty() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "key".to_owned(),
+                "test-key".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "candidates": [{
+                        "content": { "parts": [] },
+                        "finishReason": "STOP"
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 4,
+                        "candidatesTokenCount": 2
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let _stream = server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("alt".to_owned(), "sse".to_owned()),
+                mockito::Matcher::UrlEncoded("key".to_owned(), "test-key".to_owned()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(concat!(
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"fallback \"}]}}]}\n\n",
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"fallback text\"}]}}]}\n\n",
+                "data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"fallback text\"}]},\"safetyRatings\":[{\"category\":\"SAFE\"}]}],\"usageMetadata\":{\"promptTokenCount\":4,\"candidatesTokenCount\":2}}\n\n",
+                "data: [DONE]\n\n"
+            ))
+            .create_async()
+            .await;
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+            })
+            .await
+            .expect("empty candidate text should fall back to stream aggregation");
+
+        assert_eq!(response.text, "fallback text");
+        assert!(matches!(
+            response.finish_reason,
+            Some(CompletionFinishReason::Stop)
+        ));
+        let usage = response.usage.expect("usage should be present");
+        assert_eq!(usage.input_tokens, 4);
+        assert_eq!(usage.output_tokens, 2);
+        let metadata = response
+            .provider_metadata
+            .expect("provider metadata should be present");
+        assert!(metadata.get("safety_ratings").is_some());
+    }
+
+    #[tokio::test]
     async fn complete_stream_parses_typed_gemini_chunks() {
         let mut server = mockito::Server::new_async().await;
         let body = concat!(
@@ -945,5 +1122,72 @@ mod tests {
 
         assert_eq!(text, "Hello");
         assert!(done);
+    }
+
+    #[tokio::test]
+    async fn complete_stream_emits_completed_when_stream_ends_without_finish_reason() {
+        let mut server = mockito::Server::new_async().await;
+        let body = concat!(
+            "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Ack\"}]}}],",
+            "\"usageMetadata\":{\"promptTokenCount\":4,\"candidatesTokenCount\":1,\"totalTokenCount\":5,\"cachedContentTokenCount\":2}}\n\n"
+        );
+        let _mock = server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("alt".to_owned(), "sse".to_owned()),
+                mockito::Matcher::UrlEncoded("key".to_owned(), "test-key".to_owned()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        );
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut text = String::new();
+        let mut completed = None;
+
+        while let Some(item) = stream.next().await {
+            match item.expect("stream item should parse") {
+                CompletionStreamEvent::TextDelta { delta, .. } => text.push_str(delta.as_str()),
+                CompletionStreamEvent::Completed {
+                    finish_reason,
+                    usage,
+                    ..
+                } => {
+                    completed = Some((finish_reason, usage));
+                }
+                CompletionStreamEvent::ToolCallDelta { .. } => {}
+            }
+        }
+
+        assert_eq!(text, "Ack");
+        let (finish_reason, usage) = completed.expect("completed event should be emitted");
+        assert!(finish_reason.is_none());
+        let usage = usage.expect("usage should be present");
+        assert_eq!(usage.input_tokens, 4);
+        assert_eq!(usage.output_tokens, 1);
+        assert_eq!(usage.cache_read_tokens, 2);
     }
 }

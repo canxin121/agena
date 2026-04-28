@@ -4,8 +4,7 @@
 //! the wire protocol and must not be renamed without a versioning ceremony
 //! (see [`kinds_table`]).
 
-use agena_event::KindMatcher;
-use agena_event::filter::EventKindTag;
+use crate::event::filter::{EventKindTag, KindMatcher};
 use serde::{Deserialize, Serialize};
 
 use crate::event::client::{
@@ -78,6 +77,23 @@ impl EventKind {
             Self::PluginEvent(_) => "plugin_event",
         }
     }
+
+    /// Returns `true` for events that must be written to the persistent event
+    /// log. UI-only events (streaming deltas, run lifecycle signals) are
+    /// ephemeral: they are broadcast in-process but never written to SQLite.
+    pub fn is_persistent(&self) -> bool {
+        !matches!(
+            self,
+            Self::RunStarted(_)
+                | Self::RunFailed(_)
+                | Self::StreamError(_)
+                | Self::MessagePartUpdated(_)
+                | Self::MessagePartDelta(_)
+                | Self::CommandBegin(_)
+                | Self::CommandOutputDelta(_)
+                | Self::CommandEnd(_)
+        )
+    }
 }
 
 impl KindMatcher for EventKind {
@@ -86,10 +102,36 @@ impl KindMatcher for EventKind {
     }
 }
 
-/// Stable list of every known kind tag. Useful for documentation and clients
-/// that want to subscribe to "all known kinds".
+/// Ephemeral UI-only kind tags (never written to the event store).
+pub const UI_KINDS: &[&str] = &[
+    "run_started",
+    "run_failed",
+    "stream_error",
+    "message_part_updated",
+    "message_part_delta",
+    "command_begin",
+    "command_output_delta",
+    "command_end",
+];
+
+/// Persistent history kind tags (written to SQLite and replayable).
+pub const HISTORY_KINDS: &[&str] = &[
+    "turn_started",
+    "turn_completed",
+    "turn_aborted",
+    "user_message_appended",
+    "assistant_message_completed",
+    "tool_call_issued",
+    "tool_call_completed",
+    "system_notice_appended",
+    "message_revised",
+    "plugin_event",
+];
+
+/// Stable list of every known kind tag (UI + history).
 pub fn kinds_table() -> &'static [&'static str] {
-    &[
+    // UI kinds first (match serde tag ordering in the enum), then history kinds.
+    const ALL: &[&str] = &[
         "run_started",
         "run_failed",
         "stream_error",
@@ -108,18 +150,27 @@ pub fn kinds_table() -> &'static [&'static str] {
         "system_notice_appended",
         "message_revised",
         "plugin_event",
-    ]
+    ];
+    ALL
+}
+
+/// Ephemeral UI-only kind tags (never written to the event store).
+pub fn ui_kinds_table() -> &'static [&'static str] {
+    UI_KINDS
+}
+
+/// Persistent history kind tags (written to SQLite and replayable).
+pub fn history_kinds_table() -> &'static [&'static str] {
+    HISTORY_KINDS
 }
 
 /// Concrete `DomainEvent` envelope specialised for agena's `EventKind`.
-pub type DomainEvent = agena_event::DomainEvent<EventKind>;
+pub type DomainEvent = crate::event::envelope::DomainEvent<EventKind>;
 
 /// Concrete `EventPublisher` specialised for agena's `EventKind`.
-pub type EventPublisher = agena_event::EventPublisher<EventKind>;
+pub type EventPublisher = crate::event::publisher::EventPublisher<EventKind>;
 
-/// Re-export so call sites can write `event::PublishContext` instead of
-/// `agena_event::publisher::PublishContext`.
-pub use agena_event::publisher::PublishContext;
+pub use crate::event::publisher::PublishContext;
 
 #[cfg(test)]
 mod tests {
@@ -145,5 +196,38 @@ mod tests {
         });
         assert_eq!(kind.tag().as_str(), "run_started");
         assert!(kinds_table().contains(&"run_started"));
+    }
+
+    #[test]
+    fn ui_and_history_kinds_partition_all_kinds() {
+        let all: std::collections::HashSet<&str> = kinds_table().iter().copied().collect();
+        let ui: std::collections::HashSet<&str> = UI_KINDS.iter().copied().collect();
+        let history: std::collections::HashSet<&str> = HISTORY_KINDS.iter().copied().collect();
+        // No overlap
+        assert!(ui.is_disjoint(&history), "UI and history kinds must not overlap");
+        // Together they cover all kinds
+        let union: std::collections::HashSet<&str> = ui.union(&history).copied().collect();
+        assert_eq!(union, all, "UI ∪ history must equal all kinds");
+    }
+
+    #[test]
+    fn is_persistent_matches_history_kinds_table() {
+        let ui_set: std::collections::HashSet<&str> = UI_KINDS.iter().copied().collect();
+        // Every EventKind variant: persistent ↔ not in ui_set
+        let samples: &[(&str, bool)] = &[
+            ("run_started", false),
+            ("message_part_delta", false),
+            ("command_output_delta", false),
+            ("turn_started", true),
+            ("user_message_appended", true),
+            ("plugin_event", true),
+        ];
+        for (tag, expected_persistent) in samples {
+            let in_ui = ui_set.contains(*tag);
+            assert_eq!(
+                !in_ui, *expected_persistent,
+                "tag {tag}: is_persistent should be {expected_persistent}"
+            );
+        }
     }
 }

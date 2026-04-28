@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use agena::event::EventKind;
 use agena_api::notifications::Notification;
-use agena_event::{EventBus, bus::SubscriptionItem};
+use agena::event::{EventBus, bus::SubscriptionItem};
 use axum::{
     extract::{Query, State},
     response::sse::{Event, KeepAlive, Sse},
@@ -78,22 +78,22 @@ pub async fn handler(
 }
 
 impl StreamQuery {
-    fn into_filter(self) -> Result<agena_event::EventFilter, ServerError> {
+    fn into_filter(self) -> Result<agena::event::EventFilter, ServerError> {
         let scope = match self.scope_kind.as_deref() {
-            None | Some("global") => agena_event::Scope::Global,
+            None | Some("global") => agena::event::Scope::Global,
             Some("workspace") => {
                 let workspace_id = self.workspace_id.ok_or_else(|| {
                     ServerError::BadRequest(
                         "scope_kind=workspace requires workspace_id".into(),
                     )
                 })?;
-                agena_event::Scope::Workspace { workspace_id }
+                agena::event::Scope::Workspace { workspace_id }
             }
             Some("session") => {
                 let session_id = self.session_id.ok_or_else(|| {
                     ServerError::BadRequest("scope_kind=session requires session_id".into())
                 })?;
-                agena_event::Scope::Session { session_id }
+                agena::event::Scope::Session { session_id }
             }
             Some(other) => {
                 return Err(ServerError::BadRequest(format!(
@@ -104,10 +104,10 @@ impl StreamQuery {
         let kinds = self.kinds.map(|csv| {
             csv.split(',')
                 .filter(|s| !s.is_empty())
-                .map(|s| agena_event::EventKindTag::from(s.trim()))
+                .map(|s| agena::event::EventKindTag::from(s.trim()))
                 .collect::<std::collections::HashSet<_>>()
         });
-        Ok(agena_event::EventFilter {
+        Ok(agena::event::EventFilter {
             scope,
             kinds,
             since_seq_global: self.since_seq_global,

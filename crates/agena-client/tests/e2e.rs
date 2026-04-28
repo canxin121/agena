@@ -63,9 +63,10 @@ async fn rest_list_events_returns_published() {
         .event_publisher()
         .publish(
             PublishContext::for_session(1),
-            EventKind::RunStarted(agena::event::RunStartedEvent {
-                session_id: 1,
-                ts_ms: 0,
+            EventKind::PluginEvent(agena::event::PluginEventPayload {
+                plugin_id: "test".into(),
+                kind_label: "test_event".into(),
+                payload: serde_json::json!({}),
             }),
         )
         .await
@@ -80,7 +81,7 @@ async fn rest_list_events_returns_published() {
         .await
         .unwrap();
     assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].kind.tag_str(), "run_started");
+    assert_eq!(page.items[0].kind.tag_str(), "plugin_event");
 }
 
 #[tokio::test]

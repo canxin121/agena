@@ -23,7 +23,7 @@ use agena_api::{
     },
     resource::{RunOptions, SessionResource},
 };
-use agena_event::{EventStore, StoreRange};
+use agena::event::{EventStore, StoreRange};
 
 use crate::{error::ServerError, state::AppState};
 
@@ -258,7 +258,7 @@ pub async fn dispatch_query(
         }) => {
             let publisher = state.event_publisher()?;
             let store: &std::sync::Arc<dyn EventStore<EventKind>> = publisher.store();
-            let filter = agena_event::EventFilter {
+            let filter = agena::event::EventFilter {
                 scope,
                 kinds,
                 since_seq_global,

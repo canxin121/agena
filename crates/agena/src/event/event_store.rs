@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
-use crate::envelope::DomainEvent;
-use crate::error::EventStoreError;
-use crate::filter::{EventFilter, KindMatcher};
+use crate::event::envelope::DomainEvent;
+use crate::event::error::EventStoreError;
+use crate::event::filter::{EventFilter, KindMatcher};
 
 /// Inclusive lower bound, exclusive upper bound by `seq_global`.
 #[derive(Debug, Clone, Copy)]

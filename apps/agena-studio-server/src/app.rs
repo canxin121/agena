@@ -1,6 +1,7 @@
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use agena::runtime::AgenaRuntime;
+use agena::storage::StorageConfig;
 use agena_http_api::ApiState;
 use agena_api_server::AppState as ApiV2State;
 use anyhow::{Context, Result, anyhow};
@@ -155,59 +156,6 @@ fn resolve_same_site(mode: crate::UiCookieSameSite, has_cross_origin: bool) -> S
     }
 }
 
-fn resolve_database_url(
-    database_url: Option<String>,
-    database_path: Option<PathBuf>,
-) -> Result<String> {
-    if let Some(url) = database_url {
-        return Ok(url);
-    }
-
-    let path = database_path.unwrap_or_else(default_database_path);
-    Ok(format!("sqlite://{}?mode=rwc", path.display()))
-}
-
-fn default_database_path() -> PathBuf {
-    let mut base = env::var("HOME")
-        .or_else(|_| env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    base.push(".agena");
-    base.push("agena.db");
-    base
-}
-
-fn sqlite_path_from_url(database_url: &str) -> Option<PathBuf> {
-    if database_url == "sqlite::memory:" {
-        return None;
-    }
-
-    let raw = database_url.strip_prefix("sqlite://")?;
-    let path = raw.split('?').next().unwrap_or(raw);
-    if path.is_empty() || path == ":memory:" {
-        None
-    } else {
-        Some(PathBuf::from(path))
-    }
-}
-
-fn ensure_database_parent(database_url: &str) -> Result<()> {
-    let Some(path) = sqlite_path_from_url(database_url) else {
-        return Ok(());
-    };
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create database parent directory {}",
-                parent.display()
-            )
-        })?;
-    }
-    Ok(())
-}
-
 pub(crate) async fn run(args: crate::Args) -> Result<()> {
     let mut normalized_cors_origins = Vec::<String>::new();
     for raw in &args.cors_origin {
@@ -218,8 +166,13 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         normalized_cors_origins.push(origin);
     }
 
-    let database_url = resolve_database_url(args.database_url.clone(), args.database_path.clone())?;
-    ensure_database_parent(database_url.as_str())?;
+    let database_url = StorageConfig {
+        database_url: args.database_url.clone(),
+        database_path: args.database_path.clone(),
+    }
+    .resolve_url()
+    .map_err(|e| anyhow!("{e}"))?;
+    StorageConfig::ensure_parent(database_url.as_str()).map_err(|e| anyhow!("{e}"))?;
 
     let workspace_root = args
         .workspace_root

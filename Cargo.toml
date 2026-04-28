@@ -9,8 +9,6 @@ members = [
     "crates/agena-api",
     "crates/agena-api-server",
     "crates/agena-client",
-    "crates/agena-event",
-    "crates/agena-event-store-sea",
     "crates/agena-http-api",
     "crates/agena-plugin-host",
     "crates/agena-plugin-sdk",

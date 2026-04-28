@@ -8,11 +8,12 @@ use sea_orm::{
     QuerySelect, TransactionTrait,
 };
 
-use agena_event::{
-    DomainEvent, EventFilter, EventStore, EventStoreError, KindMatcher, Scope, StoreRange,
+use crate::event::{
+    EventFilter, EventStore, EventStoreError, KindMatcher, Scope, StoreRange,
 };
+use crate::event::envelope::DomainEvent;
 
-use crate::entity;
+use crate::db::event_entity as entity;
 
 /// sea_orm-backed [`EventStore`].
 ///
@@ -88,11 +89,6 @@ where
             .await
             .map_err(|err| match err {
                 sea_orm::DbErr::Exec(_) | sea_orm::DbErr::Query(_) => {
-                    // Best-effort: the unique constraints on (event_uuid,
-                    // seq_global) will trip here on duplicates. We can't
-                    // disambiguate which one without a follow-up query, so
-                    // surface a generic backend error and let the caller
-                    // diagnose.
                     EventStoreError::Backend(err.to_string())
                 }
                 other => map_db_err(other),

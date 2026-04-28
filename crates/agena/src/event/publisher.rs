@@ -3,12 +3,12 @@ use std::sync::Arc;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::bus::EventBus;
-use crate::envelope::{DomainEvent, ENVELOPE_SCHEMA_VERSION, EventMeta};
-use crate::error::{EventStoreError, PublishError};
-use crate::filter::KindMatcher;
-use crate::sequence::SequenceAllocator;
-use crate::store::EventStore;
+use crate::event::bus::EventBus;
+use crate::event::envelope::{DomainEvent, ENVELOPE_SCHEMA_VERSION, EventMeta};
+use crate::event::error::{EventStoreError, PublishError};
+use crate::event::event_store::EventStore;
+use crate::event::filter::KindMatcher;
+use crate::event::sequence::SequenceAllocator;
 
 /// Optional routing context attached to a publish call. The publisher fills
 /// in the rest of the envelope (id, seq, timestamp).

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use agena_event::Scope;
+use crate::event::Scope;
 use async_trait::async_trait;
 
 use crate::plugin::sdk::host_api::{
@@ -98,7 +98,7 @@ impl HostClient for RuntimeHostClient {
             .current_snapshot()
             .session_manager()
             .map(|mgr| {
-                let _ = mgr.event_bus().subscribe(agena_event::EventFilter::new(
+                let _ = mgr.event_bus().subscribe(crate::event::EventFilter::new(
                     Scope::Global,
                 ));
             });

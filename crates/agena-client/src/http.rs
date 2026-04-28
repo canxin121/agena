@@ -209,12 +209,12 @@ impl AgenaClient {
                 q.append_pair("limit", &limit.to_string());
             }
             match &params.scope {
-                agena_event::Scope::Global => {}
-                agena_event::Scope::Workspace { workspace_id } => {
+                agena::event::Scope::Global => {}
+                agena::event::Scope::Workspace { workspace_id } => {
                     q.append_pair("scope_kind", "workspace");
                     q.append_pair("workspace_id", &workspace_id.to_string());
                 }
-                agena_event::Scope::Session { session_id } => {
+                agena::event::Scope::Session { session_id } => {
                     q.append_pair("scope_kind", "session");
                     q.append_pair("session_id", &session_id.to_string());
                 }

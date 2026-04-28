@@ -20,6 +20,7 @@ use agena::{
     AppError,
     config::{ConfigLoader, ConfigModeName, ConfigOverride, LoadConfigRequest},
     runtime::AgenaRuntime,
+    storage::StorageConfig,
 };
 use anyhow::Context;
 use app::{App, LaunchOptions};
@@ -102,9 +103,12 @@ impl AgenaTuiCli {
         command: RunCommand,
         config_locale: Option<String>,
     ) -> Result<(), AppError> {
-        let database_url =
-            resolve_database_url(command.database_url.clone(), command.database_path.clone())?;
-        ensure_database_parent(database_url.as_str())?;
+        let storage = StorageConfig {
+            database_url: command.database_url,
+            database_path: command.database_path,
+        };
+        let database_url = storage.resolve_url()?;
+        StorageConfig::ensure_parent(database_url.as_str())?;
 
         let db = Arc::new(Database::connect(database_url.as_str()).await?);
         let workspace_root = command.workspace_root.unwrap_or(env::current_dir()?);
@@ -208,18 +212,6 @@ impl<'a> MakeWriter<'a> for TuiLogWriter {
     }
 }
 
-fn resolve_database_url(
-    database_url: Option<String>,
-    database_path: Option<PathBuf>,
-) -> Result<String, AppError> {
-    if let Some(url) = database_url {
-        return Ok(url);
-    }
-
-    let path = database_path.unwrap_or_else(default_database_path);
-    Ok(format!("sqlite://{}?mode=rwc", path.display()))
-}
-
 fn resolve_tui_log_writer(cli: &AgenaTuiCli) -> Result<TuiLogWriter, AppError> {
     let TuiCommand::Run(command) = cli.resolved_command();
     if command.log_stderr {
@@ -237,12 +229,6 @@ fn resolve_tui_log_writer(cli: &AgenaTuiCli) -> Result<TuiLogWriter, AppError> {
     Ok(TuiLogWriter::File(Arc::new(Mutex::new(file))))
 }
 
-fn default_database_path() -> PathBuf {
-    let mut base = default_agena_dir();
-    base.push("agena.db");
-    base
-}
-
 fn default_tui_log_path() -> PathBuf {
     let mut base = default_agena_dir();
     base.push("logs");
@@ -257,32 +243,6 @@ fn default_agena_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."));
     base.push(".agena");
     base
-}
-
-fn ensure_database_parent(database_url: &str) -> Result<(), AppError> {
-    let Some(path) = sqlite_path_from_url(database_url) else {
-        return Ok(());
-    };
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)?;
-    }
-    Ok(())
-}
-
-fn sqlite_path_from_url(database_url: &str) -> Option<PathBuf> {
-    if database_url == "sqlite::memory:" {
-        return None;
-    }
-
-    let raw = database_url.strip_prefix("sqlite://")?;
-    let path = raw.split('?').next().unwrap_or(raw);
-    if path.is_empty() || path == ":memory:" {
-        None
-    } else {
-        Some(PathBuf::from(path))
-    }
 }
 
 #[tokio::main]

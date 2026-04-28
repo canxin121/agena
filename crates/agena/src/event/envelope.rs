@@ -2,16 +2,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::filter::{EventKindTag, KindMatcher};
+use crate::event::filter::{EventKindTag, KindMatcher};
 
 /// Wire-format version of the envelope itself. Bumped only when envelope
 /// fields (not payload schemas) change incompatibly.
 pub const ENVELOPE_SCHEMA_VERSION: u32 = 1;
 
 /// Routing / observability metadata that lives outside the payload.
-///
-/// Constructed by [`EventPublisher`](crate::publisher::EventPublisher) and is
-/// the same shape regardless of which concrete `EventKind` is being carried.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EventMeta {
     pub id: Uuid,

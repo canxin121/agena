@@ -4,13 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-agena-event = { path = "../agena-event" }
-agena-event-store-sea = { path = "../agena-event-store-sea" }
 agena-plugin-host = { path = "../agena-plugin-host" }
 arc-swap = "1.7.1"
 chrono = { version = "0.4.42", features = ["serde"] }
 async-trait = "0.1.89"
 async-stream = "0.3.6"
+tokio-stream = { version = "0.1.16", features = ["sync"] }
 aws-config = { version = "1.8.15", default-features = true }
 aws-credential-types = "1.2.14"
 aws-smithy-eventstream = "0.60.20"

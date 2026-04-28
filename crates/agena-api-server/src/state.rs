@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use agena::{event::EventKind, runtime::AgenaRuntime, session::SessionManager};
-use agena_event::EventBus;
+use agena::event::EventBus;
 
 use crate::error::ServerError;
 

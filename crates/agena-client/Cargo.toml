@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 agena-api = { path = "../agena-api" }
-agena-event = { path = "../agena-event" }
+agena = { path = "../agena" }
 async-trait = "0.1.89"
 futures-util = "0.3.31"
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "stream"] }

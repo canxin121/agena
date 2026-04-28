@@ -771,7 +771,7 @@ mod tests {
         AssistantMessageCompleted, FinishReason, ToolCallCompleted, ToolCallIssued, TurnAborted,
         TurnAbortReason, TurnCompleted, TurnStarted, UserMessageAppended, fold_history,
     };
-    use agena_event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
+    use crate::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
     use chrono::Utc;
     use uuid::Uuid;
 

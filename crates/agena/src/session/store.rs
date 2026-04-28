@@ -96,10 +96,6 @@ impl SessionStore {
         }
     }
 
-    pub(crate) fn publisher(&self) -> &Arc<EventPublisher> {
-        &self.publisher
-    }
-
     /// Publish a single [`EventKind`] for the session. Best-effort: failures
     /// are surfaced as `AppError`.
     async fn publish_event(&self, session_id: i64, kind: EventKind) -> Result<(), AppError> {
@@ -516,16 +512,6 @@ impl SessionStore {
         Ok(())
     }
 
-    pub(crate) async fn append_client_projection(
-        &self,
-        session_id: i64,
-        _message_snapshot: Option<Message>,
-        client_events: Vec<EventKind>,
-        _cache_policy: SessionCachePolicy,
-    ) -> Result<(), AppError> {
-        self.append_client_events(session_id, client_events).await
-    }
-
     pub(crate) async fn resolve_permission_mode(
         &self,
         action_key: &str,
@@ -748,22 +734,6 @@ fn ordered_unique_touched_messages(
     ordered
 }
 
-fn upsert_session_message(session: &mut Session, message: Message) {
-    if let Some(index) = session
-        .messages
-        .iter()
-        .position(|item| item.id == message.id)
-    {
-        session.messages[index] = message;
-    } else {
-        session.messages.push(message);
-        session
-            .messages
-            .sort_by_key(|item| (item.created_at, item.id));
-    }
-    session.refresh_derived();
-}
-
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, time::Duration};
@@ -781,12 +751,10 @@ mod tests {
     };
 
     fn test_publisher(db: &sea_orm::DatabaseConnection) -> std::sync::Arc<EventPublisher> {
-        use agena_event::{EventBus, EventStore, InProcessEventBus, SequenceAllocator};
+        use crate::event::{EventBus, EventStore, InProcessEventBus, SequenceAllocator};
         let store_dyn: std::sync::Arc<dyn EventStore<crate::event::EventKind>> =
             std::sync::Arc::new(
-                agena_event_store_sea::SeaEventStore::<crate::event::EventKind>::new(
-                    std::sync::Arc::new(db.clone()),
-                ),
+                crate::db::HistoryEventStore::new(std::sync::Arc::new(db.clone())),
             );
         let bus: std::sync::Arc<dyn EventBus<crate::event::EventKind>> =
             std::sync::Arc::new(InProcessEventBus::<crate::event::EventKind>::new(64));

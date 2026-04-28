@@ -16,13 +16,6 @@ pub struct SessionMessageStats {
 }
 
 #[derive(Debug, Clone, FromQueryResult)]
-struct SessionMessageStatsRow {
-    session_id: i64,
-    message_count: i64,
-    last_message_at_ms: Option<i64>,
-}
-
-#[derive(Debug, Clone, FromQueryResult)]
 struct SessionChildCountRow {
     session_id: i64,
     child_session_count: i64,

@@ -48,7 +48,7 @@ impl SessionHistoryStore {
         &self,
         session_id: i64,
     ) -> Result<Vec<DomainEvent>, DbErr> {
-        use agena_event::{EventFilter, Scope, StoreRange};
+        use crate::event::{EventFilter, Scope, StoreRange};
         let filter = EventFilter::new(Scope::Session { session_id });
         let mut all = Vec::new();
         let mut cursor = 0i64;
@@ -143,5 +143,6 @@ impl SessionHistoryStore {
 pub(crate) struct LoadedSessionProjection {
     pub messages: Vec<Message>,
     pub runtime: SessionRuntimeState,
+    #[allow(dead_code)]
     pub last_seq: i64,
 }

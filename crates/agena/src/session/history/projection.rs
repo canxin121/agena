@@ -37,7 +37,7 @@ mod tests {
     use crate::event::{EventKind, PublishContext};
     use crate::session::history::{TurnAbortReason, TurnAborted};
     use crate::session::ids::TurnId;
-    use agena_event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
+    use crate::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
     use chrono::Utc;
     use uuid::Uuid;
 

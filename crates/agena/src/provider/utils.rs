@@ -435,16 +435,6 @@ pub fn auth_header_value(scheme: Option<&str>, token: &str) -> String {
     }
 }
 
-pub fn apply_extra_headers(
-    mut req: reqwest::RequestBuilder,
-    headers: &HashMap<String, String>,
-) -> reqwest::RequestBuilder {
-    for (key, value) in headers {
-        req = req.header(key.as_str(), value.as_str());
-    }
-    req
-}
-
 /// Apply provider-configured `extra_headers` AND consult the loaded
 /// plugin host's `chat.headers` hook chain. Plugins can add or remove
 /// headers per-provider on every request.

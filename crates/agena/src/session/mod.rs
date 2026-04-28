@@ -18,8 +18,10 @@ pub use manager::{
     SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
     SessionUserInputReplyRequest, SessionUserTurnRequest,
 };
+#[allow(unused_imports)]
 pub(crate) use model::{
-    MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_PROMPT_COMPACTED,
+    MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED,
+    MESSAGE_TAG_PROMPT_COMPACTED,
     MESSAGE_TAG_TOOL_RESULT_PRUNED,
 };
 pub use model::{

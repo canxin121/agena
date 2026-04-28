@@ -15,7 +15,7 @@ use agena::{
         entities,
     },
     message::{
-        ExecutionStatus, Message, MessageMetadata, MessagePart, PartContent,
+        ExecutionStatus, Message, MessagePart, PartContent,
         PermissionRequestPart, UserInputRequest, UserInputRequestPart,
     },
     model::ModelRef,
@@ -1171,13 +1171,6 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed)
     })
-}
-
-fn message_tags_from_json(value: Option<&serde_json::Value>) -> Vec<String> {
-    value
-        .cloned()
-        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
-        .unwrap_or_default()
 }
 
 fn normalize_workspace_path(workspace_path: &str) -> Result<String, DbErr> {

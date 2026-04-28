@@ -1,37 +1,31 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 
 use crate::error::AppError;
 use crate::event::{
-    ErrorInfo, MessagePartDeltaEvent, MessagePartUpdatedEvent, MessageProjectionEvent,
-    MessageProjector, PartDeltaField, SessionEvent, StreamErrorEvent,
+    DomainEvent, ErrorInfo, EventKind, EventPublisher, MessagePartDeltaEvent,
+    MessagePartUpdatedEvent, PartDeltaField, PublishContext, StreamErrorEvent,
 };
 use crate::message::{
-    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, GlobToolInput,
-    GrepToolInput, Message, MessageMetadata, MessageSource, MessageStateStore, MessageUpdate,
-    PartContent, ReadToolInput, StructuredObject, TaskToolInput, TimeRange, TodoWriteToolInput,
-    ToolExecutionPart, ToolInvocation, ToolSearchToolInput, ViewFileToolInput,
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, ExecutionStatus,
+    GlobToolInput, GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource,
+    MessageStatus, PartContent, ReadToolInput, StructuredObject, TaskToolInput, TimeRange,
+    TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput, ViewFileToolInput,
 };
 use crate::model::ModelRef;
-use crate::provider::{CompletionRequest, CompletionStreamEvent, ProviderRegistry};
+use crate::provider::{
+    CompletionFinishReason, CompletionRequest, CompletionStreamEvent, ProviderRegistry,
+};
 use crate::role::Role;
 use crate::tool::{ToolDefinition, ToolSource};
 
+use super::history::{
+    FinishReason, MessageId as HistoryMessageId, MessageIdAllocator, ToolCallId, TurnBuffer, TurnId,
+};
 use super::{context_governor::ContextGovernor, store::ProcessorPartIdAllocator};
-
-#[async_trait]
-pub(crate) trait SessionEventSink: Send + Sync {
-    async fn emit(
-        &self,
-        session_id: i64,
-        message_snapshot: Option<Message>,
-        events: Vec<SessionEvent>,
-    ) -> Result<(), AppError>;
-}
 
 #[derive(Clone)]
 pub(crate) struct SessionRunRequest {
@@ -41,23 +35,34 @@ pub(crate) struct SessionRunRequest {
     pub next_message_id: i64,
     pub part_ids: ProcessorPartIdAllocator,
     pub next_call_id: i64,
-    pub event_sink: Option<Arc<dyn SessionEventSink>>,
+    /// Live publisher used to push streaming events ("running") onto the
+    /// unified bus while the turn is in flight. `None` keeps test harnesses
+    /// terse — they observe the buffered `client_events` on the result.
+    pub event_publisher: Option<Arc<EventPublisher>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct SessionRunResult {
     pub assistant_message_id: i64,
     pub state: Vec<Message>,
-    pub client_events: Vec<SessionEvent>,
+    /// UI-projection events buffered during the turn (also pushed onto the
+    /// bus when `event_publisher` was set).
+    pub client_events: Vec<EventKind>,
     pub provider_metadata: Option<serde_json::Value>,
     pub terminal_error: Option<AppError>,
+    /// Append-only history events emitted by the turn buffer. Routed by the
+    /// manager into `SessionStore::append_history_items`.
+    pub history_items: Vec<EventKind>,
+    /// The turn id used by `history_items` — the manager wraps this with
+    /// `TurnStarted` / `TurnCompleted` / `TurnAborted` boundary events.
+    pub turn_id: TurnId,
 }
 
 #[derive(Clone)]
 pub struct SessionProcessor {
     provider_registry: Arc<ProviderRegistry>,
     context_governor: ContextGovernor,
-    projector: MessageProjector,
+    plugins: Option<Arc<crate::plugin::PluginHost>>,
 }
 
 impl SessionProcessor {
@@ -68,7 +73,230 @@ impl SessionProcessor {
         Self {
             provider_registry,
             context_governor,
-            projector: MessageProjector,
+            plugins: None,
+        }
+    }
+
+    pub fn with_plugin_host(mut self, plugins: Arc<crate::plugin::PluginHost>) -> Self {
+        self.plugins = Some(plugins);
+        self
+    }
+
+    /// Apply the `chat.params` plugin hook chain to a [`CompletionRequest`]
+    /// before sending it to the provider.
+    async fn apply_chat_params_hook(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        request: &mut CompletionRequest,
+    ) {
+        let Some(plugins) = &self.plugins else { return };
+        if plugins.is_empty() {
+            return;
+        }
+        let mut params = serde_json::Map::new();
+        if let Some(t) = request.temperature {
+            params.insert("temperature".into(), serde_json::json!(t));
+        }
+        if let Some(m) = request.max_output_tokens {
+            params.insert("max_output_tokens".into(), serde_json::json!(m));
+        }
+        let input = crate::plugin::ChatParamsInput {
+            provider: provider_id.to_string(),
+            model: model_id.to_string(),
+            params: serde_json::Value::Object(params),
+        };
+        match plugins.dispatch_chat_params(input).await {
+            Ok(updated) => {
+                if let Some(t) = updated
+                    .params
+                    .get("temperature")
+                    .and_then(|v| v.as_f64())
+                {
+                    request.temperature = Some(t as f32);
+                }
+                if let Some(m) = updated
+                    .params
+                    .get("max_output_tokens")
+                    .and_then(|v| v.as_u64())
+                {
+                    request.max_output_tokens = Some(m as u32);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::chat_params",
+                    "chat.params hook failed: {err}"
+                );
+            }
+        }
+    }
+
+    /// Apply the experimental `chat.system.transform` hook chain to the
+    /// system prompt before sending it to the provider.
+    async fn apply_chat_system_transform_hook(
+        &self,
+        session_id: i64,
+        request: &mut CompletionRequest,
+    ) {
+        let Some(plugins) = &self.plugins else { return };
+        if plugins.is_empty() {
+            return;
+        }
+        let current = request.system.clone().unwrap_or_default();
+        let input = crate::plugin::ChatSystemTransformInput {
+            session_id,
+            current_system: current,
+        };
+        match plugins.dispatch_chat_system_transform(input).await {
+            Ok(updated) => {
+                request.system = if updated.current_system.is_empty() {
+                    None
+                } else {
+                    Some(updated.current_system)
+                };
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::chat_system_transform",
+                    "chat.system.transform hook failed: {err}"
+                );
+            }
+        }
+    }
+
+    /// Apply the `chat.message` hook chain to every outgoing message before
+    /// the provider request goes out. Messages whose `content` becomes
+    /// `Value::Null` (the SDK's drop signal) are filtered out.
+    async fn apply_chat_message_hook(
+        &self,
+        session_id: i64,
+        request: &mut CompletionRequest,
+    ) {
+        let Some(plugins) = &self.plugins else { return };
+        if plugins.is_empty() {
+            return;
+        }
+        let mut kept: Vec<crate::message::Message> = Vec::with_capacity(request.messages.len());
+        for mut msg in std::mem::take(&mut request.messages) {
+            let content_json = match serde_json::to_value(&msg.parts) {
+                Ok(v) => v,
+                Err(_) => {
+                    kept.push(msg);
+                    continue;
+                }
+            };
+            let role = match msg.role {
+                crate::role::Role::User => "user",
+                crate::role::Role::Assistant => "assistant",
+                crate::role::Role::Tool => "tool",
+                crate::role::Role::System => "system",
+            };
+            let chat_msg = crate::plugin::ChatMessage {
+                role: role.to_string(),
+                content: content_json,
+            };
+            let input = crate::plugin::ChatMessageInput {
+                session_id,
+                direction: crate::plugin::ChatDirection::ToProvider,
+                message: chat_msg,
+            };
+            match plugins.dispatch_chat_message(input).await {
+                Ok(after) => {
+                    if matches!(after.message.content, serde_json::Value::Null) {
+                        continue;
+                    }
+                    // Re-serialize the (potentially patched) content back onto msg.
+                    if let Ok(patched) = serde_json::from_value::<Vec<crate::message::MessagePart>>(after.message.content) {
+                        msg.parts = patched;
+                    }
+                    kept.push(msg);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "agena_plugin_host::chat_message",
+                        "chat.message hook failed (keeping original): {err}"
+                    );
+                    kept.push(msg);
+                }
+            }
+        }
+        request.messages = kept;
+    }
+
+    /// Apply the `chat.messages.transform` hook: dispatches the entire outgoing
+    /// message list as `ChatMessage` SDK values; plugins can add, remove, or
+    /// reorder messages wholesale.
+    async fn apply_chat_messages_transform_hook(
+        &self,
+        session_id: i64,
+        request: &mut CompletionRequest,
+    ) {
+        let Some(plugins) = &self.plugins else { return };
+        if plugins.is_empty() {
+            return;
+        }
+        let sdk_messages: Vec<crate::plugin::ChatMessage> = request
+            .messages
+            .iter()
+            .filter_map(|msg| {
+                let content = serde_json::to_value(&msg.parts).ok()?;
+                let role = match msg.role {
+                    crate::role::Role::User => "user",
+                    crate::role::Role::Assistant => "assistant",
+                    crate::role::Role::Tool => "tool",
+                    crate::role::Role::System => "system",
+                };
+                Some(crate::plugin::ChatMessage {
+                    role: role.to_string(),
+                    content,
+                })
+            })
+            .collect();
+
+        let input = crate::plugin::ChatMessagesTransformInput {
+            session_id,
+            messages: sdk_messages,
+        };
+        match plugins.dispatch_chat_messages_transform(input).await {
+            Ok(updated) => {
+                // Rebuild the message list from the patched SDK messages.
+                // We keep original Message fields (id, metadata, etc.) for
+                // messages whose position still lines up; new or reordered
+                // messages get a best-effort reconstruction.
+                let mut patched: Vec<crate::message::Message> =
+                    Vec::with_capacity(updated.messages.len());
+                for (i, sdk_msg) in updated.messages.into_iter().enumerate() {
+                    if let Some(original) = request.messages.get(i).filter(|m| {
+                        let role = match m.role {
+                            crate::role::Role::User => "user",
+                            crate::role::Role::Assistant => "assistant",
+                            crate::role::Role::Tool => "tool",
+                            crate::role::Role::System => "system",
+                        };
+                        role == sdk_msg.role
+                    }) {
+                        let mut msg = original.clone();
+                        if let Ok(parts) = serde_json::from_value::<
+                            Vec<crate::message::MessagePart>,
+                        >(sdk_msg.content)
+                        {
+                            msg.parts = parts;
+                        }
+                        patched.push(msg);
+                    }
+                    // Messages added/moved by plugins are silently dropped —
+                    // synthesising valid Message structs from SDK fragments is
+                    // not safe without proper id allocation.
+                }
+                request.messages = patched;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::chat_messages_transform",
+                    "chat.messages.transform hook failed (keeping original): {err}"
+                );
+            }
         }
     }
 
@@ -76,8 +304,19 @@ impl SessionProcessor {
         &self,
         mut run: SessionRunRequest,
     ) -> Result<SessionRunResult, AppError> {
-        let mut store = MessageStateStore::default();
         let mut client_events = Vec::new();
+        self.apply_chat_system_transform_hook(run.session_id, &mut run.completion)
+            .await;
+        self.apply_chat_message_hook(run.session_id, &mut run.completion)
+            .await;
+        self.apply_chat_messages_transform_hook(run.session_id, &mut run.completion)
+            .await;
+        self.apply_chat_params_hook(
+            run.model.provider_id.as_str(),
+            run.model.model_id.as_str(),
+            &mut run.completion,
+        )
+        .await;
         let mut stream = self
             .provider_registry
             .complete_stream(&run.model, run.completion.clone())
@@ -86,24 +325,34 @@ impl SessionProcessor {
         let assistant_message_id = run.next_message_id;
         run.next_message_id += 1;
 
-        self.projector
-            .apply_to_store(
-                &mut store,
-                MessageProjectionEvent::MessageStarted {
-                    message_id: assistant_message_id,
-                    role: Role::Assistant,
-                    created_at: Utc::now(),
-                    metadata: Some(MessageMetadata {
-                        source: MessageSource::Assistant,
-                        parent_message_id: run.completion.messages.last().map(|message| message.id),
-                        generated_by_call_id: None,
-                        model_provider_id: run.model.provider_id.to_string(),
-                        model_id: run.completion.model.to_string(),
-                        tags: Vec::new(),
-                    }),
-                },
-            )
-            .map_err(|err| AppError::Internal(err.to_string()))?;
+        let assistant_metadata = MessageMetadata {
+            source: MessageSource::Assistant,
+            parent_message_id: run.completion.messages.last().map(|message| message.id),
+            generated_by_call_id: None,
+            model_provider_id: run.model.provider_id.to_string(),
+            model_id: run.completion.model.to_string(),
+            tags: Vec::new(),
+        };
+
+        let started_at = Utc::now();
+        let mut assistant = Message {
+            id: assistant_message_id,
+            role: Role::Assistant,
+            state: MessageStatus::Pending,
+            parts: Vec::new(),
+            created_at: started_at,
+            metadata: assistant_metadata.clone(),
+            usage: None,
+            finish: None,
+        };
+
+        let turn_id = TurnId::new();
+        let mut turn_buffer = TurnBuffer::new(turn_id);
+        let mut id_provider = FixedAssistantId::new(assistant_message_id);
+        turn_buffer.begin_assistant(&mut id_provider);
+        if let Err(err) = turn_buffer.set_metadata(assistant_metadata.clone()) {
+            return Err(AppError::Internal(err.to_string()));
+        }
 
         let mut active_text_part: Option<i64> = None;
         let mut pending_calls: BTreeMap<String, PendingToolCall> = BTreeMap::new();
@@ -111,47 +360,33 @@ impl SessionProcessor {
         let mut provider_err: Option<AppError> = None;
         let mut usage = None;
         let mut finish = None;
+        let mut finish_reason_enum = FinishReason::default();
         let mut provider_metadata = None;
 
         while let Some(item) = stream.next().await {
             match item {
                 Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
-                    let part_id = if let Some(part_id) = active_text_part {
-                        part_id
-                    } else {
-                        let part_id = run.part_ids.reserve().await?;
-                        self.projector
-                            .apply_to_store(
-                                &mut store,
-                                MessageProjectionEvent::TextPartStarted {
-                                    message_id: assistant_message_id,
-                                    part_id,
-                                    created_at: Utc::now(),
-                                    synthetic: false,
-                                    ignored: false,
-                                },
-                            )
-                            .map_err(|err| AppError::Internal(err.to_string()))?;
-                        self.emit_part_updated(&run, &store, assistant_message_id, part_id)
-                            .await?;
-                        active_text_part = Some(part_id);
-                        part_id
+                    let part_id = match active_text_part {
+                        Some(part_id) => part_id,
+                        None => {
+                            let part_id = run.part_ids.reserve().await?;
+                            self.start_text_part(&mut assistant, part_id, Utc::now())?;
+                            self.emit_part_updated(&run, &assistant, part_id).await?;
+                            active_text_part = Some(part_id);
+                            part_id
+                        }
                     };
-                    self.projector
-                        .apply_to_store(
-                            &mut store,
-                            MessageProjectionEvent::TextDelta {
-                                part_id,
-                                delta: delta.clone(),
-                            },
-                        )
+
+                    self.append_text_delta(&mut assistant, part_id, delta.as_str())?;
+                    turn_buffer
+                        .push_text_delta(delta.as_str())
                         .map_err(|err| AppError::Internal(err.to_string()))?;
+
                     let seq = part_delta_sequences.entry(part_id).or_default();
                     *seq += 1;
                     self.emit_part_delta(
                         &run,
-                        &store,
-                        assistant_message_id,
+                        &assistant,
                         part_id,
                         None,
                         PartDeltaField::Text,
@@ -168,12 +403,7 @@ impl SessionProcessor {
                     ..
                 }) => {
                     if let Some(part_id) = active_text_part.take() {
-                        self.projector
-                            .apply_to_store(
-                                &mut store,
-                                MessageProjectionEvent::TextCompleted { part_id },
-                            )
-                            .map_err(|err| AppError::Internal(err.to_string()))?;
+                        complete_part_status(&mut assistant, part_id)?;
                     }
 
                     let pending = pending_calls.entry(stream_key).or_default();
@@ -183,14 +413,23 @@ impl SessionProcessor {
                     if let Some(name) = name {
                         pending.name = Some(name);
                     }
-                    pending.arguments_json.push_str(arguments_delta.as_str());
+                    pending
+                        .arguments_json
+                        .push_str(arguments_delta.as_str());
                     self.ensure_pending_tool_call_part(
                         &mut run,
-                        &mut store,
-                        assistant_message_id,
+                        &mut assistant,
+                        &mut turn_buffer,
                         pending,
                     )
                     .await?;
+                    if !arguments_delta.is_empty()
+                        && let Some(history_call_id) = pending.history_call_id.as_ref()
+                    {
+                        turn_buffer
+                            .append_tool_arguments(history_call_id, arguments_delta.as_str())
+                            .map_err(|err| AppError::Internal(err.to_string()))?;
+                    }
                 }
                 Ok(CompletionStreamEvent::Completed {
                     finish_reason,
@@ -199,6 +438,9 @@ impl SessionProcessor {
                     ..
                 }) => {
                     usage = usage_value.map(Into::into);
+                    if let Some(reason) = finish_reason.as_ref() {
+                        finish_reason_enum = map_finish_reason(reason);
+                    }
                     finish = finish_reason.map(|item| format!("{item:?}"));
                     provider_metadata = completed_provider_metadata;
                 }
@@ -210,29 +452,17 @@ impl SessionProcessor {
         }
 
         if let Some(part_id) = active_text_part {
-            self.projector
-                .apply_to_store(
-                    &mut store,
-                    MessageProjectionEvent::TextCompleted { part_id },
-                )
-                .map_err(|err| AppError::Internal(err.to_string()))?;
+            complete_part_status(&mut assistant, part_id)?;
         }
 
-        self.finalize_pending_tool_calls(&mut run, &mut store, assistant_message_id, pending_calls)
+        self.finalize_pending_tool_calls(&mut run, &mut assistant, &mut turn_buffer, pending_calls)
             .await?;
 
         if let Some(err) = provider_err {
-            self.projector
-                .apply_to_store(
-                    &mut store,
-                    MessageProjectionEvent::MessageFailed {
-                        message_id: assistant_message_id,
-                        finish: Some(err.to_string()),
-                    },
-                )
-                .map_err(|inner| AppError::Internal(inner.to_string()))?;
+            assistant.state = MessageStatus::Failed;
+            assistant.finish = Some(err.to_string());
 
-            client_events.push(SessionEvent::StreamError(StreamErrorEvent {
+            client_events.push(EventKind::StreamError(StreamErrorEvent {
                 session_id: run.session_id,
                 error: ErrorInfo {
                     code: "provider_stream_error".to_string(),
@@ -240,32 +470,50 @@ impl SessionProcessor {
                 },
                 ts_ms: Utc::now().timestamp_millis(),
             }));
+            // Even on failure the buffer has accumulated state we can still
+            // commit; downstream callers may inspect it for diagnostics.
+            let history_items = turn_buffer.commit().unwrap_or_default();
             return Ok(SessionRunResult {
                 assistant_message_id,
-                state: store.list_message_snapshots(),
+                state: vec![assistant],
                 client_events,
                 provider_metadata,
                 terminal_error: Some(err),
+                history_items,
+                turn_id,
             });
         }
 
-        self.projector
-            .apply_to_store(
-                &mut store,
-                MessageProjectionEvent::MessageCompleted {
-                    message_id: assistant_message_id,
-                    finish,
-                    usage,
-                },
-            )
+        // Successful turn: drive terminal state on the message snapshot and
+        // reflect the same finish/usage on the turn buffer for history.
+        if assistant.state == MessageStatus::Pending {
+            let _ = assistant.transition_state(MessageStatus::InProgress);
+        }
+        let _ = assistant.transition_state(MessageStatus::Completed);
+        assistant.finish = finish;
+        assistant.usage = usage.clone();
+
+        if let Some(usage_ref) = usage {
+            turn_buffer
+                .set_usage(usage_ref)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+        turn_buffer
+            .set_finish_reason(finish_reason_enum)
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+
+        let history_items = turn_buffer
+            .commit()
             .map_err(|err| AppError::Internal(err.to_string()))?;
 
         Ok(SessionRunResult {
             assistant_message_id,
-            state: store.list_message_snapshots(),
+            state: vec![assistant],
             client_events,
             provider_metadata,
             terminal_error: None,
+            history_items,
+            turn_id,
         })
     }
 
@@ -315,11 +563,59 @@ impl SessionProcessor {
         self.provider_registry.model_metadata(model)
     }
 
+    fn start_text_part(
+        &self,
+        assistant: &mut Message,
+        part_id: i64,
+        created_at: DateTime<Utc>,
+    ) -> Result<(), AppError> {
+        let mut part = MessagePart::with_content(
+            part_id,
+            assistant.id,
+            created_at,
+            ExecutionStatus::Pending,
+            PartContent::text(String::new()),
+        );
+        part.part_index = assistant.parts.len() as i32;
+        assistant.parts.push(part);
+        if assistant.state == MessageStatus::Pending {
+            let _ = assistant.transition_state(MessageStatus::InProgress);
+        }
+        Ok(())
+    }
+
+    fn append_text_delta(
+        &self,
+        assistant: &mut Message,
+        part_id: i64,
+        delta: &str,
+    ) -> Result<(), AppError> {
+        let part = assistant
+            .parts
+            .iter_mut()
+            .find(|part| part.id == part_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "active text part missing from assistant snapshot: {part_id}"
+                ))
+            })?;
+        if part.status == ExecutionStatus::Pending {
+            part.transition_status(ExecutionStatus::InProgress)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+        if !part.append_text_delta(delta) {
+            return Err(AppError::Internal(format!(
+                "failed to append text delta to part {part_id}: kind mismatch"
+            )));
+        }
+        Ok(())
+    }
+
     async fn ensure_pending_tool_call_part(
         &self,
         run: &mut SessionRunRequest,
-        store: &mut MessageStateStore,
-        assistant_message_id: i64,
+        assistant: &mut Message,
+        turn_buffer: &mut TurnBuffer,
         pending: &mut PendingToolCall,
     ) -> Result<(), AppError> {
         let mut should_emit = false;
@@ -328,28 +624,67 @@ impl SessionProcessor {
             let call_id = run.next_call_id;
             run.next_call_id += 1;
             let start = Utc::now();
-
-            self.projector
-                .apply_to_store(
-                    store,
-                    MessageProjectionEvent::ToolExecutionStarted {
-                        message_id: assistant_message_id,
-                        part_id,
-                        created_at: start,
-                        call_id,
-                        invocation: placeholder_tool_invocation(
-                            pending.name.as_deref(),
-                            run.completion.tools.as_slice(),
-                        ),
-                        title: tool_execution_title(pending.name.as_deref()),
+            let invocation =
+                placeholder_tool_invocation(pending.name.as_deref(), run.completion.tools.as_slice());
+            let mut part = MessagePart::with_content(
+                part_id,
+                assistant.id,
+                start,
+                ExecutionStatus::Pending,
+                PartContent::ToolExecution(ToolExecutionPart::Pending {
+                    call_id,
+                    invocation,
+                    title: tool_execution_title(pending.name.as_deref()),
+                    lifecycle: TimeRange {
+                        start_ms: start.timestamp_millis(),
+                        end_ms: None,
                     },
-                )
-                .map_err(|err| AppError::Internal(err.to_string()))?;
+                }),
+            );
+            part.part_index = assistant.parts.len() as i32;
+            assistant.parts.push(part);
+            if assistant.state == MessageStatus::Pending {
+                let _ = assistant.transition_state(MessageStatus::InProgress);
+            }
 
             pending.part_id = Some(part_id);
             pending.call_id = Some(call_id);
             pending.started_at_ms = Some(start.timestamp_millis());
             should_emit = true;
+
+            // Mirror into TurnBuffer with a stable history-side call id.
+            // Prefer the provider-supplied id when present; otherwise fall
+            // back to a synthetic one derived from the integer call_id so it
+            // remains stable for the lifetime of this turn.
+            let history_call_id = match pending.id.as_deref() {
+                Some(id) if !id.trim().is_empty() => ToolCallId::new(id),
+                _ => ToolCallId::new(format!("call_{call_id}")),
+            };
+            turn_buffer
+                .start_tool_call(history_call_id.clone())
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+            if let Some(name) = pending.name.as_deref() {
+                turn_buffer
+                    .name_tool_call(&history_call_id, name)
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            }
+            // Replay any argument fragments that arrived before we knew the
+            // call existed (uncommon, but possible if name-only deltas arrived
+            // first).
+            if !pending.arguments_json.is_empty() {
+                turn_buffer
+                    .append_tool_arguments(&history_call_id, pending.arguments_json.as_str())
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            }
+            pending.history_call_id = Some(history_call_id);
+        } else if let Some(history_call_id) = pending.history_call_id.as_ref()
+            && let Some(name) = pending.name.as_deref()
+        {
+            // A second name fragment can arrive after the part already exists.
+            // Re-set the name; TurnBuffer accepts repeated assignment.
+            turn_buffer
+                .name_tool_call(history_call_id, name)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
         }
 
         if let (Some(part_id), Some(operation_id)) = (
@@ -360,18 +695,21 @@ impl SessionProcessor {
                 .filter(|id| !id.trim().is_empty())
                 .cloned(),
         ) {
-            store
-                .apply(MessageUpdate::SetPartOperationId {
-                    part_id,
-                    operation_id,
-                })
-                .map_err(|err| AppError::Internal(err.to_string()))?;
-            should_emit = true;
+            let part = assistant
+                .parts
+                .iter_mut()
+                .find(|part| part.id == part_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!("tool part missing from assistant snapshot: {part_id}"))
+                })?;
+            if part.operation_id.as_deref() != Some(operation_id.as_str()) {
+                part.operation_id = Some(operation_id);
+                should_emit = true;
+            }
         }
 
         if should_emit && let Some(part_id) = pending.part_id {
-            self.emit_part_updated(run, store, assistant_message_id, part_id)
-                .await?;
+            self.emit_part_updated(run, assistant, part_id).await?;
         }
 
         Ok(())
@@ -380,12 +718,12 @@ impl SessionProcessor {
     async fn finalize_pending_tool_calls(
         &self,
         run: &mut SessionRunRequest,
-        store: &mut MessageStateStore,
-        assistant_message_id: i64,
+        assistant: &mut Message,
+        turn_buffer: &mut TurnBuffer,
         pending_calls: BTreeMap<String, PendingToolCall>,
     ) -> Result<(), AppError> {
         for mut pending in pending_calls.into_values() {
-            self.ensure_pending_tool_call_part(run, store, assistant_message_id, &mut pending)
+            self.ensure_pending_tool_call_part(run, assistant, turn_buffer, &mut pending)
                 .await?;
 
             let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
@@ -399,22 +737,33 @@ impl SessionProcessor {
             };
             let call_id = pending.call_id.unwrap_or(0);
 
-            store
-                .apply(MessageUpdate::ReplacePartContent {
-                    part_id,
-                    content: PartContent::ToolExecution(ToolExecutionPart::Pending {
-                        call_id,
-                        invocation,
-                        title: tool_execution_title(Some(tool_name.as_str())),
-                        lifecycle: TimeRange {
-                            start_ms: pending.started_at_ms.unwrap_or_default(),
-                            end_ms: None,
-                        },
-                    }),
-                })
-                .map_err(|err| AppError::Internal(err.to_string()))?;
-            self.emit_part_updated(run, store, assistant_message_id, part_id)
-                .await?;
+            let part = assistant
+                .parts
+                .iter_mut()
+                .find(|part| part.id == part_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!("tool part missing from assistant snapshot: {part_id}"))
+                })?;
+            part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
+                call_id,
+                invocation,
+                title: tool_execution_title(Some(tool_name.as_str())),
+                lifecycle: TimeRange {
+                    start_ms: pending.started_at_ms.unwrap_or_default(),
+                    end_ms: None,
+                },
+            }));
+
+            // Re-assert name on TurnBuffer (final, authoritative). The
+            // accumulated `arguments_json` was already streamed in chunks via
+            // `append_tool_arguments`; we don't repeat it here.
+            if let Some(history_call_id) = pending.history_call_id.as_ref() {
+                turn_buffer
+                    .name_tool_call(history_call_id, tool_name.as_str())
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            }
+
+            self.emit_part_updated(run, assistant, part_id).await?;
         }
 
         Ok(())
@@ -423,20 +772,14 @@ impl SessionProcessor {
     async fn emit_part_updated(
         &self,
         run: &SessionRunRequest,
-        store: &MessageStateStore,
-        message_id: i64,
+        assistant: &Message,
         part_id: i64,
     ) -> Result<(), AppError> {
-        let Some(sink) = run.event_sink.as_ref() else {
+        let Some(publisher) = run.event_publisher.as_ref() else {
             return Ok(());
         };
 
-        let message = store.get_message_snapshot(message_id).ok_or_else(|| {
-            AppError::Internal(format!(
-                "message snapshot not found for stream event: {message_id}"
-            ))
-        })?;
-        let part = message
+        let part = assistant
             .parts
             .iter()
             .find(|part| part.id == part_id)
@@ -446,57 +789,104 @@ impl SessionProcessor {
                     "part snapshot not found for stream event: {part_id}"
                 ))
             })?;
-        sink.emit(
-            run.session_id,
-            Some(message.clone()),
-            vec![SessionEvent::MessagePartUpdated(MessagePartUpdatedEvent {
-                session_id: run.session_id,
-                message_id,
-                message_role: message.role,
-                message_state: message.state,
-                message_created_at: message.created_at,
-                part,
-                ts_ms: Utc::now().timestamp_millis(),
-            })],
-        )
-        .await
+        let kind = EventKind::MessagePartUpdated(MessagePartUpdatedEvent {
+            session_id: run.session_id,
+            message_id: assistant.id,
+            message_role: assistant.role,
+            message_state: assistant.state,
+            message_created_at: assistant.created_at,
+            part,
+            ts_ms: Utc::now().timestamp_millis(),
+        });
+        publisher
+            .publish(PublishContext::for_session(run.session_id), kind)
+            .await
+            .map_err(|err| AppError::Internal(format!("publish part-updated failed: {err}")))?;
+        Ok(())
     }
 
     async fn emit_part_delta(
         &self,
         run: &SessionRunRequest,
-        store: &MessageStateStore,
-        message_id: i64,
+        assistant: &Message,
         part_id: i64,
         call_id: Option<i64>,
         field: PartDeltaField,
         delta: String,
         seq: u64,
     ) -> Result<(), AppError> {
-        let Some(sink) = run.event_sink.as_ref() else {
+        let Some(publisher) = run.event_publisher.as_ref() else {
             return Ok(());
         };
 
-        let message = store.get_message_snapshot(message_id).ok_or_else(|| {
+        let _ = assistant; // assistant snapshot is no longer needed: events
+                           // carry their own routing context.
+        let kind = EventKind::MessagePartDelta(MessagePartDeltaEvent {
+            session_id: run.session_id,
+            message_id: assistant.id,
+            part_id,
+            call_id,
+            field,
+            delta,
+            seq,
+            ts_ms: Utc::now().timestamp_millis(),
+        });
+        publisher
+            .publish(PublishContext::for_session(run.session_id), kind)
+            .await
+            .map_err(|err| AppError::Internal(format!("publish part-delta failed: {err}")))?;
+        Ok(())
+    }
+}
+
+/// Adapter that returns a single, pre-allocated `MessageId` to satisfy the
+/// `TurnBuffer` API. The processor reserves message ids via the global session
+/// allocator before opening the buffer, so the buffer must adopt that id
+/// rather than mint its own.
+struct FixedAssistantId {
+    next: Option<HistoryMessageId>,
+}
+
+impl FixedAssistantId {
+    fn new(message_id: i64) -> Self {
+        Self {
+            next: Some(HistoryMessageId(message_id)),
+        }
+    }
+}
+
+impl MessageIdAllocator for FixedAssistantId {
+    fn next_message_id(&mut self) -> HistoryMessageId {
+        self.next
+            .take()
+            .expect("FixedAssistantId only yields one id per turn")
+    }
+}
+
+fn complete_part_status(assistant: &mut Message, part_id: i64) -> Result<(), AppError> {
+    let part = assistant
+        .parts
+        .iter_mut()
+        .find(|part| part.id == part_id)
+        .ok_or_else(|| {
             AppError::Internal(format!(
-                "message snapshot not found for stream delta event: {message_id}"
+                "completing missing part on assistant snapshot: {part_id}"
             ))
         })?;
-        sink.emit(
-            run.session_id,
-            Some(message),
-            vec![SessionEvent::MessagePartDelta(MessagePartDeltaEvent {
-                session_id: run.session_id,
-                message_id,
-                part_id,
-                call_id,
-                field,
-                delta,
-                seq,
-                ts_ms: Utc::now().timestamp_millis(),
-            })],
-        )
-        .await
+    if part.status == ExecutionStatus::InProgress {
+        part.transition_status(ExecutionStatus::Completed)
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+    }
+    Ok(())
+}
+
+fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason {
+    match reason {
+        CompletionFinishReason::Stop => FinishReason::Stop,
+        CompletionFinishReason::ToolCalls => FinishReason::ToolCalls,
+        CompletionFinishReason::Length => FinishReason::MaxTokens,
+        CompletionFinishReason::ContentFilter => FinishReason::ContentFilter,
+        CompletionFinishReason::Other(_) => FinishReason::Other,
     }
 }
 
@@ -508,6 +898,10 @@ struct PendingToolCall {
     id: Option<String>,
     name: Option<String>,
     arguments_json: String,
+    /// History-side call identifier propagated to `TurnBuffer`. Set the first
+    /// time the part is materialized and reused for every subsequent argument
+    /// fragment so chunks land on the right tool entry.
+    history_call_id: Option<ToolCallId>,
 }
 
 fn tool_execution_title(name: Option<&str>) -> String {
@@ -535,9 +929,7 @@ fn placeholder_tool_invocation(
     };
 
     match &tool.source {
-        ToolSource::Builtin => ToolInvocation::Builtin {
-            input: placeholder_builtin_tool_input(tool.name.as_str()),
-        },
+        ToolSource::Builtin => placeholder_builtin_tool_input(tool.name.as_str()).into_invocation(),
         ToolSource::Plugin { .. } => ToolInvocation::Custom {
             name: tool.name.clone(),
             input: StructuredObject::default(),
@@ -647,7 +1039,7 @@ pub(crate) fn parse_tool_invocation(
         }
     };
 
-    Ok(ToolInvocation::Builtin { input })
+    Ok(input.into_invocation())
 }
 
 fn canonical_builtin_tool_name(name: &str) -> &str {
@@ -714,24 +1106,80 @@ mod tests {
     };
     use crate::tool::{ToolBehavior, ToolDefinition};
 
+    /// Construct an in-memory `EventPublisher` backed by a tiny test store
+    /// that just keeps events in a Vec. The store side of the publisher is
+    /// the side tests inspect; the bus is wired but unused here.
+    fn test_publisher() -> (Arc<EventPublisher>, Arc<MemEventStore>) {
+        use agena_event::{EventStore, InProcessEventBus, SequenceAllocator};
+        let store: Arc<MemEventStore> = Arc::new(MemEventStore::default());
+        let store_dyn: Arc<dyn EventStore<EventKind>> = Arc::clone(&store) as _;
+        let bus: Arc<dyn agena_event::EventBus<EventKind>> =
+            Arc::new(InProcessEventBus::<EventKind>::new(64));
+        let seq = Arc::new(SequenceAllocator::new());
+        (
+            Arc::new(EventPublisher::new(seq, store_dyn, bus)),
+            store,
+        )
+    }
+
     #[derive(Default)]
-    struct RecordingEventSink {
-        events: Mutex<Vec<SessionEvent>>,
+    struct MemEventStore {
+        events: Mutex<Vec<DomainEvent>>,
     }
 
     #[async_trait]
-    impl SessionEventSink for RecordingEventSink {
-        async fn emit(
+    impl agena_event::EventStore<EventKind> for MemEventStore {
+        async fn append_batch(
             &self,
-            _session_id: i64,
-            _message_snapshot: Option<Message>,
-            events: Vec<SessionEvent>,
-        ) -> Result<(), AppError> {
+            events: &[DomainEvent],
+        ) -> Result<(), agena_event::EventStoreError> {
             self.events
                 .lock()
-                .expect("recording sink lock should not be poisoned")
-                .extend(events);
+                .expect("test store lock")
+                .extend(events.iter().cloned());
             Ok(())
+        }
+
+        async fn range(
+            &self,
+            filter: &agena_event::EventFilter,
+            range: agena_event::StoreRange,
+        ) -> Result<Vec<DomainEvent>, agena_event::EventStoreError> {
+            let mut out: Vec<_> = self
+                .events
+                .lock()
+                .expect("test store lock")
+                .iter()
+                .filter(|e| e.meta.seq_global > range.after_seq_global)
+                .filter(|e| filter.scope.matches(&e.meta))
+                .cloned()
+                .collect();
+            out.truncate(range.limit);
+            Ok(out)
+        }
+
+        async fn high_watermark(&self) -> Result<Option<i64>, agena_event::EventStoreError> {
+            Ok(self
+                .events
+                .lock()
+                .expect("test store lock")
+                .iter()
+                .map(|e| e.meta.seq_global)
+                .max())
+        }
+
+        async fn session_high_watermark(
+            &self,
+            session_id: i64,
+        ) -> Result<Option<i64>, agena_event::EventStoreError> {
+            Ok(self
+                .events
+                .lock()
+                .expect("test store lock")
+                .iter()
+                .filter(|e| e.meta.session_id == Some(session_id))
+                .filter_map(|e| e.meta.seq_session)
+                .max())
         }
     }
 
@@ -770,7 +1218,7 @@ mod tests {
         let tools = vec![ToolDefinition::builtin::<ReadToolInput>(
             "read",
             "Read a file.",
-            ToolBehavior::ReadOnly,
+            crate::tool::ToolBehavior::ReadOnly,
         )];
 
         let err = parse_tool_invocation("bash", "{\"command\":\"pwd\"}", tools.as_slice())
@@ -804,10 +1252,8 @@ mod tests {
         )
         .expect("valid JSON prefix should parse for builtin tools");
 
-        match invocation {
-            ToolInvocation::Builtin {
-                input: BuiltinToolInput::Grep(payload),
-            } => {
+        match invocation.as_builtin() {
+            Some(BuiltinToolInput::Grep(payload)) => {
                 assert_eq!(payload.pattern, "cache marker");
                 assert_eq!(payload.path, None);
                 assert_eq!(payload.include, None);
@@ -941,7 +1387,7 @@ mod tests {
                 next_message_id: 100,
                 part_ids: ProcessorPartIdAllocator::for_test(200),
                 next_call_id: 300,
-                event_sink: None,
+                event_publisher: None,
             })
             .await
             .expect("processor run should succeed");
@@ -1041,7 +1487,7 @@ mod tests {
                 next_message_id: 100,
                 part_ids: ProcessorPartIdAllocator::for_test(200),
                 next_call_id: 300,
-                event_sink: None,
+                event_publisher: None,
             })
             .await
             .expect("processor run should succeed");
@@ -1106,9 +1552,9 @@ mod tests {
             Arc::new(registry),
             ContextGovernor::new(crate::session::ContextPolicy::default()),
         );
-        let event_sink = Arc::new(RecordingEventSink::default());
+        let (event_publisher, store) = test_publisher();
 
-        let _ = processor
+        let result = processor
             .run_turn(SessionRunRequest {
                 session_id: 7,
                 model: ModelRef::new("ordered-stream", "ordered-model"),
@@ -1138,21 +1584,23 @@ mod tests {
                 next_message_id: 100,
                 part_ids: ProcessorPartIdAllocator::for_test(200),
                 next_call_id: 300,
-                event_sink: Some(event_sink.clone()),
+                event_publisher: Some(event_publisher.clone()),
             })
             .await
             .expect("processor run should succeed");
 
-        let events = event_sink
+        let events: Vec<EventKind> = store
             .events
             .lock()
-            .expect("recording sink lock should not be poisoned")
-            .clone();
+            .expect("test store lock")
+            .iter()
+            .map(|e| e.kind.clone())
+            .collect();
 
         assert!(events.iter().any(|event| {
             matches!(
                 event,
-                SessionEvent::MessagePartUpdated(MessagePartUpdatedEvent {
+                EventKind::MessagePartUpdated(MessagePartUpdatedEvent {
                     message_id,
                     part,
                     ..
@@ -1162,7 +1610,7 @@ mod tests {
         assert!(events.iter().any(|event| {
             matches!(
                 event,
-                SessionEvent::MessagePartDelta(MessagePartDeltaEvent {
+                EventKind::MessagePartDelta(MessagePartDeltaEvent {
                     message_id,
                     part_id,
                     delta,
@@ -1174,7 +1622,7 @@ mod tests {
         assert!(events.iter().any(|event| {
             matches!(
                 event,
-                SessionEvent::MessagePartDelta(MessagePartDeltaEvent {
+                EventKind::MessagePartDelta(MessagePartDeltaEvent {
                     message_id,
                     part_id,
                     delta,
@@ -1186,12 +1634,22 @@ mod tests {
         assert!(events.iter().any(|event| {
             matches!(
                 event,
-                SessionEvent::MessagePartUpdated(MessagePartUpdatedEvent {
+                EventKind::MessagePartUpdated(MessagePartUpdatedEvent {
                     message_id,
                     part,
                     ..
                 }) if *message_id == 100 && part.id == 201 && part.operation_id.as_deref() == Some("call_1")
             )
         }));
+
+        // The committed history must contain at least the assistant
+        // completion and one tool-call-issued event for the streamed call.
+        let kinds: Vec<&'static str> = result
+            .history_items
+            .iter()
+            .map(EventKind::tag_str)
+            .collect();
+        assert!(kinds.contains(&"assistant_message_completed"));
+        assert!(kinds.contains(&"tool_call_issued"));
     }
 }

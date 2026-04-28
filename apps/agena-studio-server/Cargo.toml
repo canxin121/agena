@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 agena = { path = "../../crates/agena" }
+agena-api-server = { path = "../../crates/agena-api-server" }
 agena-http-api = { path = "../../crates/agena-http-api" }
 anyhow = "1.0.100"
 axum = { version = "0.8.8", features = ["macros", "ws"] }

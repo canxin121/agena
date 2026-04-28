@@ -5,7 +5,9 @@ use agena::{
     config::{ConfigLoader, ConfigModeName, ConfigOverride, LoadConfigRequest},
     runtime::AgenaRuntime,
 };
-use agena_http_api::{ApiServer, ApiState};
+use agena_http_api::{ApiState, router as v1_router};
+use agena_api_server::{AppState as V2State, router as v2_router};
+use axum::Router;
 use clap::{Args, Parser, Subcommand};
 use sea_orm::Database;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -87,9 +89,13 @@ impl AgenaHttpApiCli {
             "Agena HTTP API server listening"
         );
 
-        ApiServer::new(ApiState::new(runtime, db))
-            .serve(listener)
+        let v1 = v1_router(ApiState::new(runtime.clone(), db));
+        let v2 = v2_router(V2State::new(runtime));
+        let app = Router::new().merge(v1).merge(v2);
+
+        axum::serve(listener, app)
             .await
+            .map_err(|e| AppError::Internal(format!("axum::serve failed: {e}")))
     }
 }
 

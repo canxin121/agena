@@ -70,8 +70,8 @@ impl ToolInvocationExecution {
 impl From<BuiltinExecution> for ToolInvocationExecution {
     fn from(value: BuiltinExecution) -> Self {
         Self {
-            output: ToolOutput::Builtin {
-                output: value.output,
+            output: ToolOutput::Custom {
+                output: value.output.into_custom_output(),
             },
             view: value.view,
             apply_patch: value.apply_patch,

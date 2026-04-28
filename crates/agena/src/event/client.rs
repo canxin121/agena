@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -137,47 +136,7 @@ pub struct MessagePartDeltaEvent {
     pub ts_ms: i64,
 }
 
-/// Frontend-facing session event protocol.
-///
-/// The backend must not depend on this enum to drive core state transitions.
-/// State is updated directly in storage and memory; these events are the client
-/// projection of committed session changes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
-#[serde(tag = "event", rename_all = "snake_case")]
-pub enum SessionEvent {
-    #[serde(alias = "thread_started")]
-    RunStarted(RunStartedEvent),
-    #[serde(alias = "thread_failed")]
-    RunFailed(RunFailedEvent),
-    MessagePartUpdated(MessagePartUpdatedEvent),
-    MessagePartDelta(MessagePartDeltaEvent),
-    CommandBegin(CommandBeginEvent),
-    CommandOutputDelta(CommandOutputDeltaEvent),
-    CommandEnd(CommandEndEvent),
-    StreamError(StreamErrorEvent),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::SessionEvent;
-
-    #[test]
-    fn deserializes_legacy_thread_started_payload() {
-        let payload = serde_json::json!({
-            "event": "thread_started",
-            "thread_id": 7,
-            "ts_ms": 99
-        });
-
-        let event =
-            serde_json::from_value::<SessionEvent>(payload).expect("legacy payload should parse");
-
-        assert_eq!(
-            event,
-            SessionEvent::RunStarted(super::RunStartedEvent {
-                session_id: 7,
-                ts_ms: 99,
-            })
-        );
-    }
-}
+// NOTE: the wrapper enum `SessionEvent` has been removed in favor of the
+// unified `crate::event::EventKind`. The payload structs above are still the
+// canonical definitions — they are referenced verbatim by the corresponding
+// `EventKind` variants.

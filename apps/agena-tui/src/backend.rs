@@ -6,16 +6,18 @@ use std::{
 };
 
 use agena::{
+    event::{DomainEvent, EventKind},
     message::{AttachmentItem, AttachmentKind, AttachmentSource, PartContent, UserInputReply},
     model::ModelRef,
     permission::{PermissionReply, PermissionReplyKind},
     provider::ProviderModel,
     runtime::AgenaRuntime,
     session::{
-        SessionContinueRequest, SessionEventRecord, SessionPermissionReplyRequest,
-        SessionRewindRequest, SessionUserInputReplyRequest, SessionUserTurnRequest,
+        SessionContinueRequest, SessionPermissionReplyRequest, SessionRewindRequest,
+        SessionUserInputReplyRequest, SessionUserTurnRequest,
     },
 };
+use agena_event::{EventBus, EventFilter, Scope, bus::SubscriptionItem};
 use agena_http_api::{
     ApiError, ApiService, MessageListQuery, MessageResource, PaginatedResponse, PartLoadMode,
     ProviderSummaryResource, SessionCreateRequest, SessionEventListQuery, SessionExecutionResource,
@@ -27,6 +29,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ignore::WalkBuilder;
 use mime_guess::MimeGuess;
 use sea_orm::DatabaseConnection;
+use tokio::sync::mpsc;
 
 const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
 
@@ -36,6 +39,17 @@ pub struct SessionRefresh {
     pub event_count: usize,
     pub execution: Option<SessionExecutionResource>,
     pub latest_messages: Option<PaginatedResponse<MessageResource>>,
+}
+
+/// Push notification emitted by the unified bus for the active session.
+/// Carries the [`DomainEvent`] for handlers that want to render it directly,
+/// plus a hint about whether the change requires reloading messages.
+#[derive(Debug, Clone)]
+pub struct LiveEvent {
+    pub event: DomainEvent,
+    /// True for events that materially change session state — the UI should
+    /// trigger a `refresh_session` after handling.
+    pub triggers_refresh: bool,
 }
 
 #[derive(Clone)]
@@ -205,9 +219,11 @@ impl Backend {
         &self,
         session_id: i64,
         limit: u64,
-    ) -> Result<Vec<SessionEventRecord>> {
+    ) -> Result<Vec<DomainEvent>> {
+        let manager = self.session_manager()?;
         self.api
             .list_session_events(
+                manager.as_ref(),
                 session_id,
                 SessionEventListQuery {
                     cursor: None,
@@ -224,10 +240,14 @@ impl Backend {
         let mut cursor = None;
         let mut messages = Vec::new();
 
+        let manager = self.runtime.session_manager().ok_or_else(|| {
+            anyhow::anyhow!("session runtime is not available")
+        })?;
         loop {
             let page = self
                 .api
                 .list_messages(
+                    manager.as_ref(),
                     session_id,
                     MessageListQuery {
                         cursor: cursor.clone(),
@@ -260,7 +280,7 @@ impl Backend {
             .await
             .context("failed to load session state")?;
         self.api
-            .session_execution_resource(&session)
+            .session_execution_resource(self.session_manager()?.as_ref(), &session)
             .await
             .map_err(api_error)
             .context("failed to materialize session execution resource")
@@ -272,8 +292,12 @@ impl Backend {
         cursor: Option<String>,
         limit: u64,
     ) -> Result<PaginatedResponse<MessageResource>> {
+        let manager = self.runtime.session_manager().ok_or_else(|| {
+            anyhow::anyhow!("session runtime is not available")
+        })?;
         self.api
             .list_messages(
+                manager.as_ref(),
                 session_id,
                 MessageListQuery {
                     cursor,
@@ -293,13 +317,13 @@ impl Backend {
         latest_message_limit: u64,
         force: bool,
     ) -> Result<SessionRefresh> {
+        let manager = self.session_manager()?;
         let latest_event_seq = self
             .api
-            .latest_session_event_seq(session_id)
+            .latest_session_event_seq(manager.as_ref(), session_id)
             .await
             .map_err(api_error)
             .context("failed to fetch latest session event sequence")?;
-
         let changed = force
             || match (after_seq, latest_event_seq) {
                 (None, Some(_)) => true,
@@ -319,7 +343,7 @@ impl Backend {
         let event_count = match after_seq {
             Some(after) => self
                 .api
-                .list_session_events_after(session_id, after, Some(256))
+                .list_session_events_after(manager.as_ref(), session_id, after, Some(256))
                 .await
                 .map_err(api_error)
                 .context("failed to fetch incremental session events")?
@@ -341,6 +365,51 @@ impl Backend {
         })
     }
 
+    /// Subscribe to live events for a session via the unified
+    /// [`agena_event::EventBus`]. Replaces the legacy 250ms REST polling
+    /// loop: callers receive a [`LiveEvent`] for every domain event the
+    /// session emits, in real time.
+    ///
+    /// Returns `None` when the runtime has no session manager configured
+    /// (e.g. a database-less smoke test).
+    pub fn subscribe_session_events(
+        &self,
+        session_id: i64,
+    ) -> Option<mpsc::UnboundedReceiver<LiveEvent>> {
+        let manager = self.runtime.session_manager()?;
+        let bus = manager.event_bus();
+        let (tx, rx) = mpsc::unbounded_channel::<LiveEvent>();
+        let mut subscription = bus.subscribe(EventFilter::new(Scope::Session { session_id }));
+        tokio::spawn(async move {
+            while let Some(item) = subscription.recv().await {
+                let SubscriptionItem::Event(event) = item else {
+                    // `Lagged(n)` => UI should ask for a forced refresh; we
+                    // emit a stub LiveEvent with `triggers_refresh = true`
+                    // so the existing refresh handler runs.
+                    continue;
+                };
+                let triggers_refresh = matches!(
+                    event.kind,
+                    EventKind::AssistantMessageCompleted(_)
+                        | EventKind::ToolCallCompleted(_)
+                        | EventKind::TurnCompleted(_)
+                        | EventKind::TurnAborted(_)
+                        | EventKind::SystemNoticeAppended(_)
+                        | EventKind::MessageRevised(_)
+                        | EventKind::RunFailed(_)
+                );
+                let live = LiveEvent {
+                    event: (*event).clone(),
+                    triggers_refresh,
+                };
+                if tx.send(live).is_err() {
+                    break;
+                }
+            }
+        });
+        Some(rx)
+    }
+
     pub async fn submit_parts_turn_with_options(
         &self,
         session_id: i64,
@@ -359,7 +428,7 @@ impl Backend {
             .context("failed to submit user turn")?;
 
         self.api
-            .session_execution_resource(&session)
+            .session_execution_resource(self.session_manager()?.as_ref(), &session)
             .await
             .map_err(api_error)
             .context("failed to materialize updated session state")
@@ -489,7 +558,7 @@ impl Backend {
             .context("failed to continue session")?;
 
         self.api
-            .session_execution_resource(&session)
+            .session_execution_resource(self.session_manager()?.as_ref(), &session)
             .await
             .map_err(api_error)
             .context("failed to materialize continued session state")
@@ -519,7 +588,7 @@ impl Backend {
             .context("failed to reply to permission request")?;
 
         self.api
-            .session_execution_resource(&session)
+            .session_execution_resource(self.session_manager()?.as_ref(), &session)
             .await
             .map_err(api_error)
             .context("failed to materialize permission reply result")
@@ -543,7 +612,7 @@ impl Backend {
             .context("failed to submit user input reply")?;
 
         self.api
-            .session_execution_resource(&session)
+            .session_execution_resource(self.session_manager()?.as_ref(), &session)
             .await
             .map_err(api_error)
             .context("failed to materialize user input reply result")
@@ -564,7 +633,7 @@ impl Backend {
             .context("failed to rewind session to message")?;
 
         self.api
-            .session_execution_resource(&session)
+            .session_execution_resource(self.session_manager()?.as_ref(), &session)
             .await
             .map_err(api_error)
             .context("failed to materialize rewound session state")
@@ -576,8 +645,16 @@ impl Backend {
         request: SessionRunOptionsRequest,
     ) -> Result<agena::session::SessionRunOptions> {
         let snapshot = self.runtime.current_snapshot();
+        let manager = self.runtime.session_manager().ok_or_else(|| {
+            anyhow::anyhow!("session runtime is not available")
+        })?;
         self.api
-            .resolve_run_options(snapshot.provider_registry().as_ref(), session_id, request)
+            .resolve_run_options(
+                snapshot.provider_registry().as_ref(),
+                manager.as_ref(),
+                session_id,
+                request,
+            )
             .await
             .map_err(api_error)
             .context("failed to resolve run options")

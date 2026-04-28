@@ -2,12 +2,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use sea_orm::FromJsonQueryResult;
-use sea_orm::entity::prelude::{DeriveActiveEnum, EnumIter};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumString};
 
 use crate::{
-    event::SessionEvent,
     message::{
         ExecutionStatus, Message, MessagePart, MessageStatus, PartContent, PermissionRequestPart,
         TimeRange, ToolExecutionPart, ToolInvocation, UserInputRequest, UserInputRequestPart,
@@ -674,69 +672,9 @@ fn extract_call_id(part: &MessagePart) -> Option<i64> {
     })
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    PartialEq,
-    Eq,
-    Hash,
-    AsRefStr,
-    Display,
-    EnumString,
-    EnumIter,
-    DeriveActiveEnum,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-#[sea_orm(rs_type = "i8", db_type = "TinyInteger")]
-pub enum SessionEventType {
-    #[sea_orm(num_value = 1)]
-    RunStarted,
-    #[sea_orm(num_value = 2)]
-    RunFailed,
-    #[sea_orm(num_value = 4)]
-    MessagePartUpdated,
-    #[sea_orm(num_value = 5)]
-    MessagePartDelta,
-    #[sea_orm(num_value = 6)]
-    CommandBegin,
-    #[sea_orm(num_value = 7)]
-    CommandOutputDelta,
-    #[sea_orm(num_value = 8)]
-    CommandEnd,
-    #[sea_orm(num_value = 9)]
-    StreamError,
-}
-
-impl From<&SessionEvent> for SessionEventType {
-    fn from(value: &SessionEvent) -> Self {
-        match value {
-            SessionEvent::RunStarted(_) => Self::RunStarted,
-            SessionEvent::RunFailed(_) => Self::RunFailed,
-            SessionEvent::MessagePartUpdated(_) => Self::MessagePartUpdated,
-            SessionEvent::MessagePartDelta(_) => Self::MessagePartDelta,
-            SessionEvent::CommandBegin(_) => Self::CommandBegin,
-            SessionEvent::CommandOutputDelta(_) => Self::CommandOutputDelta,
-            SessionEvent::CommandEnd(_) => Self::CommandEnd,
-            SessionEvent::StreamError(_) => Self::StreamError,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SessionEventRecord {
-    pub event_id: Option<i64>,
-    pub session_id: i64,
-    pub seq: i64,
-    pub event_type: SessionEventType,
-    pub payload: SessionEvent,
-    pub causation_id: Option<i64>,
-    pub correlation_id: Option<i64>,
-    pub created_at: DateTime<Utc>,
-}
+// NOTE: `SessionEventType` and `SessionEventRecord` have been removed. The
+// unified `crate::event::EventKind` and `crate::event::DomainEvent` types
+// are the only event shapes the system carries.
 
 #[cfg(test)]
 mod tests {
@@ -832,9 +770,8 @@ mod tests {
         operation_id: &str,
         call_id: i64,
     ) -> MessagePart {
-        let invocation = ToolInvocation::Builtin {
-            input: BuiltinToolInput::TodoWrite(TodoWriteToolInput { items: Vec::new() }),
-        };
+        let invocation = BuiltinToolInput::TodoWrite(TodoWriteToolInput { items: Vec::new() })
+            .into_invocation();
         let mut part = MessagePart::with_content(
             part_id,
             message_id,

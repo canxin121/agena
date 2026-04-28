@@ -1,6 +1,6 @@
 use sea_orm::entity::prelude::*;
 
-use super::{message, workspace};
+use super::workspace;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "agena_sessions")]
@@ -27,19 +27,11 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Workspace,
-    #[sea_orm(has_many = "message::Entity")]
-    Message,
 }
 
 impl Related<workspace::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Workspace.def()
-    }
-}
-
-impl Related<message::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Message.def()
     }
 }
 

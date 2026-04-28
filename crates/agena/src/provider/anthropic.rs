@@ -367,7 +367,7 @@ impl AnthropicProvider {
     ) -> reqwest::RequestBuilder {
         let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
         let req = req.header(self.auth_header.as_str(), auth_value);
-        utils::apply_extra_headers(req, &self.extra_headers)
+        utils::apply_request_headers(PROVIDER_ID, req, &self.extra_headers)
     }
 
     async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>

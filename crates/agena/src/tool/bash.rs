@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use procwarden::{SandboxCommandRequest, SandboxPolicy};
 
 use crate::message::{BashToolInput, BuiltinToolOutput};
+use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 
 use super::{
     BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
@@ -43,15 +44,99 @@ pub(super) fn execute(
     let mut env = inherited_environment();
     env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
 
+    // Plugin chain: command.execute.before. Plugins can transform the
+    // command line, override env, or abort the call entirely.
+    let command_after_hook = {
+        let env_btree = env
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<std::collections::BTreeMap<String, String>>();
+        let hook_input = CommandBeforeInput {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), input.command.clone()],
+            cwd: cwd.clone(),
+            env: env_btree,
+        };
+        match executor
+            .plugin_manager()
+            .dispatch_command_before_blocking(hook_input)
+        {
+            Ok(CommandBeforeOutcome::Continue(updated)) => {
+                env = updated.env.into_iter().collect();
+                if updated.args.len() >= 2
+                    && updated.args[0] == "-c"
+                    && updated.command == "sh"
+                {
+                    Some((updated.args[1].clone(), updated.cwd))
+                } else {
+                    Some((input.command.clone(), updated.cwd))
+                }
+            }
+            Ok(CommandBeforeOutcome::Abort(reason)) => {
+                return Err(ToolError::PermissionDenied(format!(
+                    "command aborted by plugin: {reason}"
+                )));
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::command_before",
+                    "command.execute.before hook failed (continuing): {err}"
+                );
+                None
+            }
+        }
+    };
+    let (final_command, final_cwd) =
+        command_after_hook.unwrap_or_else(|| (input.command.clone(), cwd));
+
     let request = SandboxCommandRequest {
-        command: shell_command_for_platform(&input.command),
-        cwd,
+        command: shell_command_for_platform(&final_command),
+        cwd: final_cwd,
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS)),
     };
 
     let execution = executor.execute_sandboxed_command(&request)?;
-    let (trimmed_output, truncated) = truncate_output(&execution.aggregated_output);
+
+    // Plugin chain: command.execute.after. Plugins can observe or rewrite
+    // stdout/stderr; we use the (potentially patched) combined output.
+    let patched_after = {
+        let hook_input = CommandAfterInput {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), final_command.clone()],
+            cwd: request.cwd.clone(),
+            exit_code: Some(execution.exit_code),
+            stdout: execution.stdout.clone(),
+            stderr: execution.stderr.clone(),
+            timed_out: execution.timed_out,
+        };
+        match executor
+            .plugin_manager()
+            .dispatch_command_after_blocking(hook_input)
+        {
+            Ok(after) => Some(after),
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::command_after",
+                    "command.execute.after hook failed (continuing): {err}"
+                );
+                None
+            }
+        }
+    };
+    let aggregated_for_display = patched_after
+        .map(|a| {
+            if a.stdout.is_empty() {
+                a.stderr
+            } else if a.stderr.is_empty() {
+                a.stdout
+            } else {
+                format!("{}\n{}", a.stdout, a.stderr)
+            }
+        })
+        .unwrap_or(execution.aggregated_output.clone());
+
+    let (trimmed_output, truncated) = truncate_output(&aggregated_for_display);
     let exit_interpretation =
         interpret_exit_code(&analysis, execution.exit_code, execution.timed_out);
 

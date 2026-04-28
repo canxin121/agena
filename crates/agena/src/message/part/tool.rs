@@ -117,6 +117,117 @@ pub struct TodoWriteToolInput {
     pub items: Vec<TodoItem>,
 }
 
+/// Stream channel reported by the `monitor` tool for each captured event.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum MonitorStream {
+    Stdout,
+    Stderr,
+}
+
+/// Lifecycle state of a registered monitor.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum MonitorStatus {
+    /// The child process is running and the buffer is being filled.
+    Running,
+    /// The child exited normally (use `exit_code` for the precise code).
+    Exited,
+    /// The runner aborted the child after exceeding `timeout_ms`.
+    TimedOut,
+    /// `stop` action terminated the child.
+    Stopped,
+    /// The child failed to start or crashed before producing output.
+    Failed,
+}
+
+/// One captured event line from a monitored process.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct MonitorEvent {
+    /// Monotonic sequence number scoped to a single monitor (starts at 1).
+    pub seq: u64,
+    pub stream: MonitorStream,
+    /// Wall-clock timestamp in milliseconds since the Unix epoch.
+    pub ts_ms: i64,
+    /// Captured line, without the trailing newline. Lossy UTF-8 if needed.
+    pub line: String,
+}
+
+/// Action discriminator for the `monitor` builtin tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum MonitorToolInput {
+    /// Spawn a new background monitor and return its id.
+    Start {
+        /// Shell command to execute. Runs under `/bin/sh -lc` (or `cmd /c` on Windows).
+        command: String,
+        /// One-line human-readable description (shown in events / metadata).
+        #[serde(default)]
+        description: String,
+        /// Optional working directory; defaults to workspace root.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workdir: Option<String>,
+        /// Auto-kill after this many ms when not persistent. Default 300000, max 3_600_000.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+        /// If true, the monitor runs until explicitly stopped or the session ends.
+        #[serde(default)]
+        persistent: bool,
+        /// Optional regex applied to each line; only matching lines are kept.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_pattern: Option<String>,
+        /// Ring buffer size in lines (default 1000, max 10_000).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_buffered_lines: Option<u32>,
+        /// Whether stderr lines are captured. Default true.
+        #[serde(default = "default_capture_stderr")]
+        capture_stderr: bool,
+    },
+    /// List every active or recently-finished monitor in this session.
+    List {},
+    /// Read events from a monitor; optionally block waiting for new events.
+    Read {
+        monitor_id: String,
+        /// Return only events with `seq > since_seq`. Default 0.
+        #[serde(default)]
+        since_seq: u64,
+        /// Max events to return. Default 200, max 2000.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+        /// If positive, block up to this many ms waiting for new events when none are available.
+        #[serde(default)]
+        wait_ms: u64,
+    },
+    /// Terminate a running monitor.
+    Stop {
+        monitor_id: String,
+    },
+}
+
+fn default_capture_stderr() -> bool {
+    true
+}
+
+/// Lightweight summary record returned by `list` / embedded inside other outputs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MonitorSummary {
+    pub monitor_id: String,
+    pub command: String,
+    pub description: String,
+    pub status: MonitorStatus,
+    pub persistent: bool,
+    pub started_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<i64>,
+    pub buffered_lines: u32,
+    pub last_seq: u64,
+    pub dropped_lines: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct AskUserToolInput {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -145,14 +256,82 @@ pub enum BuiltinToolInput {
     TodoWrite(TodoWriteToolInput),
     #[serde(rename = "ask_user", alias = "request_user_input")]
     AskUser(AskUserToolInput),
+    Monitor(MonitorToolInput),
+}
+
+impl BuiltinToolInput {
+    /// Stable tool name as serialized in the wire format.
+    pub fn tool_name(&self) -> &'static str {
+        match self {
+            Self::Bash(_) => "bash",
+            Self::Read(_) => "read",
+            Self::ViewFile(_) => "view_file",
+            Self::ApplyPatch(_) => "apply_patch",
+            Self::Glob(_) => "glob",
+            Self::Grep(_) => "grep",
+            Self::Task(_) => "task",
+            Self::ToolSearch(_) => "tool_search",
+            Self::TodoWrite(_) => "todo_write",
+            Self::AskUser(_) => "ask_user",
+            Self::Monitor(_) => "monitor",
+        }
+    }
+
+    /// Convert into a `ToolInvocation::Custom` carrying the tool name and a
+    /// `StructuredObject`-encoded payload.
+    pub fn into_invocation(self) -> ToolInvocation {
+        let name = self.tool_name().to_string();
+        let value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
+        let mut object = match value {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
+        object.remove("tool");
+        let payload = StructuredObject::try_from(serde_json::Value::Object(object))
+            .unwrap_or_default();
+        ToolInvocation::Custom {
+            name,
+            input: payload,
+        }
+    }
+
+    /// Reconstruct a `BuiltinToolInput` from a `(name, StructuredObject)`
+    /// pair, or `None` if the name is not a recognized built-in tool.
+    pub fn from_custom(name: &str, payload: &StructuredObject) -> Option<Self> {
+        let value: serde_json::Value = payload.clone().into();
+        let mut object = match value {
+            serde_json::Value::Object(map) => map,
+            serde_json::Value::Null => serde_json::Map::new(),
+            _ => return None,
+        };
+        let tag = canonical_builtin_name(name)?;
+        object.insert("tool".to_string(), serde_json::Value::String(tag.to_string()));
+        serde_json::from_value(serde_json::Value::Object(object)).ok()
+    }
+}
+
+/// Returns `Some(canonical_tag)` if `name` matches a built-in tool. Includes
+/// the legacy `request_user_input` alias.
+pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "bash" => "bash",
+        "read" => "read",
+        "view_file" => "view_file",
+        "apply_patch" => "apply_patch",
+        "glob" => "glob",
+        "grep" => "grep",
+        "task" => "task",
+        "tool_search" => "tool_search",
+        "todo_write" => "todo_write",
+        "ask_user" | "request_user_input" => "ask_user",
+        "monitor" => "monitor",
+        _ => return None,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum ToolInvocation {
-    Builtin {
-        input: BuiltinToolInput,
-    },
     Mcp {
         server: String,
         tool: String,
@@ -164,6 +343,17 @@ pub enum ToolInvocation {
         #[serde(default)]
         input: StructuredObject,
     },
+}
+
+impl ToolInvocation {
+    /// If this invocation names a built-in tool, decode its input into a
+    /// strongly-typed [`BuiltinToolInput`].
+    pub fn as_builtin(&self) -> Option<BuiltinToolInput> {
+        match self {
+            Self::Custom { name, input } => BuiltinToolInput::from_custom(name, input),
+            Self::Mcp { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -244,6 +434,76 @@ pub enum BuiltinToolOutput {
         )]
         answers: BTreeMap<String, Vec<String>>,
     },
+    Monitor {
+        action: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        monitor_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<MonitorStatus>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        events: Vec<MonitorEvent>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        monitors: Vec<MonitorSummary>,
+        /// Highest seq returned in `events` (or current `last_seq` for `start`/`list`/`stop`).
+        #[serde(default)]
+        last_seq: u64,
+        /// True when the monitor still has buffered or future events past `last_seq`.
+        #[serde(default)]
+        has_more: bool,
+        /// Total lines dropped due to ring-buffer eviction (cumulative).
+        #[serde(default)]
+        dropped_lines: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+    },
+}
+
+impl BuiltinToolOutput {
+    /// Stable tool name as serialized in the wire format.
+    pub fn tool_name(&self) -> &'static str {
+        match self {
+            Self::Bash { .. } => "bash",
+            Self::Read { .. } => "read",
+            Self::ViewFile { .. } => "view_file",
+            Self::ApplyPatch { .. } => "apply_patch",
+            Self::Glob { .. } => "glob",
+            Self::Grep { .. } => "grep",
+            Self::Task { .. } => "task",
+            Self::ToolSearch { .. } => "tool_search",
+            Self::TodoWrite { .. } => "todo_write",
+            Self::AskUser { .. } => "ask_user",
+            Self::Monitor { .. } => "monitor",
+        }
+    }
+
+    /// Convert into a [`CustomToolOutput`] carrying the tool name and a
+    /// `StructuredObject` payload (the inner fields, without the `tool` tag).
+    pub fn into_custom_output(self) -> CustomToolOutput {
+        let name = self.tool_name().to_string();
+        let value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
+        let mut object = match value {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
+        object.remove("tool");
+        let payload = StructuredObject::try_from(serde_json::Value::Object(object))
+            .unwrap_or_default();
+        CustomToolOutput { name, payload }
+    }
+
+    /// Reverse of [`into_custom_output`]: try to decode a `CustomToolOutput`
+    /// emitted by a built-in tool back into the strongly-typed enum.
+    pub fn from_custom(output: &CustomToolOutput) -> Option<Self> {
+        let tag = canonical_builtin_name(&output.name)?;
+        let value: serde_json::Value = output.payload.clone().into();
+        let mut object = match value {
+            serde_json::Value::Object(map) => map,
+            serde_json::Value::Null => serde_json::Map::new(),
+            _ => return None,
+        };
+        object.insert("tool".to_string(), serde_json::Value::String(tag.to_string()));
+        serde_json::from_value(serde_json::Value::Object(object)).ok()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -377,9 +637,6 @@ pub struct CustomToolOutput {
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum ToolOutput {
     None,
-    Builtin {
-        output: BuiltinToolOutput,
-    },
     Mcp {
         output: McpToolOutput,
     },
@@ -391,6 +648,17 @@ pub enum ToolOutput {
         #[serde(default)]
         payload: StructuredObject,
     },
+}
+
+impl ToolOutput {
+    /// If this output is a `Custom` carrying a built-in tool's payload,
+    /// decode it into a strongly-typed [`BuiltinToolOutput`].
+    pub fn as_builtin(&self) -> Option<BuiltinToolOutput> {
+        match self {
+            Self::Custom { output } => BuiltinToolOutput::from_custom(output),
+            _ => None,
+        }
+    }
 }
 
 impl Default for ToolOutput {

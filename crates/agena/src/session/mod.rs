@@ -2,11 +2,14 @@ mod cache;
 mod context_governor;
 mod context_policy;
 pub(crate) mod history;
+pub mod ids;
 mod manager;
 mod model;
 mod processor;
 mod prompt_window;
 mod store;
+
+pub use ids::{MessageId, PartId, ToolCallId, TurnId};
 
 pub use context_governor::ContextGovernor;
 pub use context_policy::ContextPolicy;
@@ -21,7 +24,6 @@ pub(crate) use model::{
 };
 pub use model::{
     PromptTokenRuntime, PromptTokenUsageSnapshot, PromptWindowRuntime, ProviderPromptAnchor,
-    Session, SessionEventRecord, SessionEventType, SessionListRequest, SessionRuntimeState,
-    SessionStatus, SessionSummary,
+    Session, SessionListRequest, SessionRuntimeState, SessionStatus, SessionSummary,
 };
 pub use processor::SessionProcessor;

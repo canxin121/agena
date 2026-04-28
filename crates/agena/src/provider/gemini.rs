@@ -327,7 +327,8 @@ impl ModelProvider for GeminiProvider {
         let response = self
             .send_request(|api_key| {
                 let endpoint = self.endpoint_with_auth(self.list_models_endpoint(), api_key);
-                utils::apply_extra_headers(
+                utils::apply_request_headers(
+                    PROVIDER_ID,
                     self.apply_auth(self.client.get(endpoint), api_key),
                     &self.extra_headers,
                 )
@@ -390,7 +391,8 @@ impl ModelProvider for GeminiProvider {
             .send_request(|api_key| {
                 let endpoint =
                     self.endpoint_with_auth(self.generate_endpoint(model.as_str()), api_key);
-                utils::apply_extra_headers(
+                utils::apply_request_headers(
+                    PROVIDER_ID,
                     self.apply_auth(
                         self.client
                             .post(endpoint)
@@ -482,7 +484,8 @@ impl ModelProvider for GeminiProvider {
             .send_request(|api_key| {
                 let endpoint =
                     self.endpoint_with_auth(self.stream_generate_endpoint(model.as_str()), api_key);
-                utils::apply_extra_headers(
+                utils::apply_request_headers(
+                    PROVIDER_ID,
                     self.apply_auth(
                         self.client
                             .post(endpoint)

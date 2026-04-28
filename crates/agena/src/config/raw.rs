@@ -99,7 +99,7 @@ pub(crate) struct RawConfig {
     pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
-    pub(crate) plugins: Option<RawPluginConfig>,
+    pub(crate) plugins: Option<PluginConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
     pub(crate) modes: BTreeMap<String, RawModeConfig>,
 }
@@ -164,15 +164,11 @@ impl RawConfig {
         if let Some(enabled) = env.var("AGENA_PLUGIN_ENABLED") {
             config
                 .plugins
-                .get_or_insert_with(RawPluginConfig::default)
-                .enabled = Some(parse_bool("AGENA_PLUGIN_ENABLED", enabled.as_str())?);
+                .get_or_insert_with(PluginConfig::default)
+                .enabled = parse_bool("AGENA_PLUGIN_ENABLED", enabled.as_str())?;
         }
-        if let Some(paths) = env.var("AGENA_PLUGIN_PATHS") {
-            config
-                .plugins
-                .get_or_insert_with(RawPluginConfig::default)
-                .paths = Some(std::env::split_paths(paths.as_str()).collect());
-        }
+        // Note: `AGENA_PLUGIN_PATHS` is no longer supported — the new plugin
+        // config requires explicit `[plugins.list.<id>]` entries.
 
         apply_env_number(env, "AGENA_PROVIDER_HTTP_TIMEOUT_SECS", |value| {
             config
@@ -314,7 +310,7 @@ impl RawConfig {
 
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
         let permission = PermissionConfig::from_raw(self.permission.unwrap_or_default());
-        let plugins = PluginConfig::from_raw(self.plugins.unwrap_or_default());
+        let plugins: PluginConfig = self.plugins.unwrap_or_default();
 
         let providers = self
             .providers
@@ -343,7 +339,7 @@ pub(crate) struct RawModeConfig {
     pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
-    pub(crate) plugins: Option<RawPluginConfig>,
+    pub(crate) plugins: Option<PluginConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
 }
 
@@ -361,16 +357,23 @@ impl RawModeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub(crate) struct RawPluginConfig {
-    pub(crate) enabled: Option<bool>,
-    pub(crate) paths: Option<Vec<PathBuf>>,
-}
+#[allow(dead_code)]
+pub(crate) struct RawPluginConfig;
 
 impl Merge for RawPluginConfig {
+    fn merge_from(&mut self, _overlay: Self) {}
+}
+
+impl Merge for PluginConfig {
     fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.enabled, overlay.enabled);
-        merge_option(&mut self.paths, overlay.paths);
+        // Overlay completely replaces nested plugin entries; otherwise we'd
+        // need entry-level merge logic. List entries from a more-specific
+        // mode override the parent.
+        self.enabled = overlay.enabled;
+        if !overlay.list.is_empty() {
+            self.list = overlay.list;
+        }
+        self.timeouts = overlay.timeouts;
     }
 }
 
@@ -645,14 +648,8 @@ impl PermissionConfig {
     }
 }
 
-impl PluginConfig {
-    pub(crate) fn from_raw(raw: RawPluginConfig) -> Self {
-        Self {
-            enabled: raw.enabled.unwrap_or(true),
-            paths: raw.paths.unwrap_or_default(),
-        }
-    }
-}
+// PluginConfig (alias for agena_plugin_host::PluginsConfig) is parsed
+// directly via serde; no `from_raw` adapter needed.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ProviderKind {

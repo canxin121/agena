@@ -7,7 +7,7 @@ pub mod event;
 pub mod message;
 pub mod model;
 pub mod permission;
-pub mod plugin;
+pub use agena_plugin_host as plugin;
 pub mod provider;
 pub mod role;
 pub mod runtime;

@@ -1,8 +1,8 @@
 use crate::agent::Agent;
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, GlobToolInput,
-    GrepToolInput, ReadToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput,
-    ViewFileToolInput,
+    GrepToolInput, MonitorToolInput, ReadToolInput, TaskToolInput, TodoWriteToolInput,
+    ToolSearchToolInput, ViewFileToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -152,6 +152,22 @@ impl ToolCatalog {
             .with_concurrency_safe(false)
             .with_requires_user_interaction(true)
             .with_always_load(),
+            ToolDefinition::builtin::<MonitorToolInput>(
+                "monitor",
+                "Run a long-lived shell command in the background and stream its stdout/stderr as numbered events. \
+                 Actions: start (spawn), list (enumerate), read (pull events with optional blocking wait), stop (kill).",
+                ToolBehavior::Mutating,
+            )
+            .with_search_terms([
+                "monitor",
+                "background process",
+                "long running",
+                "watch logs",
+                "tail",
+                "follow",
+                "stream output",
+            ])
+            .with_deferred_loading(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions

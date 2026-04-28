@@ -36,9 +36,38 @@ default_external_directory = "deny"
 
 [plugins]
 enabled = true
-# Relative paths resolve from the directory containing this config file.
-# If `paths` is omitted, Agena will scan `plugins/` next to the config file.
-paths = ["plugins"]
+# Optional global timeout overlay applied to every plugin (per-plugin
+# `timeouts = { ... }` keys override these). Values like "5s", "2m", "200ms".
+# timeouts = { tool_invoke = "60s", permission_ask = "10s" }
+
+# Each entry under `[plugins.list.<id>]` declares a plugin. The `kind`
+# discriminator picks the transport. Supported kinds:
+#
+#   * static  — compiled-in via `PluginHostBuilder::register_static`
+#   * cdylib  — local dynamic library (`abi_stable`-based ABI)
+#   * stdio   — subprocess speaking JSON-RPC over its stdin/stdout
+#   * http    — remote service speaking JSON-RPC over POST
+#
+# Examples (commented out — copy and adapt as needed):
+#
+# [plugins.list.echo]
+# kind = "cdylib"
+# path = "examples/echo_plugin/target/debug/libagena_echo_plugin.so"
+# options = { uppercase = true }
+#
+# [plugins.list.lint]
+# kind = "stdio"
+# command = "node"
+# args = ["./plugins/lint/index.js"]
+# env = { LINT_LEVEL = "warn" }
+# restart = { policy = "on-failure", min_backoff = "1s", max_backoff = "30s", max_retries = 5 }
+# options = { project = "rust" }
+#
+# [plugins.list.cloud-policy]
+# kind = "http"
+# url = "https://policy.example.com/agena/rpc"
+# auth = { kind = "bearer", token_env = "AGENA_POLICY_TOKEN" }
+# options = { org_id = "acme" }
 
 [providers.openai]
 kind = "openai"

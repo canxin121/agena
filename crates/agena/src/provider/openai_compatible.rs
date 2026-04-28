@@ -277,7 +277,7 @@ impl OpenAiCompatibleProvider {
         if let Some(session_affinity) = session_affinity.filter(|value| !value.trim().is_empty()) {
             req = req.header("x-session-affinity", session_affinity);
         }
-        utils::apply_extra_headers(req, &self.extra_headers)
+        utils::apply_request_headers(self.id.as_str(), req, &self.extra_headers)
     }
 
     fn parse_models(&self, payload: Value) -> Result<Vec<ProviderModel>, AppError> {

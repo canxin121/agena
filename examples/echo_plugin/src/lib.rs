@@ -1,152 +1,135 @@
+//! Demonstration plugin for the new agena plugin SDK.
+//!
+//! Implements every relevant hook surface in a tiny amount of code, then
+//! exports itself as a cdylib via `export_cdylib!`. The same `Plugin` impl
+//! could be exported as stdio (`export_stdio!`) or HTTP (`export_http!`)
+//! by enabling the corresponding feature on `agena-plugin-sdk`.
+
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use agena::plugin::{
-    AgenaPlugin, PluginAfterToolRequest, PluginAfterToolResponse, PluginBeforeToolRequest,
-    PluginBeforeToolResponse, PluginError, PluginMetadata, PluginShellEnvRequest,
-    PluginShellEnvResponse, PluginToolCallRequest, PluginToolCallResponse, PluginToolDescriptor,
-};
-use agena::tool::ToolBehavior;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use agena_plugin_sdk::prelude::*;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct EchoPlusInput {
-    message: String,
-    #[serde(default)]
-    uppercase: bool,
-    #[serde(default)]
-    tags: Vec<String>,
+#[derive(Default)]
+pub struct EchoPlugin {
+    uppercase: AtomicBool,
 }
 
-struct EchoPlusPlugin;
-
-impl AgenaPlugin for EchoPlusPlugin {
-    fn metadata(&self) -> PluginMetadata {
-        PluginMetadata {
-            name: "echo_plus".to_string(),
-            version: "0.1.0".to_string(),
-            description: "Sample Agena plugin with a custom tool and lifecycle hooks.".to_string(),
-        }
+#[async_trait]
+impl Plugin for EchoPlugin {
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::builder("echo", env!("CARGO_PKG_VERSION"))
+            .description("Sample plugin: echo + before/after/shell hooks.")
+            .hooks(
+                HookSubscription::INIT
+                    | HookSubscription::TOOL_INVOKE
+                    | HookSubscription::TOOL_BEFORE
+                    | HookSubscription::TOOL_AFTER
+                    | HookSubscription::SHELL_ENV
+                    | HookSubscription::EVENT,
+            )
+            .tool(
+                ToolDecl::new(
+                    "echo",
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "text": { "type": "string" }
+                        },
+                        "required": ["text"]
+                    }),
+                )
+                .description("Echo the supplied text.")
+                .behavior(ToolBehavior::ReadOnly),
+            )
+            .build()
     }
 
-    fn tools(&self) -> Vec<PluginToolDescriptor> {
-        vec![PluginToolDescriptor {
-            name: "echo_plus".to_string(),
-            description: "Echo input text with optional uppercase and tags.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "message": { "type": "string" },
-                    "uppercase": { "type": "boolean", "default": false },
-                    "tags": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "default": []
-                    }
-                },
-                "required": ["message"]
-            }),
-            behavior: ToolBehavior::ReadOnly,
-        }]
-    }
-
-    fn invoke_tool(
+    async fn init(
         &self,
-        request: PluginToolCallRequest,
-    ) -> Result<PluginToolCallResponse, PluginError> {
-        let input: EchoPlusInput = serde_json::from_str(request.input_json.as_str())
-            .map_err(|err| PluginError::new(format!("invalid echo_plus input: {err}")))?;
-
-        let mut rendered = input.message;
-        if input.uppercase {
-            rendered = rendered.to_uppercase();
+        ctx: InitContext,
+        _host: Arc<dyn HostClient>,
+    ) -> Result<InitOutcome> {
+        if let Some(b) = ctx.options.get("uppercase").and_then(|v| v.as_bool()) {
+            self.uppercase.store(b, Ordering::Relaxed);
         }
-        if !input.tags.is_empty() {
-            rendered.push_str(" [tags:");
-            rendered.push_str(input.tags.join(",").as_str());
-            rendered.push(']');
-        }
+        Ok(InitOutcome::ack(self.manifest()))
+    }
 
-        Ok(PluginToolCallResponse {
-            title: "Echo Plus".to_string(),
+    async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
+        let text = input
+            .input
+            .get("text")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| PluginError::invalid_params("missing `text`"))?
+            .to_string();
+
+        let rendered = if self.uppercase.load(Ordering::Relaxed) {
+            text.to_uppercase()
+        } else {
+            text
+        };
+
+        Ok(ToolInvokeOutput {
+            title: "Echo".to_string(),
             output_text: rendered.clone(),
-            payload_json: Some(
-                json!({
-                    "rendered": rendered,
-                    "workspace_root": request.workspace_root,
-                    "session_id": request.session_id,
-                    "call_id": request.call_id
-                })
-                .to_string(),
-            ),
-            metadata: BTreeMap::from([
-                ("plugin".to_string(), "echo_plus".to_string()),
-                ("tool".to_string(), request.tool_name),
-            ]),
+            payload: Some(json!({ "rendered": rendered })),
+            metadata: BTreeMap::from([("plugin".to_string(), "echo".to_string())]),
         })
     }
 
-    fn before_tool(
+    async fn tool_execute_before(
         &self,
-        request: PluginBeforeToolRequest,
-    ) -> Result<PluginBeforeToolResponse, PluginError> {
-        if request.tool_name != "echo_plus" {
-            return Ok(PluginBeforeToolResponse::passthrough(request.input_json));
+        input: ToolBeforeInput,
+    ) -> Result<Option<ToolBeforePatch>> {
+        if input.tool_name != "echo" {
+            return Ok(None);
         }
-
-        let mut input: EchoPlusInput = serde_json::from_str(request.input_json.as_str())
-            .map_err(|err| PluginError::new(format!("invalid before_tool input: {err}")))?;
-        if !input.message.starts_with("[prepared] ") {
-            input.message = format!("[prepared] {}", input.message);
+        let mut new_input = input.input.clone();
+        if let Some(text) = new_input.get_mut("text") {
+            if let Some(s) = text.as_str() {
+                *text = serde_json::Value::String(format!("[prepared] {s}"));
+            }
         }
-
-        Ok(PluginBeforeToolResponse {
-            input_json: serde_json::to_string(&input)
-                .map_err(|err| PluginError::new(format!("failed to serialize input: {err}")))?,
-            title_override: Some("Echo Plus (prepared)".to_string()),
-            metadata: BTreeMap::from([("before_hook".to_string(), "applied".to_string())]),
-        })
+        Ok(Some(ToolBeforePatch {
+            input: Some(new_input),
+            title_override: Some("Echo (prepared)".into()),
+            ..Default::default()
+        }))
     }
 
-    fn after_tool(
+    async fn tool_execute_after(
         &self,
-        request: PluginAfterToolRequest,
-    ) -> Result<PluginAfterToolResponse, PluginError> {
-        if request.tool_name != "echo_plus" {
-            return Ok(PluginAfterToolResponse::default());
+        input: ToolAfterInput,
+    ) -> Result<Option<ToolAfterPatch>> {
+        if input.tool_name != "echo" {
+            return Ok(None);
         }
-
-        let mut payload = request
-            .payload_json
-            .as_deref()
-            .map(serde_json::from_str::<serde_json::Value>)
-            .transpose()
-            .map_err(|err| PluginError::new(format!("invalid after_tool payload: {err}")))?
-            .unwrap_or_else(|| json!({}));
-        payload["after_hook"] = json!(true);
-
-        Ok(PluginAfterToolResponse {
-            title: Some(format!("{} (postprocessed)", request.title)),
-            output_text: Some(format!(
-                "{}\n\n[echo_plus after hook applied]",
-                request.output_text
-            )),
-            payload_json: Some(payload.to_string()),
-            metadata: BTreeMap::from([("after_hook".to_string(), "applied".to_string())]),
-        })
+        Ok(Some(ToolAfterPatch {
+            output_text: Some(format!("{}\n[echo after-hook]", input.output_text)),
+            metadata: BTreeMap::from([(
+                "after_hook".to_string(),
+                "applied".to_string(),
+            )]),
+            ..Default::default()
+        }))
     }
 
-    fn shell_env(
-        &self,
-        request: PluginShellEnvRequest,
-    ) -> Result<PluginShellEnvResponse, PluginError> {
-        Ok(PluginShellEnvResponse {
-            env: BTreeMap::from([
-                ("AGENA_SAMPLE_PLUGIN".to_string(), "echo_plus".to_string()),
-                ("AGENA_SAMPLE_PLUGIN_CWD".to_string(), request.cwd),
-            ]),
-        })
+    async fn shell_env(&self, input: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
+        let mut p = ShellEnvPatch::default();
+        p.set
+            .insert("AGENA_ECHO".into(), "1".into());
+        p.set.insert(
+            "AGENA_ECHO_CWD".into(),
+            input.cwd.to_string_lossy().to_string(),
+        );
+        Ok(Some(p))
+    }
+
+    async fn event(&self, _ev: EventEnvelope) -> Result<()> {
+        // We could log to host via `host.log(...)`. Skipped for brevity.
+        Ok(())
     }
 }
 
-agena::export_agena_plugin!(EchoPlusPlugin);
+agena_plugin_sdk::export_cdylib!(EchoPlugin);

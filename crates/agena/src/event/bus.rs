@@ -2,11 +2,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::broadcast;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
-use crate::envelope::DomainEvent;
-use crate::error::BusError;
-use crate::filter::{EventFilter, KindMatcher};
+use crate::event::envelope::DomainEvent;
+use crate::event::error::BusError;
+use crate::event::filter::{EventFilter, KindMatcher};
 
 /// Item delivered to a subscriber. `Lagged(n)` means the underlying broadcast
 /// channel dropped `n` events because this subscriber was too slow; transports
@@ -72,8 +71,11 @@ where
 }
 
 /// In-process tokio broadcast bus. Storage is the caller's responsibility:
-/// the recommended pattern is to compose this with [`crate::EventStore`] via
-/// [`crate::EventPublisher`].
+/// the recommended pattern is to compose this with [`EventStore`] via
+/// [`EventPublisher`].
+///
+/// [`EventStore`]: crate::event::store::EventStore
+/// [`EventPublisher`]: crate::event::publisher::EventPublisher
 pub struct InProcessEventBus<K> {
     tx: broadcast::Sender<Arc<DomainEvent<K>>>,
     capacity: usize,
@@ -108,18 +110,5 @@ where
 
     fn capacity(&self) -> usize {
         self.capacity
-    }
-}
-
-// Re-export so transports can convert `Subscription` into a Stream if they
-// prefer.
-pub use tokio_stream::wrappers::BroadcastStream;
-pub use tokio_stream::Stream;
-
-/// Helper: classify a `BroadcastStreamRecvError` for transport layers that
-/// build their own streams.
-pub fn classify_recv_error(err: BroadcastStreamRecvError) -> u64 {
-    match err {
-        BroadcastStreamRecvError::Lagged(n) => n,
     }
 }

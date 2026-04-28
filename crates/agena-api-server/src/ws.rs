@@ -16,7 +16,7 @@ use agena_api::{
     subscribe::SubscriptionId,
     ws::{ClientMessage, ServerMessage},
 };
-use agena_event::{EventBus, EventFilter, bus::SubscriptionItem};
+use agena::event::{EventBus, EventFilter, bus::SubscriptionItem};
 use axum::{
     extract::{State, WebSocketUpgrade, ws::Message, ws::WebSocket},
     response::Response,

@@ -3,11 +3,11 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-use crate::envelope::EventMeta;
+use crate::event::envelope::EventMeta;
 
 /// Stable, snake_case identifier for a concrete event kind variant.
 ///
-/// We use [`SmolStr`] rather than a closed enum so that [`agena_event`] does
+/// We use [`SmolStr`] rather than a closed enum so that this module does
 /// not need to know every kind that downstream crates might add. The agena
 /// core crate provides a `pub const TAGS: &[EventKindTag]` table for typed
 /// access.

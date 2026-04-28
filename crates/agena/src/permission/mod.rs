@@ -16,9 +16,7 @@ pub use request::{
     PermissionScope,
 };
 pub use runtime::{PermissionRuntime, PermissionRuntimeDecision, PermissionRuntimeError};
-pub use store::{
-    InMemoryPermissionRuleStore, PermissionRuleStore, PermissionStoreError, decide_from_mode,
-};
+pub use store::{PermissionRuleStore, PermissionStoreError, decide_from_mode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -257,16 +255,16 @@ impl PermissionPolicy {
                 continue;
             }
             if rule.matcher.matches(context) {
-                return mode_decision(rule.mode, &rule.description);
+                return decide_from_mode(rule.mode, &rule.description);
             }
         }
 
         match access {
-            AccessKind::Read => mode_decision(self.default_read, "matched default read permission"),
+            AccessKind::Read => decide_from_mode(self.default_read, "matched default read permission"),
             AccessKind::Write => {
-                mode_decision(self.default_write, "matched default write permission")
+                decide_from_mode(self.default_write, "matched default write permission")
             }
-            AccessKind::ExternalDirectory => mode_decision(
+            AccessKind::ExternalDirectory => decide_from_mode(
                 self.default_external_directory,
                 "matched default external_directory permission",
             ),
@@ -433,18 +431,6 @@ impl MatchContext {
             workspace_relative_norm,
             in_workspace,
         }
-    }
-}
-
-fn mode_decision(mode: PermissionMode, reason: &str) -> PermissionDecision {
-    match mode {
-        PermissionMode::Allow => PermissionDecision::Allow,
-        PermissionMode::Ask => PermissionDecision::Ask {
-            reason: reason.to_string(),
-        },
-        PermissionMode::Deny => PermissionDecision::Deny {
-            reason: reason.to_string(),
-        },
     }
 }
 

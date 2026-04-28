@@ -179,7 +179,7 @@ impl SessionManagerState {
 pub struct SessionManager {
     store: Arc<SessionStore>,
     publisher: Arc<crate::event::EventPublisher>,
-    bus: Arc<dyn agena_event::EventBus<crate::event::EventKind>>,
+    bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>>,
     execution: ArcSwap<SessionManagerState>,
 }
 
@@ -190,18 +190,15 @@ impl SessionManager {
         tool_executor: ToolExecutor,
     ) -> Self {
         let db_arc = Arc::new(db.clone());
-        // Build the unified event publisher that mirrors every legacy
-        // SessionEvent / HistoryItem onto the new bus. Capacity 4096 keeps
-        // long-running sessions from blocking publishers when subscribers lag.
-        let store_inner: Arc<dyn agena_event::EventStore<crate::event::EventKind>> =
-            Arc::new(agena_event_store_sea::SeaEventStore::<crate::event::EventKind>::new(
-                Arc::clone(&db_arc),
-            ));
-        let bus: Arc<dyn agena_event::EventBus<crate::event::EventKind>> = Arc::new(
-            agena_event::InProcessEventBus::<crate::event::EventKind>::new(4096),
+        // HistoryEventStore wraps SeaEventStore but silently drops UI-only
+        // (non-persistent) events so streaming deltas never land in SQLite.
+        let store_inner: Arc<dyn crate::event::EventStore<crate::event::EventKind>> =
+            Arc::new(crate::db::HistoryEventStore::new(Arc::clone(&db_arc)));
+        let bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>> = Arc::new(
+            crate::event::InProcessEventBus::<crate::event::EventKind>::new(4096),
         );
-        let seq = Arc::new(agena_event::SequenceAllocator::new());
-        let publisher = Arc::new(agena_event::EventPublisher::new(
+        let seq = Arc::new(crate::event::SequenceAllocator::new());
+        let publisher = Arc::new(crate::event::publisher::EventPublisher::new(
             seq,
             Arc::clone(&store_inner),
             Arc::clone(&bus),
@@ -229,7 +226,7 @@ impl SessionManager {
     }
 
     /// Returns the in-process bus subscribers can attach to.
-    pub fn event_bus(&self) -> Arc<dyn agena_event::EventBus<crate::event::EventKind>> {
+    pub fn event_bus(&self) -> Arc<dyn crate::event::EventBus<crate::event::EventKind>> {
         Arc::clone(&self.bus)
     }
 
@@ -3500,7 +3497,7 @@ mod tests {
     /// while readers are migrated.
     #[tokio::test]
     async fn unified_bus_mirrors_legacy_events_during_a_turn() {
-        use agena_event::{EventFilter, Scope, bus::SubscriptionItem};
+        use crate::event::{EventFilter, Scope, bus::SubscriptionItem};
 
         let workspace = TempWorkspace::new();
         let service = build_manager(

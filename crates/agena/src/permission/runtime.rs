@@ -190,12 +190,31 @@ impl From<PermissionMode> for PermissionDecision {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, RwLock};
+
     use super::*;
-    use crate::permission::InMemoryPermissionRuleStore;
+    use crate::permission::store::{PermissionRuleStore, PermissionStoreError};
+
+    #[derive(Default)]
+    struct TestPermissionStore {
+        inner: Arc<RwLock<Vec<(PermissionAction, PermissionMode)>>>,
+    }
+
+    impl PermissionRuleStore for TestPermissionStore {
+        fn lookup(&self, action: &PermissionAction) -> Result<Option<PermissionMode>, PermissionStoreError> {
+            let guard = self.inner.read().map_err(|_| PermissionStoreError::LockPoisoned)?;
+            Ok(guard.iter().rev().find_map(|(a, m)| (a == action).then_some(*m)))
+        }
+
+        fn save(&self, action: PermissionAction, mode: PermissionMode) -> Result<(), PermissionStoreError> {
+            self.inner.write().map_err(|_| PermissionStoreError::LockPoisoned)?.push((action, mode));
+            Ok(())
+        }
+    }
 
     #[test]
     fn ask_decision_creates_pending_request_and_allow_always_persists() {
-        let mut runtime = PermissionRuntime::new(InMemoryPermissionRuleStore::new());
+        let mut runtime = PermissionRuntime::new(TestPermissionStore::default());
         let action = PermissionAction::BuiltinTool {
             tool_name: "bash".to_string(),
         };

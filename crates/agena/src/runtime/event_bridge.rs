@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use agena_event::{EventBus, EventFilter as BusEventFilter, Scope, bus::SubscriptionItem};
+use crate::event::{EventBus, EventFilter as BusEventFilter, Scope, bus::SubscriptionItem};
 use tokio::task::JoinHandle;
 
 use crate::event::EventKind;

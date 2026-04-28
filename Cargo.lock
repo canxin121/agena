@@ -60,8 +60,6 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "agena"
 version = "0.1.0"
 dependencies = [
- "agena-event",
- "agena-event-store-sea",
  "agena-plugin-host",
  "arc-swap",
  "async-stream",
@@ -103,6 +101,7 @@ dependencies = [
  "strum 0.27.2",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tokio-tungstenite",
  "toml",
  "tracing",
@@ -117,7 +116,6 @@ name = "agena-api"
 version = "0.1.0"
 dependencies = [
  "agena",
- "agena-event",
  "chrono",
  "serde",
  "serde_json",
@@ -132,7 +130,6 @@ version = "0.1.0"
 dependencies = [
  "agena",
  "agena-api",
- "agena-event",
  "async-trait",
  "axum 0.8.8",
  "chrono",
@@ -168,7 +165,6 @@ dependencies = [
  "agena",
  "agena-api",
  "agena-api-server",
- "agena-event",
  "async-trait",
  "axum 0.8.8",
  "futures-util",
@@ -186,44 +182,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "agena-event"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "futures-core",
- "serde",
- "serde_json",
- "smol_str",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "agena-event-store-sea"
-version = "0.1.0"
-dependencies = [
- "agena-event",
- "async-trait",
- "chrono",
- "sea-orm",
- "sea-orm-migration",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "agena-http-api"
 version = "0.1.0"
 dependencies = [
  "agena",
- "agena-event",
  "async-stream",
  "async-trait",
  "axum 0.8.8",
@@ -332,7 +294,6 @@ name = "agena-tui"
 version = "0.1.0"
 dependencies = [
  "agena",
- "agena-event",
  "agena-http-api",
  "anyhow",
  "arboard",

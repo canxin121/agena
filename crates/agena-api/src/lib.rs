@@ -52,4 +52,4 @@ pub const PROTOCOL_VERSION: u32 = 2;
 /// only has to depend on `agena-api`.
 pub use agena::event::DomainEvent;
 pub use agena::event::EventKind;
-pub use agena_event::{EventFilter, EventKindTag, Scope};
+pub use agena::event::{EventFilter, EventKindTag, Scope};

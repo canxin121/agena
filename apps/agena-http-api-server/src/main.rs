@@ -1,9 +1,10 @@
-use std::{env, fs, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use agena::{
     AppError,
     config::{ConfigLoader, ConfigModeName, ConfigOverride, LoadConfigRequest},
     runtime::AgenaRuntime,
+    storage::StorageConfig,
 };
 use agena_http_api::{ApiState, router as v1_router};
 use agena_api_server::{AppState as V2State, router as v2_router};
@@ -69,9 +70,12 @@ impl AgenaHttpApiCli {
     }
 
     async fn run_serve(self, command: ServeCommand) -> Result<(), AppError> {
-        let database_url =
-            resolve_database_url(command.database_url.clone(), command.database_path.clone())?;
-        ensure_database_parent(database_url.as_str())?;
+        let storage = StorageConfig {
+            database_url: command.database_url,
+            database_path: command.database_path,
+        };
+        let database_url = storage.resolve_url()?;
+        StorageConfig::ensure_parent(database_url.as_str())?;
 
         let db = Arc::new(Database::connect(database_url.as_str()).await?);
         let workspace_root = command.workspace_root.unwrap_or(env::current_dir()?);
@@ -85,7 +89,7 @@ impl AgenaHttpApiCli {
 
         tracing::info!(
             listen = %command.listen,
-            database = %display_database_location(database_url.as_str()),
+            database = %StorageConfig::display_location(database_url.as_str()),
             "Agena HTTP API server listening"
         );
 
@@ -97,66 +101,6 @@ impl AgenaHttpApiCli {
             .await
             .map_err(|e| AppError::Internal(format!("axum::serve failed: {e}")))
     }
-}
-
-fn resolve_database_url(
-    database_url: Option<String>,
-    database_path: Option<PathBuf>,
-) -> Result<String, AppError> {
-    if let Some(url) = database_url {
-        return Ok(url);
-    }
-
-    let path = database_path.unwrap_or_else(default_database_path);
-    Ok(format!("sqlite://{}?mode=rwc", path.display()))
-}
-
-fn default_database_path() -> PathBuf {
-    let mut base = env::var("HOME")
-        .or_else(|_| env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    base.push(".agena");
-    base.push("agena.db");
-    base
-}
-
-fn ensure_database_parent(database_url: &str) -> Result<(), AppError> {
-    let Some(path) = sqlite_path_from_url(database_url) else {
-        return Ok(());
-    };
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)?;
-    }
-    Ok(())
-}
-
-fn sqlite_path_from_url(database_url: &str) -> Option<PathBuf> {
-    if database_url == "sqlite::memory:" {
-        return None;
-    }
-
-    let raw = database_url.strip_prefix("sqlite://")?;
-    let path = raw.split('?').next().unwrap_or(raw);
-    if path.is_empty() || path == ":memory:" {
-        None
-    } else {
-        Some(PathBuf::from(path))
-    }
-}
-
-fn display_database_location(database_url: &str) -> String {
-    sqlite_path_from_url(database_url)
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| {
-            if database_url.starts_with("sqlite:") {
-                database_url.to_string()
-            } else {
-                "<redacted>".to_string()
-            }
-        })
 }
 
 #[tokio::main]

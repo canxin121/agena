@@ -25,7 +25,7 @@ mod unix {
         subscribe::SubscriptionId,
         ws::{ClientMessage, ServerMessage},
     };
-    use agena_event::{EventBus, EventFilter, bus::SubscriptionItem};
+    use agena::event::{EventBus, EventFilter, bus::SubscriptionItem};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{Mutex, mpsc};

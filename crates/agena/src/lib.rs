@@ -12,6 +12,7 @@ pub mod provider;
 pub mod role;
 pub mod runtime;
 pub mod session;
+pub mod storage;
 pub mod tool;
 
 pub use error::AppError;

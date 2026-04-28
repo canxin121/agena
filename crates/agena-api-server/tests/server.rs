@@ -76,14 +76,17 @@ async fn health_endpoint_returns_ok() {
 async fn list_events_returns_published_events() {
     let (state, manager) = build_state().await;
 
-    // Publish a synthetic RunStarted event.
+    // Publish a persistent (history) event — UI-only events like RunStarted
+    // are no longer written to the event store. PluginEvent is an easy
+    // persistent kind that has no private payload types.
     let publisher = manager.event_publisher();
     publisher
         .publish(
             PublishContext::for_session(42),
-            EventKind::RunStarted(agena::event::RunStartedEvent {
-                session_id: 42,
-                ts_ms: 0,
+            EventKind::PluginEvent(agena::event::PluginEventPayload {
+                plugin_id: "test".into(),
+                kind_label: "test_event".into(),
+                payload: serde_json::json!({}),
             }),
         )
         .await
@@ -110,8 +113,8 @@ async fn list_events_returns_published_events() {
         .and_then(|i| i.as_array())
         .expect("items array");
     assert!(
-        items.iter().any(|e| e.get("kind").and_then(|k| k.as_str()) == Some("run_started")),
-        "expected run_started event in {value:?}"
+        items.iter().any(|e| e.get("kind").and_then(|k| k.as_str()) == Some("plugin_event")),
+        "expected plugin_event event in {value:?}"
     );
 }
 
@@ -134,7 +137,7 @@ async fn ws_protocol_round_trip_command_and_subscription() {
 
     // Sanity-check the bus routing without needing a WS client crate: we
     // subscribe in-process and verify events flow.
-    let mut sub = bus.subscribe(agena_event::EventFilter::new(Scope::Global));
+    let mut sub = bus.subscribe(agena::event::EventFilter::new(Scope::Global));
     publisher
         .publish(
             PublishContext::for_session(1),

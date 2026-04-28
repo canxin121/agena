@@ -1,103 +1,147 @@
-use chrono::{DateTime, Utc};
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr};
+use std::sync::Arc;
 
-use crate::{
-    db::crud::{message, session_history},
-    message::Message,
-    session::SessionRuntimeState,
-};
+use chrono::{DateTime, Utc};
+use sea_orm::DbErr;
+
+use crate::event::{DomainEvent, EventKind, EventPublisher, PublishContext};
+use crate::message::Message;
+use crate::session::SessionRuntimeState;
 
 use super::{
-    HistoryItem, HistoryRecord, SessionHistoryProjection, history_items_from_legacy_snapshot,
-    replay_history,
+    SessionView, SessionViewBuilder, TurnAbortReason, TurnAborted, TurnId, TurnStarted, fold_history,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct SessionHistoryStore {
-    db: DatabaseConnection,
+    publisher: Arc<EventPublisher>,
 }
 
 impl SessionHistoryStore {
-    pub(crate) fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+    pub(crate) fn new(publisher: Arc<EventPublisher>) -> Self {
+        Self { publisher }
     }
 
     pub(crate) async fn load_projection(
         &self,
         session_id: i64,
         base_runtime: SessionRuntimeState,
-    ) -> Result<SessionHistoryProjection, DbErr> {
-        self.ensure_legacy_imported(session_id).await?;
-        let records = session_history::list_history_records(&self.db, session_id).await?;
-        let mut projection = replay_history(records.as_slice())
-            .map_err(|err| DbErr::Custom(format!("failed to replay session history: {err}")))?;
-        if projection.runtime == SessionRuntimeState::default() {
-            projection.runtime = base_runtime;
+    ) -> Result<LoadedSessionProjection, DbErr> {
+        self.repair_hanging_turns(session_id).await?;
+        let events = self.list_session_events(session_id).await?;
+
+        let view: SessionView = fold_history::<SessionViewBuilder>(events.as_slice())
+            .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?
+            .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?;
+
+        let mut runtime = view.runtime;
+        if runtime == SessionRuntimeState::default() {
+            runtime = base_runtime;
         }
-        Ok(projection)
+        Ok(LoadedSessionProjection {
+            messages: view.messages,
+            runtime,
+            last_seq: view.last_seq,
+        })
     }
 
-    async fn ensure_legacy_imported(&self, session_id: i64) -> Result<(), DbErr> {
-        ensure_legacy_imported(&self.db, session_id).await
+    pub(crate) async fn list_session_events(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<DomainEvent>, DbErr> {
+        use agena_event::{EventFilter, Scope, StoreRange};
+        let filter = EventFilter::new(Scope::Session { session_id });
+        let mut all = Vec::new();
+        let mut cursor = 0i64;
+        loop {
+            let chunk = self
+                .publisher
+                .store()
+                .range(
+                    &filter,
+                    StoreRange {
+                        after_seq_global: cursor,
+                        limit: 1024,
+                    },
+                )
+                .await
+                .map_err(|err| DbErr::Custom(format!("event store range failed: {err}")))?;
+            if chunk.is_empty() {
+                break;
+            }
+            cursor = chunk.last().map(|e| e.meta.seq_global).unwrap_or(cursor);
+            all.extend(chunk);
+        }
+        Ok(all)
+    }
+
+    /// Scan the tail of the history for any `TurnStarted(t)` without a
+    /// matching `TurnCompleted(t)` / `TurnAborted(t)`. Append a synthetic
+    /// `TurnAborted { reason: ProcessRestart }` for each — the
+    /// `SessionViewBuilder` will then drop the dangling messages.
+    async fn repair_hanging_turns(&self, session_id: i64) -> Result<(), DbErr> {
+        use std::collections::HashSet;
+        let events = self.list_session_events(session_id).await?;
+        let mut started: HashSet<TurnId> = HashSet::new();
+        for event in &events {
+            match &event.kind {
+                EventKind::TurnStarted(TurnStarted { turn_id, .. }) => {
+                    started.insert(*turn_id);
+                }
+                EventKind::TurnCompleted(payload) => {
+                    started.remove(&payload.turn_id);
+                }
+                EventKind::TurnAborted(payload) => {
+                    started.remove(&payload.turn_id);
+                }
+                _ => {}
+            }
+        }
+        if started.is_empty() {
+            return Ok(());
+        }
+        for turn_id in started {
+            let kind = EventKind::TurnAborted(TurnAborted {
+                turn_id,
+                reason: TurnAbortReason::ProcessRestart,
+                message: Some("process restart detected on session load".to_string()),
+            });
+            let ctx = PublishContext::for_session(session_id);
+            self.publisher
+                .publish(ctx, kind)
+                .await
+                .map_err(|err| DbErr::Custom(format!("publish abort failed: {err}")))?;
+        }
+        Ok(())
+    }
+
+    /// Append a batch of events for a session. Each entry is published
+    /// through the unified [`EventPublisher`].
+    pub(crate) async fn append_items(
+        &self,
+        session_id: i64,
+        kinds: Vec<EventKind>,
+        _now: DateTime<Utc>,
+    ) -> Result<Vec<DomainEvent>, DbErr> {
+        if kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            let ctx = PublishContext::for_session(session_id);
+            let event = self
+                .publisher
+                .publish(ctx, kind)
+                .await
+                .map_err(|err| DbErr::Custom(format!("publish history item failed: {err}")))?;
+            out.push(event);
+        }
+        Ok(out)
     }
 }
 
-pub(crate) async fn ensure_legacy_imported<C>(db: &C, session_id: i64) -> Result<(), DbErr>
-where
-    C: ConnectionTrait,
-{
-    if session_history::latest_history_seq(db, session_id).await?.is_some() {
-        return Ok(());
-    }
-
-    let messages = message::list_messages_with_parts(db, session_id).await?;
-    if messages.is_empty() {
-        return Ok(());
-    }
-
-    append_items(
-        db,
-        session_id,
-        0,
-        history_items_from_legacy_snapshot(messages.as_slice()),
-        Utc::now(),
-    )
-    .await?;
-    Ok(())
-}
-
-pub(crate) async fn append_items<C>(
-    db: &C,
-    session_id: i64,
-    next_seq_start: i64,
-    items: Vec<HistoryItem>,
-    now: DateTime<Utc>,
-) -> Result<Vec<HistoryRecord>, DbErr>
-where
-    C: ConnectionTrait,
-{
-    if items.is_empty() {
-        return Ok(Vec::new());
-    }
-    session_history::append_history_items(db, session_id, next_seq_start, items, now).await
-}
-
-pub(crate) async fn append_message_snapshot<C>(
-    db: &C,
-    session_id: i64,
-    next_seq_start: i64,
-    message: &Message,
-    now: DateTime<Utc>,
-) -> Result<Vec<HistoryRecord>, DbErr>
-where
-    C: ConnectionTrait,
-{
-    append_items(
-        db,
-        session_id,
-        next_seq_start,
-        super::history_items_from_message_snapshot(message),
-        now,
-    )
-    .await
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LoadedSessionProjection {
+    pub messages: Vec<Message>,
+    pub runtime: SessionRuntimeState,
+    pub last_seq: i64,
 }

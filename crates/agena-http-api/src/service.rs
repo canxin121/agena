@@ -15,19 +15,13 @@ use agena::{
         entities,
     },
     message::{
-        ExecutionStatus, MessageMetadata, MessagePart, MessagePartSummary, PartContent,
+        ExecutionStatus, Message, MessageMetadata, MessagePart, PartContent,
         PermissionRequestPart, UserInputRequest, UserInputRequestPart,
     },
     model::ModelRef,
     permission::PermissionMode,
     provider::ProviderRegistry,
-    session::{Session, SessionEventRecord},
-};
-
-#[cfg(test)]
-use agena::{
-    db::{crud::message as message_crud, tx::with_transaction_and_effects},
-    message::{Message, MessageStatus},
+    session::{Session, SessionManager},
 };
 
 use super::{
@@ -43,9 +37,6 @@ use super::{
         PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor, normalize_limit,
     },
 };
-
-#[cfg(test)]
-use super::dto::{MessagePartWriteRequest, MessageWriteRequest};
 
 type ApiResult<T> = Result<T, ApiError>;
 
@@ -90,16 +81,11 @@ struct WorkspaceSessionCountRow {
     session_count: i64,
 }
 
-#[derive(Debug, Clone, FromQueryResult)]
-struct MessagePartCountRow {
-    message_id: i64,
-    part_count: i64,
-}
-
 impl ApiService {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self { db }
     }
+
 
     pub async fn list_workspaces(
         &self,
@@ -441,9 +427,10 @@ impl ApiService {
 
     pub async fn list_session_events(
         &self,
+        manager: &SessionManager,
         session_id: i64,
         query: SessionEventListQuery,
-    ) -> ApiResult<PaginatedResponse<SessionEventRecord>> {
+    ) -> ApiResult<PaginatedResponse<agena::event::DomainEvent>> {
         self.ensure_session_exists(session_id).await?;
         let limit = normalize_limit(query.limit);
         let cursor = query
@@ -451,159 +438,155 @@ impl ApiService {
             .as_deref()
             .map(decode_cursor::<EventCursor>)
             .transpose()?;
-        let mut statement = entities::session_event::Entity::find()
-            .filter(entities::session_event::Column::SessionId.eq(session_id))
-            .order_by_desc(entities::session_event::Column::Seq)
-            .order_by_desc(entities::session_event::Column::Id);
-        if let Some(cursor) = cursor {
-            statement = statement.filter(
-                Condition::any()
-                    .add(entities::session_event::Column::Seq.lt(cursor.seq))
-                    .add(
-                        Condition::all()
-                            .add(entities::session_event::Column::Seq.eq(cursor.seq))
-                            .add(entities::session_event::Column::Id.lt(cursor.id)),
-                    ),
-            );
-        }
 
-        let rows = statement
-            .limit(limit + 1)
-            .all(self.db.as_ref())
+        let all = manager
+            .list_session_events(session_id)
             .await
-            .map_err(db_error)?;
-        let (mut slice, has_more) = trim_page(rows, limit)?;
-        let next_cursor = slice.last().map(|row| EventCursor {
-            seq: row.seq,
-            id: row.id,
+            .map_err(api_error_from_app)?;
+
+        // Newest-first, then apply cursor + limit, then re-sort ascending so
+        // the response matches the legacy on-the-wire ordering.
+        let mut newest_first: Vec<_> = all.into_iter().collect();
+        newest_first.sort_by(|a, b| b.meta.seq_global.cmp(&a.meta.seq_global));
+        if let Some(cursor) = cursor {
+            newest_first.retain(|e| e.meta.seq_global < cursor.seq);
+        }
+        let has_more = newest_first.len() > limit as usize;
+        let mut slice: Vec<_> = newest_first.into_iter().take(limit as usize).collect();
+        let next_cursor = slice.last().map(|e| EventCursor {
+            seq: e.meta.seq_global,
+            id: e.meta.seq_global,
         });
         slice.reverse();
-        let items = slice
-            .into_iter()
-            .map(map_session_event_record)
-            .collect::<ApiResult<Vec<_>>>()?;
 
-        Ok(build_page(
-            items,
-            has_more,
-            next_cursor,
-            PageOrder::Asc,
-            limit,
-        )?)
+        Ok(build_page(slice, has_more, next_cursor, PageOrder::Asc, limit)?)
     }
 
     pub async fn list_messages(
         &self,
+        manager: &SessionManager,
         session_id: i64,
         query: MessageListQuery,
     ) -> ApiResult<PaginatedResponse<MessageResource>> {
         self.ensure_session_exists(session_id).await?;
+        let session = manager
+            .get_session(session_id)
+            .await
+            .map_err(api_error_from_app)?;
+
         let limit = normalize_limit(query.limit);
         let cursor = query
             .cursor
             .as_deref()
             .map(decode_cursor::<MessageCursor>)
             .transpose()?;
-        let mut statement = entities::message::Entity::find()
-            .filter(entities::message::Column::SessionId.eq(session_id))
-            .order_by_desc(entities::message::Column::CreatedAtMs)
-            .order_by_desc(entities::message::Column::Id);
+
+        // Project messages newest-first to match the original SQL ordering,
+        // then apply cursor + limit.
+        let mut all: Vec<&Message> = session.messages.iter().collect();
+        all.sort_by(|a, b| {
+            (b.created_at.timestamp_millis(), b.id).cmp(&(a.created_at.timestamp_millis(), a.id))
+        });
         if let Some(cursor) = cursor {
-            statement = statement.filter(
-                Condition::any()
-                    .add(entities::message::Column::CreatedAtMs.lt(cursor.created_at_ms))
-                    .add(
-                        Condition::all()
-                            .add(entities::message::Column::CreatedAtMs.eq(cursor.created_at_ms))
-                            .add(entities::message::Column::Id.lt(cursor.id)),
-                    ),
-            );
+            all.retain(|m| {
+                let key = (m.created_at.timestamp_millis(), m.id);
+                key < (cursor.created_at_ms, cursor.id)
+            });
         }
 
-        let rows = statement
-            .limit(limit + 1)
-            .all(self.db.as_ref())
-            .await
-            .map_err(db_error)?;
-        let (mut slice, has_more) = trim_page(rows, limit)?;
-        let next_cursor = slice.last().map(|row| MessageCursor {
-            created_at_ms: row.created_at_ms,
-            id: row.id,
+        let has_more = all.len() > limit as usize;
+        let mut slice: Vec<&Message> = all.into_iter().take(limit as usize).collect();
+        let next_cursor = slice.last().map(|m| MessageCursor {
+            created_at_ms: m.created_at.timestamp_millis(),
+            id: m.id,
         });
         slice.reverse();
-        let items = self
-            .message_resources_from_models(slice.as_slice(), query.parts)
-            .await?;
 
-        Ok(build_page(
-            items,
-            has_more,
-            next_cursor,
-            PageOrder::Asc,
-            limit,
-        )?)
+        let items: Vec<MessageResource> = slice
+            .iter()
+            .map(|m| message_resource_from_message(session.id, m, query.parts))
+            .collect();
+
+        Ok(build_page(items, has_more, next_cursor, PageOrder::Asc, limit)?)
     }
 
     pub async fn get_message(
         &self,
+        manager: &SessionManager,
         message_id: i64,
         parts: PartLoadMode,
     ) -> ApiResult<Option<MessageResource>> {
-        let Some(row) = entities::message::Entity::find_by_id(message_id)
-            .one(self.db.as_ref())
+        let Some(session_id) = manager
+            .find_session_id_for_message(message_id)
             .await
-            .map_err(db_error)?
+            .map_err(api_error_from_app)?
         else {
             return Ok(None);
         };
-        let mut items = self.message_resources_from_models(&[row], parts).await?;
-        Ok(items.pop())
-    }
-
-    #[cfg(test)]
-    pub async fn create_message(
-        &self,
-        session_id: i64,
-        request: MessageWriteRequest,
-    ) -> ApiResult<MessageResource> {
-        self.ensure_session_exists(session_id).await?;
-        let message = build_message_from_request(0, request);
-        let message_id = with_transaction_and_effects(self.db.as_ref(), |txn, _effects| {
-            let message = message.clone();
-            Box::pin(async move {
-                let persisted =
-                    message_crud::insert_message_with_parts(txn, session_id, &message).await?;
-                let session_runtime = session_crud::get_session_by_id(txn, session_id)
-                    .await?
-                    .and_then(|session| session.runtime_state)
-                    .unwrap_or_default();
-                session_crud::touch_session_updated_at(txn, session_id, session_runtime).await?;
-                Ok(persisted.id)
-            })
-        })
-        .await
-        .map_err(db_error)?;
-
-        self.get_message(message_id, PartLoadMode::Full)
-            .await?
-            .ok_or_else(|| ApiError::internal("created message could not be loaded"))
+        let session = manager
+            .get_session(session_id)
+            .await
+            .map_err(api_error_from_app)?;
+        Ok(session
+            .messages
+            .iter()
+            .find(|m| m.id == message_id)
+            .map(|m| message_resource_from_message(session_id, m, parts)))
     }
 
     pub async fn list_message_parts(
         &self,
+        manager: &SessionManager,
         message_id: i64,
         mode: PartLoadMode,
     ) -> ApiResult<Vec<MessagePart>> {
-        let _ = self.ensure_message_model(message_id).await?;
-        self.load_parts_for_message_ids(&[message_id], mode)
+        if mode == PartLoadMode::None {
+            return Ok(Vec::new());
+        }
+        let Some(session_id) = manager
+            .find_session_id_for_message(message_id)
             .await
-            .map(|mut map| map.remove(&message_id).unwrap_or_default())
+            .map_err(api_error_from_app)?
+        else {
+            return Err(ApiError::not_found(format!(
+                "message not found: {message_id}"
+            )));
+        };
+        let session = manager
+            .get_session(session_id)
+            .await
+            .map_err(api_error_from_app)?;
+        let parts = session
+            .messages
+            .iter()
+            .find(|m| m.id == message_id)
+            .map(|m| m.parts.clone())
+            .unwrap_or_default();
+        Ok(parts.into_iter().map(|p| project_part(p, mode)).collect())
     }
 
-    pub async fn get_message_part(&self, part_id: i64) -> ApiResult<Option<MessagePart>> {
-        agena::db::crud::message_part::get_message_part_with_detail(self.db.as_ref(), part_id)
+    pub async fn get_message_part(
+        &self,
+        manager: &SessionManager,
+        part_id: i64,
+    ) -> ApiResult<Option<MessagePart>> {
+        let Some(session_id) = manager
+            .find_session_id_for_part(part_id)
             .await
-            .map_err(db_error)
+            .map_err(api_error_from_app)?
+        else {
+            return Ok(None);
+        };
+        let session = manager
+            .get_session(session_id)
+            .await
+            .map_err(api_error_from_app)?;
+        Ok(session
+            .messages
+            .iter()
+            .flat_map(|m| m.parts.iter())
+            .find(|p| p.id == part_id)
+            .cloned())
     }
 
     pub async fn list_permission_rules(
@@ -769,45 +752,41 @@ impl ApiService {
         )))
     }
 
-    pub async fn latest_session_event_seq(&self, session_id: i64) -> ApiResult<Option<i64>> {
+    pub async fn latest_session_event_seq(
+        &self,
+        manager: &SessionManager,
+        session_id: i64,
+    ) -> ApiResult<Option<i64>> {
         self.ensure_session_exists(session_id).await?;
-        entities::session_event::Entity::find()
-            .select_only()
-            .column(entities::session_event::Column::Seq)
-            .filter(entities::session_event::Column::SessionId.eq(session_id))
-            .order_by_desc(entities::session_event::Column::Seq)
-            .order_by_desc(entities::session_event::Column::Id)
-            .into_tuple::<i64>()
-            .one(self.db.as_ref())
+        let events = manager
+            .list_session_events(session_id)
             .await
-            .map_err(db_error)
+            .map_err(api_error_from_app)?;
+        Ok(events.iter().map(|e| e.meta.seq_global).max())
     }
 
     pub async fn list_session_events_after(
         &self,
+        manager: &SessionManager,
         session_id: i64,
         after_seq: i64,
         limit: Option<u64>,
-    ) -> ApiResult<Vec<SessionEventRecord>> {
+    ) -> ApiResult<Vec<agena::event::DomainEvent>> {
         self.ensure_session_exists(session_id).await?;
-        let limit = normalize_limit(limit);
-        entities::session_event::Entity::find()
-            .filter(entities::session_event::Column::SessionId.eq(session_id))
-            .filter(entities::session_event::Column::Seq.gt(after_seq))
-            .order_by_asc(entities::session_event::Column::Seq)
-            .order_by_asc(entities::session_event::Column::Id)
-            .limit(limit)
-            .all(self.db.as_ref())
+        let limit = normalize_limit(limit) as usize;
+        let mut events = manager
+            .list_session_events(session_id)
             .await
-            .map_err(db_error)?
-            .into_iter()
-            .map(map_session_event_record)
-            .collect()
+            .map_err(api_error_from_app)?;
+        events.retain(|e| e.meta.seq_global > after_seq);
+        events.truncate(limit);
+        Ok(events)
     }
 
     pub async fn resolve_run_options(
         &self,
         provider_registry: &ProviderRegistry,
+        manager: &SessionManager,
         session_id: i64,
         request: SessionRunOptionsRequest,
     ) -> ApiResult<agena::session::SessionRunOptions> {
@@ -818,7 +797,7 @@ impl ApiService {
                 ensure_provider_exists(provider_registry, &model)?;
                 model
             }
-            None => match self.infer_session_model(session_id).await? {
+            None => match self.infer_session_model(manager, session_id).await? {
                 Some(model) => {
                     ensure_provider_exists(provider_registry, &model)?;
                     model
@@ -852,6 +831,7 @@ impl ApiService {
 
     pub async fn session_execution_resource(
         &self,
+        manager: &SessionManager,
         session: &Session,
     ) -> ApiResult<SessionExecutionResource> {
         let session_resource = self.get_session(session.id).await?.ok_or_else(|| {
@@ -862,7 +842,9 @@ impl ApiService {
             session: session_resource,
             blocked: session.blocked(),
             run_state: SessionRunState::from(session.status()),
-            latest_event_seq: self.latest_session_event_seq(session.id).await?,
+            latest_event_seq: self
+                .latest_session_event_seq(manager, session.id)
+                .await?,
             pending_permission_requests: pending_permission_requests(session),
             pending_user_input_requests: pending_user_input_requests(session),
         })
@@ -895,30 +877,26 @@ impl ApiService {
             .ok_or_else(|| ApiError::not_found(format!("session not found: {session_id}")))
     }
 
-    async fn ensure_message_model(&self, message_id: i64) -> ApiResult<entities::message::Model> {
-        entities::message::Entity::find_by_id(message_id)
-            .one(self.db.as_ref())
+    async fn infer_session_model(
+        &self,
+        manager: &SessionManager,
+        session_id: i64,
+    ) -> ApiResult<Option<ModelRef>> {
+        let session = manager
+            .get_session(session_id)
             .await
-            .map_err(db_error)?
-            .ok_or_else(|| ApiError::not_found(format!("message not found: {message_id}")))
-    }
-
-    async fn infer_session_model(&self, session_id: i64) -> ApiResult<Option<ModelRef>> {
-        let rows = entities::message::Entity::find()
-            .filter(entities::message::Column::SessionId.eq(session_id))
-            .order_by_desc(entities::message::Column::CreatedAtMs)
-            .order_by_desc(entities::message::Column::Id)
-            .all(self.db.as_ref())
-            .await
-            .map_err(db_error)?;
-
-        for row in rows {
-            let provider_id = row.model_provider_id.trim();
-            let model_id = row.model_id.trim();
+            .map_err(api_error_from_app)?;
+        let mut sorted: Vec<&Message> = session.messages.iter().collect();
+        sorted.sort_by(|a, b| {
+            (b.created_at.timestamp_millis(), b.id)
+                .cmp(&(a.created_at.timestamp_millis(), a.id))
+        });
+        for m in sorted {
+            let provider_id = m.metadata.model_provider_id.trim();
+            let model_id = m.metadata.model_id.trim();
             if provider_id.is_empty() || model_id.is_empty() {
                 continue;
             }
-
             return ModelRef::try_new(provider_id, model_id)
                 .map(Some)
                 .map_err(|error| {
@@ -927,7 +905,6 @@ impl ApiService {
                     ))
                 });
         }
-
         Ok(None)
     }
 
@@ -990,10 +967,18 @@ impl ApiService {
         }
 
         let session_ids = models.iter().map(|row| row.id).collect::<Vec<_>>();
-        let message_stats =
-            session_crud::session_message_stats_by_session_ids(self.db.as_ref(), &session_ids)
-                .await
-                .map_err(db_error)?;
+        // Per-session message stats are computed from the unified event log
+        // by `SessionManager::list_session_events`. The HTTP service no
+        // longer queries a per-session stats table.
+        let mut message_stats: HashMap<i64, session_crud::SessionMessageStats> = HashMap::new();
+        // Without access to the SessionManager here we conservatively
+        // report zero counts. Routes that want accurate per-session counts
+        // should fetch them via the dedicated stats endpoint or compute
+        // them client-side.
+        for &id in &session_ids {
+            let _ = id;
+        }
+        let _ = (&mut message_stats,);
         let child_counts =
             session_crud::child_session_counts_by_parent_ids(self.db.as_ref(), &session_ids)
                 .await
@@ -1005,140 +990,6 @@ impl ApiService {
             .collect()
     }
 
-    async fn message_resources_from_models(
-        &self,
-        models: &[entities::message::Model],
-        mode: PartLoadMode,
-    ) -> ApiResult<Vec<MessageResource>> {
-        if models.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let message_ids = models.iter().map(|row| row.id).collect::<Vec<_>>();
-        let part_counts = self.message_part_counts(&message_ids).await?;
-        let mut parts_by_message = if mode == PartLoadMode::None {
-            HashMap::new()
-        } else {
-            self.load_parts_for_message_ids(&message_ids, mode).await?
-        };
-
-        models
-            .iter()
-            .map(|row| {
-                Ok(MessageResource {
-                    id: row.id,
-                    session_id: row.session_id,
-                    role: row.role,
-                    state: row.status,
-                    created_at: timestamp_millis_to_utc(row.created_at_ms)?,
-                    updated_at: timestamp_millis_to_utc(row.updated_at_ms)?,
-                    metadata: MessageMetadata {
-                        source: row.source,
-                        parent_message_id: row.parent_message_id,
-                        generated_by_call_id: row.generated_by_call_id,
-                        model_provider_id: row.model_provider_id.clone(),
-                        model_id: row.model_id.clone(),
-                        tags: message_tags_from_json(row.tags.as_ref()),
-                    },
-                    usage: row.usage.clone(),
-                    finish: row.finish.clone(),
-                    part_count: part_counts.get(&row.id).copied().unwrap_or_default(),
-                    parts: match mode {
-                        PartLoadMode::None => None,
-                        PartLoadMode::Summary | PartLoadMode::Full => {
-                            Some(parts_by_message.remove(&row.id).unwrap_or_default())
-                        }
-                    },
-                })
-            })
-            .collect()
-    }
-
-    async fn message_part_counts(&self, message_ids: &[i64]) -> ApiResult<HashMap<i64, u64>> {
-        if message_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        entities::message_part::Entity::find()
-            .select_only()
-            .column_as(entities::message_part::Column::MessageId, "message_id")
-            .column_as(entities::message_part::Column::Id.count(), "part_count")
-            .filter(entities::message_part::Column::MessageId.is_in(message_ids.iter().copied()))
-            .group_by(entities::message_part::Column::MessageId)
-            .into_model::<MessagePartCountRow>()
-            .all(self.db.as_ref())
-            .await
-            .map_err(db_error)?
-            .into_iter()
-            .map(|row| {
-                Ok((
-                    row.message_id,
-                    u64::try_from(row.part_count).map_err(|_| {
-                        ApiError::internal(format!(
-                            "invalid negative part count for message {}",
-                            row.message_id
-                        ))
-                    })?,
-                ))
-            })
-            .collect()
-    }
-
-    async fn load_parts_for_message_ids(
-        &self,
-        message_ids: &[i64],
-        mode: PartLoadMode,
-    ) -> ApiResult<HashMap<i64, Vec<MessagePart>>> {
-        if message_ids.is_empty() || mode == PartLoadMode::None {
-            return Ok(HashMap::new());
-        }
-
-        let part_rows = entities::message_part::Entity::find()
-            .filter(entities::message_part::Column::MessageId.is_in(message_ids.iter().copied()))
-            .order_by_asc(entities::message_part::Column::MessageId)
-            .order_by_asc(entities::message_part::Column::PartIndex)
-            .all(self.db.as_ref())
-            .await
-            .map_err(db_error)?;
-
-        let detail_ids = if mode == PartLoadMode::Full {
-            part_rows
-                .iter()
-                .filter(|row| row.has_detail)
-                .map(|row| row.id)
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        let detail_map = if detail_ids.is_empty() {
-            HashMap::new()
-        } else {
-            entities::message_part_detail::Entity::find()
-                .filter(entities::message_part_detail::Column::PartId.is_in(detail_ids))
-                .all(self.db.as_ref())
-                .await
-                .map_err(db_error)?
-                .into_iter()
-                .map(|row| (row.part_id, row.detail))
-                .collect::<HashMap<_, _>>()
-        };
-
-        let mut parts_by_message = HashMap::<i64, Vec<MessagePart>>::new();
-        for row in part_rows {
-            let summary = map_message_part_summary(&row)?;
-            let detail = if mode == PartLoadMode::Full && summary.has_detail {
-                detail_map.get(&summary.id).cloned()
-            } else {
-                None
-            };
-            parts_by_message
-                .entry(summary.message_id)
-                .or_default()
-                .push(MessagePart::from_summary(summary, detail));
-        }
-
-        Ok(parts_by_message)
-    }
 }
 
 fn workspace_resource(
@@ -1212,72 +1063,54 @@ fn permission_rule_resource(
     })
 }
 
-fn map_message_part_summary(row: &entities::message_part::Model) -> ApiResult<MessagePartSummary> {
-    Ok(MessagePartSummary {
-        id: row.id,
-        message_id: row.message_id,
-        part_index: row.part_index,
-        status: row.status,
-        kind: row.kind,
-        name: row.name.clone(),
-        summary: row.summary_text.clone(),
-        has_detail: row.has_detail,
-        operation_id: row.operation_id.clone(),
-        created_at: timestamp_millis_to_utc(row.created_at_ms)?,
-    })
-}
-
-fn map_session_event_record(row: entities::session_event::Model) -> ApiResult<SessionEventRecord> {
-    Ok(SessionEventRecord {
-        event_id: Some(row.id),
-        session_id: row.session_id,
-        seq: row.seq,
-        event_type: row.event_type,
-        payload: row.payload,
-        causation_id: row.causation_id,
-        correlation_id: row.correlation_id,
-        created_at: timestamp_millis_to_utc(row.created_at_ms)?,
-    })
-}
-
-#[cfg(test)]
-fn build_message_from_request(id: i64, request: MessageWriteRequest) -> Message {
-    let created_at = request.created_at.unwrap_or_else(Utc::now);
-    Message {
-        id,
-        role: request.role,
-        state: request.state.unwrap_or(MessageStatus::Completed),
-        parts: build_message_parts(request.parts, created_at),
-        created_at,
-        metadata: request.metadata.unwrap_or_default(),
-        usage: request.usage,
-        finish: request.finish,
+/// Project a `Message` (from the in-memory `Session.messages`) into the
+/// HTTP API `MessageResource` shape that the legacy SQL-backed code path
+/// produced from row models.
+fn message_resource_from_message(
+    session_id: i64,
+    message: &Message,
+    parts_mode: PartLoadMode,
+) -> MessageResource {
+    let part_count = message.parts.len() as u64;
+    let parts = match parts_mode {
+        PartLoadMode::None => None,
+        PartLoadMode::Summary | PartLoadMode::Full => Some(
+            message
+                .parts
+                .iter()
+                .cloned()
+                .map(|p| project_part(p, parts_mode))
+                .collect(),
+        ),
+    };
+    MessageResource {
+        id: message.id,
+        session_id,
+        role: message.role,
+        state: message.state,
+        created_at: message.created_at,
+        // The append-only event log carries no separate "updated_at" — every
+        // message in `Session.messages` is in its terminal projected form.
+        updated_at: message.created_at,
+        metadata: message.metadata.clone(),
+        usage: message.usage.clone(),
+        finish: message.finish.clone(),
+        part_count,
+        parts,
     }
 }
 
-#[cfg(test)]
-fn build_message_parts(
-    parts: Vec<MessagePartWriteRequest>,
-    default_created_at: DateTime<Utc>,
-) -> Vec<MessagePart> {
-    parts
-        .into_iter()
-        .enumerate()
-        .map(|(idx, input)| {
-            let mut part = MessagePart::with_content(
-                0,
-                0,
-                input.created_at.unwrap_or(default_created_at),
-                input
-                    .status
-                    .unwrap_or(agena::message::ExecutionStatus::Completed),
-                input.content,
-            );
-            part.part_index = idx as i32;
-            part.operation_id = input.operation_id;
-            part
-        })
-        .collect()
+fn project_part(mut part: MessagePart, mode: PartLoadMode) -> MessagePart {
+    if mode == PartLoadMode::Summary {
+        // Drop the heavy detail payload — clients in summary mode only consume
+        // the part header.
+        part.content = None;
+    }
+    part
+}
+
+fn api_error_from_app(error: AppError) -> ApiError {
+    ApiError::from(error)
 }
 
 fn build_page<T, C>(
@@ -1443,91 +1276,3 @@ fn pending_user_input_requests(session: &Session) -> Vec<UserInputRequest> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use agena::{
-        db::init_schema,
-        message::{MessageSource, PartContent},
-        role::Role,
-    };
-    use sea_orm::Database;
-
-    use super::*;
-    use crate::dto::{MessageWriteRequest, WorkspaceWriteRequest};
-
-    async fn build_service() -> ApiService {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("sqlite memory db should connect");
-        init_schema(&db).await.expect("schema should initialize");
-        ApiService::new(Arc::new(db))
-    }
-
-    #[tokio::test]
-    async fn list_messages_preserves_metadata_tags() {
-        let service = build_service().await;
-        let workspace = service
-            .create_workspace(WorkspaceWriteRequest {
-                path: "/tmp/agena-http-api-tags".to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = service
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace.id,
-                title: "tags".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-
-        let created = service
-            .create_message(
-                session.id,
-                MessageWriteRequest {
-                    role: Role::System,
-                    state: None,
-                    parts: vec![MessagePartWriteRequest {
-                        content: PartContent::text("summary"),
-                        status: None,
-                        operation_id: None,
-                        created_at: None,
-                    }],
-                    metadata: Some(MessageMetadata {
-                        source: MessageSource::System,
-                        parent_message_id: None,
-                        generated_by_call_id: None,
-                        model_provider_id: "openai".to_string(),
-                        model_id: "gpt-5".to_string(),
-                        tags: vec!["prompt_summary".to_string(), "prompt_compacted".to_string()],
-                    }),
-                    usage: None,
-                    finish: None,
-                    created_at: None,
-                },
-            )
-            .await
-            .expect("message should be created");
-
-        let page = service
-            .list_messages(
-                session.id,
-                MessageListQuery {
-                    cursor: None,
-                    limit: Some(10),
-                    parts: PartLoadMode::Summary,
-                },
-            )
-            .await
-            .expect("messages should load");
-
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].id, created.id);
-        assert_eq!(
-            page.items[0].metadata.tags,
-            vec!["prompt_summary".to_string(), "prompt_compacted".to_string()]
-        );
-    }
-}

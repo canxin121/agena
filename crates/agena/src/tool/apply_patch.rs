@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -8,13 +9,13 @@ use crate::message::ApplyPatchToolInput;
 
 use super::{ToolError, ToolExecutor};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppliedFileChange {
     pub path: String,
     pub kind: PatchOpKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplyPatchExecution {
     pub operation_id: String,
     pub files: Vec<AppliedFileChange>,
@@ -23,7 +24,8 @@ pub struct ApplyPatchExecution {
     pub inverse_patch: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PatchOpKind {
     Add,
     Update,

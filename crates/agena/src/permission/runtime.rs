@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use thiserror::Error;
@@ -9,6 +10,10 @@ use super::request::{
 };
 use super::store::{PermissionRuleStore, PermissionStoreError};
 use super::{PermissionDecision, PermissionMode};
+use crate::plugin::{
+    PermissionAskInput as PluginPermissionAskInput,
+    PermissionDecision as PluginPermissionDecision, PluginHost,
+};
 
 #[derive(Debug, Error)]
 pub enum PermissionRuntimeError {
@@ -50,8 +55,61 @@ where
         action: PermissionAction,
         base: PermissionDecision,
     ) -> Result<PermissionRuntimeDecision, PermissionRuntimeError> {
+        self.decide_or_request_with_plugins(session_id, action, base, None)
+    }
+
+    /// Same as [`decide_or_request`] but consults the plugin host's
+    /// `permission.ask` hook before falling back to the default flow. A
+    /// plugin returning `Decide(Allow|Deny)` short-circuits the runtime; a
+    /// plugin returning `Defer` lets the next plugin or the default base
+    /// decision win.
+    pub fn decide_or_request_with_plugins(
+        &mut self,
+        session_id: Option<i64>,
+        action: PermissionAction,
+        base: PermissionDecision,
+        plugins: Option<&Arc<PluginHost>>,
+    ) -> Result<PermissionRuntimeDecision, PermissionRuntimeError> {
         if let Some(saved) = self.store.lookup(&action)? {
             return Ok(PermissionRuntimeDecision::Immediate(saved.into()));
+        }
+
+        // Plugin override (best-effort: errors are logged and ignored).
+        if let Some(host) = plugins
+            && !host.is_empty()
+        {
+            let default_decision = match &base {
+                PermissionDecision::Allow => PluginPermissionDecision::Allow,
+                PermissionDecision::Deny { .. } => PluginPermissionDecision::Deny,
+                PermissionDecision::Ask { .. } => PluginPermissionDecision::Prompt,
+            };
+            let req = PluginPermissionAskInput {
+                session_id: session_id.unwrap_or(-1),
+                action: format!("{:?}", action),
+                subject: serde_json::Value::Null,
+                default_decision,
+            };
+            match host.dispatch_permission_ask_blocking(req) {
+                Ok(Some(PluginPermissionDecision::Allow)) => {
+                    return Ok(PermissionRuntimeDecision::Immediate(
+                        PermissionDecision::Allow,
+                    ));
+                }
+                Ok(Some(PluginPermissionDecision::Deny)) => {
+                    return Ok(PermissionRuntimeDecision::Immediate(
+                        PermissionDecision::Deny {
+                            reason: "denied by plugin".to_string(),
+                        },
+                    ));
+                }
+                Ok(Some(PluginPermissionDecision::Prompt)) | Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        target: "agena_plugin_host::permission",
+                        "permission plugin failed: {err}"
+                    );
+                }
+            }
         }
 
         match base {

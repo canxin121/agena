@@ -1,0 +1,36 @@
+[package]
+name = "agena-plugin-host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agena-plugin-sdk = { path = "../agena-plugin-sdk", features = ["cdylib", "stdio", "http"] }
+abi_stable = "0.11.3"
+async-trait = "0.1.89"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["macros", "rt", "rt-multi-thread", "io-util", "process", "sync", "time"] }
+toml = "0.9.8"
+tracing = "0.1.44"
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
+url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+dashmap = "6"
+wasmtime = { version = "26", default-features = false, features = ["cranelift", "runtime", "std"], optional = true }
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "pkcs8", "pem"], optional = true }
+
+[features]
+default = []
+wasm = ["dep:wasmtime", "dep:sha2", "dep:hex"]
+signing = ["dep:sha2", "dep:hex", "dep:ed25519-dalek"]
+
+[dev-dependencies]
+agena-plugin-sdk = { path = "../agena-plugin-sdk", features = ["http", "stdio"] }
+async-trait = "0.1"
+axum = "0.7"
+ed25519-dalek = { version = "2", features = ["std", "rand_core"] }
+hex = "0.4"
+tokio = { version = "1.50.0", features = ["full"] }

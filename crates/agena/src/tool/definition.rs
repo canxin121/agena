@@ -1,9 +1,7 @@
-use abi_stable::StableAbi;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, StableAbi)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolBehavior {
     ReadOnly,

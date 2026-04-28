@@ -171,6 +171,10 @@ impl CodexProvider {
             req = req.header("x-codex-window-id", window_id);
         }
 
+        // chat.headers plugin chain: lets plugins add/remove headers per
+        // request without touching codex internals.
+        req = super::utils::apply_request_headers(PROVIDER_ID, req, &Default::default());
+
         req.send().await.map_err(AppError::from)
     }
 

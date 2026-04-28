@@ -1615,7 +1615,7 @@ impl OpenAiProvider {
     }
 
     fn apply_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        utils::apply_extra_headers(req, &self.extra_headers)
+        utils::apply_request_headers(PROVIDER_ID, req, &self.extra_headers)
     }
 
     async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>

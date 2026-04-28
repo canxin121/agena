@@ -8,7 +8,7 @@ use std::{
 };
 
 use agena::{
-    event::SessionEvent as AgenaSessionEvent,
+    event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
         AttachmentKind, BuiltinToolInput, MessagePart, PartContent, ToolExecutionPart,
         ToolInvocation, UserInputReply, UserInputReplyKind, UserInputRequest,
@@ -17,7 +17,6 @@ use agena::{
     permission::PermissionReplyKind,
     provider::ProviderModel,
     role::Role,
-    session::SessionEventRecord,
 };
 use agena_http_api::{
     MessageResource, PaginatedResponse, ProviderSummaryResource, SessionExecutionResource,
@@ -125,6 +124,10 @@ pub struct App {
     last_refresh_at: Instant,
     pending_ui_action: Option<UiAction>,
     current_lineage: Option<CurrentLineageState>,
+    /// Forwarder task that pumps `Backend::subscribe_session_events` into
+    /// [`AppMessage::SessionEventArrived`]. Aborted whenever the active
+    /// session changes so we don't accumulate stale subscriptions.
+    active_subscription: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Drop for App {
@@ -224,12 +227,19 @@ enum AppMessage {
     },
     TimelineLoaded {
         session_id: i64,
-        result: UiResult<Vec<SessionEventRecord>>,
+        result: UiResult<Vec<DomainEvent>>,
     },
     SessionRewound {
         session_id: i64,
         target: String,
         result: UiResult<SessionExecutionResource>,
+    },
+    /// Pushed by the unified event bus (`Backend::subscribe_session_events`).
+    /// Replaces the legacy 250ms polling tick: callers receive each domain
+    /// event in real time, with a hint about whether a refresh is needed.
+    SessionEventArrived {
+        session_id: i64,
+        triggers_refresh: bool,
     },
 }
 
@@ -666,6 +676,7 @@ impl App {
                 .unwrap_or_else(Instant::now),
             pending_ui_action: None,
             current_lineage: None,
+            active_subscription: None,
         };
         if let Some(draft) = app.draft_store.get(DraftSlot::NewSession).cloned() {
             app.restore_composer_draft(draft);
@@ -1495,6 +1506,10 @@ impl App {
                 target,
                 result,
             } => self.handle_session_rewound(session_id, target, result),
+            AppMessage::SessionEventArrived {
+                session_id,
+                triggers_refresh,
+            } => self.handle_session_event_arrived(session_id, triggers_refresh),
         }
     }
 
@@ -2036,7 +2051,7 @@ impl App {
     fn handle_timeline_loaded(
         &mut self,
         session_id: i64,
-        result: UiResult<Vec<SessionEventRecord>>,
+        result: UiResult<Vec<DomainEvent>>,
     ) {
         let Some(Overlay::Timeline(mut dialog)) = self.overlay.take() else {
             return;
@@ -2448,11 +2463,52 @@ impl App {
         let _ = self.sessions.select_by_id(session_id);
         self.restore_draft_for_slot(DraftSlot::Session(session_id));
         self.persist_draft_store_with_feedback(true);
+        self.subscribe_session_events(session_id);
         self.request_lineage(session_id);
         self.request_session_state(session_id);
         self.request_messages(session_id, MessageLoadMode::Replace);
         if self.sessions.view_mode == SessionViewMode::Subtree {
             self.request_sessions(false);
+        }
+    }
+
+    /// Spawn a forwarder task that pumps live `LiveEvent`s from the unified
+    /// bus into [`AppMessage::SessionEventArrived`]. Replaces the legacy
+    /// 250ms refresh polling with push-based notifications. Aborts any
+    /// previous subscription so we never accumulate stale receivers.
+    fn subscribe_session_events(&mut self, session_id: i64) {
+        if let Some(handle) = self.active_subscription.take() {
+            handle.abort();
+        }
+        let Some(mut rx) = self.backend.subscribe_session_events(session_id) else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let handle = tokio::spawn(async move {
+            while let Some(live) = rx.recv().await {
+                if tx
+                    .send(AppMessage::SessionEventArrived {
+                        session_id,
+                        triggers_refresh: live.triggers_refresh,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        self.active_subscription = Some(handle);
+    }
+
+    fn handle_session_event_arrived(&mut self, session_id: i64, triggers_refresh: bool) {
+        // Ignore events for sessions the user has already navigated away
+        // from. The forwarder is normally aborted in that case but a few
+        // in-flight messages may still land.
+        if self.transcript.session_id != Some(session_id) {
+            return;
+        }
+        if triggers_refresh {
+            self.request_refresh(session_id, false);
         }
     }
 
@@ -7019,8 +7075,8 @@ fn render_tool_execution(
 }
 
 fn tool_invocation_label(invocation: &ToolInvocation) -> String {
-    match invocation {
-        ToolInvocation::Builtin { input } => match input {
+    if let Some(input) = invocation.as_builtin() {
+        return match input {
             BuiltinToolInput::Bash(input) => format!("bash {}", input.command),
             BuiltinToolInput::Read(input) => format!("read {}", input.file_path),
             BuiltinToolInput::ViewFile(input) => format!("view_file {}", input.path),
@@ -7031,7 +7087,21 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
             BuiltinToolInput::ToolSearch(input) => format!("tool_search {}", input.query),
             BuiltinToolInput::TodoWrite(_) => "todo_write".to_string(),
             BuiltinToolInput::AskUser(_) => "ask_user".to_string(),
-        },
+            BuiltinToolInput::Monitor(input) => match input {
+                agena::message::MonitorToolInput::Start { command, .. } => {
+                    format!("monitor start {command}")
+                }
+                agena::message::MonitorToolInput::List {} => "monitor list".to_string(),
+                agena::message::MonitorToolInput::Read { monitor_id, .. } => {
+                    format!("monitor read {monitor_id}")
+                }
+                agena::message::MonitorToolInput::Stop { monitor_id } => {
+                    format!("monitor stop {monitor_id}")
+                }
+            },
+        };
+    }
+    match invocation {
         ToolInvocation::Mcp { server, tool, .. } => format!("{server}/{tool}"),
         ToolInvocation::Custom { name, .. } => name.clone(),
     }
@@ -7190,27 +7260,25 @@ fn render_transcript_export_markdown(
     out.join("\n")
 }
 
-fn build_timeline_item(record: &SessionEventRecord) -> TimelineItem {
+fn build_timeline_item(record: &DomainEvent) -> TimelineItem {
     let event_type = timeline_event_type_name(record);
     let summary_suffix = timeline_event_summary(record);
     let summary = if summary_suffix.is_empty() {
-        format!("#{}  {}", record.seq, event_type)
+        format!("#{}  {}", record.meta.seq_global, event_type)
     } else {
-        format!("#{}  {}  {}", record.seq, event_type, summary_suffix)
+        format!("#{}  {}  {}", record.meta.seq_global, event_type, summary_suffix)
     };
 
     let mut detail_lines = vec![
-        format!("seq: {}", record.seq),
-        format!("created: {}", format_timestamp(record.created_at)),
+        format!("seq: {}", record.meta.seq_global),
+        format!("created: {}", format_timestamp(record.meta.created_at)),
         format!("type: {event_type}"),
+        format!("event_id: {}", record.meta.id),
     ];
-    if let Some(event_id) = record.event_id {
-        detail_lines.push(format!("event_id: {event_id}"));
-    }
-    if let Some(causation_id) = record.causation_id {
+    if let Some(causation_id) = record.meta.causation_id {
         detail_lines.push(format!("causation_id: {causation_id}"));
     }
-    if let Some(correlation_id) = record.correlation_id {
+    if let Some(correlation_id) = record.meta.correlation_id {
         detail_lines.push(format!("correlation_id: {correlation_id}"));
     }
     detail_lines.push(String::new());
@@ -7232,21 +7300,12 @@ fn build_timeline_item(record: &SessionEventRecord) -> TimelineItem {
     }
 }
 
-fn timeline_event_type_name(record: &SessionEventRecord) -> &'static str {
-    match &record.payload {
-        AgenaSessionEvent::RunStarted(_) => "run_started",
-        AgenaSessionEvent::RunFailed(_) => "run_failed",
-        AgenaSessionEvent::MessagePartUpdated(_) => "message_part_updated",
-        AgenaSessionEvent::MessagePartDelta(_) => "message_part_delta",
-        AgenaSessionEvent::CommandBegin(_) => "command_begin",
-        AgenaSessionEvent::CommandOutputDelta(_) => "command_output_delta",
-        AgenaSessionEvent::CommandEnd(_) => "command_end",
-        AgenaSessionEvent::StreamError(_) => "stream_error",
-    }
+fn timeline_event_type_name(record: &DomainEvent) -> &'static str {
+    record.kind.tag_str()
 }
 
-fn timeline_event_summary(record: &SessionEventRecord) -> String {
-    match &record.payload {
+fn timeline_event_summary(record: &DomainEvent) -> String {
+    match &record.kind {
         AgenaSessionEvent::RunStarted(event) => format!("session #{}", event.session_id),
         AgenaSessionEvent::RunFailed(event) => {
             format!(
@@ -7288,11 +7347,37 @@ fn timeline_event_summary(record: &SessionEventRecord) -> String {
                 detail_excerpt(event.error.message.as_str(), 72)
             )
         }
+        AgenaSessionEvent::TurnStarted(p) => format!("turn {}", p.turn_id),
+        AgenaSessionEvent::TurnCompleted(p) => {
+            format!("turn {} ({:?})", p.turn_id, p.finish_reason)
+        }
+        AgenaSessionEvent::TurnAborted(p) => {
+            format!("turn {} aborted ({:?})", p.turn_id, p.reason)
+        }
+        AgenaSessionEvent::UserMessageAppended(p) => {
+            format!("user #{}", p.message_id)
+        }
+        AgenaSessionEvent::AssistantMessageCompleted(p) => {
+            format!("assistant #{} ({:?})", p.message_id, p.finish_reason)
+        }
+        AgenaSessionEvent::ToolCallIssued(p) => {
+            format!("tool {} call={}", p.name, p.call_id)
+        }
+        AgenaSessionEvent::ToolCallCompleted(p) => format!("tool call {} done", p.call_id),
+        AgenaSessionEvent::SystemNoticeAppended(p) => {
+            format!("system #{}: {:?}", p.message_id, p.kind)
+        }
+        AgenaSessionEvent::MessageRevised(p) => {
+            format!("message #{} revised", p.target_message_id)
+        }
+        AgenaSessionEvent::PluginEvent(p) => {
+            format!("plugin {}/{}", p.plugin_id, p.kind_label)
+        }
     }
 }
 
-fn timeline_event_detail_lines(record: &SessionEventRecord) -> Vec<String> {
-    match &record.payload {
+fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
+    match &record.kind {
         AgenaSessionEvent::RunStarted(event) => vec![format!("session_id: {}", event.session_id)],
         AgenaSessionEvent::RunFailed(event) => vec![
             format!("session_id: {}", event.session_id),
@@ -7310,7 +7395,7 @@ fn timeline_event_detail_lines(record: &SessionEventRecord) -> Vec<String> {
                     .part
                     .summary
                     .clone()
-                    .unwrap_or_else(|| "(none)".to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
             ),
         ],
         AgenaSessionEvent::MessagePartDelta(event) => vec![
@@ -7318,39 +7403,87 @@ fn timeline_event_detail_lines(record: &SessionEventRecord) -> Vec<String> {
             format!("part_id: {}", event.part_id),
             format!("field: {:?}", event.field),
             format!("seq: {}", event.seq),
-            format!("delta: {}", detail_excerpt(event.delta.as_str(), 400)),
+            format!("delta: {}", detail_excerpt(event.delta.as_str(), 200)),
         ],
         AgenaSessionEvent::CommandBegin(event) => vec![
+            format!("session_id: {}", event.context.session_id),
             format!("call_id: {}", event.context.call_id),
-            format!("cwd: {}", event.cwd),
             format!("command: {}", event.command),
-            format!("argv: {}", event.argv.join(" ")),
+            format!("cwd: {}", event.cwd),
         ],
         AgenaSessionEvent::CommandOutputDelta(event) => vec![
+            format!("session_id: {}", event.context.session_id),
             format!("call_id: {}", event.context.call_id),
             format!("stream: {:?}", event.stream),
             format!("seq: {}", event.seq),
-            format!(
-                "preview: {}",
-                detail_excerpt(event.preview_text.as_str(), 400)
-            ),
+            format!("bytes: {}", event.chunk.len()),
+            format!("preview: {}", detail_excerpt(event.preview_text.as_str(), 200)),
         ],
         AgenaSessionEvent::CommandEnd(event) => vec![
+            format!("session_id: {}", event.context.session_id),
             format!("call_id: {}", event.context.call_id),
             format!("status: {:?}", event.status),
             format!("exit_code: {}", event.exit_code),
             format!("duration_ms: {}", event.duration_ms),
-            format!(
-                "output: {}",
-                detail_excerpt(event.aggregated_output.as_str(), 400)
-            ),
         ],
         AgenaSessionEvent::StreamError(event) => vec![
             format!("session_id: {}", event.session_id),
             format!("error_code: {}", event.error.code),
             format!("error_message: {}", event.error.message),
         ],
+        AgenaSessionEvent::TurnStarted(p) => vec![
+            format!("turn_id: {}", p.turn_id),
+            format!("model: {} / {}", p.provider_id, p.model_id),
+        ],
+        AgenaSessionEvent::TurnCompleted(p) => vec![
+            format!("turn_id: {}", p.turn_id),
+            format!("finish: {:?}", p.finish_reason),
+        ],
+        AgenaSessionEvent::TurnAborted(p) => vec![
+            format!("turn_id: {}", p.turn_id),
+            format!("reason: {:?}", p.reason),
+            format!(
+                "message: {}",
+                p.message.clone().unwrap_or_else(|| "<none>".to_string())
+            ),
+        ],
+        AgenaSessionEvent::UserMessageAppended(p) => vec![
+            format!("message_id: {}", p.message_id),
+            format!("turn_id: {}", p.turn_id),
+        ],
+        AgenaSessionEvent::AssistantMessageCompleted(p) => vec![
+            format!("message_id: {}", p.message_id),
+            format!("turn_id: {}", p.turn_id),
+            format!("finish: {:?}", p.finish_reason),
+        ],
+        AgenaSessionEvent::ToolCallIssued(p) => vec![
+            format!("call_id: {}", p.call_id),
+            format!("name: {}", p.name),
+            format!("turn_id: {}", p.turn_id),
+        ],
+        AgenaSessionEvent::ToolCallCompleted(p) => vec![
+            format!("call_id: {}", p.call_id),
+            format!("turn_id: {}", p.turn_id),
+        ],
+        AgenaSessionEvent::SystemNoticeAppended(p) => vec![
+            format!("message_id: {}", p.message_id),
+            format!("kind: {:?}", p.kind),
+            format!("text: {}", detail_excerpt(p.text.as_str(), 200)),
+        ],
+        AgenaSessionEvent::MessageRevised(p) => vec![
+            format!("target_message_id: {}", p.target_message_id),
+            format!("kind: {:?}", p.kind),
+        ],
+        AgenaSessionEvent::PluginEvent(p) => vec![
+            format!("plugin_id: {}", p.plugin_id),
+            format!("kind_label: {}", p.kind_label),
+            format!("payload: {}", detail_excerpt(&p.payload.to_string(), 200)),
+        ],
     }
+}
+
+fn timeline_event_detail_lines_legacy_unused() {
+    // legacy function removed
 }
 
 fn detail_excerpt(text: &str, max_chars: usize) -> String {
@@ -8704,12 +8837,20 @@ mod tests {
     #[test]
     fn build_timeline_item_summarizes_command_end_events() {
         let now = Utc::now();
-        let item = build_timeline_item(&SessionEventRecord {
-            event_id: Some(3),
-            session_id: 9,
-            seq: 12,
-            event_type: agena::session::SessionEventType::CommandEnd,
-            payload: AgenaSessionEvent::CommandEnd(CommandEndEvent {
+        use agena_event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
+        let event = DomainEvent {
+            meta: EventMeta {
+                id: uuid::Uuid::new_v4(),
+                seq_global: 12,
+                seq_session: Some(12),
+                session_id: Some(9),
+                workspace_id: None,
+                created_at: now,
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: ENVELOPE_SCHEMA_VERSION,
+            },
+            kind: AgenaSessionEvent::CommandEnd(CommandEndEvent {
                 context: CommandContext {
                     session_id: 9,
                     call_id: 77,
@@ -8724,10 +8865,8 @@ mod tests {
                 aggregated_output: "ok".to_string(),
                 ts_ms: now.timestamp_millis(),
             }),
-            causation_id: Some(4),
-            correlation_id: Some(5),
-            created_at: now,
-        });
+        };
+        let item = build_timeline_item(&event);
 
         assert!(item.summary.contains("command_end"));
         assert!(item.summary.contains("exit=0"));

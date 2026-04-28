@@ -1,0 +1,16 @@
+[package]
+name = "agena-echo-plugin-stdio"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[[bin]]
+name = "agena-echo-plugin-stdio"
+path = "src/main.rs"
+
+[dependencies]
+agena-plugin-sdk = { path = "../../crates/agena-plugin-sdk", features = ["stdio"] }
+async-trait = "0.1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }

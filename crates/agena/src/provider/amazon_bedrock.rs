@@ -352,6 +352,8 @@ impl AmazonBedrockProvider {
         for (name, value) in signing_headers.iter() {
             request = request.header(name, value);
         }
+        // Apply chat.headers plugin hook on top of signed headers.
+        request = utils::apply_request_headers(PROVIDER_ID, request, &Default::default());
         if let Some(payload) = body {
             request = request.body(payload);
         }

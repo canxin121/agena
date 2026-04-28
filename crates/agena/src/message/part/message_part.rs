@@ -380,7 +380,6 @@ const fn file_change_kind_label(kind: FileChangeKind) -> &'static str {
 
 fn tool_name(invocation: &ToolInvocation) -> String {
     match invocation {
-        ToolInvocation::Builtin { input } => input.to_string(),
         ToolInvocation::Mcp { server, tool, .. } => format!("{server}:{tool}"),
         ToolInvocation::Custom { name, .. } => name.clone(),
     }

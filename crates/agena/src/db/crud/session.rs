@@ -111,6 +111,18 @@ where
         .await
 }
 
+pub async fn list_all_session_ids<C>(db: &C) -> Result<Vec<i64>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    entities::session::Entity::find()
+        .select_only()
+        .column(entities::session::Column::Id)
+        .into_tuple::<i64>()
+        .all(db)
+        .await
+}
+
 pub async fn list_sessions_by_workspace_id_with_request<C>(
     db: &C,
     workspace_id: i64,
@@ -136,45 +148,6 @@ where
     let offset = usize::try_from(request.offset)
         .map_err(|_| DbErr::Custom(format!("session list offset too large: {}", request.offset)))?;
     Ok(sessions.into_iter().skip(offset).collect())
-}
-
-pub async fn session_message_stats_by_session_ids<C>(
-    db: &C,
-    session_ids: &[i64],
-) -> Result<HashMap<i64, SessionMessageStats>, DbErr>
-where
-    C: ConnectionTrait,
-{
-    if session_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    entities::message::Entity::find()
-        .select_only()
-        .column(entities::message::Column::SessionId)
-        .column_as(entities::message::Column::Id.count(), "message_count")
-        .column_as(
-            entities::message::Column::CreatedAtMs.max(),
-            "last_message_at_ms",
-        )
-        .filter(entities::message::Column::SessionId.is_in(session_ids.iter().copied()))
-        .group_by(entities::message::Column::SessionId)
-        .into_model::<SessionMessageStatsRow>()
-        .all(db)
-        .await
-        .map(|rows| {
-            rows.into_iter()
-                .map(|row| {
-                    (
-                        row.session_id,
-                        SessionMessageStats {
-                            message_count: row.message_count,
-                            last_message_at_ms: row.last_message_at_ms,
-                        },
-                    )
-                })
-                .collect()
-        })
 }
 
 pub async fn child_session_counts_by_parent_ids<C>(

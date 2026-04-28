@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 agena = { path = "../../crates/agena" }
+agena-event = { path = "../../crates/agena-event" }
 agena-http-api = { path = "../../crates/agena-http-api" }
 arboard = "3.6.1"
 anyhow = "1.0.100"
@@ -33,3 +34,4 @@ unic-langid = "0.9.6"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.0"
 url = "2.5.7"
+uuid = { version = "1.18.1", features = ["v4", "serde"] }

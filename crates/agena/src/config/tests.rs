@@ -491,11 +491,9 @@ kind = "preset"
     }
 }
 
-#[test]
-fn build_plugin_manager_uses_config_relative_plugin_directory() {
-    let dir = temp_dir("plugins-relative");
-    let plugins_dir = dir.join("plugins");
-    fs::create_dir_all(&plugins_dir).expect("plugins dir should be created");
+#[tokio::test]
+async fn build_plugin_host_with_no_entries_succeeds() {
+    let dir = temp_dir("plugins-empty");
     let path = dir.join("config.toml");
     fs::write(
         &path,
@@ -516,21 +514,24 @@ default_model = "gpt-4.1-mini"
         })
         .expect("config should load");
 
-    let plugins = resolution
-        .build_plugin_manager()
-        .expect("empty plugin directory should be accepted");
-    assert!(plugins.is_empty());
+    let host = resolution
+        .build_plugin_host()
+        .await
+        .expect("plugin host should build");
+    assert_eq!(host.plugins().len(), 1);
+    assert_eq!(host.plugins()[0].id, crate::tool::builtins_plugin_id());
 }
 
-#[test]
-fn build_plugin_manager_rejects_missing_explicit_path() {
+#[tokio::test]
+async fn build_plugin_host_rejects_missing_cdylib_path() {
     let dir = temp_dir("plugins-missing");
     let path = dir.join("config.toml");
     fs::write(
         &path,
         r#"
-[plugins]
-paths = ["missing-plugins"]
+[plugins.list.bogus]
+kind = "cdylib"
+path = "missing-plugins/libfoo.so"
 
 [providers.openai]
 kind = "openai"
@@ -548,12 +549,14 @@ default_model = "gpt-4.1-mini"
         })
         .expect("config should load");
 
-    let err = resolution
-        .build_plugin_manager()
-        .expect_err("missing explicit plugin path should fail");
-    assert!(
-        matches!(err, ConfigError::Validation(message) if message.contains("plugin path does not exist"))
-    );
+    let host = resolution
+        .build_plugin_host()
+        .await
+        .expect("host build accepts but skips broken plugins");
+    // The bogus cdylib entry is skipped; only the in-process built-in plugin
+    // remains.
+    assert_eq!(host.plugins().len(), 1);
+    assert_eq!(host.plugins()[0].id, crate::tool::builtins_plugin_id());
 }
 
 fn write_temp_config(content: &str) -> PathBuf {

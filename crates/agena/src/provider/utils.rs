@@ -234,10 +234,6 @@ pub(crate) fn project_session_text_lossy(message: &Message) -> String {
 
 fn project_tool_invocation(invocation: &ToolInvocation) -> (String, String) {
     match invocation {
-        ToolInvocation::Builtin { input } => (
-            input.to_string(),
-            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
-        ),
         ToolInvocation::Mcp {
             server,
             tool,
@@ -449,6 +445,47 @@ pub fn apply_extra_headers(
     req
 }
 
+/// Apply provider-configured `extra_headers` AND consult the loaded
+/// plugin host's `chat.headers` hook chain. Plugins can add or remove
+/// headers per-provider on every request.
+///
+/// `provider_id` is used as the `provider` field passed to the hook so
+/// plugins can scope their patches.
+pub fn apply_request_headers(
+    provider_id: &str,
+    mut req: reqwest::RequestBuilder,
+    extra_headers: &HashMap<String, String>,
+) -> reqwest::RequestBuilder {
+    let mut combined: std::collections::BTreeMap<String, String> = extra_headers
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    if let Some(host) = crate::runtime::plugin_slot::current()
+        && !host.is_empty()
+    {
+        let input = crate::plugin::ChatHeadersInput {
+            provider: provider_id.to_string(),
+            headers: combined.clone(),
+        };
+        match host.dispatch_chat_headers_blocking(input) {
+            Ok(updated) => combined = updated.headers,
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::chat_headers",
+                    provider = provider_id,
+                    "chat.headers hook failed (using base headers): {err}"
+                );
+            }
+        }
+    }
+
+    for (key, value) in &combined {
+        req = req.header(key.as_str(), value.as_str());
+    }
+    req
+}
+
 pub async fn parse_json_response<T>(
     provider_id: &str,
     response: reqwest::Response,
@@ -597,15 +634,13 @@ mod projection_tests {
                     ExecutionStatus::Completed,
                     PartContent::ToolExecution(ToolExecutionPart::Completed {
                         call_id: 3,
-                        invocation: ToolInvocation::Builtin {
-                            input: crate::message::BuiltinToolInput::ToolSearch(
-                                crate::message::ToolSearchToolInput {
+                        invocation: crate::message::BuiltinToolInput::ToolSearch(
+                            crate::message::ToolSearchToolInput {
                                     query: "patch".to_string(),
                                     load: vec!["apply_patch".to_string()],
                                     limit: None,
                                 },
-                            ),
-                        },
+                            ).into_invocation(),
                         output_text: "Loaded deferred tools.".to_string(),
                         blocks: Vec::new(),
                         attachments: Vec::new(),

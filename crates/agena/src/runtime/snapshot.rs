@@ -13,7 +13,7 @@ use crate::{
     agent::Agent,
     config::{ConfigLoader, ConfigResolution, LoadConfigRequest, ProcessEnvironment},
     model::ModelRef,
-    plugin::PluginManager,
+    plugin::PluginHost,
     provider::{ProviderRegistry, auth::AuthStore},
     session::{
         ContextGovernor, ContextPolicy, SessionManager, SessionManagerConfig, SessionProcessor,
@@ -79,23 +79,62 @@ pub struct RuntimeSnapshot {
 #[derive(Clone)]
 struct RuntimeServices {
     providers: Arc<ProviderRegistry>,
-    plugins: Arc<PluginManager>,
+    plugins: Arc<PluginHost>,
     auth_store: RuntimeAuthStore,
     session_manager: Option<Arc<SessionManager>>,
+    /// Lives for as long as this snapshot does; aborts the event bridge
+    /// task when the snapshot is dropped.
+    _event_bridge: Option<Arc<EventBridgeGuard>>,
+    /// Drives `PluginHost::shutdown` when the snapshot is dropped.
+    _plugin_shutdown: Option<Arc<PluginShutdownGuard>>,
+}
+
+struct EventBridgeGuard(tokio::task::JoinHandle<()>);
+
+impl Drop for EventBridgeGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+struct PluginShutdownGuard {
+    plugins: Arc<PluginHost>,
+    handle: Option<tokio::runtime::Handle>,
+}
+
+impl Drop for PluginShutdownGuard {
+    fn drop(&mut self) {
+        let plugins = Arc::clone(&self.plugins);
+        match self.handle.take() {
+            Some(h) => {
+                h.spawn(async move { plugins.shutdown().await });
+            }
+            None => {
+                tracing::debug!(
+                    target: "agena_plugin_host",
+                    "no tokio runtime available at snapshot drop; plugins will be cleaned up by their own transports"
+                );
+            }
+        }
+    }
 }
 
 impl RuntimeServices {
     fn new(
         providers: Arc<ProviderRegistry>,
-        plugins: Arc<PluginManager>,
+        plugins: Arc<PluginHost>,
         auth_store: RuntimeAuthStore,
         session_manager: Option<Arc<SessionManager>>,
+        event_bridge: Option<Arc<EventBridgeGuard>>,
+        plugin_shutdown: Option<Arc<PluginShutdownGuard>>,
     ) -> Self {
         Self {
             providers,
             plugins,
             auth_store,
             session_manager,
+            _event_bridge: event_bridge,
+            _plugin_shutdown: plugin_shutdown,
         }
     }
 }
@@ -138,9 +177,74 @@ impl RuntimeSnapshot {
         database: Option<Arc<DatabaseConnection>>,
         existing_session_manager: Option<Arc<SessionManager>>,
     ) -> Result<Self, AppError> {
+        Self::build_inner(
+            generation,
+            loader,
+            load_request,
+            workspace_root,
+            database,
+            existing_session_manager,
+            None,
+        )
+        .await
+    }
+
+    /// Hot-reload variant that lets the new snapshot reuse plugin transports
+    /// from the previous snapshot when the corresponding `[plugins.list.<id>]`
+    /// entry is byte-identical.
+    pub(crate) async fn build_with_previous(
+        generation: u64,
+        loader: &ConfigLoader<ProcessEnvironment>,
+        load_request: &LoadConfigRequest,
+        workspace_root: &Path,
+        database: Option<Arc<DatabaseConnection>>,
+        existing_session_manager: Option<Arc<SessionManager>>,
+        previous: Arc<RuntimeSnapshot>,
+    ) -> Result<Self, AppError> {
+        Self::build_inner(
+            generation,
+            loader,
+            load_request,
+            workspace_root,
+            database,
+            existing_session_manager,
+            Some(previous),
+        )
+        .await
+    }
+
+    async fn build_inner(
+        generation: u64,
+        loader: &ConfigLoader<ProcessEnvironment>,
+        load_request: &LoadConfigRequest,
+        workspace_root: &Path,
+        database: Option<Arc<DatabaseConnection>>,
+        existing_session_manager: Option<Arc<SessionManager>>,
+        previous: Option<Arc<RuntimeSnapshot>>,
+    ) -> Result<Self, AppError> {
         let resolution = loader.load(load_request)?;
         let providers = Arc::new(resolution.config.build_provider_registry()?);
-        let plugins = Arc::new(resolution.build_plugin_manager()?);
+        let plugins = if let Some(prev) = previous.as_ref() {
+            let prev_host = prev.plugin_manager();
+            let prev_cfg = prev.config_resolution().config.plugins.clone();
+            resolution
+                .build_plugin_host_with_previous(Some(prev_host), Some(&prev_cfg))
+                .await
+                .map_err(AppError::from)?
+        } else {
+            resolution.build_plugin_host().await.map_err(AppError::from)?
+        };
+        // Make the active host visible to provider request builders for the
+        // `chat.headers` hook (no constructor threading required).
+        super::plugin_slot::install(Arc::clone(&plugins));
+        // Notify plugins of the resolved config (best-effort).
+        if !plugins.is_empty() {
+            if let Ok(value) = serde_json::to_value(&resolution) {
+                let _ = plugins
+                    .dispatch_config(crate::plugin::ConfigInput { current: value })
+                    .await;
+            }
+        }
         let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
         let session_manager = if let Some(db) = database.as_ref() {
             Some(build_or_reconfigure_session_manager(
@@ -154,7 +258,27 @@ impl RuntimeSnapshot {
         } else {
             None
         };
-        let services = RuntimeServices::new(providers, plugins, auth_store, session_manager);
+        let event_bridge = session_manager.as_ref().map(|mgr| {
+            let handle =
+                super::event_bridge::spawn_event_bridge(mgr.event_bus(), Arc::clone(&plugins));
+            Arc::new(EventBridgeGuard(handle))
+        });
+        let plugin_shutdown = if !plugins.is_empty() {
+            Some(Arc::new(PluginShutdownGuard {
+                plugins: Arc::clone(&plugins),
+                handle: tokio::runtime::Handle::try_current().ok(),
+            }))
+        } else {
+            None
+        };
+        let services = RuntimeServices::new(
+            providers,
+            plugins,
+            auth_store,
+            session_manager,
+            event_bridge,
+            plugin_shutdown,
+        );
         let maintenance = RuntimeMaintenance::from_resolution(&resolution);
 
         Ok(Self {
@@ -227,7 +351,7 @@ impl RuntimeSnapshot {
         self.model_capabilities_for(&ModelRef::new(provider_id, model))
     }
 
-    pub fn plugin_manager(&self) -> Arc<PluginManager> {
+    pub fn plugin_manager(&self) -> Arc<PluginHost> {
         Arc::clone(&self.services.plugins)
     }
 
@@ -280,11 +404,11 @@ fn build_or_reconfigure_session_manager(
     existing: Option<Arc<SessionManager>>,
     db: &Arc<DatabaseConnection>,
     providers: Arc<ProviderRegistry>,
-    plugins: Arc<PluginManager>,
+    plugins: Arc<PluginHost>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
 ) -> Arc<SessionManager> {
-    let processor = build_session_processor(providers);
+    let processor = build_session_processor(providers, Arc::clone(&plugins));
     let executor = build_tool_executor(plugins, workspace_root, resolution);
     let config = session_manager_config(resolution);
 
@@ -296,12 +420,16 @@ fn build_or_reconfigure_session_manager(
     Arc::new(SessionManager::new(db.as_ref().clone(), processor, executor).with_config(config))
 }
 
-fn build_session_processor(providers: Arc<ProviderRegistry>) -> SessionProcessor {
+fn build_session_processor(
+    providers: Arc<ProviderRegistry>,
+    plugins: Arc<PluginHost>,
+) -> SessionProcessor {
     SessionProcessor::new(providers, ContextGovernor::new(ContextPolicy::default()))
+        .with_plugin_host(plugins)
 }
 
 fn build_tool_executor(
-    plugins: Arc<PluginManager>,
+    plugins: Arc<PluginHost>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
 ) -> ToolExecutor {
@@ -331,20 +459,16 @@ fn collect_watch_paths(resolution: &ConfigResolution) -> Vec<PathBuf> {
         .config_path
         .parent()
         .unwrap_or_else(|| Path::new("."));
-    let explicit_paths = !resolution.config.plugins.paths.is_empty();
-    let plugin_paths = if explicit_paths {
-        resolution.config.plugins.paths.clone()
-    } else {
-        vec![PathBuf::from("plugins")]
-    };
 
-    for path in plugin_paths {
-        let resolved = if path.is_absolute() {
-            path
-        } else {
-            base_dir.join(path)
-        };
-        push_watch_path(&mut paths, resolved);
+    for entry in resolution.config.plugins.list.values() {
+        if let crate::plugin::PluginEntry::Cdylib { path, .. } = entry {
+            let resolved = if path.is_absolute() {
+                path.clone()
+            } else {
+                base_dir.join(path)
+            };
+            push_watch_path(&mut paths, resolved);
+        }
     }
 
     paths

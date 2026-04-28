@@ -298,10 +298,13 @@ impl ModelProvider for CopilotProvider {
                     AppError::Config(format!("invalid copilot bearer token header: {e}"))
                 })?;
 
-                Ok(self
-                    .client
-                    .get(self.models_endpoint())
-                    .header(reqwest::header::AUTHORIZATION, authorization))
+                Ok(utils::apply_request_headers(
+                    self.id.as_str(),
+                    self.client
+                        .get(self.models_endpoint())
+                        .header(reqwest::header::AUTHORIZATION, authorization),
+                    &Default::default(),
+                ))
             })
             .await?;
 
@@ -331,12 +334,15 @@ impl ModelProvider for CopilotProvider {
             let body = OpenAiResponsesRequest::from_request(model.to_string(), &request);
             let response = self
                 .send_request(|bearer_token| {
-                    Ok(self
-                        .client
-                        .post(self.responses_endpoint())
-                        .headers(self.base_headers(bearer_token, &request)?)
-                        .header(reqwest::header::CONTENT_TYPE, "application/json")
-                        .json(&body))
+                    Ok(utils::apply_request_headers(
+                        self.id.as_str(),
+                        self.client
+                            .post(self.responses_endpoint())
+                            .headers(self.base_headers(bearer_token, &request)?)
+                            .header(reqwest::header::CONTENT_TYPE, "application/json")
+                            .json(&body),
+                        &Default::default(),
+                    ))
                 })
                 .await?;
 
@@ -387,12 +393,15 @@ impl ModelProvider for CopilotProvider {
         let body = ChatCompletionRequest::from_request(model.to_string(), &request);
         let response = self
             .send_request(|bearer_token| {
-                Ok(self
-                    .client
-                    .post(self.chat_endpoint())
-                    .headers(self.base_headers(bearer_token, &request)?)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .json(&body))
+                Ok(utils::apply_request_headers(
+                    self.id.as_str(),
+                    self.client
+                        .post(self.chat_endpoint())
+                        .headers(self.base_headers(bearer_token, &request)?)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json")
+                        .json(&body),
+                    &Default::default(),
+                ))
             })
             .await?;
 
@@ -466,12 +475,15 @@ impl ModelProvider for CopilotProvider {
                 OpenAiResponsesRequest::from_request(model.to_string(), &request).with_stream(true);
             let response = self
                 .send_request(|bearer_token| {
-                    Ok(self
-                        .client
-                        .post(self.responses_endpoint())
-                        .headers(self.base_headers(bearer_token, &request)?)
-                        .header(reqwest::header::CONTENT_TYPE, "application/json")
-                        .json(&body))
+                    Ok(utils::apply_request_headers(
+                        self.id.as_str(),
+                        self.client
+                            .post(self.responses_endpoint())
+                            .headers(self.base_headers(bearer_token, &request)?)
+                            .header(reqwest::header::CONTENT_TYPE, "application/json")
+                            .json(&body),
+                        &Default::default(),
+                    ))
                 })
                 .await?;
 
@@ -663,12 +675,15 @@ impl ModelProvider for CopilotProvider {
             ChatCompletionRequest::from_request(model.to_string(), &request).with_stream(true);
         let response = self
             .send_request(|bearer_token| {
-                Ok(self
-                    .client
-                    .post(self.chat_endpoint())
-                    .headers(self.base_headers(bearer_token, &request)?)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .json(&body))
+                Ok(utils::apply_request_headers(
+                    self.id.as_str(),
+                    self.client
+                        .post(self.chat_endpoint())
+                        .headers(self.base_headers(bearer_token, &request)?)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json")
+                        .json(&body),
+                    &Default::default(),
+                ))
             })
             .await?;
 

@@ -6,6 +6,7 @@ use std::{
 use regex::Regex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use smol_str::SmolStr;
 
 use crate::{
     message::{
@@ -14,13 +15,18 @@ use crate::{
     },
     provider::{
         PRUNED_TOOL_RESULT_PLACEHOLDER, PromptCacheShape, PromptCacheShapeDiff,
-        project_session_parts, project_session_text_lossy,
+        ProjectedSessionPart, project_session_parts, project_session_text_lossy,
     },
     role::Role,
     tool::ToolDefinition,
 };
 
 use super::Session;
+use super::history::{
+    ProviderTranscript, TranscriptBlock, TranscriptContent, TranscriptFragment, TranscriptToolCall,
+    TranscriptToolOutput,
+};
+use super::ids::ToolCallId;
 use super::model::{
     MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_PROMPT_COMPACTED,
     MESSAGE_TAG_PROMPT_SUMMARY, MESSAGE_TAG_TOOL_RESULT_PRUNED,
@@ -156,54 +162,6 @@ pub(crate) struct PromptTokenEstimate {
     pub total_tokens: u64,
     pub delta_tokens: u64,
     pub delta_chars: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct PromptTranscriptDigestMessage {
-    role: Role,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    parts: Vec<PromptTranscriptDigestPart>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    fallback_text: Option<PromptDigestText>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "part_type", rename_all = "snake_case")]
-enum PromptTranscriptDigestPart {
-    Text {
-        text: PromptDigestText,
-    },
-    Attachment {
-        kind: String,
-        mime: String,
-        label: String,
-        source: PromptTranscriptAttachmentSource,
-    },
-    ToolCall {
-        id: String,
-        name: String,
-        arguments_json: PromptDigestText,
-    },
-    ToolResult {
-        tool_call_id: String,
-        output_json: PromptDigestText,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "source", rename_all = "snake_case")]
-enum PromptTranscriptAttachmentSource {
-    Url { value: PromptDigestText },
-    DataUrl { value: PromptDigestText },
-    Base64 { value: PromptDigestText },
-    FileId { value: String },
-    LocalPath { value: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct PromptDigestText {
-    len: usize,
-    sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -575,94 +533,172 @@ pub(crate) fn prompt_transcript_digest(messages: &[Message]) -> String {
     prompt_prefix_transcript_digest(normalized.as_slice(), normalized.len().saturating_sub(1))
 }
 
+/// Compute the prompt-prefix transcript digest by projecting `messages[..=inclusive_end]`
+/// into a [`ProviderTranscript`] and hashing it with [`ProviderTranscript::digest_hex`].
+///
+/// Append-only refactor invariant: the digest depends only on cache-stable content
+/// (role, text/reasoning blocks, attachment source, tool call name+arguments,
+/// tool result output) — never on mutable per-message state (status,
+/// timestamps, in-memory ids).
 fn prompt_prefix_transcript_digest(messages: &[Message], inclusive_end: usize) -> String {
     let end = inclusive_end.saturating_add(1).min(messages.len());
-    let digest_messages = messages[..end]
-        .iter()
-        .map(prompt_transcript_digest_message)
-        .collect::<Vec<_>>();
-    fingerprint_value(&digest_messages)
+    let transcript = messages_to_provider_transcript(&messages[..end]);
+    transcript.digest_hex()
 }
 
-fn prompt_transcript_digest_message(message: &Message) -> PromptTranscriptDigestMessage {
-    let parts = project_session_parts(message)
-        .into_iter()
-        .map(prompt_transcript_digest_part)
-        .collect::<Vec<_>>();
-    let fallback_text = if parts.is_empty() {
-        let fallback = message.as_text_lossy();
-        (!fallback.trim().is_empty()).then(|| digest_text(fallback.as_str()))
-    } else {
-        None
-    };
-
-    PromptTranscriptDigestMessage {
-        role: message.role,
-        parts,
-        fallback_text,
-    }
-}
-
-fn prompt_transcript_digest_part(
-    part: crate::provider::ProjectedSessionPart,
-) -> PromptTranscriptDigestPart {
-    match part {
-        crate::provider::ProjectedSessionPart::Text { text } => PromptTranscriptDigestPart::Text {
-            text: digest_text(text.as_str()),
-        },
-        crate::provider::ProjectedSessionPart::Attachment { item } => {
-            PromptTranscriptDigestPart::Attachment {
-                kind: item.kind.as_str().to_string(),
-                mime: item.mime.trim().to_string(),
-                label: item.summary_label(),
-                source: prompt_transcript_attachment_source(&item.source),
+fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
+    let mut transcript = ProviderTranscript::new();
+    for message in messages {
+        let parts = project_session_parts(message);
+        match message.role {
+            Role::Tool => {
+                for part in parts {
+                    if let ProjectedSessionPart::ToolResult {
+                        tool_call_id,
+                        output_json,
+                    } = part
+                    {
+                        if output_json.is_empty() {
+                            // Empty tool results are equivalent to "no result yet" —
+                            // keep digest stable across the placeholder/synthesized
+                            // states (see existing tests covering this behavior).
+                            continue;
+                        }
+                        let output = if output_json == PRUNED_TOOL_RESULT_PLACEHOLDER {
+                            TranscriptToolOutput::Pruned {
+                                replacement: output_json,
+                            }
+                        } else {
+                            TranscriptToolOutput::Text { text: output_json }
+                        };
+                        transcript.push(TranscriptFragment::ToolResult {
+                            call_id: ToolCallId::from(SmolStr::from(tool_call_id)),
+                            output,
+                        });
+                    }
+                }
+            }
+            Role::Assistant => {
+                let mut content = TranscriptContent::default();
+                let mut tool_calls = Vec::new();
+                let mut had_any = false;
+                for part in parts {
+                    match part {
+                        ProjectedSessionPart::Text { text } => {
+                            had_any = true;
+                            if !text.is_empty() {
+                                content.push_text(text);
+                            }
+                        }
+                        ProjectedSessionPart::Attachment { item } => {
+                            had_any = true;
+                            content.blocks.push(attachment_to_transcript_block(&item));
+                        }
+                        ProjectedSessionPart::ToolCall {
+                            id,
+                            name,
+                            arguments_json,
+                        } => {
+                            had_any = true;
+                            tool_calls.push(TranscriptToolCall {
+                                call_id: ToolCallId::from(SmolStr::from(id)),
+                                name: SmolStr::from(name),
+                                arguments: arguments_json,
+                            });
+                        }
+                        ProjectedSessionPart::ToolResult { .. } => {
+                            // Tool results never appear under assistant role.
+                        }
+                    }
+                }
+                if !had_any {
+                    let fallback = message.as_text_lossy();
+                    if !fallback.trim().is_empty() {
+                        content.push_text(fallback);
+                        had_any = true;
+                    }
+                }
+                if had_any {
+                    transcript.push(TranscriptFragment::Assistant {
+                        content,
+                        tool_calls,
+                    });
+                }
+            }
+            Role::User | Role::System => {
+                let mut content = TranscriptContent::default();
+                let mut had_any = false;
+                for part in parts {
+                    match part {
+                        ProjectedSessionPart::Text { text } => {
+                            had_any = true;
+                            if !text.is_empty() {
+                                content.push_text(text);
+                            }
+                        }
+                        ProjectedSessionPart::Attachment { item } => {
+                            had_any = true;
+                            content.blocks.push(attachment_to_transcript_block(&item));
+                        }
+                        // ToolCall / ToolResult are not produced under user/system roles
+                        // by `project_session_parts`; ignore for digest stability.
+                        _ => {}
+                    }
+                }
+                if !had_any {
+                    let fallback = message.as_text_lossy();
+                    if !fallback.trim().is_empty() {
+                        content.push_text(fallback);
+                        had_any = true;
+                    }
+                }
+                if !had_any {
+                    continue;
+                }
+                let fragment = if matches!(message.role, Role::System) {
+                    TranscriptFragment::System {
+                        text: content
+                            .blocks
+                            .iter()
+                            .filter_map(|block| match block {
+                                TranscriptBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join(""),
+                    }
+                } else {
+                    TranscriptFragment::User { content }
+                };
+                transcript.push(fragment);
             }
         }
-        crate::provider::ProjectedSessionPart::ToolCall {
-            id,
-            name,
-            arguments_json,
-        } => PromptTranscriptDigestPart::ToolCall {
-            id,
-            name,
-            arguments_json: digest_text(arguments_json.as_str()),
-        },
-        crate::provider::ProjectedSessionPart::ToolResult {
-            tool_call_id,
-            output_json,
-        } => PromptTranscriptDigestPart::ToolResult {
-            tool_call_id,
-            output_json: digest_text(output_json.as_str()),
-        },
     }
+    transcript
 }
 
-fn prompt_transcript_attachment_source(
-    source: &AttachmentSource,
-) -> PromptTranscriptAttachmentSource {
-    match source {
-        AttachmentSource::Url { url } => PromptTranscriptAttachmentSource::Url {
-            value: digest_text(url.trim()),
-        },
-        AttachmentSource::DataUrl { url } => PromptTranscriptAttachmentSource::DataUrl {
-            value: digest_text(url.trim()),
-        },
-        AttachmentSource::Base64 { data } => PromptTranscriptAttachmentSource::Base64 {
-            value: digest_text(data.trim()),
-        },
-        AttachmentSource::FileId { file_id } => PromptTranscriptAttachmentSource::FileId {
-            value: file_id.trim().to_string(),
-        },
-        AttachmentSource::LocalPath { path } => PromptTranscriptAttachmentSource::LocalPath {
-            value: path.trim().to_string(),
-        },
-    }
-}
-
-fn digest_text(value: &str) -> PromptDigestText {
-    PromptDigestText {
-        len: value.len(),
-        sha256: digest_bytes(value.as_bytes()),
+fn attachment_to_transcript_block(
+    item: &crate::message::AttachmentItem,
+) -> TranscriptBlock {
+    // Encode attachment identity into a stable text block. The exact wire bytes
+    // here are part of the cache-stability contract; only fields that survive
+    // a round-trip through the provider participate.
+    let source_marker = match &item.source {
+        AttachmentSource::Url { url } => format!("url:{}", url.trim()),
+        AttachmentSource::DataUrl { url } => format!("data_url:{}", url.trim()),
+        AttachmentSource::Base64 { data } => format!("base64:{}", digest_bytes(data.trim().as_bytes())),
+        AttachmentSource::FileId { file_id } => format!("file_id:{}", file_id.trim()),
+        AttachmentSource::LocalPath { path } => format!("local_path:{}", path.trim()),
+    };
+    TranscriptBlock::Attachment {
+        file_id: SmolStr::from(format!(
+            "{}|{}|{}|{}",
+            item.kind.as_str(),
+            item.mime.trim(),
+            item.summary_label(),
+            source_marker
+        )),
+        media_type: Some(SmolStr::from(item.mime.trim())),
     }
 }
 
@@ -1349,7 +1385,6 @@ fn tool_execution_invocation(exec: &ToolExecutionPart) -> &ToolInvocation {
 
 fn tool_invocation_name(invocation: &ToolInvocation) -> String {
     match invocation {
-        ToolInvocation::Builtin { input } => input.to_string(),
         ToolInvocation::Mcp { server, tool, .. } => format!("{server}:{tool}"),
         ToolInvocation::Custom { name, .. } => name.clone(),
     }
@@ -1357,9 +1392,6 @@ fn tool_invocation_name(invocation: &ToolInvocation) -> String {
 
 fn tool_invocation_arguments_json(invocation: &ToolInvocation) -> String {
     match invocation {
-        ToolInvocation::Builtin { input } => {
-            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
-        }
         ToolInvocation::Mcp { input, .. } | ToolInvocation::Custom { input, .. } => {
             serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
         }

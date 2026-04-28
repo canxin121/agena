@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -8,7 +8,7 @@ use aws_credential_types::Credentials;
 
 use crate::{
     model::ModelId,
-    plugin::PluginManager,
+    plugin::{PluginHost, PluginHostBuilder},
     provider::{
         AmazonBedrockProvider, AnthropicProvider, AuthRefreshStrategy, AuthSecretSelector,
         CapabilityOverrideProvider, CloudflareAiGatewayProvider, CodexProvider, CopilotProvider,
@@ -73,59 +73,39 @@ impl ResolvedConfig {
 }
 
 impl super::ConfigResolution {
-    pub fn build_plugin_manager(&self) -> Result<PluginManager, ConfigError> {
-        let mut manager = PluginManager::new();
-        if !self.config.plugins.enabled {
-            return Ok(manager);
-        }
+    pub async fn build_plugin_host(&self) -> Result<Arc<PluginHost>, ConfigError> {
+        self.build_plugin_host_with_previous(None, None).await
+    }
 
-        let explicit_paths = !self.config.plugins.paths.is_empty();
-        let base_dir = self
+    /// Hot-reload-aware build: when a previous plugin host (and its config)
+    /// is available, transports for byte-identical entries are reused, so
+    /// stdio subprocesses and HTTP plugins survive a config reload that
+    /// didn't touch them.
+    pub async fn build_plugin_host_with_previous(
+        &self,
+        previous_host: Option<Arc<PluginHost>>,
+        previous_config: Option<&agena_plugin_host::PluginsConfig>,
+    ) -> Result<Arc<PluginHost>, ConfigError> {
+        let workspace_root = self
             .meta
             .config_path
             .parent()
-            .unwrap_or_else(|| Path::new("."));
-        let paths = if explicit_paths {
-            self.config.plugins.paths.clone()
-        } else {
-            vec![PathBuf::from("plugins")]
-        };
-
-        for raw_path in paths {
-            let path = if raw_path.is_absolute() {
-                raw_path
-            } else {
-                base_dir.join(raw_path)
-            };
-
-            if !path.exists() {
-                if explicit_paths {
-                    return Err(ConfigError::Validation(format!(
-                        "plugin path does not exist: {}",
-                        path.display()
-                    )));
-                }
-                continue;
-            }
-
-            if path.is_dir() {
-                manager.discover_directory(&path).map_err(|err| {
-                    ConfigError::Validation(format!(
-                        "failed to discover plugins in {}: {err}",
-                        path.display()
-                    ))
-                })?;
-            } else {
-                manager.load_dynamic(&path).map_err(|err| {
-                    ConfigError::Validation(format!(
-                        "failed to load plugin {}: {err}",
-                        path.display()
-                    ))
-                })?;
-            }
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let agena_version = env!("CARGO_PKG_VERSION").to_string();
+        let mut builder = PluginHostBuilder::new(workspace_root, agena_version)
+            .with_config(self.config.plugins.clone())
+            .register_static(
+                crate::tool::builtins_plugin_id(),
+                crate::tool::new_builtins_plugin(),
+            );
+        if let (Some(prev_host), Some(prev_cfg)) = (previous_host, previous_config) {
+            builder = builder.with_previous(prev_host, prev_cfg);
         }
-
-        Ok(manager)
+        builder
+            .build()
+            .await
+            .map_err(|e| ConfigError::Validation(format!("plugin host: {e}")))
     }
 }
 

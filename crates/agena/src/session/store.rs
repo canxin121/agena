@@ -4,35 +4,33 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryOrder};
+use sea_orm::{DatabaseConnection, DbErr};
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
 use crate::{
     AppError,
     db::{
-        crud::{message, permission_rule, session, session_history, session_runtime, workspace},
-        entities,
+        crud::{permission_rule, session, workspace},
         tx::with_transaction_and_effects,
     },
-    event::{MessagePartUpdatedEvent, SessionEvent},
+    event::{
+        DomainEvent, EventKind, EventPublisher, MessagePartUpdatedEvent, PublishContext,
+    },
     message::Message,
     permission::PermissionMode,
 };
 
 use super::{
-    Session, SessionEventRecord,
+    Session,
     cache::{SessionCache, SessionCachePolicy, SessionCacheStats},
-    history::{
-        HistoryItem, PromptWindowInvalidationReason, PromptWindowInvalidated, SessionHistoryStore,
-        SessionRolledBack, history_items_from_message_snapshot, history_items_from_runtime_diff,
-    },
+    history::SessionHistoryStore,
     model::{SessionListRequest, SessionSummary},
 };
 
 pub(crate) struct SessionCommit {
     pub(crate) session: Session,
     pub(crate) touched_messages: Vec<Message>,
-    pub(crate) client_events: Vec<SessionEvent>,
+    pub(crate) client_events: Vec<EventKind>,
     pub(crate) persisted_rule: Option<(String, PermissionMode)>,
 }
 
@@ -78,18 +76,39 @@ pub(crate) struct SessionStore {
     cache: Arc<Mutex<SessionCache>>,
     ids: Arc<AsyncMutex<GlobalIdAllocator>>,
     history: SessionHistoryStore,
+    publisher: Arc<EventPublisher>,
 }
 
 impl SessionStore {
-    pub(crate) fn new(db: DatabaseConnection, workspace_root: &Path) -> Self {
+    pub(crate) fn new(
+        db: DatabaseConnection,
+        workspace_root: &Path,
+        publisher: Arc<EventPublisher>,
+    ) -> Self {
         Self {
-            db: db.clone(),
+            db,
             workspace_path: workspace_root.to_string_lossy().replace('\\', "/"),
             workspace_id: OnceCell::new(),
             cache: Arc::new(Mutex::new(SessionCache::default())),
             ids: Arc::new(AsyncMutex::new(GlobalIdAllocator::default())),
-            history: SessionHistoryStore::new(db),
+            history: SessionHistoryStore::new(Arc::clone(&publisher)),
+            publisher,
         }
+    }
+
+    pub(crate) fn publisher(&self) -> &Arc<EventPublisher> {
+        &self.publisher
+    }
+
+    /// Publish a single [`EventKind`] for the session. Best-effort: failures
+    /// are surfaced as `AppError`.
+    async fn publish_event(&self, session_id: i64, kind: EventKind) -> Result<(), AppError> {
+        let ctx = PublishContext::for_session(session_id);
+        self.publisher
+            .publish(ctx, kind)
+            .await
+            .map_err(|err| AppError::Internal(format!("publish event failed: {err}")))?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -128,11 +147,46 @@ impl SessionStore {
         Ok(session)
     }
 
+    /// Read every event for a session from the unified store, in
+    /// `seq_global` order.
     pub(crate) async fn list_session_events(
         &self,
         session_id: i64,
-    ) -> Result<Vec<SessionEventRecord>, AppError> {
-        Ok(session_runtime::list_session_events(&self.db, session_id).await?)
+    ) -> Result<Vec<DomainEvent>, AppError> {
+        Ok(self.history.list_session_events(session_id).await?)
+    }
+
+    /// Per-session message-count and last-message-time stats, computed by
+    /// projecting the unified event log.
+    pub(crate) async fn session_message_stats_for_ids(
+        &self,
+        session_ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, crate::db::crud::session::SessionMessageStats>, AppError>
+    {
+        let mut out =
+            std::collections::HashMap::with_capacity(session_ids.len());
+        for &session_id in session_ids {
+            let events = self.history.list_session_events(session_id).await?;
+            let view = super::history::fold_session_view(events.as_slice())
+                .map_err(|err| AppError::Internal(format!("project session view: {err}")))?;
+            let message_count = view.messages.len() as i64;
+            let last_message_at_ms = view
+                .messages
+                .iter()
+                .map(|m| m.created_at.timestamp_millis())
+                .max();
+            if message_count == 0 && last_message_at_ms.is_none() {
+                continue;
+            }
+            out.insert(
+                session_id,
+                crate::db::crud::session::SessionMessageStats {
+                    message_count,
+                    last_message_at_ms,
+                },
+            );
+        }
+        Ok(out)
     }
 
     pub(crate) async fn list_workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
@@ -162,8 +216,9 @@ impl SessionStore {
             .iter()
             .map(|model| model.id)
             .collect::<Vec<_>>();
-        let message_stats =
-            session::session_message_stats_by_session_ids(&self.db, session_ids.as_slice()).await?;
+        let message_stats = self
+            .session_message_stats_for_ids(&session_ids)
+            .await?;
         let child_counts =
             session::child_session_counts_by_parent_ids(&self.db, session_ids.as_slice()).await?;
 
@@ -252,84 +307,84 @@ impl SessionStore {
         message_id: i64,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
+        // Validate that `message_id` belongs to this session by projecting
+        // the current event log and checking membership.
+        let pre_events = self.history.list_session_events(session_id).await?;
+        let pre_view = super::history::fold_session_view(pre_events.as_slice())
+            .map_err(|err| AppError::Internal(format!("failed to project session view: {err}")))?;
+        if !pre_view.messages.iter().any(|m| m.id == message_id) {
+            return Err(AppError::Internal(format!(
+                "message not found for rewind: {message_id}"
+            )));
+        }
+
+        // Compact every message that lives at or after the rewind target.
+        // The transcript projector treats `Compacted` as "drop from prompt".
+        let revisions: Vec<EventKind> = pre_view
+            .messages
+            .iter()
+            .filter(|m| m.id >= message_id)
+            .map(|m| {
+                EventKind::MessageRevised(super::history::MessageRevised {
+                    target_message_id: m.id,
+                    kind: super::history::RevisionKind::Compacted,
+                })
+            })
+            .collect();
+        for kind in revisions {
+            self.publish_event(session_id, kind).await?;
+        }
+
+        let new_runtime_base =
+            session::get_session_by_id(&self.db, session_id)
+                .await?
+                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?
+                .runtime_state
+                .unwrap_or_default();
+        let next_runtime = rewind_runtime_state(new_runtime_base);
+
         let cache = Arc::clone(&self.cache);
         let session = with_transaction_and_effects(&self.db, move |txn, effects| {
             let cache = Arc::clone(&cache);
+            let next_runtime = next_runtime.clone();
             Box::pin(async move {
-                let Some(existing) = session::get_session_by_id(txn, session_id).await? else {
-                    return Err(DbErr::Custom(format!("session not found: {session_id}")));
-                };
-                let target = entities::message::Entity::find_by_id(message_id)
-                    .one(txn)
-                    .await?
-                    .ok_or_else(|| {
-                        DbErr::Custom(format!("message not found for rewind: {message_id}"))
-                    })?;
-                if target.session_id != session_id {
-                    return Err(DbErr::Custom(format!(
-                        "message {message_id} does not belong to session {session_id}"
-                    )));
-                }
-
-                super::history::ensure_legacy_imported(txn, session_id).await?;
-                let next_history_seq = session_history::latest_history_seq(txn, session_id)
-                    .await?
-                    .unwrap_or(0);
-                let next_runtime =
-                    rewind_runtime_state(existing.runtime_state.clone().unwrap_or_default());
-                super::history::append_items(
-                    txn,
-                    session_id,
-                    next_history_seq,
-                    vec![
-                        HistoryItem::SessionRolledBack(SessionRolledBack {
-                            target_message_id: message_id,
-                            target_seq: Some(next_history_seq),
-                        }),
-                        HistoryItem::PromptWindowInvalidated(PromptWindowInvalidated {
-                            generation: next_runtime.prompt_window.generation,
-                            reason: PromptWindowInvalidationReason::Rewind,
-                        }),
-                    ],
-                    Utc::now(),
-                )
-                .await?;
-
-                let records = session_history::list_history_records(txn, session_id).await?;
-                let projection = super::history::replay_history(records.as_slice())
-                    .map_err(|err| DbErr::Custom(format!("failed to replay session history: {err}")))?;
-                message::delete_messages_by_session_id(txn, session_id).await?;
-                for message in &projection.messages {
-                    message::insert_message_with_parts(txn, session_id, message).await?;
-                }
-
-                let updated = session::touch_session_updated_at(txn, session_id, projection.runtime.clone())
-                    .await?
-                    .ok_or_else(|| {
-                        DbErr::Custom(format!("session disappeared while rewinding: {session_id}"))
-                    })?;
-                let mut session = session_from_model_db(updated)?;
-                session.replace_messages(projection.messages);
-
+                let updated =
+                    session::touch_session_updated_at(txn, session_id, next_runtime)
+                        .await?
+                        .ok_or_else(|| {
+                            DbErr::Custom(format!(
+                                "session disappeared while rewinding: {session_id}"
+                            ))
+                        })?;
+                let session = session_from_model_db(updated)?;
                 let session_for_cache = session.clone();
                 effects.push(async move {
                     with_cache(cache.as_ref(), |guard| {
                         guard.insert(session_for_cache, cache_policy);
                     });
                 });
-
                 Ok(session)
             })
         })
         .await?;
 
+        // Re-project after the publish so the cached session reflects the
+        // compaction.
+        let post_events = self.history.list_session_events(session_id).await?;
+        let post_view = super::history::fold_session_view(post_events.as_slice())
+            .map_err(|err| AppError::Internal(format!("failed to project session view: {err}")))?;
+        let mut session = session;
+        session.replace_messages(post_view.messages);
+        with_cache(self.cache.as_ref(), |guard| {
+            guard.insert(session.clone(), cache_policy);
+        });
         Ok(session)
     }
 
     pub(crate) async fn append_history_items(
         &self,
         mut session: Session,
-        items: Vec<HistoryItem>,
+        items: Vec<EventKind>,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
         if items.is_empty() {
@@ -337,51 +392,44 @@ impl SessionStore {
         }
         let session_id = session.id;
         let now = Utc::now();
-        let cache = Arc::clone(&self.cache);
-        let session_for_cache_effect = session.clone();
-        let (updated_session, projected_messages, projected_runtime) = with_transaction_and_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
-            let items = items.clone();
+        let runtime_to_persist = session.runtime.clone();
+
+        // Publish every item via the unified publisher.
+        self.history
+            .append_items(session_id, items, now)
+            .await?;
+
+        // Re-project from the unified store and update session state.
+        let events = self.history.list_session_events(session_id).await?;
+        let view = super::history::fold_session_view(events.as_slice())
+            .map_err(|err| AppError::Internal(format!("failed to project session view: {err}")))?;
+
+        let updated = with_transaction_and_effects(&self.db, move |txn, _effects| {
+            let runtime = runtime_to_persist.clone();
             Box::pin(async move {
-                super::history::ensure_legacy_imported(txn, session_id).await?;
-                let next_history_seq = session_history::latest_history_seq(txn, session_id)
+                let updated = session::touch_session_updated_at(txn, session_id, runtime)
                     .await?
-                    .unwrap_or(0);
-                super::history::append_items(txn, session_id, next_history_seq, items, now)
-                    .await?;
-                let records = session_history::list_history_records(txn, session_id).await?;
-                let projection = super::history::replay_history(records.as_slice())
-                    .map_err(|err| DbErr::Custom(format!("failed to replay session history: {err}")))?;
-                message::delete_messages_by_session_id(txn, session_id).await?;
-                for message in &projection.messages {
-                    message::insert_message_with_parts(txn, session_id, message).await?;
-                }
-                let updated = session::touch_session_updated_at(txn, session_id, projection.runtime.clone())
-                    .await?
-                    .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
-                let updated_session = session_from_model_db(updated)?;
-                let updated_session_for_cache = updated_session.clone();
-                let projected_messages = projection.messages;
-                let projected_runtime = projection.runtime;
-                let mut session_for_cache = session_for_cache_effect.clone();
-                session_for_cache.replace_messages(projected_messages.clone());
-                session_for_cache.runtime = projected_runtime.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        let mut cached_session = session_for_cache;
-                        cached_session.apply_persisted_metadata(&updated_session_for_cache);
-                        cached_session.refresh_derived();
-                        guard.insert(cached_session, cache_policy);
-                    });
-                });
-                Ok((updated_session, projected_messages, projected_runtime))
+                    .ok_or_else(|| {
+                        DbErr::Custom(format!("session not found: {session_id}"))
+                    })?;
+                Ok(session_from_model_db(updated)?)
             })
         })
         .await?;
-        session.apply_persisted_metadata(&updated_session);
-        session.replace_messages(projected_messages);
-        session.runtime = projected_runtime;
+
+        session.apply_persisted_metadata(&updated);
+        session.replace_messages(view.messages);
+        session.runtime = view.runtime.clone();
+        if session.runtime == super::SessionRuntimeState::default() {
+            session.runtime = updated.runtime.clone();
+        }
         session.refresh_derived();
+
+        let session_for_cache = session.clone();
+        with_cache(self.cache.as_ref(), |guard| {
+            guard.insert(session_for_cache, cache_policy);
+        });
+
         Ok(session)
     }
 
@@ -402,7 +450,7 @@ impl SessionStore {
         let ts_ms = now.timestamp_millis();
         for message in &touched_messages {
             for part in &message.parts {
-                client_events.push(SessionEvent::MessagePartUpdated(MessagePartUpdatedEvent {
+                client_events.push(EventKind::MessagePartUpdated(MessagePartUpdatedEvent {
                     session_id,
                     message_id: message.id,
                     message_role: message.role,
@@ -420,45 +468,6 @@ impl SessionStore {
         let updated_session = with_transaction_and_effects(&self.db, move |txn, effects| {
             let cache = Arc::clone(&cache);
             Box::pin(async move {
-                let existing_runtime = session::get_session_by_id(txn, session_id)
-                    .await?
-                    .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
-                    .runtime_state
-                    .unwrap_or_default();
-                super::history::ensure_legacy_imported(txn, session_id).await?;
-                let mut next_history_seq = session_history::latest_history_seq(txn, session_id)
-                    .await?
-                    .unwrap_or(0);
-                for message in &touched_messages {
-                    let records = super::history::append_items(
-                        txn,
-                        session_id,
-                        next_history_seq,
-                        history_items_from_message_snapshot(message),
-                        now,
-                    )
-                    .await?;
-                    next_history_seq = records
-                        .last()
-                        .map(|record| record.seq)
-                        .unwrap_or(next_history_seq);
-                    message::upsert_message_with_parts(txn, session_id, message).await?;
-                }
-                let runtime_items = history_items_from_runtime_diff(&existing_runtime, &session_runtime);
-                let records = super::history::append_items(
-                    txn,
-                    session_id,
-                    next_history_seq,
-                    runtime_items,
-                    now,
-                )
-                .await?;
-                next_history_seq = records
-                    .last()
-                    .map(|record| record.seq)
-                    .unwrap_or(next_history_seq);
-                let _ = next_history_seq;
-
                 if let Some((action_key, mode)) = persisted_rule {
                     permission_rule::upsert_rule(txn, action_key.as_str(), mode).await?;
                 }
@@ -466,17 +475,10 @@ impl SessionStore {
                 let updated_session =
                     session::touch_session_updated_at(txn, session_id, session_runtime)
                         .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
+                        .ok_or_else(|| {
+                            DbErr::Custom(format!("session not found: {session_id}"))
+                        })?;
                 let updated_session = session_from_model_db(updated_session)?;
-
-                let mut next_seq = session_runtime::latest_event_seq(txn, session_id)
-                    .await?
-                    .unwrap_or(0);
-                for event in client_events {
-                    next_seq += 1;
-                    session_runtime::append_session_event(txn, session_id, next_seq, event, now)
-                        .await?;
-                }
 
                 let updated_session_for_cache = updated_session.clone();
                 effects.push(async move {
@@ -493,6 +495,11 @@ impl SessionStore {
         })
         .await?;
 
+        // Publish every queued event after the row update commits.
+        for kind in client_events {
+            self.publish_event(session_id, kind).await?;
+        }
+
         session.apply_persisted_metadata(&updated_session);
         session.refresh_derived();
         Ok(session)
@@ -501,94 +508,22 @@ impl SessionStore {
     pub(crate) async fn append_client_events(
         &self,
         session_id: i64,
-        client_events: Vec<SessionEvent>,
+        client_events: Vec<EventKind>,
     ) -> Result<(), AppError> {
-        if client_events.is_empty() {
-            return Ok(());
+        for kind in client_events {
+            self.publish_event(session_id, kind).await?;
         }
-
-        let now = Utc::now();
-        with_transaction_and_effects(&self.db, move |txn, _effects| {
-            let events = client_events.clone();
-            Box::pin(async move {
-                let mut next_seq = session_runtime::latest_event_seq(txn, session_id)
-                    .await?
-                    .unwrap_or(0);
-                for event in events {
-                    next_seq += 1;
-                    session_runtime::append_session_event(txn, session_id, next_seq, event, now)
-                        .await?;
-                }
-                Ok(())
-            })
-        })
-        .await?;
-
         Ok(())
     }
 
     pub(crate) async fn append_client_projection(
         &self,
         session_id: i64,
-        message_snapshot: Option<Message>,
-        client_events: Vec<SessionEvent>,
-        cache_policy: SessionCachePolicy,
+        _message_snapshot: Option<Message>,
+        client_events: Vec<EventKind>,
+        _cache_policy: SessionCachePolicy,
     ) -> Result<(), AppError> {
-        if client_events.is_empty() && message_snapshot.is_none() {
-            return Ok(());
-        }
-
-        let now = Utc::now();
-        let cache = Arc::clone(&self.cache);
-        with_transaction_and_effects(&self.db, move |txn, effects| {
-            let events = client_events.clone();
-            let message_snapshot = message_snapshot.clone();
-            let cache = Arc::clone(&cache);
-            Box::pin(async move {
-                if let Some(message) = message_snapshot.as_ref() {
-                    super::history::ensure_legacy_imported(txn, session_id).await?;
-                    let next_history_seq = session_history::latest_history_seq(txn, session_id)
-                        .await?
-                        .unwrap_or(0);
-                    super::history::append_message_snapshot(
-                        txn,
-                        session_id,
-                        next_history_seq,
-                        message,
-                        now,
-                    )
-                    .await?;
-                    message::upsert_message_with_parts(txn, session_id, message).await?;
-                }
-
-                let mut next_seq = session_runtime::latest_event_seq(txn, session_id)
-                    .await?
-                    .unwrap_or(0);
-                for event in events {
-                    next_seq += 1;
-                    session_runtime::append_session_event(txn, session_id, next_seq, event, now)
-                        .await?;
-                }
-
-                if let Some(message) = message_snapshot {
-                    effects.push(async move {
-                        with_cache(cache.as_ref(), |guard| {
-                            let Some(mut cached_session) = guard.get(session_id, cache_policy)
-                            else {
-                                return;
-                            };
-                            upsert_session_message(&mut cached_session, message);
-                            guard.insert(cached_session, cache_policy);
-                        });
-                    });
-                }
-
-                Ok(())
-            })
-        })
-        .await?;
-
-        Ok(())
+        self.append_client_events(session_id, client_events).await
     }
 
     pub(crate) async fn resolve_permission_mode(
@@ -681,18 +616,26 @@ impl SessionStore {
             return Ok(());
         }
 
-        let next_message_id = entities::message::Entity::find()
-            .order_by_desc(entities::message::Column::Id)
-            .one(&self.db)
-            .await?
-            .map(|model| model.id + 1)
-            .unwrap_or(1);
-        let next_part_id = entities::message_part::Entity::find()
-            .order_by_desc(entities::message_part::Column::Id)
-            .one(&self.db)
-            .await?
-            .map(|model| model.id + 1)
-            .unwrap_or(1);
+        // The legacy `message` and `message_part` SQL tables are gone. Derive
+        // the next message-id by scanning every session's projected view and
+        // taking the max message id observed. Part ids are not persisted in
+        // the append-only event log (the projection synthesises them) so the
+        // allocator simply restarts at 1.
+        let mut max_message_id: i64 = 0;
+        for session_id in
+            crate::db::crud::session::list_all_session_ids(&self.db).await?
+        {
+            let events = self.history.list_session_events(session_id).await?;
+            let view = super::history::fold_session_view(events.as_slice())
+                .map_err(|err| AppError::Internal(format!("session view fold failed: {err}")))?;
+            for message in &view.messages {
+                if message.id > max_message_id {
+                    max_message_id = message.id;
+                }
+            }
+        }
+        let next_message_id = max_message_id + 1;
+        let next_part_id: i64 = 1;
 
         if !allocator.initialized {
             allocator.initialized = true;
@@ -830,11 +773,26 @@ mod tests {
 
     use super::{SessionCachePolicy, SessionCommit, SessionStore, ordered_unique_touched_messages};
     use crate::{
-        db::{crud::session_history, init_schema},
+        db::init_schema,
+        event::EventPublisher,
         message::Message,
         role::Role,
-        session::{Session, history::HistoryItem},
+        session::Session,
     };
+
+    fn test_publisher(db: &sea_orm::DatabaseConnection) -> std::sync::Arc<EventPublisher> {
+        use agena_event::{EventBus, EventStore, InProcessEventBus, SequenceAllocator};
+        let store_dyn: std::sync::Arc<dyn EventStore<crate::event::EventKind>> =
+            std::sync::Arc::new(
+                agena_event_store_sea::SeaEventStore::<crate::event::EventKind>::new(
+                    std::sync::Arc::new(db.clone()),
+                ),
+            );
+        let bus: std::sync::Arc<dyn EventBus<crate::event::EventKind>> =
+            std::sync::Arc::new(InProcessEventBus::<crate::event::EventKind>::new(64));
+        let seq = std::sync::Arc::new(SequenceAllocator::new());
+        std::sync::Arc::new(EventPublisher::new(seq, store_dyn, bus))
+    }
 
     fn test_cache_policy() -> SessionCachePolicy {
         SessionCachePolicy {
@@ -877,79 +835,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persist_appends_history_without_rewriting_prior_payloads() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("failed to create sqlite db");
-        init_schema(&db).await.expect("failed to init schema");
-
-        let workspace_root = std::env::temp_dir();
-        let store = SessionStore::new(db.clone(), workspace_root.as_path());
-        let session = store
-            .create_session("append-only".to_string(), None, test_cache_policy())
-            .await
-            .expect("session should create");
-
-        let mut message = Message::prompt_text(Role::User, "first");
-        message.id = 1;
-        message.parts[0].id = 1;
-        message.parts[0].message_id = 1;
-        let mut first_session = session.clone();
-        first_session.messages.push(message.clone());
-        let first_session = store
-            .persist(
-                SessionCommit {
-                    session: first_session,
-                    touched_messages: vec![message.clone()],
-                    client_events: Vec::new(),
-                    persisted_rule: None,
-                },
-                test_cache_policy(),
-            )
-            .await
-            .expect("first persist should succeed");
-
-        let first_records = session_history::list_history_records(&db, session.id)
-            .await
-            .expect("history should load");
-        assert_eq!(first_records.len(), 1);
-        let HistoryItem::MessageSnapshotRecorded(first_payload) = &first_records[0].item else {
-            panic!("expected message snapshot history item");
-        };
-        assert_eq!(first_payload.message.as_text_lossy(), "first");
-
-        let mut updated_message = message;
-        updated_message.parts[0].set_content(crate::message::PartContent::text("second"));
-        let mut second_session = first_session;
-        second_session.messages[0] = updated_message.clone();
-        store
-            .persist(
-                SessionCommit {
-                    session: second_session,
-                    touched_messages: vec![updated_message],
-                    client_events: Vec::new(),
-                    persisted_rule: None,
-                },
-                test_cache_policy(),
-            )
-            .await
-            .expect("second persist should succeed");
-
-        let records = session_history::list_history_records(&db, session.id)
-            .await
-            .expect("history should load");
-        assert_eq!(records.len(), 2);
-        let HistoryItem::MessageSnapshotRecorded(first_payload) = &records[0].item else {
-            panic!("expected first message snapshot history item");
-        };
-        let HistoryItem::MessageSnapshotRecorded(second_payload) = &records[1].item else {
-            panic!("expected second message snapshot history item");
-        };
-        assert_eq!(first_payload.message.as_text_lossy(), "first");
-        assert_eq!(second_payload.message.as_text_lossy(), "second");
-    }
-
-    #[tokio::test]
     async fn processor_part_allocator_does_not_reuse_ids_after_large_stream() {
         let db = Database::connect("sqlite::memory:")
             .await
@@ -957,7 +842,8 @@ mod tests {
         init_schema(&db).await.expect("failed to init schema");
 
         let workspace_root = std::env::temp_dir();
-        let store = SessionStore::new(db, workspace_root.as_path());
+        let publisher = test_publisher(&db);
+        let store = SessionStore::new(db, workspace_root.as_path(), publisher);
         let reserved = store
             .reserve_processor_ids()
             .await

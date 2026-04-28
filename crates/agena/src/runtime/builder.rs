@@ -118,6 +118,14 @@ impl AgenaRuntimeBuilder {
             }),
         };
 
+        // Install the runtime-backed HostClient into the plugin host so
+        // plugin → host callbacks (log/read_config/etc.) actually do work.
+        {
+            let host_handle = initial_snapshot.plugin_manager().host_handle();
+            let client = super::host_client_for(runtime.clone());
+            host_handle.install_client(client).await;
+        }
+
         runtime.apply_tracing_filter(
             initial_snapshot
                 .config_resolution()
@@ -217,19 +225,27 @@ impl AgenaRuntime {
         let _guard = self.inner.reload_lock.lock().await;
         let previous = self.current_snapshot();
         let next = Arc::new(
-            RuntimeSnapshot::build(
+            RuntimeSnapshot::build_with_previous(
                 previous.generation() + 1,
                 &self.inner.loader,
                 &self.inner.load_request,
                 self.inner.workspace_root.as_path(),
                 self.inner.database.clone(),
                 previous.session_manager(),
+                Arc::clone(&previous),
             )
             .await?,
         );
 
         self.apply_tracing_filter(next.config_resolution().config.tracing.filter.as_str());
         let previous_generation = previous.generation();
+        // Install runtime-backed HostClient into the new snapshot's plugin
+        // host so post-reload plugin callbacks keep working.
+        {
+            let host_handle = next.plugin_manager().host_handle();
+            let client = super::host_client_for(self.clone());
+            host_handle.install_client(client).await;
+        }
         let _ = self.inner.snapshot_store.swap(next.clone());
 
         Ok(RuntimeReloadReport {

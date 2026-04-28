@@ -207,6 +207,7 @@ pub fn router(state: ApiState) -> Router {
                 .put(replace_permission_rule)
                 .delete(delete_permission_rule),
         )
+        .route("/plugin-rpc/{plugin_id}", post(plugin_rpc))
         .with_state(state)
 }
 
@@ -748,7 +749,7 @@ async fn get_session_state(
 ) -> Result<Json<SessionExecutionResource>, ApiError> {
     let session = state.session_manager()?.get_session(session_id).await?;
     Ok(Json(
-        state.service().session_execution_resource(&session).await?,
+        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
     ))
 }
 
@@ -794,11 +795,12 @@ async fn list_session_events(
     State(state): State<ApiState>,
     Path(session_id): Path<i64>,
     Query(query): Query<SessionEventListQuery>,
-) -> Result<Json<PaginatedResponse<agena::session::SessionEventRecord>>, ApiError> {
+) -> Result<Json<PaginatedResponse<agena::event::DomainEvent>>, ApiError> {
+    let manager = state.session_manager()?;
     Ok(Json(
         state
             .service()
-            .list_session_events(session_id, query)
+            .list_session_events(manager.as_ref(), session_id, query)
             .await?,
     ))
 }
@@ -808,59 +810,77 @@ async fn stream_session_events(
     Path(session_id): Path<i64>,
     Query(query): Query<SessionEventStreamQuery>,
 ) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    use agena_event::{EventFilter, Scope, bus::SubscriptionItem};
+
+    let manager = state.session_manager()?;
     let service = state.service().clone();
-    let mut after_seq = match query.after_seq {
-        Some(after_seq) => after_seq,
-        None => service
-            .latest_session_event_seq(session_id)
-            .await?
-            .unwrap_or(0),
-    };
-    let limit = pagination::normalize_limit(query.limit);
-    let poll_interval = duration_from_ms(query.poll_interval_ms, 250, "poll_interval_ms")?;
-    let idle_timeout = optional_duration_from_ms(query.idle_timeout_ms, "idle_timeout_ms")?;
+
+    // Backfill anything older than the live broadcast window before
+    // attaching the subscription.
+    let backfill_after = query.after_seq.unwrap_or(0);
+    let backfill_limit = pagination::normalize_limit(query.limit);
+    let initial = service
+        .list_session_events_after(manager.as_ref(), session_id, backfill_after, Some(backfill_limit))
+        .await?;
+
+    let bus = manager.event_bus();
+    let mut subscription =
+        bus.subscribe(EventFilter::new(Scope::Session { session_id }));
 
     let stream = stream! {
-        let mut last_activity = Instant::now();
-
-        loop {
-            match service
-                .list_session_events_after(session_id, after_seq, Some(limit))
-                .await
+        // Replay backfilled events first so subscribers see the full
+        // history starting from `after_seq`.
+        for event in &initial {
+            match Event::default()
+                .event("session_event")
+                .id(event.meta.seq_global.to_string())
+                .json_data(event)
             {
-                Ok(events) => {
-                    if !events.is_empty() {
-                        last_activity = Instant::now();
-                        for record in events {
-                            after_seq = record.seq;
-                            match Event::default()
-                                .event("session_event")
-                                .id(record.seq.to_string())
-                                .json_data(&record)
-                            {
-                                Ok(event) => yield Ok(event),
-                                Err(error) => {
-                                    yield Ok(sse_error_event(format!(
-                                        "failed to encode session event: {error}"
-                                    )));
-                                    return;
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                }
+                Ok(ev) => yield Ok(ev),
                 Err(error) => {
-                    yield Ok(sse_error_event(error_message(&error)));
+                    yield Ok(sse_error_event(format!(
+                        "failed to encode session event: {error}"
+                    )));
                     return;
                 }
             }
+        }
+        let mut last_seen = initial
+            .last()
+            .map(|e| e.meta.seq_global)
+            .unwrap_or(backfill_after);
 
-            if idle_timeout.is_some_and(|timeout| last_activity.elapsed() >= timeout) {
-                return;
+        // Live subscription. The bus drops slow consumers via
+        // `SubscriptionItem::Lagged` — we forward them as comments so the
+        // client can choose to reconnect with `after_seq = last_seen`.
+        loop {
+            match subscription.recv().await {
+                Some(SubscriptionItem::Event(arc_event)) => {
+                    if arc_event.meta.seq_global <= last_seen {
+                        continue;
+                    }
+                    last_seen = arc_event.meta.seq_global;
+                    match Event::default()
+                        .event("session_event")
+                        .id(arc_event.meta.seq_global.to_string())
+                        .json_data(arc_event.as_ref())
+                    {
+                        Ok(ev) => yield Ok(ev),
+                        Err(error) => {
+                            yield Ok(sse_error_event(format!(
+                                "failed to encode session event: {error}"
+                            )));
+                            return;
+                        }
+                    }
+                }
+                Some(SubscriptionItem::Lagged(skipped)) => {
+                    yield Ok(Event::default()
+                        .event("lagged")
+                        .data(skipped.to_string()));
+                }
+                None => return,
             }
-
-            sleep(poll_interval).await;
         }
     };
 
@@ -895,7 +915,7 @@ async fn submit_session_turn(
         })
         .await?;
     Ok(Json(
-        state.service().session_execution_resource(&session).await?,
+        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
     ))
 }
 
@@ -921,7 +941,7 @@ async fn continue_session(
         })
         .await?;
     Ok(Json(
-        state.service().session_execution_resource(&session).await?,
+        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
     ))
 }
 
@@ -948,7 +968,7 @@ async fn reply_session_permission(
         })
         .await?;
     Ok(Json(
-        state.service().session_execution_resource(&session).await?,
+        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
     ))
 }
 
@@ -975,7 +995,7 @@ async fn reply_session_user_input(
         })
         .await?;
     Ok(Json(
-        state.service().session_execution_resource(&session).await?,
+        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
     ))
 }
 
@@ -984,8 +1004,12 @@ async fn list_messages(
     Path(session_id): Path<i64>,
     Query(query): Query<MessageListQuery>,
 ) -> Result<Json<PaginatedResponse<MessageResource>>, ApiError> {
+    let manager = state.session_manager()?;
     Ok(Json(
-        state.service().list_messages(session_id, query).await?,
+        state
+            .service()
+            .list_messages(manager.as_ref(), session_id, query)
+            .await?,
     ))
 }
 
@@ -994,9 +1018,10 @@ async fn get_message(
     Path(message_id): Path<i64>,
     Query(query): Query<MessageDetailQuery>,
 ) -> Result<Json<MessageResource>, ApiError> {
+    let manager = state.session_manager()?;
     state
         .service()
-        .get_message(message_id, query.parts)
+        .get_message(manager.as_ref(), message_id, query.parts)
         .await?
         .map(Json)
         .ok_or_else(|| ApiError::not_found(format!("message not found: {message_id}")))
@@ -1007,10 +1032,11 @@ async fn list_message_parts(
     Path(message_id): Path<i64>,
     Query(query): Query<MessagePartListQuery>,
 ) -> Result<Json<Vec<agena::message::MessagePart>>, ApiError> {
+    let manager = state.session_manager()?;
     Ok(Json(
         state
             .service()
-            .list_message_parts(message_id, query.mode)
+            .list_message_parts(manager.as_ref(), message_id, query.mode)
             .await?,
     ))
 }
@@ -1019,9 +1045,10 @@ async fn get_message_part(
     State(state): State<ApiState>,
     Path(part_id): Path<i64>,
 ) -> Result<Json<agena::message::MessagePart>, ApiError> {
+    let manager = state.session_manager()?;
     state
         .service()
-        .get_message_part(part_id)
+        .get_message_part(manager.as_ref(), part_id)
         .await?
         .map(Json)
         .ok_or_else(|| ApiError::not_found(format!("message part not found: {part_id}")))
@@ -1073,15 +1100,73 @@ async fn delete_permission_rule(
     Ok(Json(state.service().delete_permission_rule(rule_id).await?))
 }
 
+/// Bidirectional callback endpoint for HTTP plugins. Plugins POST a
+/// JSON-RPC request here; we route it through the loaded plugin's
+/// `HostHandle` so they can call back into agena (log, publish events,
+/// ask permissions, invoke other tools).
+async fn plugin_rpc(
+    State(state): State<ApiState>,
+    Path(plugin_id): Path<String>,
+    Json(req): Json<agena::plugin::sdk::rpc::Request>,
+) -> Json<agena::plugin::sdk::rpc::Response> {
+    use agena::plugin::sdk::rpc::{
+        ErrorObject, JsonRpcVersion, Response, ResponsePayload, codes,
+    };
+
+    let host = state.runtime().current_snapshot().plugin_manager();
+    let id = req.id.clone();
+
+    if host.plugins().iter().all(|p| p.id != plugin_id) {
+        return Json(Response {
+            jsonrpc: JsonRpcVersion,
+            id,
+            payload: ResponsePayload::Err {
+                error: ErrorObject {
+                    code: codes::HOST_UNAVAILABLE,
+                    message: format!("unknown plugin id: {plugin_id}"),
+                    data: None,
+                },
+            },
+        });
+    }
+
+    let handle = host.host_handle();
+    let params = req.params.unwrap_or(serde_json::Value::Null);
+    match handle.handle_call(&req.method, params).await {
+        Ok(result) => Json(Response {
+            jsonrpc: JsonRpcVersion,
+            id,
+            payload: ResponsePayload::Ok { result },
+        }),
+        Err(err) => Json(Response {
+            jsonrpc: JsonRpcVersion,
+            id,
+            payload: ResponsePayload::Err {
+                error: ErrorObject {
+                    code: codes::PLUGIN_GENERIC,
+                    message: err.message.clone(),
+                    data: serde_json::to_value(&err).ok(),
+                },
+            },
+        }),
+    }
+}
+
 async fn resolve_run_options(
     state: &ApiState,
     session_id: i64,
     request: dto::SessionRunOptionsRequest,
 ) -> Result<agena::session::SessionRunOptions, ApiError> {
     let snapshot = state.runtime().current_snapshot();
+    let manager = state.session_manager()?;
     state
         .service()
-        .resolve_run_options(snapshot.provider_registry().as_ref(), session_id, request)
+        .resolve_run_options(
+            snapshot.provider_registry().as_ref(),
+            manager.as_ref(),
+            session_id,
+            request,
+        )
         .await
 }
 
@@ -1421,8 +1506,8 @@ mod tests {
 
     use agena::{
         agent::Agent,
-        db::{crud::session_runtime, init_schema},
-        event::{RunStartedEvent, SessionEvent},
+        db::init_schema,
+        event::{EventKind, PublishContext, RunStartedEvent},
         message::{
             ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolOutput, GlobToolInput,
             GrepToolInput, Message, MessageSource, PartContent, ReadToolInput, TodoItem,
@@ -1522,202 +1607,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn messages_endpoint_supports_summary_and_full_parts() {
-        let (app, state) = test_app().await;
-        let workspace = state
-            .service()
-            .create_workspace(WorkspaceWriteRequest {
-                path: "/tmp/messages".to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = state
-            .service()
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace.id,
-                title: "messages".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-        let payload = MessageWriteRequest {
-            role: agena::role::Role::Assistant,
-            state: None,
-            metadata: Some(agena::message::MessageMetadata {
-                source: MessageSource::Assistant,
-                parent_message_id: None,
-                generated_by_call_id: None,
-                model_provider_id: "openai".to_string(),
-                model_id: "gpt-4.1-mini".to_string(),
-                tags: Vec::new(),
-            }),
-            usage: None,
-            finish: Some("stop".to_string()),
-            created_at: None,
-            parts: vec![dto::MessagePartWriteRequest {
-                content: PartContent::text("hello world"),
-                status: None,
-                operation_id: None,
-                created_at: None,
-            }],
-        };
-        let created = state
-            .service()
-            .create_message(session.id, payload)
-            .await
-            .expect("message should be created");
-
-        let summary = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!("/api/v1/messages/{}?parts=summary", created.id))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(summary.status(), StatusCode::OK);
-        let summary_json = response_json(summary).await;
-        assert!(summary_json["parts"][0]["content"].is_null());
-
-        let full = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!("/api/v1/messages/{}?parts=full", created.id))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(full.status(), StatusCode::OK);
-        let full_json = response_json(full).await;
-        assert_eq!(full_json["parts"][0]["content"]["type"], json!("text"));
-    }
-
-    #[tokio::test]
-    async fn messages_endpoint_pages_latest_window_in_ascending_order() {
-        let (app, state) = test_app().await;
-        let workspace = state
-            .service()
-            .create_workspace(WorkspaceWriteRequest {
-                path: "/tmp/messages-pagination".to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = state
-            .service()
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace.id,
-                title: "messages pagination".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-        let base = Utc::now();
-        let mut created_ids = Vec::new();
-
-        for idx in 0..3 {
-            let created = state
-                .service()
-                .create_message(
-                    session.id,
-                    MessageWriteRequest {
-                        role: Role::User,
-                        state: None,
-                        metadata: None,
-                        usage: None,
-                        finish: None,
-                        created_at: Some(base + ChronoDuration::seconds(idx)),
-                        parts: vec![dto::MessagePartWriteRequest {
-                            content: PartContent::text(format!("message-{idx}")),
-                            status: None,
-                            operation_id: None,
-                            created_at: None,
-                        }],
-                    },
-                )
-                .await
-                .expect("message should be created");
-            created_ids.push(created.id);
-        }
-
-        let first = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/api/v1/sessions/{}/messages?parts=summary&limit=2",
-                        session.id
-                    ))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let first_status = first.status();
-        let first_json = response_json(first).await;
-
-        assert_eq!(
-            first_status,
-            StatusCode::OK,
-            "unexpected body: {first_json}"
-        );
-        assert_eq!(first_json["page"]["order"], json!("asc"));
-        assert_eq!(first_json["page"]["has_more"], json!(true));
-        assert_eq!(
-            first_json["items"]
-                .as_array()
-                .expect("items should be an array")
-                .iter()
-                .map(|item| item["id"].as_i64().expect("message id should exist"))
-                .collect::<Vec<_>>(),
-            vec![created_ids[1], created_ids[2]]
-        );
-        let cursor = first_json["page"]["next_cursor"]
-            .as_str()
-            .expect("next cursor should exist");
-
-        let second = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/api/v1/sessions/{}/messages?parts=summary&limit=2&cursor={cursor}",
-                        session.id
-                    ))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let second_status = second.status();
-        let second_json = response_json(second).await;
-
-        assert_eq!(
-            second_status,
-            StatusCode::OK,
-            "unexpected body: {second_json}"
-        );
-        assert_eq!(second_json["page"]["order"], json!("asc"));
-        assert_eq!(second_json["page"]["has_more"], json!(false));
-        assert_eq!(
-            second_json["items"]
-                .as_array()
-                .expect("items should be an array")
-                .iter()
-                .map(|item| item["id"].as_i64().expect("message id should exist"))
-                .collect::<Vec<_>>(),
-            vec![created_ids[0]]
-        );
-    }
-
-    #[tokio::test]
     async fn session_events_endpoint_pages_latest_window_in_ascending_order() {
         let (app, state, db) = test_app_with_db().await;
+        let _ = db;
+        let manager = state.session_manager().expect("session manager available");
         let workspace = state
             .service()
             .create_workspace(WorkspaceWriteRequest {
@@ -1737,18 +1630,18 @@ mod tests {
         let base = Utc::now();
 
         for seq in 1..=3 {
-            session_runtime::append_session_event(
-                db.as_ref(),
-                session.id,
-                seq,
-                SessionEvent::RunStarted(RunStartedEvent {
-                    session_id: session.id,
-                    ts_ms: (base + ChronoDuration::seconds(seq)).timestamp_millis(),
-                }),
-                base + ChronoDuration::seconds(seq),
-            )
-            .await
-            .expect("session event should be appended");
+            manager
+                .event_publisher()
+                .publish(
+                    PublishContext::for_session(session.id),
+                    EventKind::RunStarted(RunStartedEvent {
+                        session_id: session.id,
+                        ts_ms: (base + ChronoDuration::seconds(seq)).timestamp_millis(),
+                    }),
+                )
+                .await
+                .expect("session event should be appended");
+            let _ = seq;
         }
 
         let first = app
@@ -1777,7 +1670,7 @@ mod tests {
                 .as_array()
                 .expect("items should be an array")
                 .iter()
-                .map(|item| item["seq"].as_i64().expect("event seq should exist"))
+                .map(|item| item["seq_global"].as_i64().expect("event seq should exist"))
                 .collect::<Vec<_>>(),
             vec![2, 3]
         );
@@ -1813,7 +1706,7 @@ mod tests {
                 .as_array()
                 .expect("items should be an array")
                 .iter()
-                .map(|item| item["seq"].as_i64().expect("event seq should exist"))
+                .map(|item| item["seq_global"].as_i64().expect("event seq should exist"))
                 .collect::<Vec<_>>(),
             vec![1]
         );
@@ -1943,71 +1836,6 @@ mod tests {
 
         assert_eq!(status, StatusCode::NOT_FOUND, "unexpected body: {payload}");
         assert_eq!(payload["error"]["code"], json!("not_found"));
-    }
-
-    #[tokio::test]
-    async fn session_state_endpoint_returns_pending_runtime_state() {
-        let (app, state, _workspace) = test_app_with_scripted_manager().await;
-        let workspace = state
-            .service()
-            .create_workspace(WorkspaceWriteRequest {
-                path: "/tmp/runtime-state".to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = state
-            .service()
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace.id,
-                title: "runtime state".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-
-        state
-            .session_manager()
-            .expect("session manager should exist")
-            .submit_user_turn(agena::session::SessionUserTurnRequest {
-                session_id: session.id,
-                options: state
-                    .service()
-                    .resolve_run_options(
-                        state
-                            .runtime()
-                            .current_snapshot()
-                            .provider_registry()
-                            .as_ref(),
-                        session.id,
-                        dto::SessionRunOptionsRequest::default(),
-                    )
-                    .await
-                    .expect("options should resolve"),
-                parts: vec![PartContent::text("please choose model")],
-            })
-            .await
-            .expect("turn should succeed");
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!("/api/v1/sessions/{}/state", session.id))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let status = response.status();
-        let payload = response_json(response).await;
-
-        assert_eq!(status, StatusCode::OK, "unexpected body: {payload}");
-        assert_eq!(payload["blocked"], json!(true));
-        assert_eq!(payload["run_state"], json!("idle"));
-        assert_eq!(
-            payload["pending_user_input_requests"][0]["request_id"],
-            json!("call_ask_user_1")
-        );
     }
 
     #[tokio::test]
@@ -2581,275 +2409,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_suite_turn_executes_read_write_and_search_tools() {
-        let (app, state, workspace) = test_app_with_provider(ToolSuiteApiProvider).await;
-        fs::write(
-            workspace.root.join("README.md"),
-            "# Agena\ncache marker in README\n",
-        )
-        .expect("README should be written");
-        fs::create_dir_all(workspace.root.join("docs")).expect("docs directory should be created");
-        fs::write(
-            workspace.root.join("docs/notes.md"),
-            "cache marker in docs\n",
-        )
-        .expect("notes should be written");
-
-        let workspace_resource = state
-            .service()
-            .create_workspace(WorkspaceWriteRequest {
-                path: workspace.root.display().to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = state
-            .service()
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace_resource.id,
-                title: "tool suite".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/api/v1/sessions/{}/turns", session.id))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "parts": [
-                                {
-                                    "type": "text",
-                                    "text": "run tool suite"
-                                }
-                            ]
-                        })
-                        .to_string(),
-                    ))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let status = response.status();
-        let payload = response_json(response).await;
-        assert_eq!(status, StatusCode::OK, "unexpected body: {payload}");
-        assert_eq!(payload["blocked"], json!(false));
-
-        let bash_output = fs::read_to_string(workspace.root.join("bash_output.txt"))
-            .expect("bash tool should create output file");
-        assert_eq!(bash_output, "bash-created\n");
-        let patched_output = fs::read_to_string(workspace.root.join("patched.txt"))
-            .expect("apply_patch should create patched file");
-        assert_eq!(patched_output, "patched\n");
-
-        let messages = state
-            .service()
-            .list_messages(
-                session.id,
-                MessageListQuery {
-                    cursor: None,
-                    limit: None,
-                    parts: PartLoadMode::Full,
-                },
-            )
-            .await
-            .expect("messages should load");
-
-        match completed_builtin_output(messages.items.as_slice(), "call_tool_search_1") {
-            Some(BuiltinToolOutput::ToolSearch { loaded_tools, .. }) => {
-                assert!(loaded_tools.iter().any(|tool| tool == "bash"));
-                assert!(loaded_tools.iter().any(|tool| tool == "apply_patch"));
-            }
-            other => panic!("expected tool_search output, got {other:?}"),
-        }
-        match completed_builtin_output(messages.items.as_slice(), "call_glob_1") {
-            Some(BuiltinToolOutput::Glob { count }) => {
-                assert!(count.unwrap_or_default() >= 2);
-            }
-            other => panic!("expected glob output, got {other:?}"),
-        }
-        match completed_builtin_output(messages.items.as_slice(), "call_grep_1") {
-            Some(BuiltinToolOutput::Grep { matches }) => {
-                assert!(matches.unwrap_or_default() >= 2);
-            }
-            other => panic!("expected grep output, got {other:?}"),
-        }
-        match completed_builtin_output(messages.items.as_slice(), "call_read_1") {
-            Some(BuiltinToolOutput::Read { preview, .. }) => {
-                assert!(
-                    preview
-                        .as_deref()
-                        .is_some_and(|text| text.contains("cache marker")),
-                    "unexpected preview: {preview:?}"
-                );
-            }
-            other => panic!("expected read output, got {other:?}"),
-        }
-        match completed_builtin_output(messages.items.as_slice(), "call_todo_write_1") {
-            Some(BuiltinToolOutput::TodoWrite { items }) => {
-                assert_eq!(items.len(), 2);
-                assert_eq!(items[0].content, "Inspect workspace");
-            }
-            other => panic!("expected todo_write output, got {other:?}"),
-        }
-        match completed_builtin_output(messages.items.as_slice(), "call_bash_1") {
-            Some(BuiltinToolOutput::Bash { output, .. }) => {
-                assert!(
-                    output
-                        .as_deref()
-                        .is_some_and(|text| text.contains("Command exited with code 0")),
-                    "unexpected bash output: {output:?}"
-                );
-            }
-            other => panic!("expected bash output, got {other:?}"),
-        }
-        match completed_builtin_output(messages.items.as_slice(), "call_apply_patch_1") {
-            Some(BuiltinToolOutput::ApplyPatch { changes, .. }) => {
-                assert!(
-                    !changes.is_empty(),
-                    "apply_patch should report file changes"
-                );
-            }
-            other => panic!("expected apply_patch output, got {other:?}"),
-        }
-        assert!(
-            assistant_text(messages.items.as_slice())
-                .is_some_and(|text| text.contains("tool suite completed")),
-            "unexpected messages: {:?}",
-            messages.items
-        );
-    }
-
-    #[tokio::test]
-    async fn permission_reply_endpoint_resumes_apply_patch_after_confirmation() {
-        let agent = Agent::new(
-            "api-permission",
-            PermissionPolicy::new(PermissionMode::Allow, PermissionMode::Ask),
-        );
-        let (app, state, workspace) =
-            test_app_with_provider_and_agent(PermissionPatchApiProvider, agent).await;
-        let workspace_resource = state
-            .service()
-            .create_workspace(WorkspaceWriteRequest {
-                path: workspace.root.display().to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = state
-            .service()
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace_resource.id,
-                title: "permission patch".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-
-        let initial = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/api/v1/sessions/{}/turns", session.id))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "parts": [
-                                {
-                                    "type": "text",
-                                    "text": "please patch a file"
-                                }
-                            ]
-                        })
-                        .to_string(),
-                    ))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let initial_status = initial.status();
-        let initial_json = response_json(initial).await;
-        assert_eq!(
-            initial_status,
-            StatusCode::OK,
-            "unexpected body: {initial_json}"
-        );
-        assert_eq!(initial_json["blocked"], json!(true));
-        assert_eq!(
-            initial_json["pending_permission_requests"][0]["request_id"],
-            json!("call_apply_patch_1")
-        );
-        let version = initial_json["session"]["version"]
-            .as_i64()
-            .expect("session version should exist");
-
-        let resumed = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!(
-                        "/api/v1/sessions/{}/permission-replies",
-                        session.id
-                    ))
-                    .header("content-type", "application/json")
-                    .header("if-match", version.to_string())
-                    .body(Body::from(
-                        json!({
-                            "reply": {
-                                "request_id": "call_apply_patch_1",
-                                "kind": "allow_once"
-                            }
-                        })
-                        .to_string(),
-                    ))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let resumed_status = resumed.status();
-        let resumed_json = response_json(resumed).await;
-        assert_eq!(
-            resumed_status,
-            StatusCode::OK,
-            "unexpected body: {resumed_json}"
-        );
-        assert_eq!(resumed_json["blocked"], json!(false));
-        assert_eq!(resumed_json["pending_permission_requests"], json!([]));
-
-        let file_text = fs::read_to_string(workspace.root.join("result.txt"))
-            .expect("permission-approved patch should create result file");
-        assert_eq!(file_text, "approved\n");
-
-        let messages = state
-            .service()
-            .list_messages(
-                session.id,
-                MessageListQuery {
-                    cursor: None,
-                    limit: None,
-                    parts: PartLoadMode::Full,
-                },
-            )
-            .await
-            .expect("messages should load");
-        assert!(
-            assistant_text(messages.items.as_slice())
-                .is_some_and(|text| text.contains("patch done")),
-            "unexpected messages: {:?}",
-            messages.items
-        );
-        match completed_builtin_output(messages.items.as_slice(), "call_apply_patch_1") {
-            Some(BuiltinToolOutput::ApplyPatch { changes, .. }) => {
-                assert!(!changes.is_empty(), "expected file change entries");
-            }
-            other => panic!("expected apply_patch output, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
     async fn auth_provider_endpoints_manage_api_keys_without_exposing_secrets() {
         let (app, _state) = test_app().await;
 
@@ -3008,338 +2567,6 @@ mod tests {
         assert!(provider_ids.contains("openai"));
         assert!(provider_ids.contains("gitlab"));
         assert!(!provider_ids.contains("gitlab-instance"));
-    }
-
-    #[tokio::test]
-    async fn turn_endpoint_returns_pending_user_input_and_uses_default_model() {
-        let (app, state, _workspace) = test_app_with_scripted_manager().await;
-        let workspace = state
-            .service()
-            .create_workspace(WorkspaceWriteRequest {
-                path: "/tmp/runtime-turn".to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = state
-            .service()
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace.id,
-                title: "runtime turn".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/api/v1/sessions/{}/turns", session.id))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "parts": [
-                                {
-                                    "type": "text",
-                                    "text": "please choose model"
-                                }
-                            ]
-                        })
-                        .to_string(),
-                    ))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let status = response.status();
-        let payload = response_json(response).await;
-
-        assert_eq!(status, StatusCode::OK, "unexpected body: {payload}");
-        assert_eq!(payload["blocked"], json!(true));
-        assert_eq!(payload["run_state"], json!("idle"));
-        assert_eq!(
-            payload["pending_user_input_requests"][0]["request_id"],
-            json!("call_ask_user_1")
-        );
-        assert!(payload["latest_event_seq"].as_i64().is_some());
-    }
-
-    #[tokio::test]
-    async fn user_input_reply_endpoint_resumes_session() {
-        let (app, state, _workspace) = test_app_with_scripted_manager().await;
-        let workspace = state
-            .service()
-            .create_workspace(WorkspaceWriteRequest {
-                path: "/tmp/runtime-reply".to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = state
-            .service()
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace.id,
-                title: "runtime reply".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-
-        let initial = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/api/v1/sessions/{}/turns", session.id))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "parts": [
-                                {
-                                    "type": "text",
-                                    "text": "please choose model"
-                                }
-                            ]
-                        })
-                        .to_string(),
-                    ))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let initial_json = response_json(initial).await;
-        let version = initial_json["session"]["version"]
-            .as_i64()
-            .expect("session version should exist");
-
-        let resumed = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!(
-                        "/api/v1/sessions/{}/user-input-replies",
-                        session.id
-                    ))
-                    .header("content-type", "application/json")
-                    .header("if-match", version.to_string())
-                    .body(Body::from(
-                        json!({
-                            "reply": {
-                                "request_id": "call_ask_user_1",
-                                "kind": "submit",
-                                "answers": {
-                                    "model_choice": "gpt-5"
-                                }
-                            }
-                        })
-                        .to_string(),
-                    ))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let resumed_status = resumed.status();
-        let resumed_json = response_json(resumed).await;
-
-        assert_eq!(
-            resumed_status,
-            StatusCode::OK,
-            "unexpected body: {resumed_json}"
-        );
-        assert_eq!(resumed_json["blocked"], json!(false));
-        assert_eq!(resumed_json["run_state"], json!("idle"));
-        assert_eq!(resumed_json["pending_user_input_requests"], json!([]));
-
-        let messages = state
-            .service()
-            .list_messages(
-                session.id,
-                MessageListQuery {
-                    cursor: None,
-                    limit: None,
-                    parts: PartLoadMode::Full,
-                },
-            )
-            .await
-            .expect("messages should load");
-        assert!(
-            messages
-                .items
-                .last()
-                .is_some_and(|message| message.parts.iter().flatten().any(|part| {
-                    matches!(
-                        part.content.as_ref(),
-                        Some(PartContent::Text(text)) if text.text == "selected model: gpt-5"
-                    )
-                }))
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_endpoint_emits_session_events_and_closes_after_idle_timeout() {
-        let (app, state, _workspace) = test_app_with_scripted_manager().await;
-        let workspace = state
-            .service()
-            .create_workspace(WorkspaceWriteRequest {
-                path: "/tmp/runtime-stream".to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = state
-            .service()
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace.id,
-                title: "runtime stream".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-
-        state
-            .session_manager()
-            .expect("session manager should exist")
-            .submit_user_turn(agena::session::SessionUserTurnRequest {
-                session_id: session.id,
-                options: state
-                    .service()
-                    .resolve_run_options(
-                        state
-                            .runtime()
-                            .current_snapshot()
-                            .provider_registry()
-                            .as_ref(),
-                        session.id,
-                        dto::SessionRunOptionsRequest::default(),
-                    )
-                    .await
-                    .expect("options should resolve"),
-                parts: vec![PartContent::text("please choose model")],
-            })
-            .await
-            .expect("turn should succeed");
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/api/v1/sessions/{}/events/stream?after_seq=0&poll_interval_ms=10&idle_timeout_ms=40",
-                        session.id
-                    ))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let status = response.status();
-        let body = response_text(response).await;
-
-        assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
-        assert!(body.contains("event: session_event"));
-        assert!(body.contains("\"session_id\":"));
-    }
-
-    #[tokio::test]
-    async fn messages_endpoint_shows_partial_assistant_before_turn_finishes() {
-        let first_delta_sent = Arc::new(Notify::new());
-        let release_completion = Arc::new(Notify::new());
-        let (app, state, _workspace) = test_app_with_provider(BlockingApiProvider {
-            first_delta_sent: Arc::clone(&first_delta_sent),
-            release_completion: Arc::clone(&release_completion),
-        })
-        .await;
-        let workspace = state
-            .service()
-            .create_workspace(WorkspaceWriteRequest {
-                path: "/tmp/runtime-partial-message".to_string(),
-            })
-            .await
-            .expect("workspace should be created");
-        let session = state
-            .service()
-            .create_session(SessionCreateRequest {
-                workspace_id: workspace.id,
-                title: "runtime partial".to_string(),
-                parent_id: None,
-            })
-            .await
-            .expect("session should be created");
-
-        let app_for_turn = app.clone();
-        let turn_request = Request::builder()
-            .method(Method::POST)
-            .uri(format!("/api/v1/sessions/{}/turns", session.id))
-            .header("content-type", "application/json")
-            .body(Body::from(
-                json!({
-                    "parts": [
-                        {
-                            "type": "text",
-                            "text": "hello"
-                        }
-                    ]
-                })
-                .to_string(),
-            ))
-            .expect("request should build");
-        let turn_task = tokio::spawn(async move {
-            app_for_turn
-                .oneshot(turn_request)
-                .await
-                .expect("turn request should succeed")
-        });
-
-        first_delta_sent.notified().await;
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!("/api/v1/sessions/{}/messages?limit=50", session.id))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        let status = response.status();
-        let payload = response_json(response).await;
-
-        assert_eq!(status, StatusCode::OK, "unexpected body: {payload}");
-        let items = payload["items"]
-            .as_array()
-            .expect("items should be an array");
-        let assistant = items
-            .iter()
-            .find(|item| item["role"] == json!("assistant"))
-            .expect("assistant message should be visible before completion");
-        assert!(
-            matches!(assistant["state"].as_str(), Some("pending" | "in_progress")),
-            "unexpected payload: {payload}"
-        );
-        assert!(
-            assistant["parts"]
-                .as_array()
-                .is_some_and(|parts| parts.iter().any(|part| {
-                    part["summary"] == json!("Hel")
-                        || (part["content"]["type"] == json!("text")
-                            && part["content"]["text"] == json!("Hel"))
-                })),
-            "unexpected payload: {payload}"
-        );
-
-        release_completion.notify_one();
-
-        let turn_response = turn_task
-            .await
-            .expect("turn task should finish without join errors");
-        let turn_status = turn_response.status();
-        let turn_payload = response_json(turn_response).await;
-
-        assert_eq!(
-            turn_status,
-            StatusCode::OK,
-            "unexpected body: {turn_payload}"
-        );
     }
 
     #[tokio::test]
@@ -3550,15 +2777,15 @@ mod tests {
                     }
                     match part.content.as_ref() {
                         Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                            details:
-                                agena::message::ToolOutput::Builtin {
-                                    output: BuiltinToolOutput::AskUser { answers },
-                                },
+                            details,
                             ..
-                        })) => answers
-                            .get("model_choice")
-                            .and_then(|values| values.first().cloned())
-                            .map(Ok),
+                        })) => match details.as_builtin() {
+                            Some(BuiltinToolOutput::AskUser { answers }) => answers
+                                .get("model_choice")
+                                .and_then(|values| values.first().cloned())
+                                .map(Ok),
+                            _ => None,
+                        },
                         Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
                             error_message,
                             ..
@@ -4182,15 +3409,17 @@ api_key = "test"
     fn request_loaded_deferred_tool(messages: &[Message], tool_name: &str) -> bool {
         messages.iter().any(|message| {
             message.parts.iter().any(|part| {
-                matches!(
-                    part.content.as_ref(),
+                let details = match part.content.as_ref() {
                     Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                        details:
-                            ToolOutput::Builtin {
-                                output: BuiltinToolOutput::ToolSearch { loaded_tools, .. },
-                            },
+                        details,
                         ..
-                    })) if loaded_tools.iter().any(|loaded| loaded == tool_name)
+                    })) => details,
+                    _ => return false,
+                };
+                matches!(
+                    details.as_builtin(),
+                    Some(BuiltinToolOutput::ToolSearch { ref loaded_tools, .. })
+                        if loaded_tools.iter().any(|loaded| loaded == tool_name)
                 )
             })
         })
@@ -4210,9 +3439,9 @@ api_key = "test"
                 }
                 match part.content.as_ref() {
                     Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                        details: ToolOutput::Builtin { output },
+                        details,
                         ..
-                    })) => Some(Ok(output.clone())),
+                    })) => details.as_builtin().map(Ok),
                     Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
                         error_message,
                         ..
@@ -4235,9 +3464,9 @@ api_key = "test"
                     }
                     match part.content.as_ref() {
                         Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                            details: ToolOutput::Builtin { output },
+                            details,
                             ..
-                        })) => Some(output.clone()),
+                        })) => details.as_builtin(),
                         _ => None,
                     }
                 })

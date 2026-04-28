@@ -14,7 +14,7 @@ use crate::{
 
 use super::ConfigError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigSource {
     Default,
@@ -39,7 +39,7 @@ pub struct ConfigResolutionMeta {
     pub applied_layers: Vec<AppliedLayer>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ConfigResolution {
     pub config: ResolvedConfig,
     pub meta: ConfigResolutionMeta,
@@ -96,7 +96,7 @@ impl fmt::Display for ConfigModeName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResolvedConfig {
     pub tracing: TracingConfig,
     pub auth: AuthConfig,
@@ -210,11 +210,7 @@ pub struct PermissionConfig {
     pub default_external_directory: PermissionMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PluginConfig {
-    pub enabled: bool,
-    pub paths: Vec<PathBuf>,
-}
+pub use agena_plugin_host::PluginsConfig as PluginConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderConfig {

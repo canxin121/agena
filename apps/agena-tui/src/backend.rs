@@ -17,7 +17,7 @@ use agena::{
         SessionUserInputReplyRequest, SessionUserTurnRequest,
     },
 };
-use agena_event::{EventBus, EventFilter, Scope, bus::SubscriptionItem};
+use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
 use agena_http_api::{
     ApiError, ApiService, MessageListQuery, MessageResource, PaginatedResponse, PartLoadMode,
     ProviderSummaryResource, SessionCreateRequest, SessionEventListQuery, SessionExecutionResource,
@@ -42,11 +42,9 @@ pub struct SessionRefresh {
 }
 
 /// Push notification emitted by the unified bus for the active session.
-/// Carries the [`DomainEvent`] for handlers that want to render it directly,
-/// plus a hint about whether the change requires reloading messages.
+/// Indicates whether the change requires reloading messages.
 #[derive(Debug, Clone)]
 pub struct LiveEvent {
-    pub event: DomainEvent,
     /// True for events that materially change session state — the UI should
     /// trigger a `refresh_session` after handling.
     pub triggers_refresh: bool,
@@ -399,7 +397,6 @@ impl Backend {
                         | EventKind::RunFailed(_)
                 );
                 let live = LiveEvent {
-                    event: (*event).clone(),
                     triggers_refresh,
                 };
                 if tx.send(live).is_err() {

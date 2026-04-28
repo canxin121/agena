@@ -7482,10 +7482,6 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
     }
 }
 
-fn timeline_event_detail_lines_legacy_unused() {
-    // legacy function removed
-}
-
 fn detail_excerpt(text: &str, max_chars: usize) -> String {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -8837,7 +8833,7 @@ mod tests {
     #[test]
     fn build_timeline_item_summarizes_command_end_events() {
         let now = Utc::now();
-        use agena_event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
+        use agena::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
         let event = DomainEvent {
             meta: EventMeta {
                 id: uuid::Uuid::new_v4(),

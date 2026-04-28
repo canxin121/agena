@@ -110,6 +110,7 @@ struct ToolCallLocation {
     turn_id: TurnId,
     /// Index into `TurnState.messages` of the assistant message that issued
     /// this call.
+    #[allow(dead_code)]
     assistant_index: usize,
 }
 
@@ -555,7 +556,7 @@ mod tests {
         ToolCallCompleted, ToolCallIssued, TurnAbortReason, TurnAborted, TurnCompleted,
         TurnStarted, UserMessageAppended, fold_history,
     };
-    use agena_event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
+    use crate::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
     use chrono::Utc;
     use smol_str::SmolStr;
     use uuid::Uuid;

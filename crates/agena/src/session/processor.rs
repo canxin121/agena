@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 
 use crate::error::AppError;
 use crate::event::{
-    DomainEvent, ErrorInfo, EventKind, EventPublisher, MessagePartDeltaEvent,
+    ErrorInfo, EventKind, EventPublisher, MessagePartDeltaEvent,
     MessagePartUpdatedEvent, PartDeltaField, PublishContext, StreamErrorEvent,
 };
 use crate::message::{
@@ -1100,6 +1100,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::event::DomainEvent;
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::provider::{
         CompletionFinishReason, CompletionResponse, ModelProvider, ProviderModel,
@@ -1110,10 +1111,10 @@ mod tests {
     /// that just keeps events in a Vec. The store side of the publisher is
     /// the side tests inspect; the bus is wired but unused here.
     fn test_publisher() -> (Arc<EventPublisher>, Arc<MemEventStore>) {
-        use agena_event::{EventStore, InProcessEventBus, SequenceAllocator};
+        use crate::event::{EventStore, InProcessEventBus, SequenceAllocator};
         let store: Arc<MemEventStore> = Arc::new(MemEventStore::default());
         let store_dyn: Arc<dyn EventStore<EventKind>> = Arc::clone(&store) as _;
-        let bus: Arc<dyn agena_event::EventBus<EventKind>> =
+        let bus: Arc<dyn crate::event::EventBus<EventKind>> =
             Arc::new(InProcessEventBus::<EventKind>::new(64));
         let seq = Arc::new(SequenceAllocator::new());
         (
@@ -1128,11 +1129,11 @@ mod tests {
     }
 
     #[async_trait]
-    impl agena_event::EventStore<EventKind> for MemEventStore {
+    impl crate::event::EventStore<EventKind> for MemEventStore {
         async fn append_batch(
             &self,
             events: &[DomainEvent],
-        ) -> Result<(), agena_event::EventStoreError> {
+        ) -> Result<(), crate::event::EventStoreError> {
             self.events
                 .lock()
                 .expect("test store lock")
@@ -1142,9 +1143,9 @@ mod tests {
 
         async fn range(
             &self,
-            filter: &agena_event::EventFilter,
-            range: agena_event::StoreRange,
-        ) -> Result<Vec<DomainEvent>, agena_event::EventStoreError> {
+            filter: &crate::event::EventFilter,
+            range: crate::event::StoreRange,
+        ) -> Result<Vec<DomainEvent>, crate::event::EventStoreError> {
             let mut out: Vec<_> = self
                 .events
                 .lock()
@@ -1158,7 +1159,7 @@ mod tests {
             Ok(out)
         }
 
-        async fn high_watermark(&self) -> Result<Option<i64>, agena_event::EventStoreError> {
+        async fn high_watermark(&self) -> Result<Option<i64>, crate::event::EventStoreError> {
             Ok(self
                 .events
                 .lock()
@@ -1171,7 +1172,7 @@ mod tests {
         async fn session_high_watermark(
             &self,
             session_id: i64,
-        ) -> Result<Option<i64>, agena_event::EventStoreError> {
+        ) -> Result<Option<i64>, crate::event::EventStoreError> {
             Ok(self
                 .events
                 .lock()

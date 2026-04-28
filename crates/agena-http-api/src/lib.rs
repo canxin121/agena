@@ -8,7 +8,6 @@ use std::{
     convert::Infallible,
     future::Future,
     sync::Arc,
-    time::Duration,
 };
 
 use async_stream::stream;
@@ -16,17 +15,13 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, header::IF_MATCH},
-    response::{
-        IntoResponse,
-        sse::{Event, Sse},
-    },
+    response::sse::{Event, Sse},
     routing::{get, post},
 };
 use chrono::DateTime;
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use tokio::net::TcpListener;
-use tokio::time::{Instant, sleep};
 
 use agena::{AppError, runtime::AgenaRuntime, session::SessionManager};
 
@@ -810,7 +805,7 @@ async fn stream_session_events(
     Path(session_id): Path<i64>,
     Query(query): Query<SessionEventStreamQuery>,
 ) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    use agena_event::{EventFilter, Scope, bus::SubscriptionItem};
+    use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
 
     let manager = state.session_manager()?;
     let service = state.service().clone();
@@ -1205,35 +1200,6 @@ fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ApiError> {
     Ok(Some(version))
 }
 
-fn duration_from_ms(
-    value: Option<u64>,
-    default_ms: u64,
-    field: &'static str,
-) -> Result<Duration, ApiError> {
-    let value = value.unwrap_or(default_ms);
-    if value == 0 {
-        return Err(ApiError::bad_request(format!(
-            "{field} must be greater than zero"
-        )));
-    }
-    Ok(Duration::from_millis(value.clamp(10, 30_000)))
-}
-
-fn optional_duration_from_ms(
-    value: Option<u64>,
-    field: &'static str,
-) -> Result<Option<Duration>, ApiError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value == 0 {
-        return Err(ApiError::bad_request(format!(
-            "{field} must be greater than zero"
-        )));
-    }
-    Ok(Some(Duration::from_millis(value.clamp(10, 300_000))))
-}
-
 async fn run_auth_future<T, Fut, F>(task: F) -> Result<T, ApiError>
 where
     T: Send + 'static,
@@ -1249,11 +1215,6 @@ where
 
 fn sse_error_event(message: impl Into<String>) -> Event {
     Event::default().event("error").data(message.into())
-}
-
-fn error_message(error: &ApiError) -> String {
-    let response = error.clone().into_response();
-    format!("request failed with status {}", response.status())
 }
 
 fn runtime_status_response(state: &ApiState) -> RuntimeStatusResponse {
@@ -1507,7 +1468,7 @@ mod tests {
     use agena::{
         agent::Agent,
         db::init_schema,
-        event::{EventKind, PublishContext, RunStartedEvent},
+        event::{EventKind, PluginEventPayload, PublishContext},
         message::{
             ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolOutput, GlobToolInput,
             GrepToolInput, Message, MessageSource, PartContent, ReadToolInput, TodoItem,
@@ -1627,16 +1588,16 @@ mod tests {
             })
             .await
             .expect("session should be created");
-        let base = Utc::now();
 
         for seq in 1..=3 {
             manager
                 .event_publisher()
                 .publish(
                     PublishContext::for_session(session.id),
-                    EventKind::RunStarted(RunStartedEvent {
-                        session_id: session.id,
-                        ts_ms: (base + ChronoDuration::seconds(seq)).timestamp_millis(),
+                    EventKind::PluginEvent(agena::event::PluginEventPayload {
+                        plugin_id: "test".into(),
+                        kind_label: format!("event_{seq}"),
+                        payload: serde_json::json!({}),
                     }),
                 )
                 .await

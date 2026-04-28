@@ -9,7 +9,7 @@ use crate::message::{
 };
 
 use super::monitor::{
-    MonitorError, MonitorRead, MonitorService, MonitorStart, MonitorStopOutcome, ReadParams,
+    MonitorError, MonitorRead, MonitorStart, MonitorStopOutcome, ReadParams,
     StartParams,
 };
 use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};

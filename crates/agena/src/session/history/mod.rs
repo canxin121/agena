@@ -1,11 +1,13 @@
 mod event;
 mod projection;
 mod store;
+#[allow(dead_code)]
 mod transcript;
+#[allow(dead_code)]
 mod turn_buffer;
 mod view;
 
-pub(crate) use crate::session::ids::{MessageId, PartId, ToolCallId, TurnId};
+pub(crate) use crate::session::ids::{MessageId, ToolCallId, TurnId};
 pub(crate) use event::{
     AssistantMessageCompleted, FinishReason, MessageRevised, RevisionKind, SystemNoticeAppended,
     SystemNoticeKind, ToolCallCompleted, ToolCallIssued, TurnAbortReason, TurnAborted,
@@ -13,7 +15,7 @@ pub(crate) use event::{
 };
 #[allow(unused_imports)]
 pub(crate) use projection::{HistoryFold, fold_history};
-pub(crate) use store::{LoadedSessionProjection, SessionHistoryStore};
+pub(crate) use store::SessionHistoryStore;
 #[allow(unused_imports)]
 pub(crate) use transcript::{
     ProviderTranscript, ProviderTranscriptBuilder, ProviderTranscriptError, TranscriptBlock,

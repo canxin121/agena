@@ -22,6 +22,7 @@ mod truncation;
 mod view_file;
 mod web_fetch;
 mod web_search;
+mod worktree;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -52,6 +53,7 @@ pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use definition::{ToolBehavior, ToolDefinition, ToolLoadPriority, ToolSource};
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
+pub use worktree::{WorktreeRegistry, registry_for_executor as worktree_registry_for_executor};
 pub use monitor::{
     MonitorError, MonitorRead, MonitorRegistry, MonitorService, MonitorStart, MonitorStopOutcome,
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,
@@ -149,6 +151,7 @@ pub struct ToolExecutor {
     web_search_backend: crate::config::WebSearchBackend,
     plan_registry: Option<plan::PlanRegistry>,
     skills_manager: Option<Arc<agena_skills::SkillsManager>>,
+    worktree_registry: Option<worktree::WorktreeRegistry>,
     permission_mode: PermissionExecutionMode,
 }
 
@@ -180,6 +183,7 @@ impl ToolExecutor {
             web_search_backend: crate::config::WebSearchBackend::DuckDuckGoHtml,
             plan_registry: None,
             skills_manager: None,
+            worktree_registry: None,
             permission_mode: PermissionExecutionMode::Enforced,
         }
     }
@@ -249,6 +253,15 @@ impl ToolExecutor {
 
     pub fn skills_manager(&self) -> Option<&Arc<agena_skills::SkillsManager>> {
         self.skills_manager.as_ref()
+    }
+
+    pub fn with_worktree_registry(mut self, reg: worktree::WorktreeRegistry) -> Self {
+        self.worktree_registry = Some(reg);
+        self
+    }
+
+    pub fn worktree_registry(&self) -> Option<&worktree::WorktreeRegistry> {
+        self.worktree_registry.as_ref()
     }
 
     /// Refuse mutating invocations while plan mode is active for this
@@ -650,6 +663,8 @@ impl ToolExecutor {
             BuiltinToolInput::EnterPlanMode(_) => {}
             BuiltinToolInput::ExitPlanMode(_) => {}
             BuiltinToolInput::SkillRun(_) => {}
+            BuiltinToolInput::EnterWorktree(_) => {}
+            BuiltinToolInput::ExitWorktree(_) => {}
         }
 
         Ok(checks)

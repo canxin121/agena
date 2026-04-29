@@ -7535,6 +7535,12 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
             BuiltinToolInput::EnterPlanMode(_) => "enter_plan_mode".to_string(),
             BuiltinToolInput::ExitPlanMode(_) => "exit_plan_mode".to_string(),
             BuiltinToolInput::SkillRun(input) => format!("skill_run {}", input.name),
+            BuiltinToolInput::EnterWorktree(input) => match (&input.name, &input.path) {
+                (Some(n), _) => format!("enter_worktree name={n}"),
+                (_, Some(p)) => format!("enter_worktree path={p}"),
+                _ => "enter_worktree".to_string(),
+            },
+            BuiltinToolInput::ExitWorktree(input) => format!("exit_worktree {}", input.action),
         };
     }
     match invocation {

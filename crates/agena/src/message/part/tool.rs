@@ -280,6 +280,27 @@ pub struct SkillRunToolInput {
     pub args: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct EnterWorktreeToolInput {
+    /// Optional name; when absent a slug is generated from the timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Path of an already-existing worktree to enter.  Mutually
+    /// exclusive with `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct ExitWorktreeToolInput {
+    /// "keep" leaves the worktree on disk; "remove" deletes it.
+    pub action: String,
+    /// Required `true` when `action = "remove"` and the worktree has
+    /// uncommitted changes / unpushed commits.
+    #[serde(default)]
+    pub discard_changes: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -301,6 +322,8 @@ pub enum BuiltinToolInput {
     EnterPlanMode(EnterPlanModeToolInput),
     ExitPlanMode(ExitPlanModeToolInput),
     SkillRun(SkillRunToolInput),
+    EnterWorktree(EnterWorktreeToolInput),
+    ExitWorktree(ExitWorktreeToolInput),
 }
 
 impl BuiltinToolInput {
@@ -323,6 +346,8 @@ impl BuiltinToolInput {
             Self::EnterPlanMode(_) => "enter_plan_mode",
             Self::ExitPlanMode(_) => "exit_plan_mode",
             Self::SkillRun(_) => "skill_run",
+            Self::EnterWorktree(_) => "enter_worktree",
+            Self::ExitWorktree(_) => "exit_worktree",
         }
     }
 
@@ -379,6 +404,8 @@ pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
         "enter_plan_mode" => "enter_plan_mode",
         "exit_plan_mode" => "exit_plan_mode",
         "skill_run" => "skill_run",
+        "enter_worktree" => "enter_worktree",
+        "exit_worktree" => "exit_worktree",
         _ => return None,
     })
 }
@@ -541,6 +568,14 @@ pub enum BuiltinToolOutput {
         body_chars: usize,
         allowed_tools: Vec<String>,
     },
+    EnterWorktree {
+        path: String,
+        branch: String,
+    },
+    ExitWorktree {
+        action: String,
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -571,6 +606,8 @@ impl BuiltinToolOutput {
             Self::EnterPlanMode { .. } => "enter_plan_mode",
             Self::ExitPlanMode { .. } => "exit_plan_mode",
             Self::SkillRun { .. } => "skill_run",
+            Self::EnterWorktree { .. } => "enter_worktree",
+            Self::ExitWorktree { .. } => "exit_worktree",
         }
     }
 

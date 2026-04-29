@@ -63,7 +63,9 @@ impl ToolOutputTruncator {
             | BuiltinToolOutput::WebSearch { .. }
             | BuiltinToolOutput::EnterPlanMode { .. }
             | BuiltinToolOutput::ExitPlanMode { .. }
-            | BuiltinToolOutput::SkillRun { .. } => {}
+            | BuiltinToolOutput::SkillRun { .. }
+            | BuiltinToolOutput::EnterWorktree { .. }
+            | BuiltinToolOutput::ExitWorktree { .. } => {}
         }
 
         execution

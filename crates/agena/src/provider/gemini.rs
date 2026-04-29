@@ -11,7 +11,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, ResponseFormat,
-        ThinkingRequest, should_retry_credential, sse, utils,
+        ThinkingRequest, should_retry_credential, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -171,7 +171,7 @@ impl GeminiProvider {
     }
 
     fn message_parts(message: &Message) -> Vec<GeminiPart> {
-        let projected_parts = utils::project_session_parts(message);
+        let projected_parts = wire_message::project(message);
         if projected_parts.is_empty() {
             let text = message.as_text_lossy();
             return (!text.trim().is_empty())
@@ -182,12 +182,12 @@ impl GeminiProvider {
         projected_parts
             .iter()
             .map(|part| match part {
-                utils::ProjectedSessionPart::Text { text } => GeminiPart::text(text.clone()),
-                utils::ProjectedSessionPart::Attachment { item } => Self::attachment_part(item),
-                utils::ProjectedSessionPart::ToolCall { name, .. } => {
+                wire_message::WirePart::Text { text } => GeminiPart::text(text.clone()),
+                wire_message::WirePart::Attachment { item } => Self::attachment_part(item),
+                wire_message::WirePart::ToolCall { name, .. } => {
                     GeminiPart::text(format!("[tool_call:{name}]"))
                 }
-                utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                wire_message::WirePart::ToolResult { tool_call_id, .. } => {
                     GeminiPart::text(format!("[tool_result:{tool_call_id}]"))
                 }
             })
@@ -195,9 +195,9 @@ impl GeminiProvider {
     }
 
     fn attachment_part(item: &AttachmentItem) -> GeminiPart {
-        utils::attachment_base64_with_mime(item)
+        wire_message::base64_with_mime(item)
             .map(|(mime_type, data)| GeminiPart::inline_data(mime_type, data))
-            .unwrap_or_else(|| GeminiPart::text(utils::attachment_hint_text(item)))
+            .unwrap_or_else(|| GeminiPart::text(wire_message::hint_text(item)))
     }
 
     async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>

@@ -24,6 +24,7 @@ mod runtime;
 mod sse;
 mod types;
 mod utils;
+mod wire_message;
 
 pub use crate::model::{
     CapabilitySupport, Model, ModelCapabilities, ModelFamily, ModelId, ModelInputModality,
@@ -57,9 +58,11 @@ pub use runtime::{
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
     ProviderStreamReplayConfig,
 };
-pub(crate) use utils::{
-    PRUNED_TOOL_RESULT_PLACEHOLDER, ProjectedSessionPart,
-    project_session_parts, project_session_text_lossy,
+pub(crate) use wire_message::{
+    PRUNED_TOOL_RESULT_PLACEHOLDER,
+    WirePart as ProjectedSessionPart,
+    project as project_session_parts,
+    project_text_lossy as project_session_text_lossy,
 };
 pub type ProviderModel = Model;
 pub use types::{

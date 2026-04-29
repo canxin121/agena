@@ -13,7 +13,7 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionToolCall,
-        CompletionUsage, ResponseFormat, ThinkingRequest, utils,
+        CompletionUsage, ResponseFormat, ThinkingRequest, utils, wire_message,
     },
     role::Role,
 };
@@ -442,7 +442,7 @@ pub(crate) fn request_to_chat_messages(request: &CompletionRequest) -> Vec<ChatM
     }
 
     for message in &request.messages {
-        let parts = utils::project_session_parts(message);
+        let parts = wire_message::project(message);
         match message.role {
             Role::System => messages.push(ChatMessage::system(session_text_lossy(
                 message,
@@ -477,27 +477,27 @@ pub(crate) fn request_to_chat_messages(request: &CompletionRequest) -> Vec<ChatM
     messages
 }
 
-fn session_text_lossy(message: &Message, parts: &[utils::ProjectedSessionPart]) -> String {
+fn session_text_lossy(message: &Message, parts: &[wire_message::WirePart]) -> String {
     if parts.is_empty() {
         message.as_text_lossy()
     } else {
-        utils::projected_parts_text_lossy(parts)
+        wire_message::parts_text_lossy(parts)
     }
 }
 
 fn message_content_value(
     message: &Message,
-    parts: &[utils::ProjectedSessionPart],
+    parts: &[wire_message::WirePart],
 ) -> Value {
     if parts.is_empty() {
         return Value::String(message.as_text_lossy());
     }
-    utils::projected_parts_to_openai_chat_value(parts)
+    wire_message::parts_to_openai_content_array(parts)
 }
 
 fn assistant_content_and_tool_calls(
     message: &Message,
-    parts: &[utils::ProjectedSessionPart],
+    parts: &[wire_message::WirePart],
 ) -> (Option<Value>, Vec<ChatToolCallRequest>) {
     if parts.is_empty() {
         return (Some(Value::String(message.as_text_lossy())), Vec::new());
@@ -507,8 +507,8 @@ fn assistant_content_and_tool_calls(
     let mut tool_calls = Vec::new();
     for part in parts {
         match part {
-            utils::ProjectedSessionPart::Text { text } => text_chunks.push(text.clone()),
-            utils::ProjectedSessionPart::ToolCall {
+            wire_message::WirePart::Text { text } => text_chunks.push(text.clone()),
+            wire_message::WirePart::ToolCall {
                 id,
                 name,
                 arguments_json,
@@ -522,10 +522,10 @@ fn assistant_content_and_tool_calls(
                     },
                 });
             }
-            utils::ProjectedSessionPart::Attachment { item } => {
-                text_chunks.push(utils::attachment_hint_text(item));
+            wire_message::WirePart::Attachment { item } => {
+                text_chunks.push(wire_message::hint_text(item));
             }
-            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+            wire_message::WirePart::ToolResult { tool_call_id, .. } => {
                 text_chunks.push(format!("[tool_result:{tool_call_id}]"));
             }
         }
@@ -540,12 +540,12 @@ fn assistant_content_and_tool_calls(
 /// Returns an empty `Vec` when no tool-result parts with a valid ID are found
 /// (the caller falls back to sending the message as a plain user message).
 fn ordered_tool_and_user_messages(
-    parts: &[utils::ProjectedSessionPart],
+    parts: &[wire_message::WirePart],
 ) -> Vec<ChatMessage> {
     let has_identified_result = parts.iter().any(|part| {
         matches!(
             part,
-            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. }
+            wire_message::WirePart::ToolResult { tool_call_id, .. }
                 if !tool_call_id.trim().is_empty()
         )
     });
@@ -554,16 +554,16 @@ fn ordered_tool_and_user_messages(
     }
 
     let mut messages = Vec::new();
-    let mut buffered: Vec<utils::ProjectedSessionPart> = Vec::new();
+    let mut buffered: Vec<wire_message::WirePart> = Vec::new();
 
     for part in parts {
         match part {
-            utils::ProjectedSessionPart::ToolResult {
+            wire_message::WirePart::ToolResult {
                 tool_call_id,
                 output_json,
             } if !tool_call_id.trim().is_empty() => {
                 if !buffered.is_empty() {
-                    messages.push(ChatMessage::user(utils::projected_parts_to_openai_chat_value(
+                    messages.push(ChatMessage::user(wire_message::parts_to_openai_content_array(
                         buffered.as_slice(),
                     )));
                     buffered.clear();
@@ -573,8 +573,8 @@ fn ordered_tool_and_user_messages(
                     Value::String(output_json.clone()),
                 ));
             }
-            utils::ProjectedSessionPart::ToolResult { output_json, .. } => {
-                buffered.push(utils::ProjectedSessionPart::Text {
+            wire_message::WirePart::ToolResult { output_json, .. } => {
+                buffered.push(wire_message::WirePart::Text {
                     text: output_json.clone(),
                 });
             }
@@ -583,7 +583,7 @@ fn ordered_tool_and_user_messages(
     }
 
     if !buffered.is_empty() {
-        messages.push(ChatMessage::user(utils::projected_parts_to_openai_chat_value(
+        messages.push(ChatMessage::user(wire_message::parts_to_openai_content_array(
             buffered.as_slice(),
         )));
     }

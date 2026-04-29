@@ -438,7 +438,8 @@ fn build_tool_executor(
         Agent::new("build", resolution.config.permission_policy()),
     )
     .with_plugin_manager(plugins)
-    .with_web_search_backend(resolution.config.web.search.resolve());
+    .with_web_search_backend(resolution.config.web.search.resolve())
+    .with_plan_registry(crate::tool::plan_registry_for_executor());
 
     if !resolution.config.mcp.servers.is_empty() {
         let manager = build_mcp_manager(&resolution.config.mcp);

@@ -91,6 +91,7 @@ dependencies = [
  "mime_guess",
  "mockito",
  "oauth2",
+ "parking_lot",
  "path-clean",
  "procwarden",
  "regex",

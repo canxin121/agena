@@ -60,7 +60,9 @@ impl ToolOutputTruncator {
             | BuiltinToolOutput::AskUser { .. }
             | BuiltinToolOutput::Monitor { .. }
             | BuiltinToolOutput::WebFetch { .. }
-            | BuiltinToolOutput::WebSearch { .. } => {}
+            | BuiltinToolOutput::WebSearch { .. }
+            | BuiltinToolOutput::EnterPlanMode { .. }
+            | BuiltinToolOutput::ExitPlanMode { .. } => {}
         }
 
         execution

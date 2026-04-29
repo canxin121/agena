@@ -23,5 +23,6 @@ pub use tool::{
     MonitorStream, MonitorSummary, MonitorToolInput, ReadToolInput, RequestUserInputToolInput,
     TaskSubagentType, TaskToolInput, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
     ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput, ViewFileToolInput,
-    WebFetchToolInput, WebSearchHit, WebSearchToolInput, canonical_builtin_name,
+    WebFetchToolInput, WebSearchHit, WebSearchToolInput, EnterPlanModeToolInput,
+    ExitPlanModeToolInput, canonical_builtin_name,
 };

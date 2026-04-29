@@ -1,8 +1,9 @@
 use crate::agent::Agent;
 use crate::message::{
-    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, GlobToolInput,
-    GrepToolInput, MonitorToolInput, ReadToolInput, TaskToolInput, TodoWriteToolInput,
-    ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput, WebSearchToolInput,
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput,
+    EnterPlanModeToolInput, ExitPlanModeToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
+    ReadToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput,
+    WebFetchToolInput, WebSearchToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -184,6 +185,24 @@ impl ToolCatalog {
             )
             .with_search_terms(["web", "search", "google", "ddg", "find online"])
             .with_deferred_loading(),
+            ToolDefinition::builtin::<EnterPlanModeToolInput>(
+                "enter_plan_mode",
+                "Enter plan mode. Allocates a fresh plan markdown file under \
+                 .agena/plans/, blocks mutating tools, and asks the LLM to draft a \
+                 plan.  Pair with `exit_plan_mode` once the plan is complete.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["plan", "design", "approach", "outline"])
+            .with_always_load(),
+            ToolDefinition::builtin::<ExitPlanModeToolInput>(
+                "exit_plan_mode",
+                "Leave plan mode and return to normal tool execution.  Surfaces a \
+                 permission ask so the human can review the plan before approving \
+                 the unblock.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["plan", "approve", "exit"])
+            .with_always_load(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions
@@ -212,6 +231,8 @@ impl ToolCatalog {
                         | "ask_user"
                         | "web_fetch"
                         | "web_search"
+                        | "enter_plan_mode"
+                        | "exit_plan_mode"
                 )
             }
             ModelToolProfile::NoTask => tool_name != "task",

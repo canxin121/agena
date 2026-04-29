@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use sea_orm::FromJsonQueryResult;
@@ -211,6 +212,21 @@ pub struct SessionRuntimeState {
     pub provider_anchors: BTreeMap<String, ProviderPromptAnchor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loaded_deferred_tools: Vec<String>,
+    /// When `Some`, the session is in plan mode: writes/mutating tools
+    /// are blocked, the LLM is expected to draft its plan into the
+    /// referenced file, and `ExitPlanMode` then asks the user to approve
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanState {
+    /// Absolute path to the plan markdown file.
+    pub file_path: PathBuf,
+    /// Slug used in the path (e.g. "fluffy-dancing-comet").
+    pub slug: String,
+    pub started_at: DateTime<Utc>,
 }
 
 impl SessionRuntimeState {

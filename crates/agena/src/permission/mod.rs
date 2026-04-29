@@ -116,6 +116,8 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
         BuiltinToolInput::Monitor(_) => "monitor",
         BuiltinToolInput::WebFetch(_) => "web_fetch",
         BuiltinToolInput::WebSearch(_) => "web_search",
+        BuiltinToolInput::EnterPlanMode(_) => "enter_plan_mode",
+        BuiltinToolInput::ExitPlanMode(_) => "exit_plan_mode",
     }
 }
 

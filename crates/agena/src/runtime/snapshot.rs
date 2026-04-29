@@ -433,11 +433,78 @@ fn build_tool_executor(
     workspace_root: &Path,
     resolution: &ConfigResolution,
 ) -> ToolExecutor {
-    ToolExecutor::new(
+    let mut executor = ToolExecutor::new(
         workspace_root.to_path_buf(),
         Agent::new("build", resolution.config.permission_policy()),
     )
-    .with_plugin_manager(plugins)
+    .with_plugin_manager(plugins);
+
+    if !resolution.config.mcp.servers.is_empty() {
+        let manager = build_mcp_manager(&resolution.config.mcp);
+        executor = executor.with_mcp_manager(manager);
+    }
+    executor
+}
+
+fn build_mcp_manager(
+    config: &crate::config::McpConfig,
+) -> Arc<agena_mcp_client::McpConnectionManager> {
+    use agena_mcp_client::{HttpTransportMode, McpConnectionManager, ServerSpec};
+
+    let manager = Arc::new(McpConnectionManager::new(
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+    ));
+    // Connect each configured server in the background.  Failures only
+    // disable that one server — the rest of the runtime keeps booting.
+    for (name, entry) in &config.servers {
+        let manager = manager.clone();
+        let name = name.clone();
+        let spec = match entry {
+            crate::config::McpServerConfig::Stdio { command, args, env, cwd } => {
+                ServerSpec::Stdio {
+                    command: command.clone(),
+                    args: args.clone(),
+                    env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                    cwd: cwd.clone(),
+                }
+            }
+            crate::config::McpServerConfig::Http { url, mode, headers } => {
+                let parsed = match url::Url::parse(url) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "agena::mcp",
+                            "skipping mcp server '{name}': invalid url '{url}': {e}"
+                        );
+                        continue;
+                    }
+                };
+                let mode = match mode {
+                    crate::config::McpHttpMode::Sse => HttpTransportMode::Sse,
+                    crate::config::McpHttpMode::StreamableHttp => {
+                        HttpTransportMode::StreamableHttp
+                    }
+                };
+                ServerSpec::Http {
+                    url: parsed,
+                    mode,
+                    headers: headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                }
+            }
+        };
+        tokio::spawn(async move {
+            if let Err(e) = manager.add_server(&name, spec).await {
+                tracing::warn!(
+                    target: "agena::mcp",
+                    "failed to connect MCP server '{name}': {e}"
+                );
+            } else {
+                tracing::info!(target: "agena::mcp", "connected MCP server '{name}'");
+            }
+        });
+    }
+    manager
 }
 
 fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig {

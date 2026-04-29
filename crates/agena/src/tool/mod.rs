@@ -6,6 +6,7 @@ mod catalog;
 mod definition;
 mod glob;
 mod grep;
+mod mcp;
 mod monitor;
 mod monitor_tool;
 mod orchestrator;
@@ -139,6 +140,7 @@ pub struct ToolExecutor {
     sandbox_policy: SandboxPolicy,
     sandbox_manager: SandboxManager,
     plugins: Arc<PluginHost>,
+    mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     permission_mode: PermissionExecutionMode,
 }
 
@@ -166,6 +168,7 @@ impl ToolExecutor {
             sandbox_policy,
             sandbox_manager: SandboxManager::new(),
             plugins: PluginHost::new_empty(),
+            mcp_manager: None,
             permission_mode: PermissionExecutionMode::Enforced,
         }
     }
@@ -193,6 +196,18 @@ impl ToolExecutor {
     pub fn with_plugin_manager(mut self, manager: Arc<PluginHost>) -> Self {
         self.plugins = manager;
         self
+    }
+
+    pub fn with_mcp_manager(
+        mut self,
+        manager: Arc<agena_mcp_client::McpConnectionManager>,
+    ) -> Self {
+        self.mcp_manager = Some(manager);
+        self
+    }
+
+    pub fn mcp_manager(&self) -> Option<&Arc<agena_mcp_client::McpConnectionManager>> {
+        self.mcp_manager.as_ref()
     }
 
     pub fn with_truncation_policy(mut self, policy: ToolOutputTruncationPolicy) -> Self {
@@ -310,6 +325,34 @@ impl ToolExecutor {
                 .into_iter()
                 .filter(|definition| !plugin_names.contains(definition.name.as_str())),
         );
+
+        // Splice in tools advertised by connected MCP servers.  Names use
+        // `mcp:<server>:<tool>` so the session-level call parser can map
+        // them back into `ToolInvocation::Mcp`.
+        if let Some(manager) = &self.mcp_manager {
+            let manager = manager.clone();
+            let entries = mcp::block_on(async move { manager.all_tools().await });
+            let existing: std::collections::HashSet<String> =
+                definitions.iter().map(|d| d.name.clone()).collect();
+            for (server, tool) in entries {
+                let name = format!("mcp:{server}:{}", tool.name);
+                if existing.contains(&name) {
+                    continue;
+                }
+                let schema = tool.input_schema.unwrap_or_else(|| {
+                    serde_json::json!({"type": "object", "properties": {}})
+                });
+                let description = tool.description.unwrap_or_default();
+                definitions.push(ToolDefinition::plugin(
+                    name,
+                    description,
+                    schema,
+                    ToolBehavior::Mutating,
+                    format!("mcp:{server}"),
+                ));
+            }
+        }
+
         definitions.sort_by(|left, right| {
             left.name
                 .cmp(&right.name)
@@ -598,9 +641,15 @@ impl ToolExecutor {
                     decision: self.agent.authorize_tool_name(name.as_str()),
                 }])
             }
-            ToolInvocation::Mcp { server, tool, .. } => Err(ToolError::UnsupportedInvocation(
-                format!("mcp:{server}:{tool}"),
-            )),
+            ToolInvocation::Mcp { server, tool, .. } => {
+                let action_name = format!("mcp:{server}:{tool}");
+                Ok(vec![ToolPermissionCheck {
+                    action: PermissionAction::BuiltinTool {
+                        tool_name: action_name.clone(),
+                    },
+                    decision: self.agent.authorize_tool_name(action_name.as_str()),
+                }])
+            }
         }
     }
 
@@ -668,9 +717,16 @@ impl ToolExecutor {
                 self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
                 Ok(execution)
             }
-            ToolInvocation::Mcp { server, tool, .. } => Err(ToolError::UnsupportedInvocation(
-                format!("mcp:{server}:{tool}"),
-            )),
+            ToolInvocation::Mcp { server, tool, input } => {
+                let manager = self.mcp_manager.as_ref().ok_or_else(|| {
+                    ToolError::UnsupportedInvocation(format!(
+                        "mcp:{server}:{tool} (no MCP manager configured)"
+                    ))
+                })?;
+                let mut execution = mcp::invoke(manager, server, tool, input)?;
+                self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
+                Ok(execution)
+            }
         }
     }
 

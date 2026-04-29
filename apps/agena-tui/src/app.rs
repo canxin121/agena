@@ -7534,6 +7534,7 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
             BuiltinToolInput::WebSearch(input) => format!("web_search {}", input.query),
             BuiltinToolInput::EnterPlanMode(_) => "enter_plan_mode".to_string(),
             BuiltinToolInput::ExitPlanMode(_) => "exit_plan_mode".to_string(),
+            BuiltinToolInput::SkillRun(input) => format!("skill_run {}", input.name),
         };
     }
     match invocation {

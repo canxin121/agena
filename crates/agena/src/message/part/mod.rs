@@ -24,5 +24,5 @@ pub use tool::{
     TaskSubagentType, TaskToolInput, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
     ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput, ViewFileToolInput,
     WebFetchToolInput, WebSearchHit, WebSearchToolInput, EnterPlanModeToolInput,
-    ExitPlanModeToolInput, canonical_builtin_name,
+    ExitPlanModeToolInput, SkillRunToolInput, canonical_builtin_name,
 };

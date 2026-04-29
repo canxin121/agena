@@ -271,6 +271,15 @@ pub struct EnterPlanModeToolInput {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 pub struct ExitPlanModeToolInput {}
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct SkillRunToolInput {
+    /// Skill name or alias.
+    pub name: String,
+    /// Optional free-form arguments forwarded to the skill body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -291,6 +300,7 @@ pub enum BuiltinToolInput {
     WebSearch(WebSearchToolInput),
     EnterPlanMode(EnterPlanModeToolInput),
     ExitPlanMode(ExitPlanModeToolInput),
+    SkillRun(SkillRunToolInput),
 }
 
 impl BuiltinToolInput {
@@ -312,6 +322,7 @@ impl BuiltinToolInput {
             Self::WebSearch(_) => "web_search",
             Self::EnterPlanMode(_) => "enter_plan_mode",
             Self::ExitPlanMode(_) => "exit_plan_mode",
+            Self::SkillRun(_) => "skill_run",
         }
     }
 
@@ -367,6 +378,7 @@ pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
         "web_search" => "web_search",
         "enter_plan_mode" => "enter_plan_mode",
         "exit_plan_mode" => "exit_plan_mode",
+        "skill_run" => "skill_run",
         _ => return None,
     })
 }
@@ -524,6 +536,11 @@ pub enum BuiltinToolOutput {
         approved: bool,
         plan_path: String,
     },
+    SkillRun {
+        name: String,
+        body_chars: usize,
+        allowed_tools: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -553,6 +570,7 @@ impl BuiltinToolOutput {
             Self::WebSearch { .. } => "web_search",
             Self::EnterPlanMode { .. } => "enter_plan_mode",
             Self::ExitPlanMode { .. } => "exit_plan_mode",
+            Self::SkillRun { .. } => "skill_run",
         }
     }
 

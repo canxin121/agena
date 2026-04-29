@@ -1023,6 +1023,10 @@ fn placeholder_builtin_tool_input(name: &str) -> BuiltinToolInput {
         "exit_plan_mode" => {
             BuiltinToolInput::ExitPlanMode(crate::message::ExitPlanModeToolInput::default())
         }
+        "skill_run" => BuiltinToolInput::SkillRun(crate::message::SkillRunToolInput {
+            name: String::new(),
+            args: None,
+        }),
         other => BuiltinToolInput::Task(TaskToolInput {
             description: String::new(),
             prompt: format!("placeholder for unsupported builtin {other}"),
@@ -1091,6 +1095,7 @@ pub(crate) fn parse_tool_invocation(
         "web_search" => BuiltinToolInput::WebSearch(parse_input::<crate::message::WebSearchToolInput>(arguments_json)?),
         "enter_plan_mode" => BuiltinToolInput::EnterPlanMode(parse_input::<crate::message::EnterPlanModeToolInput>(arguments_json)?),
         "exit_plan_mode" => BuiltinToolInput::ExitPlanMode(parse_input::<crate::message::ExitPlanModeToolInput>(arguments_json)?),
+        "skill_run" => BuiltinToolInput::SkillRun(parse_input::<crate::message::SkillRunToolInput>(arguments_json)?),
         other => {
             return Err(AppError::Provider(format!(
                 "unsupported builtin tool call from model: {other}"

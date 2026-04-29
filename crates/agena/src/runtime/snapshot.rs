@@ -441,6 +441,10 @@ fn build_tool_executor(
     .with_web_search_backend(resolution.config.web.search.resolve())
     .with_plan_registry(crate::tool::plan_registry_for_executor());
 
+    if let Ok(mgr) = agena_skills::SkillsManager::build(Some(workspace_root)) {
+        executor = executor.with_skills_manager(Arc::new(mgr));
+    }
+
     if !resolution.config.mcp.servers.is_empty() {
         let manager = build_mcp_manager(&resolution.config.mcp);
         executor = executor.with_mcp_manager(manager);

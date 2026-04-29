@@ -518,8 +518,9 @@ default_model = "gpt-4.1-mini"
         .build_plugin_host()
         .await
         .expect("plugin host should build");
-    assert_eq!(host.plugins().len(), 1);
-    assert_eq!(host.plugins()[0].id, crate::tool::builtins_plugin_id());
+    assert_eq!(host.plugins().len(), 2);
+    assert_eq!(host.plugins()[0].id, "agena-memory");
+    assert_eq!(host.plugins()[1].id, crate::tool::builtins_plugin_id());
 }
 
 #[tokio::test]
@@ -553,10 +554,11 @@ default_model = "gpt-4.1-mini"
         .build_plugin_host()
         .await
         .expect("host build accepts but skips broken plugins");
-    // The bogus cdylib entry is skipped; only the in-process built-in plugin
-    // remains.
-    assert_eq!(host.plugins().len(), 1);
-    assert_eq!(host.plugins()[0].id, crate::tool::builtins_plugin_id());
+    // The bogus cdylib entry is skipped; only the in-process built-in plugins
+    // remain.
+    assert_eq!(host.plugins().len(), 2);
+    assert_eq!(host.plugins()[0].id, "agena-memory");
+    assert_eq!(host.plugins()[1].id, crate::tool::builtins_plugin_id());
 }
 
 fn write_temp_config(content: &str) -> PathBuf {

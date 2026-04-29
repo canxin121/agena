@@ -98,6 +98,10 @@ impl super::ConfigResolution {
             .register_static(
                 crate::tool::builtins_plugin_id(),
                 crate::tool::new_builtins_plugin(),
+            )
+            .register_static(
+                "agena-memory",
+                crate::memory::new_memory_plugin(),
             );
         if let (Some(prev_host), Some(prev_cfg)) = (previous_host, previous_config) {
             builder = builder.with_previous(prev_host, prev_cfg);

@@ -1395,6 +1395,13 @@ impl SessionManager {
             }));
         }
 
+        // Plan-mode guardrail: refuse mutating tools while the session
+        // is in plan mode.
+        state
+            .tool_executor
+            .enforce_plan_mode_for(&resolved.invocation, session.id)
+            .map_err(tool_error_to_app_error)?;
+
         for check in state
             .tool_executor
             .collect_permission_checks_for_invocation(&resolved.invocation)

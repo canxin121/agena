@@ -17,6 +17,7 @@ pub use part::{
     TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput,
     ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
     UserInputReplyKind, UserInputRequest, UserInputRequestPart, ViewFileToolInput, WebFetchToolInput,
-    WebSearchHit, WebSearchPart, WebSearchResult, WebSearchToolInput, canonical_builtin_name,
+    WebSearchHit, WebSearchPart, WebSearchResult, WebSearchToolInput, EnterPlanModeToolInput,
+    ExitPlanModeToolInput, canonical_builtin_name,
 };
 pub use usage::MessageUsage;

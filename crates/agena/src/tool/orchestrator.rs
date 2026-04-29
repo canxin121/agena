@@ -2,8 +2,8 @@ use crate::message::{BuiltinToolInput, BuiltinToolOutput, FileChangeEntry, FileC
 
 use super::{
     BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
-    apply_patch, ask_user, bash, glob, grep, monitor_tool, read, task, todo_write, tool_search,
-    view_file, web_fetch, web_search,
+    apply_patch, ask_user, bash, glob, grep, monitor_tool, plan, read, task, todo_write,
+    tool_search, view_file, web_fetch, web_search,
 };
 
 pub(super) fn execute_builtin(
@@ -60,5 +60,11 @@ pub(super) fn execute_builtin(
         BuiltinToolInput::Monitor(payload) => monitor_tool::execute(executor, payload),
         BuiltinToolInput::WebFetch(payload) => web_fetch::execute(executor, payload),
         BuiltinToolInput::WebSearch(payload) => web_search::execute(executor, payload),
+        BuiltinToolInput::EnterPlanMode(payload) => {
+            plan::execute_enter(executor, payload, context.session_id)
+        }
+        BuiltinToolInput::ExitPlanMode(payload) => {
+            plan::execute_exit(executor, payload, context.session_id)
+        }
     }
 }

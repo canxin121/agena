@@ -10,6 +10,7 @@ mod mcp;
 mod monitor;
 mod monitor_tool;
 mod orchestrator;
+mod plan;
 mod read;
 mod result;
 mod subtask;
@@ -49,6 +50,7 @@ use procwarden::{
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use definition::{ToolBehavior, ToolDefinition, ToolLoadPriority, ToolSource};
+pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
 pub use monitor::{
     MonitorError, MonitorRead, MonitorRegistry, MonitorService, MonitorStart, MonitorStopOutcome,
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,
@@ -144,6 +146,7 @@ pub struct ToolExecutor {
     plugins: Arc<PluginHost>,
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     web_search_backend: crate::config::WebSearchBackend,
+    plan_registry: Option<plan::PlanRegistry>,
     permission_mode: PermissionExecutionMode,
 }
 
@@ -173,6 +176,7 @@ impl ToolExecutor {
             plugins: PluginHost::new_empty(),
             mcp_manager: None,
             web_search_backend: crate::config::WebSearchBackend::DuckDuckGoHtml,
+            plan_registry: None,
             permission_mode: PermissionExecutionMode::Enforced,
         }
     }
@@ -224,6 +228,51 @@ impl ToolExecutor {
 
     pub fn web_search_backend(&self) -> crate::config::WebSearchBackend {
         self.web_search_backend.clone()
+    }
+
+    pub fn with_plan_registry(mut self, reg: plan::PlanRegistry) -> Self {
+        self.plan_registry = Some(reg);
+        self
+    }
+
+    pub fn plan_registry(&self) -> Option<&plan::PlanRegistry> {
+        self.plan_registry.as_ref()
+    }
+
+    /// Refuse mutating invocations while plan mode is active for this
+    /// session.  Returns Ok when the invocation is safe (read-only) or
+    /// when plan mode is off.  Returns `PermissionDenied` otherwise.
+    pub fn enforce_plan_mode_for(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+    ) -> Result<(), ToolError> {
+        let Some(reg) = self.plan_registry() else {
+            return Ok(());
+        };
+        if !reg.read().contains_key(&session_id) {
+            return Ok(());
+        }
+        // In plan mode.  Allow read-only builtins (and plan tools
+        // themselves); refuse everything else.
+        if let Some(builtin) = invocation.as_builtin() {
+            let name = crate::permission::builtin_name(&builtin);
+            let allowed = matches!(
+                name,
+                "read" | "view_file" | "glob" | "grep" | "tool_search" | "todo_write"
+                    | "ask_user" | "monitor" | "web_fetch" | "web_search"
+                    | "enter_plan_mode" | "exit_plan_mode"
+            );
+            if allowed {
+                return Ok(());
+            }
+            return Err(ToolError::PermissionDenied(format!(
+                "tool '{name}' is blocked in plan mode; call exit_plan_mode first"
+            )));
+        }
+        Err(ToolError::PermissionDenied(
+            "non-builtin tools are blocked in plan mode; call exit_plan_mode first".to_string(),
+        ))
     }
 
     pub fn with_truncation_policy(mut self, policy: ToolOutputTruncationPolicy) -> Self {
@@ -586,6 +635,8 @@ impl ToolExecutor {
             }
             BuiltinToolInput::WebFetch(_) => {}
             BuiltinToolInput::WebSearch(_) => {}
+            BuiltinToolInput::EnterPlanMode(_) => {}
+            BuiltinToolInput::ExitPlanMode(_) => {}
         }
 
         Ok(checks)

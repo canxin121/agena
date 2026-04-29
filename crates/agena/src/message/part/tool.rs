@@ -265,6 +265,12 @@ pub struct WebSearchToolInput {
     pub max_results: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct EnterPlanModeToolInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct ExitPlanModeToolInput {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -283,6 +289,8 @@ pub enum BuiltinToolInput {
     Monitor(MonitorToolInput),
     WebFetch(WebFetchToolInput),
     WebSearch(WebSearchToolInput),
+    EnterPlanMode(EnterPlanModeToolInput),
+    ExitPlanMode(ExitPlanModeToolInput),
 }
 
 impl BuiltinToolInput {
@@ -302,6 +310,8 @@ impl BuiltinToolInput {
             Self::Monitor(_) => "monitor",
             Self::WebFetch(_) => "web_fetch",
             Self::WebSearch(_) => "web_search",
+            Self::EnterPlanMode(_) => "enter_plan_mode",
+            Self::ExitPlanMode(_) => "exit_plan_mode",
         }
     }
 
@@ -355,6 +365,8 @@ pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
         "monitor" => "monitor",
         "web_fetch" => "web_fetch",
         "web_search" => "web_search",
+        "enter_plan_mode" => "enter_plan_mode",
+        "exit_plan_mode" => "exit_plan_mode",
         _ => return None,
     })
 }
@@ -504,6 +516,14 @@ pub enum BuiltinToolOutput {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<WebSearchHit>,
     },
+    EnterPlanMode {
+        plan_path: String,
+        slug: String,
+    },
+    ExitPlanMode {
+        approved: bool,
+        plan_path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -531,6 +551,8 @@ impl BuiltinToolOutput {
             Self::Monitor { .. } => "monitor",
             Self::WebFetch { .. } => "web_fetch",
             Self::WebSearch { .. } => "web_search",
+            Self::EnterPlanMode { .. } => "enter_plan_mode",
+            Self::ExitPlanMode { .. } => "exit_plan_mode",
         }
     }
 

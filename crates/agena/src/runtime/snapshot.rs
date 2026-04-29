@@ -440,7 +440,8 @@ fn build_tool_executor(
     .with_plugin_manager(plugins)
     .with_web_search_backend(resolution.config.web.search.resolve())
     .with_plan_registry(crate::tool::plan_registry_for_executor())
-    .with_worktree_registry(crate::tool::worktree_registry_for_executor());
+    .with_worktree_registry(crate::tool::worktree_registry_for_executor())
+    .with_scheduler(build_scheduler());
 
     if let Ok(mgr) = agena_skills::SkillsManager::build(Some(workspace_root)) {
         executor = executor.with_skills_manager(Arc::new(mgr));
@@ -552,4 +553,29 @@ fn push_watch_path(paths: &mut Vec<PathBuf>, candidate: PathBuf) {
     if !paths.iter().any(|existing| existing == &candidate) {
         paths.push(candidate);
     }
+}
+
+/// Build a process-wide cron scheduler.  The sink is a `tracing` logger
+/// — the SessionManager bridge that actually re-injects fired prompts is
+/// expected to be wired up in a follow-up commit.
+fn build_scheduler() -> Arc<agena_scheduler::Scheduler> {
+    use std::time::Duration;
+    struct LogSink;
+    #[async_trait::async_trait]
+    impl agena_scheduler::JobSink for LogSink {
+        async fn deliver(&self, job: &agena_scheduler::ScheduledJob) {
+            tracing::info!(
+                target: "agena::scheduler",
+                job_id = %job.id,
+                prompt = %job.prompt,
+                "scheduled job fired (no SessionManager bridge yet — prompt logged only)"
+            );
+        }
+    }
+    let sched = agena_scheduler::scheduler::build_in_memory(
+        Arc::new(LogSink),
+        Duration::from_secs(10),
+    );
+    sched.start();
+    sched
 }

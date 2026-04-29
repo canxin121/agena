@@ -301,6 +301,37 @@ pub struct ExitWorktreeToolInput {
     pub discard_changes: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct CronCreateToolInput {
+    /// 6-field cron expression: `<sec> <min> <hour> <day-of-month> <month> <day-of-week>`.
+    pub expression: String,
+    /// Prompt to enqueue when the job fires.
+    pub prompt: String,
+    #[serde(default = "default_cron_max_age")]
+    pub max_age_days: u32,
+}
+
+fn default_cron_max_age() -> u32 {
+    7
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct CronListToolInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct CronDeleteToolInput {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct ScheduleWakeupToolInput {
+    pub delay_seconds: u32,
+    pub prompt: String,
+    /// Short reason logged for telemetry / shown back to the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -324,6 +355,10 @@ pub enum BuiltinToolInput {
     SkillRun(SkillRunToolInput),
     EnterWorktree(EnterWorktreeToolInput),
     ExitWorktree(ExitWorktreeToolInput),
+    CronCreate(CronCreateToolInput),
+    CronList(CronListToolInput),
+    CronDelete(CronDeleteToolInput),
+    ScheduleWakeup(ScheduleWakeupToolInput),
 }
 
 impl BuiltinToolInput {
@@ -348,6 +383,10 @@ impl BuiltinToolInput {
             Self::SkillRun(_) => "skill_run",
             Self::EnterWorktree(_) => "enter_worktree",
             Self::ExitWorktree(_) => "exit_worktree",
+            Self::CronCreate(_) => "cron_create",
+            Self::CronList(_) => "cron_list",
+            Self::CronDelete(_) => "cron_delete",
+            Self::ScheduleWakeup(_) => "schedule_wakeup",
         }
     }
 
@@ -406,6 +445,10 @@ pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
         "skill_run" => "skill_run",
         "enter_worktree" => "enter_worktree",
         "exit_worktree" => "exit_worktree",
+        "cron_create" => "cron_create",
+        "cron_list" => "cron_list",
+        "cron_delete" => "cron_delete",
+        "schedule_wakeup" => "schedule_wakeup",
         _ => return None,
     })
 }
@@ -576,6 +619,32 @@ pub enum BuiltinToolOutput {
         action: String,
         path: String,
     },
+    CronCreate {
+        id: String,
+        next_fire_at: Option<String>,
+    },
+    CronList {
+        jobs: Vec<CronJobSummary>,
+    },
+    CronDelete {
+        id: String,
+        removed: bool,
+    },
+    ScheduleWakeup {
+        id: String,
+        next_fire_at: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CronJobSummary {
+    pub id: String,
+    pub kind: String,
+    pub expression: Option<String>,
+    pub at: Option<String>,
+    pub prompt: String,
+    pub next_fire_at: Option<String>,
+    pub last_fired_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -608,6 +677,10 @@ impl BuiltinToolOutput {
             Self::SkillRun { .. } => "skill_run",
             Self::EnterWorktree { .. } => "enter_worktree",
             Self::ExitWorktree { .. } => "exit_worktree",
+            Self::CronCreate { .. } => "cron_create",
+            Self::CronList { .. } => "cron_list",
+            Self::CronDelete { .. } => "cron_delete",
+            Self::ScheduleWakeup { .. } => "schedule_wakeup",
         }
     }
 

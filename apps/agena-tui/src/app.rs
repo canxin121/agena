@@ -7541,6 +7541,14 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
                 _ => "enter_worktree".to_string(),
             },
             BuiltinToolInput::ExitWorktree(input) => format!("exit_worktree {}", input.action),
+            BuiltinToolInput::CronCreate(input) => {
+                format!("cron_create {}", input.expression)
+            }
+            BuiltinToolInput::CronList(_) => "cron_list".to_string(),
+            BuiltinToolInput::CronDelete(input) => format!("cron_delete {}", input.id),
+            BuiltinToolInput::ScheduleWakeup(input) => {
+                format!("schedule_wakeup +{}s", input.delay_seconds)
+            }
         };
     }
     match invocation {

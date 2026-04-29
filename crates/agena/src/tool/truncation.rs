@@ -65,7 +65,11 @@ impl ToolOutputTruncator {
             | BuiltinToolOutput::ExitPlanMode { .. }
             | BuiltinToolOutput::SkillRun { .. }
             | BuiltinToolOutput::EnterWorktree { .. }
-            | BuiltinToolOutput::ExitWorktree { .. } => {}
+            | BuiltinToolOutput::ExitWorktree { .. }
+            | BuiltinToolOutput::CronCreate { .. }
+            | BuiltinToolOutput::CronList { .. }
+            | BuiltinToolOutput::CronDelete { .. }
+            | BuiltinToolOutput::ScheduleWakeup { .. } => {}
         }
 
         execution

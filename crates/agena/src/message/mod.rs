@@ -19,6 +19,7 @@ pub use part::{
     UserInputReplyKind, UserInputRequest, UserInputRequestPart, ViewFileToolInput, WebFetchToolInput,
     WebSearchHit, WebSearchPart, WebSearchResult, WebSearchToolInput, EnterPlanModeToolInput,
     EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, SkillRunToolInput,
-    canonical_builtin_name,
+    CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput,
+    ScheduleWakeupToolInput, canonical_builtin_name,
 };
 pub use usage::MessageUsage;

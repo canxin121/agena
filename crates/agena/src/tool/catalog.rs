@@ -1,10 +1,10 @@
 use crate::agent::Agent;
 use crate::message::{
-    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput,
-    EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput,
-    GlobToolInput, GrepToolInput, MonitorToolInput, ReadToolInput, SkillRunToolInput, TaskToolInput,
-    TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
-    WebSearchToolInput,
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, CronCreateToolInput,
+    CronDeleteToolInput, CronListToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
+    ExitPlanModeToolInput, ExitWorktreeToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
+    ReadToolInput, ScheduleWakeupToolInput, SkillRunToolInput, TaskToolInput, TodoWriteToolInput,
+    ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput, WebSearchToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -228,6 +228,34 @@ impl ToolCatalog {
                 ToolBehavior::Mutating,
             )
             .with_search_terms(["git", "worktree", "exit", "cleanup"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<CronCreateToolInput>(
+                "cron_create",
+                "Schedule a recurring prompt with a 6-field cron expression.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["cron", "schedule", "recurring", "background"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<CronListToolInput>(
+                "cron_list",
+                "List all currently scheduled cron jobs and one-shot wakeups.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["cron", "list", "scheduled jobs"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<CronDeleteToolInput>(
+                "cron_delete",
+                "Delete a scheduled job by id.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["cron", "delete", "remove", "cancel"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<ScheduleWakeupToolInput>(
+                "schedule_wakeup",
+                "Schedule a one-shot prompt to fire after `delay_seconds`.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["wakeup", "remind", "later", "delay"])
             .with_deferred_loading(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));

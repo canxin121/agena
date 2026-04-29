@@ -1034,6 +1034,24 @@ fn placeholder_builtin_tool_input(name: &str) -> BuiltinToolInput {
             action: "keep".to_string(),
             discard_changes: false,
         }),
+        "cron_create" => BuiltinToolInput::CronCreate(crate::message::CronCreateToolInput {
+            expression: String::new(),
+            prompt: String::new(),
+            max_age_days: 7,
+        }),
+        "cron_list" => {
+            BuiltinToolInput::CronList(crate::message::CronListToolInput::default())
+        }
+        "cron_delete" => BuiltinToolInput::CronDelete(crate::message::CronDeleteToolInput {
+            id: String::new(),
+        }),
+        "schedule_wakeup" => {
+            BuiltinToolInput::ScheduleWakeup(crate::message::ScheduleWakeupToolInput {
+                delay_seconds: 0,
+                prompt: String::new(),
+                reason: None,
+            })
+        }
         other => BuiltinToolInput::Task(TaskToolInput {
             description: String::new(),
             prompt: format!("placeholder for unsupported builtin {other}"),
@@ -1105,6 +1123,10 @@ pub(crate) fn parse_tool_invocation(
         "skill_run" => BuiltinToolInput::SkillRun(parse_input::<crate::message::SkillRunToolInput>(arguments_json)?),
         "enter_worktree" => BuiltinToolInput::EnterWorktree(parse_input::<crate::message::EnterWorktreeToolInput>(arguments_json)?),
         "exit_worktree" => BuiltinToolInput::ExitWorktree(parse_input::<crate::message::ExitWorktreeToolInput>(arguments_json)?),
+        "cron_create" => BuiltinToolInput::CronCreate(parse_input::<crate::message::CronCreateToolInput>(arguments_json)?),
+        "cron_list" => BuiltinToolInput::CronList(parse_input::<crate::message::CronListToolInput>(arguments_json)?),
+        "cron_delete" => BuiltinToolInput::CronDelete(parse_input::<crate::message::CronDeleteToolInput>(arguments_json)?),
+        "schedule_wakeup" => BuiltinToolInput::ScheduleWakeup(parse_input::<crate::message::ScheduleWakeupToolInput>(arguments_json)?),
         other => {
             return Err(AppError::Provider(format!(
                 "unsupported builtin tool call from model: {other}"

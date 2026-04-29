@@ -865,6 +865,13 @@ fn remap_event_provider_id(
             usage,
             provider_metadata,
         },
+        CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
+            CompletionStreamEvent::ThinkingDelta {
+                provider_id,
+                model,
+                delta,
+            }
+        }
     }
 }
 
@@ -1014,6 +1021,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         }
     }
 
@@ -1057,6 +1076,7 @@ mod tests {
                 provider_id: pid(self.provider_id),
                 model: request.model,
                 text: "ok".to_owned(),
+                reasoning_text: None,
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
                 usage: None,
@@ -1095,6 +1115,7 @@ mod tests {
                 provider_id: pid(self.provider_id),
                 model: self.default_model().clone(),
                 text: "ok".to_owned(),
+                reasoning_text: None,
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
                 usage: None,
@@ -1253,6 +1274,7 @@ mod tests {
                 provider_id: pid("unsupported-image"),
                 model: self.default_model().clone(),
                 text: "should not run".to_owned(),
+                reasoning_text: None,
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
                 usage: None,
@@ -1600,6 +1622,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
                 },
             )
             .await
@@ -1667,6 +1695,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
                 },
             )
             .await
@@ -1711,6 +1745,7 @@ mod tests {
                 CompletionStreamEvent::TextDelta { delta, .. } => text.push_str(delta.as_str()),
                 CompletionStreamEvent::Completed { .. } => done = true,
                 CompletionStreamEvent::ToolCallDelta { .. } => {}
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
             }
         }
         assert_eq!(text, "ok");
@@ -1750,6 +1785,7 @@ mod tests {
                 CompletionStreamEvent::TextDelta { delta, .. } => text.push_str(delta.as_str()),
                 CompletionStreamEvent::Completed { .. }
                 | CompletionStreamEvent::ToolCallDelta { .. } => {}
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
             }
         }
         assert_eq!(text, "ok");
@@ -1837,6 +1873,7 @@ mod tests {
                 CompletionStreamEvent::TextDelta { delta, .. } => text.push_str(delta.as_str()),
                 CompletionStreamEvent::Completed { .. } => done = true,
                 CompletionStreamEvent::ToolCallDelta { .. } => {}
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
             }
         }
         assert_eq!(text, "partialfinal");

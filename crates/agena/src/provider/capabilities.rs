@@ -27,11 +27,15 @@ impl Default for CapabilityRegistry {
                     vec![
                         ModelCapabilityRule::new(
                             ModelMatcher::any_prefix([
-                                "gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4",
+                                "gpt-4o", "gpt-4.1", "gpt-5",
                             ]),
                             openai_multimodal_capabilities(),
                         )
                         .or(ModelMatcher::contains("codex")),
+                        ModelCapabilityRule::new(
+                            ModelMatcher::any_prefix(["o1", "o3", "o4"]),
+                            openai_reasoning_capabilities(),
+                        ),
                     ],
                 ),
                 CapabilityFamilyProfile::new(
@@ -40,11 +44,15 @@ impl Default for CapabilityRegistry {
                     vec![
                         ModelCapabilityRule::new(
                             ModelMatcher::any_prefix([
-                                "gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4",
+                                "gpt-4o", "gpt-4.1", "gpt-5",
                             ]),
                             openai_multimodal_capabilities(),
                         )
                         .or(ModelMatcher::contains("codex")),
+                        ModelCapabilityRule::new(
+                            ModelMatcher::any_prefix(["o1", "o3", "o4"]),
+                            openai_reasoning_capabilities(),
+                        ),
                     ],
                 ),
                 CapabilityFamilyProfile::new(
@@ -81,11 +89,15 @@ impl Default for CapabilityRegistry {
                         ),
                         ModelCapabilityRule::new(
                             ModelMatcher::any_prefix([
-                                "gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4",
+                                "gpt-4o", "gpt-4.1", "gpt-5",
                             ]),
                             openai_multimodal_capabilities(),
                         )
                         .or(ModelMatcher::contains("gpt")),
+                        ModelCapabilityRule::new(
+                            ModelMatcher::any_prefix(["o1", "o3", "o4"]),
+                            openai_reasoning_capabilities(),
+                        ),
                     ],
                 ),
             ],
@@ -218,6 +230,9 @@ fn openai_default_capabilities() -> ModelCapabilities {
     ModelCapabilities::default()
         .with_tool_calling(CapabilitySupport::Supported)
         .with_streaming(CapabilitySupport::Supported)
+        .with_structured_output(CapabilitySupport::Unknown)
+        .with_reasoning(CapabilitySupport::Unsupported)
+        .with_temperature_supported(CapabilitySupport::Supported)
 }
 
 fn openai_multimodal_capabilities() -> ModelCapabilities {
@@ -225,6 +240,14 @@ fn openai_multimodal_capabilities() -> ModelCapabilities {
         .with_image_input(CapabilitySupport::Supported)
         .with_document_input(CapabilitySupport::Supported)
         .with_file_input(CapabilitySupport::Supported)
+        .with_structured_output(CapabilitySupport::Supported)
+}
+
+fn openai_reasoning_capabilities() -> ModelCapabilities {
+    openai_multimodal_capabilities()
+        .with_reasoning(CapabilitySupport::Supported)
+        .with_structured_output(CapabilitySupport::Supported)
+        .with_temperature_supported(CapabilitySupport::Unsupported)
 }
 
 fn anthropic_default_capabilities() -> ModelCapabilities {
@@ -233,6 +256,8 @@ fn anthropic_default_capabilities() -> ModelCapabilities {
         .with_streaming(CapabilitySupport::Supported)
         .with_audio_input(CapabilitySupport::Unsupported)
         .with_video_input(CapabilitySupport::Unsupported)
+        .with_reasoning(CapabilitySupport::Unsupported)
+        .with_structured_output(CapabilitySupport::Unsupported)
 }
 
 fn anthropic_claude_capabilities() -> ModelCapabilities {
@@ -240,19 +265,24 @@ fn anthropic_claude_capabilities() -> ModelCapabilities {
         .with_image_input(CapabilitySupport::Supported)
         .with_document_input(CapabilitySupport::Supported)
         .with_file_input(CapabilitySupport::Unsupported)
+        .with_reasoning(CapabilitySupport::Supported)
 }
 
 fn gemini_default_capabilities() -> ModelCapabilities {
     ModelCapabilities::default()
         .with_tool_calling(CapabilitySupport::Unsupported)
         .with_streaming(CapabilitySupport::Supported)
+        .with_structured_output(CapabilitySupport::Supported)
+        .with_reasoning(CapabilitySupport::Unsupported)
 }
 
 fn gemini_multimodal_capabilities() -> ModelCapabilities {
     gemini_default_capabilities()
+        .with_tool_calling(CapabilitySupport::Supported)
         .with_image_input(CapabilitySupport::Supported)
         .with_document_input(CapabilitySupport::Supported)
         .with_file_input(CapabilitySupport::Supported)
+        .with_reasoning(CapabilitySupport::Supported)
 }
 
 fn bedrock_default_capabilities() -> ModelCapabilities {
@@ -278,6 +308,28 @@ mod tests {
         assert_eq!(capabilities.image_input, CapabilitySupport::Supported);
         assert_eq!(capabilities.document_input, CapabilitySupport::Supported);
         assert_eq!(capabilities.file_input, CapabilitySupport::Supported);
+        assert_eq!(capabilities.structured_output, CapabilitySupport::Supported);
+        assert_eq!(capabilities.reasoning, CapabilitySupport::Unsupported);
+        assert_eq!(capabilities.temperature_supported, CapabilitySupport::Supported);
+    }
+
+    #[test]
+    fn openai_family_marks_o_series_as_reasoning_no_temperature() {
+        let registry = CapabilityRegistry::default();
+        for model in ["o1", "o3-mini", "o4-mini"] {
+            let capabilities = registry.capabilities_for_family(CapabilityFamily::OpenAi, model);
+            assert_eq!(
+                capabilities.reasoning,
+                CapabilitySupport::Supported,
+                "{model} should support reasoning"
+            );
+            assert_eq!(
+                capabilities.temperature_supported,
+                CapabilitySupport::Unsupported,
+                "{model} should not support temperature"
+            );
+            assert_eq!(capabilities.structured_output, CapabilitySupport::Supported);
+        }
     }
 
     #[test]
@@ -288,5 +340,17 @@ mod tests {
         assert_eq!(capabilities.image_input, CapabilitySupport::Supported);
         assert_eq!(capabilities.document_input, CapabilitySupport::Supported);
         assert_eq!(capabilities.file_input, CapabilitySupport::Unsupported);
+        assert_eq!(capabilities.reasoning, CapabilitySupport::Supported);
+        assert_eq!(capabilities.structured_output, CapabilitySupport::Unsupported);
+    }
+
+    #[test]
+    fn gemini_family_marks_gemini_models_as_multimodal_with_reasoning() {
+        let registry = CapabilityRegistry::default();
+        let capabilities =
+            registry.capabilities_for_family(CapabilityFamily::Gemini, "gemini-2.0-flash");
+        assert_eq!(capabilities.image_input, CapabilitySupport::Supported);
+        assert_eq!(capabilities.reasoning, CapabilitySupport::Supported);
+        assert_eq!(capabilities.structured_output, CapabilitySupport::Supported);
     }
 }

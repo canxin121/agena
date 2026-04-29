@@ -6,6 +6,33 @@ use crate::{
     tool::ToolDefinition,
 };
 
+/// Controls extended thinking / reasoning for providers that support it.
+///
+/// For Anthropic: maps to the `thinking` request field with `budget_tokens`.
+/// For OpenAI o-series: maps to `reasoning_effort` ("low"/"medium"/"high") derived from budget.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThinkingRequest {
+    Enabled { budget_tokens: u32 },
+    Disabled,
+}
+
+/// Instructs the provider to produce output in a specific format.
+///
+/// Not all providers support all variants; unsupported variants are silently ignored.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseFormat {
+    Text,
+    JsonObject,
+    JsonSchema {
+        name: String,
+        schema: serde_json::Value,
+        #[serde(default)]
+        strict: bool,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompletionRequest {
     pub model: ModelId,
@@ -24,6 +51,18 @@ pub struct CompletionRequest {
     pub previous_response_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_window_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stop_sequences: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -31,6 +70,8 @@ pub struct CompletionResponse {
     pub provider_id: ProviderId,
     pub model: ModelId,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<CompletionFinishReason>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -122,6 +163,11 @@ impl CompletionFinishReason {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CompletionStreamEvent {
     TextDelta {
+        provider_id: ProviderId,
+        model: ModelId,
+        delta: String,
+    },
+    ThinkingDelta {
         provider_id: ProviderId,
         model: ModelId,
         delta: String,

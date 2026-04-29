@@ -77,6 +77,39 @@ api_key_env = "OPENAI_API_KEY"
 api_mode = "auto"
 stream_mode = "sse"
 
+# Per-provider thinking-depth presets (name → budget_tokens).
+# Set default_thinking to one of the preset names to apply it to every request
+# that doesn't already specify request.thinking.
+# Use "disabled" as the default_thinking value to explicitly suppress thinking.
+#
+# Example — OpenAI o-series with named reasoning levels:
+#
+# [providers.openai-reasoning]
+# kind = "openai"
+# base_url = "https://api.openai.com/v1"
+# default_model = "o3-mini"
+# api_key_env = "OPENAI_API_KEY"
+# default_thinking = "standard"
+#
+# [providers.openai-reasoning.thinking_depths]
+# light    = 3000
+# standard = 10000
+# deep     = 30000
+#
+# Example — Anthropic with named thinking levels:
+#
+# [providers.anthropic]
+# kind = "anthropic"
+# base_url = "https://api.anthropic.com/v1"
+# default_model = "claude-sonnet-4-5"
+# api_key_env = "ANTHROPIC_API_KEY"
+# default_thinking = "standard"
+#
+# [providers.anthropic.thinking_depths]
+# light    = 3000
+# standard = 10000
+# deep     = 30000
+
 # models.dev preset examples:
 #
 # [providers.openrouter]

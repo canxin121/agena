@@ -10,8 +10,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, should_retry_credential,
-        sse, utils,
+        CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, ResponseFormat,
+        ThinkingRequest, should_retry_credential, sse, utils,
     },
     role::Role,
 };
@@ -26,6 +26,7 @@ pub struct GeminiProvider {
     default_model: ModelId,
     auth_mode: GeminiAuthMode,
     extra_headers: HashMap<String, String>,
+    default_thinking: Option<ThinkingRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +70,13 @@ impl GeminiProvider {
                 name: "key".to_owned(),
             },
             extra_headers: HashMap::new(),
+            default_thinking: None,
         }
+    }
+
+    pub fn with_default_thinking(mut self, thinking: Option<ThinkingRequest>) -> Self {
+        self.default_thinking = thinking;
+        self
     }
 
     pub fn with_auth_header(
@@ -112,6 +119,16 @@ impl GeminiProvider {
             "{}/{}:streamGenerateContent?alt=sse",
             self.base_url, model_name
         )
+    }
+
+    fn map_response_format(fmt: Option<&ResponseFormat>) -> (Option<String>, Option<serde_json::Value>) {
+        match fmt {
+            Some(ResponseFormat::JsonObject) => (Some("application/json".to_owned()), None),
+            Some(ResponseFormat::JsonSchema { schema, .. }) => {
+                (Some("application/json".to_owned()), Some(schema.clone()))
+            }
+            _ => (None, None),
+        }
     }
 
     fn endpoint_with_auth(&self, endpoint: String, api_key: &str) -> String {
@@ -236,6 +253,7 @@ impl GeminiProvider {
                     completed = Some((provider_id, model, finish_reason, usage, provider_metadata));
                 }
                 CompletionStreamEvent::ToolCallDelta { .. } => {}
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
             }
         }
 
@@ -260,6 +278,7 @@ impl GeminiProvider {
             provider_id,
             model,
             text,
+            reasoning_text: None,
             finish_reason,
             tool_calls: Vec::new(),
             usage,
@@ -278,14 +297,8 @@ impl ModelProvider for GeminiProvider {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
-        crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::Gemini, model.as_str())
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
-        crate::provider::default_model_metadata_registry()
-            .metadata_for_family(crate::provider::CapabilityFamily::Gemini, model.as_str())
+    fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
+        Some(crate::provider::CapabilityFamily::Gemini)
     }
 
     fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
@@ -380,9 +393,18 @@ impl ModelProvider for GeminiProvider {
                 parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
             }),
             contents,
-            generation_config: GeminiGenerationConfig {
-                temperature: request.temperature,
-                max_output_tokens: request.max_output_tokens,
+            generation_config: {
+                let (response_mime_type, response_schema) =
+                    Self::map_response_format(request.response_format.as_ref());
+                GeminiGenerationConfig {
+                    temperature: request.temperature,
+                    max_output_tokens: request.max_output_tokens,
+                    top_p: request.top_p,
+                    top_k: request.top_k,
+                    stop_sequences: request.stop_sequences.clone(),
+                    response_mime_type,
+                    response_schema,
+                }
             },
             stream: None,
         };
@@ -429,6 +451,7 @@ impl ModelProvider for GeminiProvider {
             provider_id: ProviderId::new(PROVIDER_ID),
             model,
             text,
+            reasoning_text: None,
             finish_reason: CompletionFinishReason::from_provider(finish_reason.as_deref()),
             tool_calls: Vec::new(),
             usage,
@@ -473,9 +496,18 @@ impl ModelProvider for GeminiProvider {
                 parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
             }),
             contents,
-            generation_config: GeminiGenerationConfig {
-                temperature: request.temperature,
-                max_output_tokens: request.max_output_tokens,
+            generation_config: {
+                let (response_mime_type, response_schema) =
+                    Self::map_response_format(request.response_format.as_ref());
+                GeminiGenerationConfig {
+                    temperature: request.temperature,
+                    max_output_tokens: request.max_output_tokens,
+                    top_p: request.top_p,
+                    top_k: request.top_k,
+                    stop_sequences: request.stop_sequences.clone(),
+                    response_mime_type,
+                    response_schema,
+                }
             },
             stream: Some(true),
         };
@@ -651,6 +683,16 @@ struct GeminiGenerationConfig {
     temperature: Option<f32>,
     #[serde(rename = "maxOutputTokens", skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
+    #[serde(rename = "topP", skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(rename = "topK", skip_serializing_if = "Option::is_none")]
+    top_k: Option<u32>,
+    #[serde(rename = "stopSequences", skip_serializing_if = "Vec::is_empty", default)]
+    stop_sequences: Vec<String>,
+    #[serde(rename = "responseMimeType", skip_serializing_if = "Option::is_none")]
+    response_mime_type: Option<String>,
+    #[serde(rename = "responseSchema", skip_serializing_if = "Option::is_none")]
+    response_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -921,6 +963,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("completion should succeed");
@@ -967,6 +1015,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("completion should succeed");
@@ -1035,6 +1089,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("empty candidate text should fall back to stream aggregation");
@@ -1093,6 +1153,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("stream should start");
@@ -1164,6 +1230,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("stream should start");
@@ -1182,6 +1254,7 @@ mod tests {
                     completed = Some((finish_reason, usage));
                 }
                 CompletionStreamEvent::ToolCallDelta { .. } => {}
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
             }
         }
 

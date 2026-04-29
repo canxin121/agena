@@ -98,6 +98,12 @@ impl SessionRunOptions {
             prompt_cache_key,
             previous_response_id,
             prompt_window_generation,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            response_format: None,
         }
     }
 }
@@ -2314,6 +2320,7 @@ mod tests {
                 provider_id: scripted_provider_id(),
                 model: scripted_model_id(),
                 text: String::new(),
+                reasoning_text: None,
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
                 usage: None,
@@ -2732,6 +2739,7 @@ mod tests {
                 provider_id: recording_provider_id(),
                 model: recording_model_id(),
                 text: "recorded".to_string(),
+                reasoning_text: None,
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
                 usage: self.usage.clone(),

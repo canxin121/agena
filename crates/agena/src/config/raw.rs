@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     permission::PermissionMode,
-    provider::{ProviderCapabilityOverrideRule, auth::FileAuthStore},
+    provider::{ProviderCapabilityOverrideRule, ThinkingRequest, auth::FileAuthStore},
 };
 
 use super::{
@@ -256,6 +256,7 @@ impl RawConfig {
                     provider.api_mode = Some(OpenAiApiModeConfig::from_str(value.as_str())?)
                 }
                 "REALTIME_WS_URL" => provider.realtime_ws_url = Some(value),
+                "DEFAULT_THINKING" => provider.default_thinking = Some(value),
                 "TARGET_PROVIDER_ID" => provider.target_provider_id = Some(value),
                 "AUTH_PROVIDER_ID" => provider.auth_provider_id = Some(value),
                 "INSTANCE_URL" => provider.instance_url = Some(value),
@@ -268,9 +269,6 @@ impl RawConfig {
                 "ACCESS_KEY_ID" => provider.access_key_id = Some(value),
                 "SECRET_ACCESS_KEY" => provider.secret_access_key = Some(value),
                 "SESSION_TOKEN" => provider.session_token = Some(value),
-                "INCLUDE_THINKING" => {
-                    provider.include_thinking = Some(parse_bool(key.as_str(), value.as_str())?)
-                }
                 _ => {}
             }
         }
@@ -723,7 +721,12 @@ pub(crate) struct RawProviderConfig {
     pub(crate) api_mode: Option<OpenAiApiModeConfig>,
     pub(crate) stream_mode: Option<StreamTransportMode>,
     pub(crate) realtime_ws_url: Option<String>,
-    pub(crate) include_thinking: Option<bool>,
+    /// Named thinking-depth presets for this provider: name → budget_tokens.
+    /// Example: `thinking_depths = { light = 3000, deep = 30000 }`
+    pub(crate) thinking_depths: BTreeMap<String, u32>,
+    /// Default thinking depth to apply when the caller doesn't specify one.
+    /// Must match a key in `thinking_depths`, or be the literal "disabled".
+    pub(crate) default_thinking: Option<String>,
     pub(crate) instance_url: Option<String>,
     pub(crate) ai_gateway_url: Option<String>,
     pub(crate) ai_gateway_headers: BTreeMap<String, String>,
@@ -755,7 +758,8 @@ impl Merge for RawProviderConfig {
         merge_option(&mut self.api_mode, overlay.api_mode);
         merge_option(&mut self.stream_mode, overlay.stream_mode);
         merge_option(&mut self.realtime_ws_url, overlay.realtime_ws_url);
-        merge_option(&mut self.include_thinking, overlay.include_thinking);
+        self.thinking_depths.extend(overlay.thinking_depths);
+        merge_option(&mut self.default_thinking, overlay.default_thinking);
         merge_option(&mut self.instance_url, overlay.instance_url);
         merge_option(&mut self.ai_gateway_url, overlay.ai_gateway_url);
         self.ai_gateway_headers.extend(overlay.ai_gateway_headers);
@@ -789,6 +793,11 @@ impl RawProviderConfig {
         let enabled = self.enabled.unwrap_or(true);
         validate_capability_overrides(provider_id.as_str(), &self.capability_overrides)?;
         let capability_overrides = self.capability_overrides.clone();
+        let default_thinking = resolve_default_thinking(
+            provider_id.as_str(),
+            &self.thinking_depths,
+            self.default_thinking.clone(),
+        )?;
 
         let definition = match kind {
             ProviderKind::Preset => {
@@ -816,6 +825,7 @@ impl RawProviderConfig {
                 api_key: normalize_optional(self.api_key),
                 api_key_env: normalize_optional(self.api_key_env),
                 extra_headers: self.extra_headers,
+                default_thinking: default_thinking.clone(),
                 options: super::OpenAiProviderOptions {
                     api_mode: self.api_mode.unwrap_or(OpenAiApiModeConfig::Responses),
                     stream_mode: self.stream_mode.unwrap_or(StreamTransportMode::Sse),
@@ -833,6 +843,7 @@ impl RawProviderConfig {
                     api_key: normalize_optional(self.api_key),
                     api_key_env: normalize_optional(self.api_key_env),
                     extra_headers: self.extra_headers,
+                    default_thinking: default_thinking.clone(),
                     options: super::OpenAiCompatibleProviderOptions {
                         auth_header: self
                             .auth_header
@@ -854,6 +865,7 @@ impl RawProviderConfig {
                 api_key: normalize_optional(self.api_key),
                 api_key_env: normalize_optional(self.api_key_env),
                 extra_headers: self.extra_headers,
+                default_thinking: default_thinking.clone(),
                 options: super::OpenAiCompatibleProviderOptions {
                     auth_header: self
                         .auth_header
@@ -874,10 +886,10 @@ impl RawProviderConfig {
                 api_key: normalize_optional(self.api_key),
                 api_key_env: normalize_optional(self.api_key_env),
                 extra_headers: self.extra_headers,
+                default_thinking: default_thinking.clone(),
                 options: super::AnthropicProviderOptions {
                     auth_header: self.auth_header.unwrap_or_else(|| "x-api-key".to_owned()),
                     auth_scheme: normalize_optional(self.auth_scheme),
-                    include_thinking: self.include_thinking.unwrap_or(false),
                 },
             }),
             ProviderKind::Gemini => ProviderDefinition::Gemini(super::HttpProviderConfig {
@@ -890,6 +902,7 @@ impl RawProviderConfig {
                 api_key: normalize_optional(self.api_key),
                 api_key_env: normalize_optional(self.api_key_env),
                 extra_headers: self.extra_headers,
+                default_thinking: default_thinking.clone(),
                 options: super::SimpleHttpProviderOptions,
             }),
             ProviderKind::Codex => ProviderDefinition::Codex(super::CodexProviderOptions {
@@ -1049,6 +1062,25 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
+}
+
+fn resolve_default_thinking(
+    provider_id: &str,
+    thinking_depths: &BTreeMap<String, u32>,
+    default_thinking: Option<String>,
+) -> Result<Option<ThinkingRequest>, ConfigError> {
+    let Some(name) = default_thinking.and_then(|v| normalize_optional(Some(v))) else {
+        return Ok(None);
+    };
+    if name.eq_ignore_ascii_case("disabled") {
+        return Ok(Some(ThinkingRequest::Disabled));
+    }
+    let budget_tokens = thinking_depths.get(name.as_str()).copied().ok_or_else(|| {
+        ConfigError::Validation(format!(
+            "provider `{provider_id}` default_thinking `{name}` not found in thinking_depths"
+        ))
+    })?;
+    Ok(Some(ThinkingRequest::Enabled { budget_tokens }))
 }
 
 fn validate_capability_overrides(

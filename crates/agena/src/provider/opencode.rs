@@ -767,6 +767,12 @@ mod tests {
                 prompt_cache_key: Some("session-42".to_owned()),
                 previous_response_id: Some("resp_prev".to_owned()),
                 prompt_window_generation: Some(7),
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("completion should succeed");
@@ -889,6 +895,12 @@ mod tests {
                 prompt_cache_key: Some("session-42".to_owned()),
                 previous_response_id: Some("resp_prev".to_owned()),
                 prompt_window_generation: Some(7),
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("anthropic-backed completion should succeed");
@@ -905,6 +917,12 @@ mod tests {
                 prompt_cache_key: Some("session-42".to_owned()),
                 previous_response_id: Some("resp_prev".to_owned()),
                 prompt_window_generation: Some(7),
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("gemini-backed completion should succeed");
@@ -921,6 +939,12 @@ mod tests {
                 prompt_cache_key: Some("session-42".to_owned()),
                 previous_response_id: Some("resp_prev".to_owned()),
                 prompt_window_generation: Some(7),
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("openai-compatible completion should succeed");
@@ -988,6 +1012,12 @@ mod tests {
                 prompt_cache_key: Some("session-42".to_owned()),
                 previous_response_id: None,
                 prompt_window_generation: Some(1),
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("completion should succeed");

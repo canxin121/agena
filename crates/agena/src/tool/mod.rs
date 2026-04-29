@@ -1023,10 +1023,10 @@ fn access_kind_name(access: AccessKind) -> &'static str {
     }
 }
 
-fn invocation_name(invocation: &ToolInvocation) -> &str {
+fn invocation_name(invocation: &ToolInvocation) -> String {
     match invocation {
-        ToolInvocation::Custom { name, .. } => name.as_str(),
-        ToolInvocation::Mcp { tool, .. } => tool.as_str(),
+        ToolInvocation::Custom { name, .. } => name.clone(),
+        ToolInvocation::Mcp { server, tool, .. } => format!("mcp:{server}:{tool}"),
     }
 }
 

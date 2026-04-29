@@ -25,5 +25,6 @@ pub use tool::{
     ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput, ViewFileToolInput,
     WebFetchToolInput, WebSearchHit, WebSearchToolInput, EnterPlanModeToolInput,
     EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, SkillRunToolInput,
-    canonical_builtin_name,
+    CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput,
+    ScheduleWakeupToolInput, canonical_builtin_name,
 };

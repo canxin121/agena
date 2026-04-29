@@ -121,6 +121,10 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
         BuiltinToolInput::SkillRun(_) => "skill_run",
         BuiltinToolInput::EnterWorktree(_) => "enter_worktree",
         BuiltinToolInput::ExitWorktree(_) => "exit_worktree",
+        BuiltinToolInput::CronCreate(_) => "cron_create",
+        BuiltinToolInput::CronList(_) => "cron_list",
+        BuiltinToolInput::CronDelete(_) => "cron_delete",
+        BuiltinToolInput::ScheduleWakeup(_) => "schedule_wakeup",
     }
 }
 

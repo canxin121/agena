@@ -14,5 +14,6 @@ members = [
     "crates/agena-plugin-host",
     "crates/agena-plugin-sdk",
     "crates/agena-rollout",
+    "crates/agena-scheduler",
     "crates/agena-skills",
 ]

@@ -3,6 +3,7 @@ mod ask_user;
 mod bash;
 mod builtins;
 mod catalog;
+mod cron;
 mod definition;
 mod glob;
 mod grep;
@@ -152,6 +153,7 @@ pub struct ToolExecutor {
     plan_registry: Option<plan::PlanRegistry>,
     skills_manager: Option<Arc<agena_skills::SkillsManager>>,
     worktree_registry: Option<worktree::WorktreeRegistry>,
+    scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     permission_mode: PermissionExecutionMode,
 }
 
@@ -184,6 +186,7 @@ impl ToolExecutor {
             plan_registry: None,
             skills_manager: None,
             worktree_registry: None,
+            scheduler: None,
             permission_mode: PermissionExecutionMode::Enforced,
         }
     }
@@ -262,6 +265,15 @@ impl ToolExecutor {
 
     pub fn worktree_registry(&self) -> Option<&worktree::WorktreeRegistry> {
         self.worktree_registry.as_ref()
+    }
+
+    pub fn with_scheduler(mut self, scheduler: Arc<agena_scheduler::Scheduler>) -> Self {
+        self.scheduler = Some(scheduler);
+        self
+    }
+
+    pub fn scheduler(&self) -> Option<&Arc<agena_scheduler::Scheduler>> {
+        self.scheduler.as_ref()
     }
 
     /// Refuse mutating invocations while plan mode is active for this
@@ -665,6 +677,10 @@ impl ToolExecutor {
             BuiltinToolInput::SkillRun(_) => {}
             BuiltinToolInput::EnterWorktree(_) => {}
             BuiltinToolInput::ExitWorktree(_) => {}
+            BuiltinToolInput::CronCreate(_) => {}
+            BuiltinToolInput::CronList(_) => {}
+            BuiltinToolInput::CronDelete(_) => {}
+            BuiltinToolInput::ScheduleWakeup(_) => {}
         }
 
         Ok(checks)

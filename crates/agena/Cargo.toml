@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 agena-mcp-client = { path = "../agena-mcp-client" }
+agena-scheduler = { path = "../agena-scheduler" }
 agena-skills = { path = "../agena-skills" }
 agena-plugin-host = { path = "../agena-plugin-host" }
 arc-swap = "1.7.1"

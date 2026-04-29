@@ -1,0 +1,18 @@
+[package]
+name = "agena-rollout"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { version = "0.4.42", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["fs", "io-util", "sync"] }
+tracing = "0.1.44"
+uuid = { version = "1.18.1", features = ["v4", "serde"] }
+walkdir = "2.5.0"
+
+[dev-dependencies]
+tempfile = "3.23.0"
+tokio = { version = "1.50.0", features = ["full"] }

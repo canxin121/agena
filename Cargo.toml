@@ -13,4 +13,5 @@ members = [
     "crates/agena-mcp-client",
     "crates/agena-plugin-host",
     "crates/agena-plugin-sdk",
+    "crates/agena-rollout",
 ]

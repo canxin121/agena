@@ -289,6 +289,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-rollout"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
 name = "agena-studio-server"
 version = "0.1.0"
 dependencies = [

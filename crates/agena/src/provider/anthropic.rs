@@ -12,7 +12,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        ThinkingRequest, prompt_cache, sse, utils,
+        ThinkingRequest, prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -119,7 +119,7 @@ impl AnthropicProvider {
     }
 
     fn content_to_blocks(message: &Message) -> Vec<AnthropicTextBlock> {
-        let projected = utils::project_session_parts(message);
+        let projected = wire_message::project(message);
         if projected.is_empty() {
             let text = message.as_text_lossy();
             if text.is_empty() {
@@ -136,18 +136,18 @@ impl AnthropicProvider {
         let mut blocks = Vec::new();
         for part in projected {
             match part {
-                utils::ProjectedSessionPart::Text { text } => {
+                wire_message::WirePart::Text { text } => {
                     blocks.push(AnthropicTextBlock::text(text));
                 }
-                utils::ProjectedSessionPart::Attachment { item } => {
+                wire_message::WirePart::Attachment { item } => {
                     blocks.extend(Self::attachment_blocks(&item));
                 }
-                utils::ProjectedSessionPart::ToolCall {
+                wire_message::WirePart::ToolCall {
                     id,
                     name,
                     arguments_json,
                 } => blocks.push(AnthropicTextBlock::tool_use(id, name, arguments_json)),
-                utils::ProjectedSessionPart::ToolResult {
+                wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
                 } => blocks.push(AnthropicTextBlock::tool_result(tool_call_id, output_json)),
@@ -167,7 +167,7 @@ impl AnthropicProvider {
                 .map(AnthropicTextBlock::document)
                 .into_iter()
                 .collect(),
-            AttachmentKind::File => utils::attachment_text(item)
+            AttachmentKind::File => wire_message::attachment_text(item)
                 .map(AnthropicTextBlock::text)
                 .into_iter()
                 .collect(),
@@ -177,15 +177,15 @@ impl AnthropicProvider {
         .chain(
             match item.kind {
                 AttachmentKind::Audio | AttachmentKind::Video => {
-                    Some(AnthropicTextBlock::text(utils::attachment_hint_text(item)))
+                    Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
                 }
                 AttachmentKind::Image | AttachmentKind::Pdf
                     if Self::binary_source(item).is_none() =>
                 {
-                    Some(AnthropicTextBlock::text(utils::attachment_hint_text(item)))
+                    Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
                 }
-                AttachmentKind::File if utils::attachment_text(item).is_none() => {
-                    Some(AnthropicTextBlock::text(utils::attachment_hint_text(item)))
+                AttachmentKind::File if wire_message::attachment_text(item).is_none() => {
+                    Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
                 }
                 _ => None,
             }
@@ -195,7 +195,7 @@ impl AnthropicProvider {
     }
 
     fn binary_source(item: &AttachmentItem) -> Option<AnthropicBinarySource> {
-        utils::attachment_base64_with_mime(item)
+        wire_message::base64_with_mime(item)
             .map(|(media_type, data)| AnthropicBinarySource::base64(media_type, data))
     }
 

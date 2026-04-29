@@ -16,7 +16,7 @@ use super::{
     CapabilityOverrideProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
     ModelProvider, ProviderCapabilityOverrideRule, ProviderHttpClientConfig,
     ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
-    StreamResumePolicy, utils,
+    StreamResumePolicy, wire_message,
 };
 
 #[derive(Debug, Clone)]
@@ -884,8 +884,8 @@ fn validate_request_capabilities(
 
     let mut unsupported = Vec::new();
     for message in &request.messages {
-        for part in utils::project_session_parts(message) {
-            let utils::ProjectedSessionPart::Attachment { item } = part else {
+        for part in wire_message::project(message) {
+            let wire_message::WirePart::Attachment { item } = part else {
                 continue;
             };
 

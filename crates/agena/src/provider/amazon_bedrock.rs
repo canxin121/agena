@@ -31,7 +31,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider,
-        OpenAiCompatibleProvider, ProviderModel, StreamResumePolicy, prompt_cache, sse, utils,
+        OpenAiCompatibleProvider, ProviderModel, StreamResumePolicy, prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -557,7 +557,7 @@ impl AmazonBedrockProvider {
     }
 
     fn anthropic_content_to_blocks(message: &Message) -> Vec<BedrockAnthropicTextBlock> {
-        let projected = utils::project_session_parts(message);
+        let projected = wire_message::project(message);
         if projected.is_empty() {
             let text = message.as_text_lossy();
             if text.is_empty() {
@@ -574,13 +574,13 @@ impl AmazonBedrockProvider {
         let mut blocks = Vec::new();
         for part in projected {
             match part {
-                utils::ProjectedSessionPart::Text { text } => {
+                wire_message::WirePart::Text { text } => {
                     blocks.push(BedrockAnthropicTextBlock::text(text));
                 }
-                utils::ProjectedSessionPart::Attachment { item } => {
+                wire_message::WirePart::Attachment { item } => {
                     blocks.extend(Self::anthropic_attachment_blocks(&item));
                 }
-                utils::ProjectedSessionPart::ToolCall {
+                wire_message::WirePart::ToolCall {
                     id,
                     name,
                     arguments_json,
@@ -589,7 +589,7 @@ impl AmazonBedrockProvider {
                     name,
                     arguments_json,
                 )),
-                utils::ProjectedSessionPart::ToolResult {
+                wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
                 } => blocks.push(BedrockAnthropicTextBlock::tool_result(
@@ -612,7 +612,7 @@ impl AmazonBedrockProvider {
                 .map(BedrockAnthropicTextBlock::document)
                 .into_iter()
                 .collect(),
-            AttachmentKind::File => utils::attachment_text(item)
+            AttachmentKind::File => wire_message::attachment_text(item)
                 .map(BedrockAnthropicTextBlock::text)
                 .into_iter()
                 .collect(),
@@ -622,17 +622,17 @@ impl AmazonBedrockProvider {
         .chain(
             match item.kind {
                 AttachmentKind::Audio | AttachmentKind::Video => Some(
-                    BedrockAnthropicTextBlock::text(utils::attachment_hint_text(item)),
+                    BedrockAnthropicTextBlock::text(wire_message::hint_text(item)),
                 ),
                 AttachmentKind::Image | AttachmentKind::Pdf
                     if Self::anthropic_binary_source(item).is_none() =>
                 {
                     Some(BedrockAnthropicTextBlock::text(
-                        utils::attachment_hint_text(item),
+                        wire_message::hint_text(item),
                     ))
                 }
-                AttachmentKind::File if utils::attachment_text(item).is_none() => Some(
-                    BedrockAnthropicTextBlock::text(utils::attachment_hint_text(item)),
+                AttachmentKind::File if wire_message::attachment_text(item).is_none() => Some(
+                    BedrockAnthropicTextBlock::text(wire_message::hint_text(item)),
                 ),
                 _ => None,
             }
@@ -642,7 +642,7 @@ impl AmazonBedrockProvider {
     }
 
     fn anthropic_binary_source(item: &AttachmentItem) -> Option<BedrockAnthropicBinarySource> {
-        utils::attachment_base64_with_mime(item)
+        wire_message::base64_with_mime(item)
             .map(|(media_type, data)| BedrockAnthropicBinarySource::base64(media_type, data))
     }
 
@@ -1388,7 +1388,7 @@ fn convert_messages(system: Option<String>, messages: Vec<Message>) -> Vec<ChatM
     }
 
     for message in messages {
-        let projected_parts = utils::project_session_parts(&message);
+        let projected_parts = wire_message::project(&message);
         match message.role {
             Role::System => {
                 result.push(ChatMessage {
@@ -1444,7 +1444,7 @@ fn convert_messages(system: Option<String>, messages: Vec<Message>) -> Vec<ChatM
 
 fn provider_message_to_openai_value(
     message: &Message,
-    parts: &[utils::ProjectedSessionPart],
+    parts: &[wire_message::WirePart],
 ) -> Value {
     if parts.is_empty() {
         return Value::String(message.as_text_lossy());
@@ -1454,7 +1454,7 @@ fn provider_message_to_openai_value(
 }
 
 fn attachment_upload_name(item: &AttachmentItem) -> String {
-    utils::attachment_filename(item)
+    wire_message::filename(item)
         .map(str::to_owned)
         .unwrap_or_else(|| item.summary_label())
 }
@@ -1463,7 +1463,7 @@ fn attachment_file_content_value(item: &AttachmentItem) -> Option<Value> {
     let filename = attachment_upload_name(item);
     match &item.source {
         AttachmentSource::Base64 { .. } | AttachmentSource::DataUrl { .. } => {
-            utils::attachment_data_url(item).map(|file_data| {
+            wire_message::data_url(item).map(|file_data| {
                 serde_json::json!({
                     "type": "file",
                     "file": {
@@ -1491,7 +1491,7 @@ fn attachment_file_content_value(item: &AttachmentItem) -> Option<Value> {
 
 fn attachment_content_value(item: &AttachmentItem) -> Value {
     match item.kind {
-        AttachmentKind::Image => utils::attachment_media_url(item)
+        AttachmentKind::Image => wire_message::media_url(item)
             .map(|url| {
                 serde_json::json!({
                     "type": "image_url",
@@ -1501,7 +1501,7 @@ fn attachment_content_value(item: &AttachmentItem) -> Value {
             .unwrap_or_else(|| {
                 serde_json::json!({
                     "type": "text",
-                    "text": utils::attachment_hint_text(item),
+                    "text": wire_message::hint_text(item),
                 })
             }),
         AttachmentKind::Audio
@@ -1510,24 +1510,24 @@ fn attachment_content_value(item: &AttachmentItem) -> Value {
         | AttachmentKind::File => attachment_file_content_value(item).unwrap_or_else(|| {
             serde_json::json!({
                 "type": "text",
-                "text": utils::attachment_hint_text(item),
+                "text": wire_message::hint_text(item),
             })
         }),
     }
 }
 
-fn projected_parts_to_openai_value(parts: &[utils::ProjectedSessionPart]) -> Value {
+fn projected_parts_to_openai_value(parts: &[wire_message::WirePart]) -> Value {
     let items = parts
         .iter()
         .map(|part| match part {
-            utils::ProjectedSessionPart::Text { text } => {
+            wire_message::WirePart::Text { text } => {
                 serde_json::json!({ "type": "text", "text": text })
             }
-            utils::ProjectedSessionPart::Attachment { item } => attachment_content_value(item),
-            utils::ProjectedSessionPart::ToolCall { name, .. } => {
+            wire_message::WirePart::Attachment { item } => attachment_content_value(item),
+            wire_message::WirePart::ToolCall { name, .. } => {
                 serde_json::json!({ "type": "text", "text": format!("[tool_call:{name}]") })
             }
-            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+            wire_message::WirePart::ToolResult { tool_call_id, .. } => {
                 serde_json::json!({ "type": "text", "text": format!("[tool_result:{tool_call_id}]") })
             }
         })
@@ -1537,7 +1537,7 @@ fn projected_parts_to_openai_value(parts: &[utils::ProjectedSessionPart]) -> Val
 
 fn assistant_content_and_tool_calls(
     message: &Message,
-    parts: &[utils::ProjectedSessionPart],
+    parts: &[wire_message::WirePart],
 ) -> (Option<Value>, Vec<ChatToolCallRequest>) {
     if parts.is_empty() {
         return (Some(Value::String(message.as_text_lossy())), Vec::new());
@@ -1547,8 +1547,8 @@ fn assistant_content_and_tool_calls(
     let mut tool_calls = Vec::new();
     for part in parts {
         match part {
-            utils::ProjectedSessionPart::Text { text } => text_chunks.push(text.clone()),
-            utils::ProjectedSessionPart::ToolCall {
+            wire_message::WirePart::Text { text } => text_chunks.push(text.clone()),
+            wire_message::WirePart::ToolCall {
                 id,
                 name,
                 arguments_json,
@@ -1562,10 +1562,10 @@ fn assistant_content_and_tool_calls(
                     },
                 });
             }
-            utils::ProjectedSessionPart::Attachment { item } => {
-                text_chunks.push(utils::attachment_hint_text(item));
+            wire_message::WirePart::Attachment { item } => {
+                text_chunks.push(wire_message::hint_text(item));
             }
-            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+            wire_message::WirePart::ToolResult { tool_call_id, .. } => {
                 text_chunks.push(format!("[tool_result:{tool_call_id}]"));
             }
         }
@@ -1575,12 +1575,12 @@ fn assistant_content_and_tool_calls(
 }
 
 fn ordered_tool_and_user_messages_from_parts(
-    parts: &[utils::ProjectedSessionPart],
+    parts: &[wire_message::WirePart],
 ) -> Vec<ChatMessage> {
     let has_tool_message = parts.iter().any(|part| {
         matches!(
             part,
-            utils::ProjectedSessionPart::ToolResult { tool_call_id, .. }
+            wire_message::WirePart::ToolResult { tool_call_id, .. }
                 if !tool_call_id.trim().is_empty()
         )
     });
@@ -1593,7 +1593,7 @@ fn ordered_tool_and_user_messages_from_parts(
 
     for part in parts {
         match part {
-            utils::ProjectedSessionPart::ToolResult {
+            wire_message::WirePart::ToolResult {
                 tool_call_id,
                 output_json,
             } if !tool_call_id.trim().is_empty() => {
@@ -1614,8 +1614,8 @@ fn ordered_tool_and_user_messages_from_parts(
                     tool_calls: None,
                 });
             }
-            utils::ProjectedSessionPart::ToolResult { output_json, .. } => {
-                buffered_parts.push(utils::ProjectedSessionPart::Text {
+            wire_message::WirePart::ToolResult { output_json, .. } => {
+                buffered_parts.push(wire_message::WirePart::Text {
                     text: output_json.clone(),
                 });
             }
@@ -1637,12 +1637,12 @@ fn ordered_tool_and_user_messages_from_parts(
 
 fn session_text_lossy(
     message: &Message,
-    projected_parts: &[utils::ProjectedSessionPart],
+    projected_parts: &[wire_message::WirePart],
 ) -> String {
     if projected_parts.is_empty() {
         message.as_text_lossy()
     } else {
-        utils::projected_parts_text_lossy(projected_parts)
+        wire_message::parts_text_lossy(projected_parts)
     }
 }
 

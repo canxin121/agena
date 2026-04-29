@@ -11,7 +11,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        StreamResumePolicy, ThinkingRequest, sse, utils,
+        StreamResumePolicy, ThinkingRequest, sse, utils, wire_message,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
@@ -828,7 +828,7 @@ impl OpenAiProvider {
     }
 
     fn attachment_upload_name(item: &AttachmentItem) -> String {
-        utils::attachment_filename(item)
+        wire_message::filename(item)
             .map(str::to_owned)
             .unwrap_or_else(|| item.summary_label())
     }
@@ -837,7 +837,7 @@ impl OpenAiProvider {
         let filename = Some(Self::attachment_upload_name(item));
         match &item.source {
             AttachmentSource::Base64 { .. } | AttachmentSource::DataUrl { .. } => {
-                utils::attachment_data_url(item).map(|file_data| OpenAiInputContent::File {
+                wire_message::data_url(item).map(|file_data| OpenAiInputContent::File {
                     file_data: Some(file_data),
                     file_id: None,
                     file_url: None,
@@ -868,17 +868,17 @@ impl OpenAiProvider {
 
     fn responses_content_from_attachment(item: &AttachmentItem) -> OpenAiInputContent {
         match item.kind {
-            AttachmentKind::Image => utils::attachment_media_url(item)
+            AttachmentKind::Image => wire_message::media_url(item)
                 .map(|image_url| OpenAiInputContent::Image { image_url })
                 .unwrap_or_else(|| OpenAiInputContent::Text {
-                    text: utils::attachment_hint_text(item),
+                    text: wire_message::hint_text(item),
                 }),
             AttachmentKind::Audio
             | AttachmentKind::Video
             | AttachmentKind::Pdf
             | AttachmentKind::File => {
                 Self::responses_file_content(item).unwrap_or_else(|| OpenAiInputContent::Text {
-                    text: utils::attachment_hint_text(item),
+                    text: wire_message::hint_text(item),
                 })
             }
         }
@@ -915,7 +915,7 @@ impl OpenAiProvider {
     fn push_responses_message_from_parts(
         input: &mut Vec<OpenAiResponsesInputItem>,
         role: &str,
-        parts: &[utils::ProjectedSessionPart],
+        parts: &[wire_message::WirePart],
     ) {
         let content = Self::responses_input_contents_from_parts(parts);
         if content.is_empty() {
@@ -932,7 +932,7 @@ impl OpenAiProvider {
         input: &mut Vec<OpenAiResponsesInputItem>,
         message: &Message,
     ) {
-        let projected_parts = utils::project_session_parts(message);
+        let projected_parts = wire_message::project(message);
         match message.role {
             Role::System => Self::push_responses_text_message(
                 input,
@@ -957,11 +957,11 @@ impl OpenAiProvider {
                     let mut text_chunks = Vec::new();
                     for part in projected_parts {
                         match part {
-                            utils::ProjectedSessionPart::Text { text } => text_chunks.push(text),
-                            utils::ProjectedSessionPart::Attachment { item } => {
-                                text_chunks.push(utils::attachment_hint_text(&item));
+                            wire_message::WirePart::Text { text } => text_chunks.push(text),
+                            wire_message::WirePart::Attachment { item } => {
+                                text_chunks.push(wire_message::hint_text(&item));
                             }
-                            utils::ProjectedSessionPart::ToolCall {
+                            wire_message::WirePart::ToolCall {
                                 id,
                                 name,
                                 arguments_json,
@@ -978,7 +978,7 @@ impl OpenAiProvider {
                                     ));
                                 }
                             }
-                            utils::ProjectedSessionPart::ToolResult {
+                            wire_message::WirePart::ToolResult {
                                 tool_call_id,
                                 output_json,
                             } => {
@@ -1002,14 +1002,14 @@ impl OpenAiProvider {
                 if projected_parts.is_empty() {
                     Self::push_responses_text_message(input, "user", message.as_text_lossy());
                 } else {
-                    let tool_results = utils::tool_results(projected_parts.as_slice());
-                    let extra_parts = utils::non_tool_result_parts(projected_parts.as_slice());
+                    let tool_results = wire_message::tool_results(projected_parts.as_slice());
+                    let extra_parts = wire_message::non_tool_result_parts(projected_parts.as_slice());
 
                     if tool_results.len() > 1 {
                         let mut buffered_parts = Vec::new();
                         for part in projected_parts {
                             match part {
-                                utils::ProjectedSessionPart::ToolResult {
+                                wire_message::WirePart::ToolResult {
                                     tool_call_id,
                                     output_json,
                                 } => {
@@ -1023,7 +1023,7 @@ impl OpenAiProvider {
                                     }
 
                                     if tool_call_id.trim().is_empty() {
-                                        buffered_parts.push(utils::ProjectedSessionPart::Text {
+                                        buffered_parts.push(wire_message::WirePart::Text {
                                             text: output_json,
                                         });
                                     } else {
@@ -1052,7 +1052,7 @@ impl OpenAiProvider {
                     {
                         if tool_call_id.trim().is_empty() {
                             let mut fallback_parts =
-                                vec![utils::ProjectedSessionPart::Text { text: output_json }];
+                                vec![wire_message::WirePart::Text { text: output_json }];
                             fallback_parts.extend(extra_parts);
                             Self::push_responses_message_from_parts(
                                 input,
@@ -1084,21 +1084,21 @@ impl OpenAiProvider {
     }
 
     fn responses_input_contents_from_parts(
-        parts: &[utils::ProjectedSessionPart],
+        parts: &[wire_message::WirePart],
     ) -> Vec<OpenAiInputContent> {
         parts
             .iter()
             .map(|part| match part {
-                utils::ProjectedSessionPart::Text { text } => {
+                wire_message::WirePart::Text { text } => {
                     OpenAiInputContent::Text { text: text.clone() }
                 }
-                utils::ProjectedSessionPart::Attachment { item } => {
+                wire_message::WirePart::Attachment { item } => {
                     Self::responses_content_from_attachment(item)
                 }
-                utils::ProjectedSessionPart::ToolCall { name, .. } => OpenAiInputContent::Text {
+                wire_message::WirePart::ToolCall { name, .. } => OpenAiInputContent::Text {
                     text: format!("[tool_call:{name}]"),
                 },
-                utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                wire_message::WirePart::ToolResult { tool_call_id, .. } => {
                     OpenAiInputContent::Text {
                         text: format!("[tool_result:{tool_call_id}]"),
                     }
@@ -1109,7 +1109,7 @@ impl OpenAiProvider {
 
     fn multimodal_function_output_value(
         output_json: &str,
-        extra_parts: &[utils::ProjectedSessionPart],
+        extra_parts: &[wire_message::WirePart],
     ) -> serde_json::Value {
         if extra_parts.is_empty() {
             return serde_json::Value::String(output_json.to_owned());
@@ -1758,7 +1758,7 @@ fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
     let normalized = messages
         .iter()
         .filter_map(|message| {
-            let text = utils::project_session_text_lossy(message);
+            let text = wire_message::project_text_lossy(message);
             let trimmed = text.trim();
             if trimmed.is_empty() {
                 None
@@ -1787,12 +1787,12 @@ fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
 
 fn session_text_lossy(
     message: &Message,
-    projected_parts: &[utils::ProjectedSessionPart],
+    projected_parts: &[wire_message::WirePart],
 ) -> String {
     if projected_parts.is_empty() {
         message.as_text_lossy()
     } else {
-        utils::projected_parts_text_lossy(projected_parts)
+        wire_message::parts_text_lossy(projected_parts)
     }
 }
 

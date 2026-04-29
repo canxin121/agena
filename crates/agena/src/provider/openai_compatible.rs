@@ -13,7 +13,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        StreamResumePolicy, ThinkingRequest, prompt_cache, sse, utils,
+        StreamResumePolicy, ThinkingRequest, prompt_cache, sse, utils, wire_message,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
@@ -628,7 +628,7 @@ fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
     let normalized = messages
         .iter()
         .filter_map(|message| {
-            let text = utils::project_session_text_lossy(message);
+            let text = wire_message::project_text_lossy(message);
             let trimmed = text.trim();
             if trimmed.is_empty() {
                 None

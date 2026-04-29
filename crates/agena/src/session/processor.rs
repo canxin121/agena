@@ -444,6 +444,7 @@ impl SessionProcessor {
                     finish = finish_reason.map(|item| format!("{item:?}"));
                     provider_metadata = completed_provider_metadata;
                 }
+                Ok(CompletionStreamEvent::ThinkingDelta { .. }) => {}
                 Err(err) => {
                     provider_err = Some(err);
                     break;
@@ -1292,6 +1293,7 @@ mod tests {
                 provider_id: ProviderId::new("ordered-stream"),
                 model: ModelId::new("ordered-model"),
                 text: String::new(),
+                reasoning_text: None,
                 finish_reason: Some(CompletionFinishReason::Stop),
                 tool_calls: Vec::new(),
                 usage: None,
@@ -1384,6 +1386,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
                 },
                 next_message_id: 100,
                 part_ids: ProcessorPartIdAllocator::for_test(200),
@@ -1484,6 +1492,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
                 },
                 next_message_id: 100,
                 part_ids: ProcessorPartIdAllocator::for_test(200),
@@ -1581,6 +1595,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
                 },
                 next_message_id: 100,
                 part_ids: ProcessorPartIdAllocator::for_test(200),

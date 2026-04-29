@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     permission::{PermissionMode, PermissionPolicy},
     provider::{
-        OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
-        ProviderCapabilityOverrideRule, ProviderHttpClientConfig, ProviderRequestRetryConfig,
-        ProviderRuntimeConfig, ProviderStreamReplayConfig, auth::FileAuthStore,
+        OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode, ProviderCapabilityOverrideRule,
+        ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+        ProviderStreamReplayConfig, ThinkingRequest, auth::FileAuthStore,
     },
 };
 
@@ -251,6 +251,7 @@ pub struct HttpProviderConfig<T> {
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
     pub extra_headers: BTreeMap<String, String>,
+    pub default_thinking: Option<ThinkingRequest>,
     pub options: T,
 }
 
@@ -273,7 +274,6 @@ pub struct OpenAiCompatibleProviderOptions {
 pub struct AnthropicProviderOptions {
     pub auth_header: String,
     pub auth_scheme: Option<String>,
-    pub include_thinking: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

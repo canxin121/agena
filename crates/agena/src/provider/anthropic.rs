@@ -12,7 +12,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        prompt_cache, should_retry_credential, sse, utils,
+        ThinkingRequest, prompt_cache, sse, utils,
     },
     role::Role,
 };
@@ -29,10 +29,10 @@ pub struct AnthropicProvider {
     api_key: ManagedCredential,
     base_url: String,
     default_model: ModelId,
-    include_thinking: bool,
     auth_header: String,
     auth_scheme: Option<String>,
     extra_headers: HashMap<String, String>,
+    default_thinking: Option<ThinkingRequest>,
 }
 
 impl AnthropicProvider {
@@ -70,11 +70,16 @@ impl AnthropicProvider {
             api_key,
             base_url,
             default_model: ModelId::new(default_model),
-            include_thinking: false,
             auth_header: "x-api-key".to_owned(),
             auth_scheme: None,
             extra_headers,
+            default_thinking: None,
         }
+    }
+
+    pub fn with_default_thinking(mut self, thinking: Option<ThinkingRequest>) -> Self {
+        self.default_thinking = thinking;
+        self
     }
 
     pub fn with_auth_header(
@@ -89,11 +94,6 @@ impl AnthropicProvider {
 
     pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.extra_headers.extend(headers);
-        self
-    }
-
-    pub fn with_include_thinking(mut self, include_thinking: bool) -> Self {
-        self.include_thinking = include_thinking;
         self
     }
 
@@ -114,94 +114,8 @@ impl AnthropicProvider {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
-        let mut stream = ModelProvider::complete_stream(self, request).await?;
-        let mut text = String::new();
-        let mut tool_calls: std::collections::BTreeMap<String, AnthropicAggregatedToolCallState> =
-            std::collections::BTreeMap::new();
-        let mut completed: Option<(
-            ProviderId,
-            ModelId,
-            Option<CompletionFinishReason>,
-            Option<CompletionUsage>,
-            Option<serde_json::Value>,
-        )> = None;
-
-        while let Some(item) = stream.next().await {
-            match item? {
-                CompletionStreamEvent::TextDelta { delta, .. } => {
-                    text.push_str(delta.as_str());
-                }
-                CompletionStreamEvent::ToolCallDelta {
-                    stream_key,
-                    id,
-                    name,
-                    arguments_delta,
-                    ..
-                } => {
-                    let state = tool_calls.entry(stream_key).or_default();
-                    if let Some(id) = id {
-                        state.id = Some(id);
-                    }
-                    if let Some(name) = name {
-                        state.name = Some(name);
-                    }
-                    state.arguments.push_str(arguments_delta.as_str());
-                }
-                CompletionStreamEvent::Completed {
-                    provider_id,
-                    model,
-                    finish_reason,
-                    usage,
-                    provider_metadata,
-                } => {
-                    completed = Some((provider_id, model, finish_reason, usage, provider_metadata));
-                }
-            }
-        }
-
-        let (provider_id, model, finish_reason, usage, provider_metadata) = completed
-            .unwrap_or_else(|| {
-                (
-                    ProviderId::new(PROVIDER_ID),
-                    fallback_model,
-                    None,
-                    None,
-                    None,
-                )
-            });
-
-        let tool_calls = tool_calls
-            .into_iter()
-            .map(|(stream_key, state)| {
-                let id = utils::normalize_optional_text(state.id).unwrap_or(stream_key);
-                let name = utils::normalize_optional_text(state.name).ok_or_else(|| {
-                    AppError::Provider(
-                        "anthropic stream ended with tool call without name".to_owned(),
-                    )
-                })?;
-                Ok(CompletionToolCall::Function {
-                    id,
-                    name,
-                    arguments_json: state.arguments,
-                })
-            })
-            .collect::<Result<Vec<_>, AppError>>()?;
-
-        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
-            return Err(AppError::Provider(
-                "anthropic stream fallback produced empty completion".to_owned(),
-            ));
-        }
-
-        Ok(CompletionResponse {
-            provider_id,
-            model,
-            text,
-            finish_reason,
-            tool_calls,
-            usage,
-            provider_metadata,
-        })
+        let stream = ModelProvider::complete_stream(self, request).await?;
+        utils::aggregate_stream(PROVIDER_ID, fallback_model, stream).await
     }
 
     fn content_to_blocks(message: &Message) -> Vec<AnthropicTextBlock> {
@@ -344,18 +258,17 @@ impl AnthropicProvider {
     where
         R: for<'de> Deserialize<'de>,
     {
-        let response = self
-            .send_request(|api_key| {
-                self.apply_headers(
-                    self.client
-                        .post(endpoint.clone())
-                        .header("anthropic-version", ANTHROPIC_VERSION)
-                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                    api_key,
-                )
-                .json(body)
-            })
-            .await?;
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            self.apply_headers(
+                self.client
+                    .post(endpoint.clone())
+                    .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                api_key,
+            )
+            .json(body)
+        })
+        .await?;
 
         utils::parse_json_response(PROVIDER_ID, response).await
     }
@@ -370,28 +283,6 @@ impl AnthropicProvider {
         utils::apply_request_headers(PROVIDER_ID, req, &self.extra_headers)
     }
 
-    async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>
-    where
-        F: FnMut(&str) -> reqwest::RequestBuilder,
-    {
-        let mut force_refresh = false;
-
-        loop {
-            let api_key = if force_refresh {
-                self.api_key.force_refresh().await?
-            } else {
-                self.api_key.resolve().await?
-            };
-
-            let response = build(api_key.as_str()).send().await?;
-            if !force_refresh && should_retry_credential(response.status()) {
-                force_refresh = true;
-                continue;
-            }
-
-            return Ok(response);
-        }
-    }
 }
 
 #[async_trait]
@@ -404,14 +295,8 @@ impl ModelProvider for AnthropicProvider {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
-        crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::Anthropic, model.as_str())
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
-        crate::provider::default_model_metadata_registry()
-            .metadata_for_family(crate::provider::CapabilityFamily::Anthropic, model.as_str())
+    fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
+        Some(crate::provider::CapabilityFamily::Anthropic)
     }
 
     fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
@@ -419,7 +304,6 @@ impl ModelProvider for AnthropicProvider {
             crate::provider::PromptCacheShape::new(PROVIDER_ID)
                 .with_string("auth_scope", self.api_key.prompt_cache_scope())
                 .with_string("base_url", self.base_url.as_str())
-                .with_bool("include_thinking", self.include_thinking)
                 .with_string("auth_header", self.auth_header.as_str())
                 .with_optional_string("auth_scheme", self.auth_scheme.as_deref())
                 .with_bool(
@@ -438,16 +322,15 @@ impl ModelProvider for AnthropicProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let response = self
-            .send_request(|api_key| {
-                self.apply_headers(
-                    self.client
-                        .get(self.models_endpoint())
-                        .header("anthropic-version", ANTHROPIC_VERSION),
-                    api_key,
-                )
-            })
-            .await?;
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            self.apply_headers(
+                self.client
+                    .get(self.models_endpoint())
+                    .header("anthropic-version", ANTHROPIC_VERSION),
+                api_key,
+            )
+        })
+        .await?;
 
         let payload: AnthropicModelListResponse =
             utils::parse_json_response(PROVIDER_ID, response).await?;
@@ -467,6 +350,16 @@ impl ModelProvider for AnthropicProvider {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
+
+        let effective_thinking = request.thinking.as_ref().or(self.default_thinking.as_ref());
+        let include_thinking = matches!(effective_thinking, Some(ThinkingRequest::Enabled { .. }));
+        let thinking_body = effective_thinking.and_then(|t| match t {
+            ThinkingRequest::Enabled { budget_tokens } => Some(serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": budget_tokens
+            })),
+            ThinkingRequest::Disabled => None,
+        });
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -507,17 +400,35 @@ impl ModelProvider for AnthropicProvider {
             tools,
             temperature: request.temperature,
             stream: None,
+            thinking: thinking_body,
+            stop_sequences: request.stop_sequences,
+            top_p: request.top_p,
+            top_k: request.top_k,
         };
 
         let response: AnthropicMessagesResponse =
             self.send_json(self.messages_endpoint(), &body).await?;
+
         let text = response
             .content
             .iter()
-            .filter(|c| c.kind == "text" || (self.include_thinking && c.kind == "thinking"))
+            .filter(|c| c.kind == "text")
             .filter_map(|c| c.text.clone())
             .collect::<Vec<_>>()
             .join("");
+
+        let reasoning_text = if include_thinking {
+            let thinking = response
+                .content
+                .iter()
+                .filter(|c| c.kind == "thinking")
+                .filter_map(|c| c.text.clone())
+                .collect::<Vec<_>>()
+                .join("");
+            if thinking.is_empty() { None } else { Some(thinking) }
+        } else {
+            None
+        };
 
         let tool_calls = response
             .content
@@ -556,6 +467,7 @@ impl ModelProvider for AnthropicProvider {
             provider_id: ProviderId::new(PROVIDER_ID),
             model: ModelId::new(response.model),
             text,
+            reasoning_text,
             finish_reason,
             tool_calls,
             usage: Self::map_usage(response.usage),
@@ -611,20 +523,29 @@ impl ModelProvider for AnthropicProvider {
             tools,
             temperature: request.temperature,
             stream: Some(true),
+            thinking: request.thinking.as_ref().or(self.default_thinking.as_ref()).and_then(|t| match t {
+                ThinkingRequest::Enabled { budget_tokens } => Some(serde_json::json!({
+                    "type": "enabled",
+                    "budget_tokens": budget_tokens
+                })),
+                ThinkingRequest::Disabled => None,
+            }),
+            stop_sequences: request.stop_sequences,
+            top_p: request.top_p,
+            top_k: request.top_k,
         };
 
-        let response = self
-            .send_request(|api_key| {
-                self.apply_headers(
-                    self.client
-                        .post(self.messages_endpoint())
-                        .header("anthropic-version", ANTHROPIC_VERSION)
-                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                    api_key,
-                )
-                .json(&body)
-            })
-            .await?;
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            self.apply_headers(
+                self.client
+                    .post(self.messages_endpoint())
+                    .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                api_key,
+            )
+            .json(&body)
+        })
+        .await?;
 
         if !response.status().is_success() {
             return Err(utils::http_status_error_from_response(PROVIDER_ID, response).await);
@@ -633,7 +554,10 @@ impl ModelProvider for AnthropicProvider {
         let mut events = sse::json_events(response);
         let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = model;
-        let include_thinking = self.include_thinking;
+        let include_thinking = matches!(
+            request.thinking.as_ref().or(self.default_thinking.as_ref()),
+            Some(ThinkingRequest::Enabled { .. })
+        );
 
         let stream = async_stream::try_stream! {
             let mut pending_tool_calls: HashMap<usize, AnthropicToolCallState> = HashMap::new();
@@ -707,19 +631,26 @@ impl ModelProvider for AnthropicProvider {
                         }
                     }
                     AnthropicSseEvent::ContentBlockDelta { index, delta } => {
-                        let text = delta
-                            .text
-                            .clone()
-                            .or_else(|| if include_thinking { delta.thinking.clone() } else { None })
-                            .filter(|value| !value.is_empty());
-
-                        if let Some(delta) = text {
+                        // Text content
+                        if let Some(text_delta) = delta.text.clone().filter(|v| !v.is_empty()) {
                             stream_has_content = true;
                             yield CompletionStreamEvent::TextDelta {
                                 provider_id: provider_id.clone(),
                                 model: model_name.clone(),
-                                delta,
+                                delta: text_delta,
                             };
+                        }
+
+                        // Thinking/reasoning content — only yield when thinking was requested
+                        if include_thinking {
+                            if let Some(thinking_delta) = delta.thinking.clone().filter(|v| !v.is_empty()) {
+                                stream_has_content = true;
+                                yield CompletionStreamEvent::ThinkingDelta {
+                                    provider_id: provider_id.clone(),
+                                    model: model_name.clone(),
+                                    delta: thinking_delta,
+                                };
+                            }
                         }
 
                         let is_tool_delta = matches!(delta.kind.as_deref(), Some("input_json_delta"));
@@ -823,6 +754,14 @@ struct AnthropicMessagesRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    stop_sequences: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_k: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1170,13 +1109,6 @@ struct AnthropicToolCallState {
     name: String,
 }
 
-#[derive(Debug, Default)]
-struct AnthropicAggregatedToolCallState {
-    id: Option<String>,
-    name: Option<String>,
-    arguments: String,
-}
-
 #[cfg(test)]
 mod tests {
     use futures_util::StreamExt;
@@ -1395,6 +1327,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("tool_use response should parse");
@@ -1469,6 +1407,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("completion should succeed");
@@ -1525,6 +1469,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("completion should succeed");
@@ -1589,6 +1539,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("empty message payload should fall back to stream aggregation");
@@ -1641,6 +1597,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("stream should start");
@@ -1710,6 +1672,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("stream should start");

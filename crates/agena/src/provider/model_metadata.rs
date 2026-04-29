@@ -66,6 +66,15 @@ fn detect_model_family(family: CapabilityFamily, model: &str) -> Option<ModelFam
     if model.contains("nova") {
         return Some(ModelFamily::Nova);
     }
+    if model.contains("grok") {
+        return Some(ModelFamily::Grok);
+    }
+    if model.contains("phi") {
+        return Some(ModelFamily::Phi);
+    }
+    if model.contains("command") {
+        return Some(ModelFamily::Command);
+    }
     if model.starts_with("gpt")
         || model.starts_with("o1")
         || model.starts_with("o3")

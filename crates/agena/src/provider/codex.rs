@@ -589,14 +589,8 @@ impl ModelProvider for CodexProvider {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
-        crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
-        crate::provider::default_model_metadata_registry()
-            .metadata_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
+    fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
+        Some(crate::provider::CapabilityFamily::OpenAi)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -681,6 +675,7 @@ impl ModelProvider for CodexProvider {
             provider_id: ProviderId::new(PROVIDER_ID),
             model: ModelId::new(payload.model.unwrap_or_else(|| model.to_string())),
             text,
+            reasoning_text: None,
             finish_reason,
             tool_calls,
             usage: payload.usage.map(map_openai_usage),
@@ -1337,6 +1332,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         let input = CodexProvider::to_responses_input(&request);
@@ -1397,6 +1404,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         let input = CodexProvider::to_responses_input(&request);
@@ -1425,6 +1444,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         let input = CodexProvider::to_responses_input(&request);

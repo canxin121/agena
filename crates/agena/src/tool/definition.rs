@@ -42,6 +42,10 @@ pub struct ToolDefinition {
     pub requires_user_interaction: bool,
     #[serde(default)]
     pub load_priority: ToolLoadPriority,
+    /// When true, instructs providers that support it (e.g. OpenAI) to enforce strict
+    /// JSON schema validation on function call arguments.
+    #[serde(default)]
+    pub strict: bool,
 }
 
 impl ToolDefinition {
@@ -60,6 +64,7 @@ impl ToolDefinition {
             concurrency_safe: behavior == ToolBehavior::ReadOnly,
             requires_user_interaction: false,
             load_priority: ToolLoadPriority::Standard,
+            strict: false,
         }
     }
 
@@ -83,6 +88,7 @@ impl ToolDefinition {
             concurrency_safe: behavior == ToolBehavior::ReadOnly,
             requires_user_interaction: false,
             load_priority: ToolLoadPriority::Standard,
+            strict: false,
         }
     }
 
@@ -120,6 +126,11 @@ impl ToolDefinition {
 
     pub fn with_always_load(self) -> Self {
         self.with_load_priority(ToolLoadPriority::Always)
+    }
+
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
     }
 
     pub fn should_load_by_default(&self) -> bool {

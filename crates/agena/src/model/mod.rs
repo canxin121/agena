@@ -259,6 +259,9 @@ pub enum ModelFamily {
     Deepseek,
     Qwen,
     Nova,
+    Grok,
+    Phi,
+    Command,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -386,6 +389,16 @@ pub struct ModelCapabilities {
     pub tool_calling: CapabilitySupport,
     #[serde(default)]
     pub streaming: CapabilitySupport,
+    /// Whether the model supports extended thinking / reasoning output.
+    #[serde(default)]
+    pub reasoning: CapabilitySupport,
+    /// Whether the model supports JSON schema / structured output constraints.
+    #[serde(default)]
+    pub structured_output: CapabilitySupport,
+    /// Whether the model accepts a `temperature` parameter.
+    /// Some reasoning models (e.g. o1/o3) reject temperature and must receive 1.0 or omit it.
+    #[serde(default = "CapabilitySupport::supported")]
+    pub temperature_supported: CapabilitySupport,
 }
 
 impl Default for ModelCapabilities {
@@ -399,6 +412,9 @@ impl Default for ModelCapabilities {
             file_input: CapabilitySupport::Unknown,
             tool_calling: CapabilitySupport::Unknown,
             streaming: CapabilitySupport::Unknown,
+            reasoning: CapabilitySupport::Unknown,
+            structured_output: CapabilitySupport::Unknown,
+            temperature_supported: CapabilitySupport::Supported,
         }
     }
 }
@@ -442,6 +458,21 @@ impl ModelCapabilities {
 
     pub fn with_streaming(mut self, support: CapabilitySupport) -> Self {
         self.streaming = support;
+        self
+    }
+
+    pub fn with_reasoning(mut self, support: CapabilitySupport) -> Self {
+        self.reasoning = support;
+        self
+    }
+
+    pub fn with_structured_output(mut self, support: CapabilitySupport) -> Self {
+        self.structured_output = support;
+        self
+    }
+
+    pub fn with_temperature_supported(mut self, support: CapabilitySupport) -> Self {
+        self.temperature_supported = support;
         self
     }
 
@@ -490,6 +521,15 @@ impl ModelCapabilities {
         }
         if matches!(self.streaming, CapabilitySupport::Unknown) {
             self.streaming = fallback.streaming;
+        }
+        if matches!(self.reasoning, CapabilitySupport::Unknown) {
+            self.reasoning = fallback.reasoning;
+        }
+        if matches!(self.structured_output, CapabilitySupport::Unknown) {
+            self.structured_output = fallback.structured_output;
+        }
+        if matches!(self.temperature_supported, CapabilitySupport::Unknown) {
+            self.temperature_supported = fallback.temperature_supported;
         }
         self
     }

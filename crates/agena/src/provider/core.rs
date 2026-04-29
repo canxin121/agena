@@ -5,21 +5,41 @@ use futures_util::stream;
 use crate::error::AppError;
 use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata};
 
-use super::{CompletionRequest, CompletionResponse, CompletionStreamEvent, PromptCacheShape};
+use super::{
+    CapabilityFamily, CompletionRequest, CompletionResponse, CompletionStreamEvent,
+    PromptCacheShape,
+};
 
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
     fn id(&self) -> &str;
     fn default_model(&self) -> &ModelId;
 
+    /// Return the capability family used to look up model capabilities and
+    /// metadata from the global registries.  Providers that use the standard
+    /// registries only need to override this one method; `model_capabilities`
+    /// and `model_metadata` are derived from it automatically.
+    ///
+    /// Providers that need custom logic can still override
+    /// `model_capabilities`/`model_metadata` directly.
+    fn capability_family(&self) -> Option<CapabilityFamily> {
+        None
+    }
+
     fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
-        let _ = model;
-        ModelCapabilities::default()
+        match self.capability_family() {
+            Some(family) => super::default_capability_registry()
+                .capabilities_for_family(family, model.as_str()),
+            None => ModelCapabilities::default(),
+        }
     }
 
     fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
-        let _ = model;
-        ModelMetadata::default()
+        match self.capability_family() {
+            Some(family) => super::default_model_metadata_registry()
+                .metadata_for_family(family, model.as_str()),
+            None => ModelMetadata::default(),
+        }
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -53,20 +73,28 @@ pub trait ModelProvider: Send + Sync {
         AppError,
     > {
         let response = self.complete(request).await?;
-        let events = vec![
-            Ok(CompletionStreamEvent::TextDelta {
-                provider_id: response.provider_id.clone(),
-                model: response.model.clone(),
-                delta: response.text,
-            }),
-            Ok(CompletionStreamEvent::Completed {
-                provider_id: response.provider_id,
-                model: response.model,
-                finish_reason: response.finish_reason,
-                usage: response.usage,
-                provider_metadata: response.provider_metadata,
-            }),
-        ];
+        let mut events = Vec::new();
+        if let Some(reasoning) = response.reasoning_text {
+            if !reasoning.is_empty() {
+                events.push(Ok(CompletionStreamEvent::ThinkingDelta {
+                    provider_id: response.provider_id.clone(),
+                    model: response.model.clone(),
+                    delta: reasoning,
+                }));
+            }
+        }
+        events.push(Ok(CompletionStreamEvent::TextDelta {
+            provider_id: response.provider_id.clone(),
+            model: response.model.clone(),
+            delta: response.text,
+        }));
+        events.push(Ok(CompletionStreamEvent::Completed {
+            provider_id: response.provider_id,
+            model: response.model,
+            finish_reason: response.finish_reason,
+            usage: response.usage,
+            provider_metadata: response.provider_metadata,
+        }));
         Ok(Box::pin(stream::iter(events)))
     }
 }

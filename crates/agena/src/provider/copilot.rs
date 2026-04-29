@@ -260,14 +260,8 @@ impl ModelProvider for CopilotProvider {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
-        crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
-        crate::provider::default_model_metadata_registry()
-            .metadata_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
+    fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
+        Some(crate::provider::CapabilityFamily::OpenAi)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -376,6 +370,7 @@ impl ModelProvider for CopilotProvider {
                     provider_id: ProviderId::new(self.id.clone()),
                     model: ModelId::new(payload.model.unwrap_or_else(|| model.to_string())),
                     text,
+                    reasoning_text: None,
                     finish_reason,
                     tool_calls,
                     usage: payload.usage.map(map_openai_usage),
@@ -444,6 +439,7 @@ impl ModelProvider for CopilotProvider {
             provider_id: ProviderId::new(self.id.clone()),
             model: ModelId::new(payload.model.unwrap_or_else(|| model.to_string())),
             text,
+            reasoning_text: None,
             finish_reason,
             tool_calls,
             usage: payload.usage.map(|u| {
@@ -1895,6 +1891,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         let input = build_responses_input(&request);
@@ -1958,6 +1966,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         });
         let json = serde_json::to_value(&messages).expect("chat messages should serialize");
         let items = json.as_array().expect("chat messages should be an array");
@@ -1989,6 +2009,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         let input = build_responses_input(&request);
@@ -2101,6 +2133,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         assert!(CopilotProvider::is_vision_request(&request));
@@ -2226,6 +2270,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses 404 should fall back to chat");
@@ -2274,6 +2324,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("chat request should succeed");
@@ -2321,6 +2377,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses payload should parse tool calls");
@@ -2393,6 +2455,12 @@ mod tests {
                 prompt_cache_key: Some("session-42".to_string()),
                 previous_response_id: Some("resp_prev".to_string()),
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses request should succeed");
@@ -2439,6 +2507,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("chat stream should start");
@@ -2506,6 +2580,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("chat fallback should succeed");
@@ -2556,6 +2636,12 @@ mod tests {
                 prompt_cache_key: Some("session-42".to_string()),
                 previous_response_id: Some("resp_prev".to_string()),
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses stream should start");
@@ -2593,6 +2679,7 @@ mod tests {
                     completed_metadata = provider_metadata;
                     done = true;
                 }
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
             }
         }
 

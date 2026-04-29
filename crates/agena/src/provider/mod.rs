@@ -5,6 +5,7 @@ mod amazon_bedrock;
 mod anthropic;
 mod capabilities;
 mod capability_overrides;
+mod chat_wire;
 mod cloudflare_ai_gateway;
 mod codex;
 mod copilot;
@@ -57,11 +58,11 @@ pub use runtime::{
     ProviderStreamReplayConfig,
 };
 pub(crate) use utils::{
-    PRUNED_TOOL_RESULT_PLACEHOLDER, ProjectedSessionPart, project_session_parts,
-    project_session_text_lossy,
+    PRUNED_TOOL_RESULT_PLACEHOLDER, ProjectedSessionPart,
+    project_session_parts, project_session_text_lossy,
 };
 pub type ProviderModel = Model;
 pub use types::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionToolCall, CompletionUsage,
+    CompletionToolCall, CompletionUsage, ResponseFormat, ThinkingRequest,
 };

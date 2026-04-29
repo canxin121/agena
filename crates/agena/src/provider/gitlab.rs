@@ -431,14 +431,8 @@ impl ModelProvider for GitlabProvider {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
-        crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::Gitlab, model.as_str())
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
-        crate::provider::default_model_metadata_registry()
-            .metadata_for_family(crate::provider::CapabilityFamily::Gitlab, model.as_str())
+    fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
+        Some(crate::provider::CapabilityFamily::Gitlab)
     }
 
     fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
@@ -560,6 +554,13 @@ fn remap_stream_provider_id(event: CompletionStreamEvent) -> CompletionStreamEve
             usage,
             provider_metadata,
         },
+        CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
+            CompletionStreamEvent::ThinkingDelta {
+                provider_id,
+                model,
+                delta,
+            }
+        }
     }
 }
 
@@ -700,6 +701,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("stream should start");

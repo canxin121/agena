@@ -241,6 +241,30 @@ pub struct ApplyPatchToolInput {
     pub patch: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct WebFetchToolInput {
+    /// Absolute URL to fetch.  HTTP is upgraded to HTTPS.
+    pub url: String,
+    /// Optional follow-up instruction; when present, the fetched markdown
+    /// is summarized by the session's default LLM provider before being
+    /// returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct WebSearchToolInput {
+    pub query: String,
+    /// Restrict results to these domains; empty means no restriction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_domains: Vec<String>,
+    /// Drop results from these domains.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -257,6 +281,8 @@ pub enum BuiltinToolInput {
     #[serde(rename = "ask_user", alias = "request_user_input")]
     AskUser(AskUserToolInput),
     Monitor(MonitorToolInput),
+    WebFetch(WebFetchToolInput),
+    WebSearch(WebSearchToolInput),
 }
 
 impl BuiltinToolInput {
@@ -274,6 +300,8 @@ impl BuiltinToolInput {
             Self::TodoWrite(_) => "todo_write",
             Self::AskUser(_) => "ask_user",
             Self::Monitor(_) => "monitor",
+            Self::WebFetch(_) => "web_fetch",
+            Self::WebSearch(_) => "web_search",
         }
     }
 
@@ -325,6 +353,8 @@ pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
         "todo_write" => "todo_write",
         "ask_user" | "request_user_input" => "ask_user",
         "monitor" => "monitor",
+        "web_fetch" => "web_fetch",
+        "web_search" => "web_search",
         _ => return None,
     })
 }
@@ -456,6 +486,32 @@ pub enum BuiltinToolOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
     },
+    WebFetch {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        markdown: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        #[serde(default)]
+        truncated: bool,
+        #[serde(default)]
+        cached: bool,
+        status: u16,
+    },
+    WebSearch {
+        query: String,
+        backend: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        results: Vec<WebSearchHit>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WebSearchHit {
+    pub title: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
 }
 
 impl BuiltinToolOutput {
@@ -473,6 +529,8 @@ impl BuiltinToolOutput {
             Self::TodoWrite { .. } => "todo_write",
             Self::AskUser { .. } => "ask_user",
             Self::Monitor { .. } => "monitor",
+            Self::WebFetch { .. } => "web_fetch",
+            Self::WebSearch { .. } => "web_search",
         }
     }
 

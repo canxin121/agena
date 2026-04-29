@@ -437,7 +437,8 @@ fn build_tool_executor(
         workspace_root.to_path_buf(),
         Agent::new("build", resolution.config.permission_policy()),
     )
-    .with_plugin_manager(plugins);
+    .with_plugin_manager(plugins)
+    .with_web_search_backend(resolution.config.web.search.resolve());
 
     if !resolution.config.mcp.servers.is_empty() {
         let manager = build_mcp_manager(&resolution.config.mcp);

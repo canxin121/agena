@@ -23,7 +23,8 @@ pub use types::{
     ProviderAliasConfig, ProviderDefinition, ProviderHttpConfig, RequestRetryConfig,
     ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeJanitorConfig,
     RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions, StreamReplayConfig,
-    StreamTransportMode, TracingConfig, UiConfig,
+    StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend, WebSearchBackendKind,
+    WebSearchConfig, WebToolsConfig,
 };
 
 pub(crate) use error::{parse_numeric, parse_permission_mode};

@@ -7530,6 +7530,8 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
                     format!("monitor stop {monitor_id}")
                 }
             },
+            BuiltinToolInput::WebFetch(input) => format!("web_fetch {}", input.url),
+            BuiltinToolInput::WebSearch(input) => format!("web_search {}", input.query),
         };
     }
     match invocation {

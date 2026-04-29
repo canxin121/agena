@@ -18,6 +18,8 @@ mod todo_write;
 mod tool_search;
 mod truncation;
 mod view_file;
+mod web_fetch;
+mod web_search;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -141,6 +143,7 @@ pub struct ToolExecutor {
     sandbox_manager: SandboxManager,
     plugins: Arc<PluginHost>,
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
+    web_search_backend: crate::config::WebSearchBackend,
     permission_mode: PermissionExecutionMode,
 }
 
@@ -169,6 +172,7 @@ impl ToolExecutor {
             sandbox_manager: SandboxManager::new(),
             plugins: PluginHost::new_empty(),
             mcp_manager: None,
+            web_search_backend: crate::config::WebSearchBackend::DuckDuckGoHtml,
             permission_mode: PermissionExecutionMode::Enforced,
         }
     }
@@ -208,6 +212,18 @@ impl ToolExecutor {
 
     pub fn mcp_manager(&self) -> Option<&Arc<agena_mcp_client::McpConnectionManager>> {
         self.mcp_manager.as_ref()
+    }
+
+    pub fn with_web_search_backend(
+        mut self,
+        backend: crate::config::WebSearchBackend,
+    ) -> Self {
+        self.web_search_backend = backend;
+        self
+    }
+
+    pub fn web_search_backend(&self) -> crate::config::WebSearchBackend {
+        self.web_search_backend.clone()
     }
 
     pub fn with_truncation_policy(mut self, policy: ToolOutputTruncationPolicy) -> Self {
@@ -568,6 +584,8 @@ impl ToolExecutor {
                     self.push_path_checks(&mut checks, AccessKind::Read, &cwd);
                 }
             }
+            BuiltinToolInput::WebFetch(_) => {}
+            BuiltinToolInput::WebSearch(_) => {}
         }
 
         Ok(checks)

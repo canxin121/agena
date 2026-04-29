@@ -1007,6 +1007,16 @@ fn placeholder_builtin_tool_input(name: &str) -> BuiltinToolInput {
         "ask_user" => BuiltinToolInput::AskUser(AskUserToolInput {
             questions: Vec::new(),
         }),
+        "web_fetch" => BuiltinToolInput::WebFetch(crate::message::WebFetchToolInput {
+            url: String::new(),
+            prompt: None,
+        }),
+        "web_search" => BuiltinToolInput::WebSearch(crate::message::WebSearchToolInput {
+            query: String::new(),
+            allowed_domains: Vec::new(),
+            blocked_domains: Vec::new(),
+            max_results: None,
+        }),
         other => BuiltinToolInput::Task(TaskToolInput {
             description: String::new(),
             prompt: format!("placeholder for unsupported builtin {other}"),
@@ -1071,6 +1081,8 @@ pub(crate) fn parse_tool_invocation(
             BuiltinToolInput::TodoWrite(parse_input::<TodoWriteToolInput>(arguments_json)?)
         }
         "ask_user" => BuiltinToolInput::AskUser(parse_input::<AskUserToolInput>(arguments_json)?),
+        "web_fetch" => BuiltinToolInput::WebFetch(parse_input::<crate::message::WebFetchToolInput>(arguments_json)?),
+        "web_search" => BuiltinToolInput::WebSearch(parse_input::<crate::message::WebSearchToolInput>(arguments_json)?),
         other => {
             return Err(AppError::Provider(format!(
                 "unsupported builtin tool call from model: {other}"

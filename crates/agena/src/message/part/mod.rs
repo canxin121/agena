@@ -23,5 +23,5 @@ pub use tool::{
     MonitorStream, MonitorSummary, MonitorToolInput, ReadToolInput, RequestUserInputToolInput,
     TaskSubagentType, TaskToolInput, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
     ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput, ViewFileToolInput,
-    canonical_builtin_name,
+    WebFetchToolInput, WebSearchHit, WebSearchToolInput, canonical_builtin_name,
 };

@@ -16,7 +16,7 @@ pub use part::{
     TaskSubagentType, TaskToolInput, TextPart, TimeRange, TodoItem, TodoListPart, TodoPriority,
     TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput,
     ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
-    UserInputReplyKind, UserInputRequest, UserInputRequestPart, ViewFileToolInput, WebSearchPart,
-    WebSearchResult, canonical_builtin_name,
+    UserInputReplyKind, UserInputRequest, UserInputRequestPart, ViewFileToolInput, WebFetchToolInput,
+    WebSearchHit, WebSearchPart, WebSearchResult, WebSearchToolInput, canonical_builtin_name,
 };
 pub use usage::MessageUsage;

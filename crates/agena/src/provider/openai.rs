@@ -11,7 +11,11 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        StreamResumePolicy, should_retry_credential, sse, utils,
+        StreamResumePolicy, ThinkingRequest, sse, utils,
+        chat_wire::{
+            self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
+            request_to_chat_messages, tools_to_chat_definitions,
+        },
     },
     role::Role,
 };
@@ -28,6 +32,7 @@ pub struct OpenAiProvider {
     extra_headers: HashMap<String, String>,
     stream_mode: OpenAiStreamMode,
     realtime_ws_url: Option<String>,
+    default_thinking: Option<ThinkingRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,11 +78,17 @@ impl OpenAiProvider {
             extra_headers: HashMap::new(),
             stream_mode: OpenAiStreamMode::Sse,
             realtime_ws_url: None,
+            default_thinking: None,
         }
     }
 
     pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.extra_headers = headers;
+        self
+    }
+
+    pub fn with_default_thinking(mut self, thinking: Option<ThinkingRequest>) -> Self {
+        self.default_thinking = thinking;
         self
     }
 
@@ -246,70 +257,43 @@ impl OpenAiProvider {
         request: &CompletionRequest,
         model: String,
     ) -> Result<CompletionResponse, AppError> {
-        let body = OpenAiChatCompletionRequest {
+        let body = ChatCompletionRequest {
             model: model.clone(),
-            messages: Self::to_chat_messages(request),
-            tools: (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice())),
+            messages: request_to_chat_messages(request),
+            tools: (!request.tools.is_empty())
+                .then(|| tools_to_chat_definitions(request.tools.as_slice())),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
+            cache_control: None,
+            prompt_cache_key: None,
+            prompt_cache_key_camel_case: None,
             stream: false,
             stream_options: None,
+            stop: request.stop_sequences.clone(),
+            top_p: request.top_p,
+            seed: request.seed,
+            response_format: chat_wire::map_response_format(request.response_format.as_ref()),
+            reasoning_effort: chat_wire::reasoning_effort(
+                request.thinking.as_ref().or(self.default_thinking.as_ref()),
+                model.as_str(),
+            ),
         };
 
-        let response = self
-            .send_request(|api_key| {
-                self.apply_headers(
-                    self.client
-                        .post(self.chat_endpoint())
-                        .bearer_auth(api_key)
-                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                )
-                .json(&body)
-            })
-            .await?;
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            self.apply_headers(
+                self.client
+                    .post(self.chat_endpoint())
+                    .bearer_auth(api_key)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
+            )
+            .json(&body)
+        })
+        .await?;
 
-        let payload: OpenAiChatCompletionResponse =
+        let payload: ChatCompletionResponse =
             utils::parse_json_response(PROVIDER_ID, response).await?;
 
-        let text = payload
-            .choices
-            .first()
-            .and_then(|c| c.message.as_ref())
-            .and_then(|m| m.content.as_ref())
-            .map(extract_chat_content_text)
-            .or_else(|| payload.choices.first().and_then(|c| c.text.clone()))
-            .unwrap_or_default();
-
-        let finish_reason = CompletionFinishReason::from_provider(
-            payload
-                .choices
-                .first()
-                .and_then(|c| c.finish_reason.as_deref()),
-        );
-
-        let tool_calls = Self::parse_chat_tool_calls(
-            payload
-                .choices
-                .first()
-                .and_then(|c| c.message.as_ref())
-                .and_then(|m| m.tool_calls.as_ref()),
-        )?;
-
-        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
-            return Err(AppError::Provider(
-                "openai chat completion payload was empty without finish reason".to_owned(),
-            ));
-        }
-
-        Ok(CompletionResponse {
-            provider_id: ProviderId::new(PROVIDER_ID),
-            model: ModelId::new(payload.model.unwrap_or(model)),
-            text,
-            finish_reason,
-            tool_calls,
-            usage: Self::map_chat_usage(payload.usage),
-            provider_metadata: None,
-        })
+        chat_wire::parse_completion_response(PROVIDER_ID, model.as_str(), payload)
     }
 
     async fn complete_stream_with_chat_api(
@@ -320,29 +304,38 @@ impl OpenAiProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let body = OpenAiChatCompletionRequest {
+        let body = ChatCompletionRequest {
             model: model.clone(),
-            messages: Self::to_chat_messages(request),
-            tools: (!request.tools.is_empty()).then(|| Self::chat_tools(request.tools.as_slice())),
+            messages: request_to_chat_messages(request),
+            tools: (!request.tools.is_empty())
+                .then(|| tools_to_chat_definitions(request.tools.as_slice())),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
+            cache_control: None,
+            prompt_cache_key: None,
+            prompt_cache_key_camel_case: None,
             stream: true,
-            stream_options: Some(OpenAiChatStreamOptions {
-                include_usage: true,
-            }),
+            stream_options: Some(ChatStreamOptions { include_usage: true }),
+            stop: request.stop_sequences.clone(),
+            top_p: request.top_p,
+            seed: request.seed,
+            response_format: chat_wire::map_response_format(request.response_format.as_ref()),
+            reasoning_effort: chat_wire::reasoning_effort(
+                request.thinking.as_ref().or(self.default_thinking.as_ref()),
+                model.as_str(),
+            ),
         };
 
-        let response = self
-            .send_request(|api_key| {
-                self.apply_headers(
-                    self.client
-                        .post(self.chat_endpoint())
-                        .bearer_auth(api_key)
-                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                )
-                .json(&body)
-            })
-            .await?;
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            self.apply_headers(
+                self.client
+                    .post(self.chat_endpoint())
+                    .bearer_auth(api_key)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
+            )
+            .json(&body)
+        })
+        .await?;
 
         if !response.status().is_success() {
             return Err(utils::http_status_error_from_response(PROVIDER_ID, response).await);
@@ -353,7 +346,7 @@ impl OpenAiProvider {
         let model_name = ModelId::new(model);
 
         let stream = async_stream::try_stream! {
-            let mut pending_tool_calls: std::collections::BTreeMap<String, ChatToolCallState> = std::collections::BTreeMap::new();
+            let mut pending_tool_calls: std::collections::BTreeMap<String, chat_wire::ChatToolCallStreamState> = std::collections::BTreeMap::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
@@ -368,7 +361,7 @@ impl OpenAiProvider {
                 let delta = choice
                     .and_then(|item| item.delta.as_ref())
                     .and_then(|delta| delta.content.as_ref())
-                    .map(extract_chat_content_text)
+                    .map(|v| chat_wire::extract_text_from_content(v))
                     .or_else(|| choice.and_then(|item| item.text.clone()))
                     .unwrap_or_default();
 
@@ -387,7 +380,7 @@ impl OpenAiProvider {
                     .unwrap_or_default();
 
                 for raw_tool in tool_deltas {
-                    let tool = utils::parse_json_value::<OpenAiChatToolCall>(
+                    let tool = utils::parse_json_value::<chat_wire::ChatToolCallWire>(
                         PROVIDER_ID,
                         "chat stream tool_call delta",
                         raw_tool,
@@ -429,22 +422,12 @@ impl OpenAiProvider {
                 }
 
                 if let Some(raw_usage) = chunk.usage {
-                    let usage = utils::parse_json_value::<OpenAiChatUsage>(
+                    let usage = utils::parse_json_value::<chat_wire::ChatUsage>(
                         PROVIDER_ID,
                         "chat stream usage",
                         raw_usage,
                     )?;
-                    stream_usage = Some(
-                        MessageUsage {
-                            input_tokens: usage.prompt_tokens.unwrap_or_default(),
-                            output_tokens: usage.completion_tokens.unwrap_or_default(),
-                            reasoning_tokens: 0,
-                            cache_write_tokens: 0,
-                            cache_read_tokens: 0,
-                            total_cost: 0.0,
-                        }
-                        .into(),
-                    );
+                    stream_usage = Some(chat_wire::chat_usage_to_completion(usage));
                 }
 
                 let finish_reason = choice
@@ -766,6 +749,7 @@ impl OpenAiProvider {
             .output
             .iter()
             .flatten()
+            .filter(|item| item.kind.as_deref() != Some("reasoning"))
             .flat_map(|item| item.content.iter().flatten())
             .filter_map(|part| part.text.as_ref())
             .cloned()
@@ -773,100 +757,27 @@ impl OpenAiProvider {
             .join("")
     }
 
+    fn extract_reasoning_text(response: &OpenAiResponsesResponse) -> Option<String> {
+        let text: String = response
+            .output
+            .iter()
+            .flatten()
+            .filter(|item| item.kind.as_deref() == Some("reasoning"))
+            .flat_map(|item| item.content.iter().flatten())
+            .filter_map(|part| part.text.as_ref())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("");
+        (!text.is_empty()).then_some(text)
+    }
+
     async fn complete_by_aggregating_stream(
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
-        let mut stream = ModelProvider::complete_stream(self, request).await?;
-        let mut text = String::new();
-        let mut tool_calls: std::collections::BTreeMap<String, ResponsesToolState> =
-            std::collections::BTreeMap::new();
-        let mut completed: Option<(
-            ProviderId,
-            ModelId,
-            Option<CompletionFinishReason>,
-            Option<CompletionUsage>,
-            Option<serde_json::Value>,
-        )> = None;
-
-        while let Some(item) = stream.next().await {
-            match item? {
-                CompletionStreamEvent::TextDelta { delta, .. } => {
-                    text.push_str(delta.as_str());
-                }
-                CompletionStreamEvent::ToolCallDelta {
-                    stream_key,
-                    id,
-                    name,
-                    arguments_delta,
-                    ..
-                } => {
-                    let state = tool_calls.entry(stream_key).or_default();
-                    if let Some(id) = id {
-                        state.id = Some(id);
-                    }
-                    if let Some(name) = name {
-                        state.name = Some(name);
-                    }
-                    state.arguments.push_str(arguments_delta.as_str());
-                }
-                CompletionStreamEvent::Completed {
-                    provider_id,
-                    model,
-                    finish_reason,
-                    usage,
-                    provider_metadata,
-                } => {
-                    completed = Some((provider_id, model, finish_reason, usage, provider_metadata));
-                }
-            }
-        }
-
-        let (provider_id, model, finish_reason, usage, provider_metadata) = completed
-            .unwrap_or_else(|| {
-                (
-                    ProviderId::new(PROVIDER_ID),
-                    fallback_model,
-                    None,
-                    None,
-                    None,
-                )
-            });
-
-        let tool_calls = tool_calls
-            .into_iter()
-            .map(|(stream_key, state)| {
-                let id = utils::normalize_optional_text(state.id).unwrap_or(stream_key);
-                let name = utils::normalize_optional_text(state.name).ok_or_else(|| {
-                    AppError::Provider(
-                        "openai responses stream ended with function_call without name".to_owned(),
-                    )
-                })?;
-
-                Ok(CompletionToolCall::Function {
-                    id,
-                    name,
-                    arguments_json: state.arguments,
-                })
-            })
-            .collect::<Result<Vec<_>, AppError>>()?;
-
-        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
-            return Err(AppError::Provider(
-                "openai responses stream fallback produced empty completion".to_owned(),
-            ));
-        }
-
-        Ok(CompletionResponse {
-            provider_id,
-            model,
-            text,
-            finish_reason,
-            tool_calls,
-            usage,
-            provider_metadata,
-        })
+        let stream = ModelProvider::complete_stream(self, request).await?;
+        utils::aggregate_stream(PROVIDER_ID, fallback_model, stream).await
     }
 
     fn map_usage(usage: Option<OpenAiUsage>) -> Option<CompletionUsage> {
@@ -889,20 +800,6 @@ impl OpenAiProvider {
         })
     }
 
-    fn map_chat_usage(usage: Option<OpenAiChatUsage>) -> Option<CompletionUsage> {
-        usage.map(|u| {
-            MessageUsage {
-                input_tokens: u.prompt_tokens.unwrap_or_default(),
-                output_tokens: u.completion_tokens.unwrap_or_default(),
-                reasoning_tokens: 0,
-                cache_write_tokens: 0,
-                cache_read_tokens: 0,
-                total_cost: 0.0,
-            }
-            .into()
-        })
-    }
-
     fn responses_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<OpenAiResponsesTool> {
         tools
             .iter()
@@ -911,94 +808,9 @@ impl OpenAiProvider {
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 parameters: tool.input_schema.clone(),
+                strict: tool.strict,
             })
             .collect()
-    }
-
-    fn chat_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<OpenAiChatToolDefinition> {
-        tools
-            .iter()
-            .map(|tool| OpenAiChatToolDefinition {
-                kind: "function".to_string(),
-                function: OpenAiChatFunctionDefinition {
-                    name: tool.name.clone(),
-                    description: tool.description.clone(),
-                    parameters: tool.input_schema.clone(),
-                },
-            })
-            .collect()
-    }
-
-    fn to_chat_messages(request: &CompletionRequest) -> Vec<OpenAiChatMessage> {
-        let mut messages = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            messages.push(OpenAiChatMessage {
-                role: "system".to_owned(),
-                content: Some(serde_json::Value::String(system.clone())),
-                tool_calls: None,
-                tool_call_id: None,
-                kind: None,
-            });
-        }
-
-        for message in &request.messages {
-            let projected_parts = utils::project_session_parts(message);
-            match message.role {
-                Role::System => messages.push(OpenAiChatMessage {
-                    role: "system".to_owned(),
-                    content: Some(serde_json::Value::String(session_text_lossy(
-                        message,
-                        projected_parts.as_slice(),
-                    ))),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    kind: None,
-                }),
-                Role::User => messages.push(OpenAiChatMessage {
-                    role: "user".to_owned(),
-                    content: Some(Self::chat_content_value(
-                        message,
-                        projected_parts.as_slice(),
-                    )),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    kind: None,
-                }),
-                Role::Assistant => {
-                    let (content, tool_calls) = Self::assistant_chat_content_and_tool_calls(
-                        message,
-                        projected_parts.as_slice(),
-                    );
-                    messages.push(OpenAiChatMessage {
-                        role: "assistant".to_owned(),
-                        content,
-                        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
-                        tool_call_id: None,
-                        kind: None,
-                    });
-                }
-                Role::Tool => {
-                    let ordered_messages =
-                        Self::ordered_tool_and_user_chat_messages(projected_parts.as_slice());
-                    if ordered_messages.is_empty() {
-                        messages.push(OpenAiChatMessage {
-                            role: "user".to_owned(),
-                            content: Some(Self::chat_content_value(
-                                message,
-                                projected_parts.as_slice(),
-                            )),
-                            tool_calls: None,
-                            tool_call_id: None,
-                            kind: None,
-                        });
-                    } else {
-                        messages.extend(ordered_messages);
-                    }
-                }
-            }
-        }
-
-        messages
     }
 
     fn to_responses_input(request: &CompletionRequest) -> Vec<OpenAiResponsesInputItem> {
@@ -1069,63 +881,6 @@ impl OpenAiProvider {
                     text: utils::attachment_hint_text(item),
                 })
             }
-        }
-    }
-
-    fn chat_file_content_value(item: &AttachmentItem) -> Option<serde_json::Value> {
-        let filename = Self::attachment_upload_name(item);
-        match &item.source {
-            AttachmentSource::Base64 { .. } | AttachmentSource::DataUrl { .. } => {
-                utils::attachment_data_url(item).map(|file_data| {
-                    serde_json::json!({
-                        "type": "file",
-                        "file": {
-                            "file_data": file_data,
-                            "filename": filename,
-                        }
-                    })
-                })
-            }
-            AttachmentSource::FileId { file_id } => {
-                let file_id = file_id.trim();
-                (!file_id.is_empty()).then(|| {
-                    serde_json::json!({
-                        "type": "file",
-                        "file": {
-                            "file_id": file_id,
-                            "filename": filename,
-                        }
-                    })
-                })
-            }
-            AttachmentSource::Url { .. } | AttachmentSource::LocalPath { .. } => None,
-        }
-    }
-
-    fn chat_content_value_from_attachment(item: &AttachmentItem) -> serde_json::Value {
-        match item.kind {
-            AttachmentKind::Image => utils::attachment_media_url(item)
-                .map(|url| {
-                    serde_json::json!({
-                        "type": "image_url",
-                        "image_url": { "url": url }
-                    })
-                })
-                .unwrap_or_else(|| {
-                    serde_json::json!({
-                        "type": "text",
-                        "text": utils::attachment_hint_text(item),
-                    })
-                }),
-            AttachmentKind::Audio
-            | AttachmentKind::Video
-            | AttachmentKind::Pdf
-            | AttachmentKind::File => Self::chat_file_content_value(item).unwrap_or_else(|| {
-                serde_json::json!({
-                    "type": "text",
-                    "text": utils::attachment_hint_text(item),
-                })
-            }),
         }
     }
 
@@ -1328,41 +1083,6 @@ impl OpenAiProvider {
         }
     }
 
-    fn chat_content_value(
-        message: &Message,
-        parts: &[utils::ProjectedSessionPart],
-    ) -> serde_json::Value {
-        if parts.is_empty() {
-            serde_json::Value::String(message.as_text_lossy())
-        } else {
-            Self::chat_content_value_from_parts(parts)
-        }
-    }
-
-    fn chat_content_value_from_parts(parts: &[utils::ProjectedSessionPart]) -> serde_json::Value {
-        let items = parts
-            .iter()
-            .map(|part| match part {
-                utils::ProjectedSessionPart::Text { text } => {
-                    serde_json::json!({ "type": "text", "text": text })
-                }
-                utils::ProjectedSessionPart::Attachment { item } => {
-                    Self::chat_content_value_from_attachment(item)
-                }
-                utils::ProjectedSessionPart::ToolCall { name, .. } => {
-                    serde_json::json!({ "type": "text", "text": format!("[tool_call:{name}]") })
-                }
-                utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
-                    serde_json::json!({
-                        "type": "text",
-                        "text": format!("[tool_result:{tool_call_id}]"),
-                    })
-                }
-            })
-            .collect::<Vec<_>>();
-        serde_json::Value::Array(items)
-    }
-
     fn responses_input_contents_from_parts(
         parts: &[utils::ProjectedSessionPart],
     ) -> Vec<OpenAiInputContent> {
@@ -1405,156 +1125,6 @@ impl OpenAiProvider {
         serde_json::to_value(content).expect("openai function_call_output content should serialize")
     }
 
-    fn assistant_chat_content_and_tool_calls(
-        message: &Message,
-        projected_parts: &[utils::ProjectedSessionPart],
-    ) -> (Option<serde_json::Value>, Vec<OpenAiChatToolCall>) {
-        if projected_parts.is_empty() {
-            return (
-                Some(serde_json::Value::String(message.as_text_lossy())),
-                Vec::new(),
-            );
-        }
-
-        let mut text_chunks = Vec::new();
-        let mut tool_calls = Vec::new();
-
-        for part in projected_parts {
-            match part {
-                utils::ProjectedSessionPart::Text { text } => text_chunks.push(text.clone()),
-                utils::ProjectedSessionPart::Attachment { item } => {
-                    text_chunks.push(utils::attachment_hint_text(item));
-                }
-                utils::ProjectedSessionPart::ToolCall {
-                    id,
-                    name,
-                    arguments_json,
-                } => {
-                    tool_calls.push(OpenAiChatToolCall {
-                        index: None,
-                        id: Some(id.clone()),
-                        kind: Some("function".to_owned()),
-                        function: Some(OpenAiChatFunctionCall {
-                            name: Some(name.clone()),
-                            arguments: Some(arguments_json.clone()),
-                        }),
-                    });
-                }
-                utils::ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
-                    text_chunks.push(format!("[tool_result:{tool_call_id}]"));
-                }
-            }
-        }
-
-        let content =
-            (!text_chunks.is_empty()).then(|| serde_json::Value::String(text_chunks.join("")));
-        (content, tool_calls)
-    }
-
-    fn ordered_tool_and_user_chat_messages(
-        parts: &[utils::ProjectedSessionPart],
-    ) -> Vec<OpenAiChatMessage> {
-        let has_tool_message = parts.iter().any(|part| {
-            matches!(
-                part,
-                utils::ProjectedSessionPart::ToolResult { tool_call_id, .. }
-                    if !tool_call_id.trim().is_empty()
-            )
-        });
-        if !has_tool_message {
-            return Vec::new();
-        }
-
-        let mut messages = Vec::new();
-        let mut buffered_parts = Vec::new();
-
-        for part in parts {
-            match part {
-                utils::ProjectedSessionPart::ToolResult {
-                    tool_call_id,
-                    output_json,
-                } if !tool_call_id.trim().is_empty() => {
-                    if !buffered_parts.is_empty() {
-                        messages.push(OpenAiChatMessage {
-                            role: "user".to_owned(),
-                            content: Some(Self::chat_content_value_from_parts(
-                                buffered_parts.as_slice(),
-                            )),
-                            tool_calls: None,
-                            tool_call_id: None,
-                            kind: None,
-                        });
-                        buffered_parts.clear();
-                    }
-
-                    messages.push(OpenAiChatMessage {
-                        role: "tool".to_owned(),
-                        content: Some(serde_json::Value::String(output_json.clone())),
-                        tool_calls: None,
-                        tool_call_id: Some(tool_call_id.clone()),
-                        kind: None,
-                    });
-                }
-                utils::ProjectedSessionPart::ToolResult { output_json, .. } => {
-                    buffered_parts.push(utils::ProjectedSessionPart::Text {
-                        text: output_json.clone(),
-                    });
-                }
-                other => buffered_parts.push(other.clone()),
-            }
-        }
-
-        if !buffered_parts.is_empty() {
-            messages.push(OpenAiChatMessage {
-                role: "user".to_owned(),
-                content: Some(Self::chat_content_value_from_parts(
-                    buffered_parts.as_slice(),
-                )),
-                tool_calls: None,
-                tool_call_id: None,
-                kind: None,
-            });
-        }
-
-        messages
-    }
-
-    fn parse_chat_tool_calls(
-        calls: Option<&Vec<OpenAiChatToolCall>>,
-    ) -> Result<Vec<CompletionToolCall>, AppError> {
-        calls
-            .into_iter()
-            .flatten()
-            .map(|c| {
-                let id = utils::normalize_optional_text(c.id.clone()).ok_or_else(|| {
-                    AppError::Provider(
-                        "openai chat completion returned tool_call without id".to_owned(),
-                    )
-                })?;
-
-                let function = c.function.as_ref().ok_or_else(|| {
-                    AppError::Provider(
-                        "openai chat completion returned tool_call without function".to_owned(),
-                    )
-                })?;
-
-                let name =
-                    utils::normalize_optional_text(function.name.clone()).ok_or_else(|| {
-                        AppError::Provider(
-                            "openai chat completion returned tool_call without function.name"
-                                .to_owned(),
-                        )
-                    })?;
-
-                Ok(CompletionToolCall::Function {
-                    id,
-                    name,
-                    arguments_json: function.arguments.clone().unwrap_or_default(),
-                })
-            })
-            .collect()
-    }
-
     fn parse_responses_tool_calls(
         items: Option<&Vec<OpenAiOutputItem>>,
     ) -> Result<Vec<CompletionToolCall>, AppError> {
@@ -1595,22 +1165,21 @@ impl OpenAiProvider {
     where
         R: for<'de> Deserialize<'de>,
     {
-        let response = self
-            .send_request(|api_key| {
-                let mut request = self.apply_headers(
-                    self.client
-                        .post(endpoint.clone())
-                        .bearer_auth(api_key)
-                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                );
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            let mut request = self.apply_headers(
+                self.client
+                    .post(endpoint.clone())
+                    .bearer_auth(api_key)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
+            );
 
-                if let Some(body) = body {
-                    request = request.json(body);
-                }
+            if let Some(body) = body {
+                request = request.json(body);
+            }
 
-                request
-            })
-            .await?;
+            request
+        })
+        .await?;
         utils::parse_json_response(PROVIDER_ID, response).await
     }
 
@@ -1618,32 +1187,10 @@ impl OpenAiProvider {
         utils::apply_request_headers(PROVIDER_ID, req, &self.extra_headers)
     }
 
-    async fn send_request<F>(&self, mut build: F) -> Result<reqwest::Response, AppError>
-    where
-        F: FnMut(&str) -> reqwest::RequestBuilder,
-    {
-        let mut force_refresh = false;
-
-        loop {
-            let api_key = if force_refresh {
-                self.api_key.force_refresh().await?
-            } else {
-                self.api_key.resolve().await?
-            };
-
-            let response = build(api_key.as_str()).send().await?;
-            if !force_refresh && should_retry_credential(response.status()) {
-                force_refresh = true;
-                continue;
-            }
-
-            return Ok(response);
-        }
-    }
 }
 
 fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
-    response_id.map(|response_id| serde_json::json!({ "response_id": response_id }))
+    utils::response_id_metadata(response_id)
 }
 
 #[async_trait]
@@ -1656,14 +1203,8 @@ impl ModelProvider for OpenAiProvider {
         &self.default_model
     }
 
-    fn model_capabilities(&self, model: &ModelId) -> crate::provider::ModelCapabilities {
-        crate::provider::default_capability_registry()
-            .capabilities_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> crate::provider::ModelMetadata {
-        crate::provider::default_model_metadata_registry()
-            .metadata_for_family(crate::provider::CapabilityFamily::OpenAi, model.as_str())
+    fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
+        Some(crate::provider::CapabilityFamily::OpenAi)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -1692,11 +1233,10 @@ impl ModelProvider for OpenAiProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let response = self
-            .send_request(|api_key| {
-                self.apply_headers(self.client.get(self.model_endpoint()).bearer_auth(api_key))
-            })
-            .await?;
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            self.apply_headers(self.client.get(self.model_endpoint()).bearer_auth(api_key))
+        })
+        .await?;
 
         let payload: OpenAiModelListResponse =
             utils::parse_json_response(PROVIDER_ID, response).await?;
@@ -1731,6 +1271,11 @@ impl ModelProvider for OpenAiProvider {
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
             stream: false,
+            stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
+            top_p: request.top_p,
+            seed: request.seed,
+            response_format: chat_wire::map_response_format(request.response_format.as_ref()),
+            reasoning_effort: chat_wire::reasoning_effort(request.thinking.as_ref().or(self.default_thinking.as_ref()), model.as_str()),
         };
 
         let response: OpenAiResponsesResponse =
@@ -1749,6 +1294,7 @@ impl ModelProvider for OpenAiProvider {
         let response_model =
             ModelId::new(response.model.clone().unwrap_or_else(|| model.to_string()));
         let text = Self::extract_text(&response);
+        let reasoning_text = Self::extract_reasoning_text(&response);
         let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
         let tool_calls = Self::parse_responses_tool_calls(response.output.as_ref())?;
 
@@ -1762,6 +1308,7 @@ impl ModelProvider for OpenAiProvider {
             provider_id: ProviderId::new(PROVIDER_ID),
             model: response_model,
             text,
+            reasoning_text,
             finish_reason,
             tool_calls,
             usage,
@@ -1801,19 +1348,23 @@ impl ModelProvider for OpenAiProvider {
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
             stream: true,
+            stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
+            top_p: request.top_p,
+            seed: request.seed,
+            response_format: chat_wire::map_response_format(request.response_format.as_ref()),
+            reasoning_effort: chat_wire::reasoning_effort(request.thinking.as_ref().or(self.default_thinking.as_ref()), model.as_str()),
         };
 
-        let response = self
-            .send_request(|api_key| {
-                self.apply_headers(
-                    self.client
-                        .post(self.responses_endpoint())
-                        .bearer_auth(api_key)
-                        .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                )
-                .json(&body)
-            })
-            .await?;
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            self.apply_headers(
+                self.client
+                    .post(self.responses_endpoint())
+                    .bearer_auth(api_key)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
+            )
+            .json(&body)
+        })
+        .await?;
 
         if !response.status().is_success() {
             if Self::responses_endpoint_unsupported(response.status()) {
@@ -1846,6 +1397,15 @@ impl ModelProvider for OpenAiProvider {
                 if let Some(delta) = utils::responses_text_delta(&event) {
                     stream_has_content = true;
                     yield CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model_name.clone(),
+                        delta,
+                    };
+                }
+
+                if let Some(delta) = responses_reasoning_delta(&event) {
+                    stream_has_content = true;
+                    yield CompletionStreamEvent::ThinkingDelta {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
                         delta,
@@ -2027,6 +1587,16 @@ struct OpenAiResponsesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_response_id: Option<String>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<chat_wire::ChatResponseFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2036,6 +1606,8 @@ struct OpenAiResponsesTool {
     name: String,
     description: String,
     parameters: serde_json::Value,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    strict: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -2091,13 +1663,6 @@ struct OpenAiFunctionCallOutputItem {
 
 #[derive(Debug, Default)]
 struct ResponsesToolState {
-    id: Option<String>,
-    name: Option<String>,
-    arguments: String,
-}
-
-#[derive(Debug, Default)]
-struct ChatToolCallState {
     id: Option<String>,
     name: Option<String>,
     arguments: String,
@@ -2175,112 +1740,18 @@ struct OpenAiInputTokenDetails {
     cached_tokens: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
-struct OpenAiChatCompletionRequest {
-    model: String,
-    messages: Vec<OpenAiChatMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<OpenAiChatToolDefinition>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<u32>,
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream_options: Option<OpenAiChatStreamOptions>,
-}
-
-#[derive(Debug, Serialize)]
-struct OpenAiChatStreamOptions {
-    #[serde(rename = "include_usage")]
-    include_usage: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenAiChatMessage {
-    role: String,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "type")]
-    kind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    content: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<OpenAiChatToolCall>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenAiChatToolCall {
-    #[serde(default)]
-    index: Option<usize>,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
-    kind: Option<String>,
-    #[serde(default)]
-    function: Option<OpenAiChatFunctionCall>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenAiChatFunctionCall {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    arguments: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct OpenAiChatToolDefinition {
-    #[serde(rename = "type")]
-    kind: String,
-    function: OpenAiChatFunctionDefinition,
-}
-
-#[derive(Debug, Serialize)]
-struct OpenAiChatFunctionDefinition {
-    name: String,
-    description: String,
-    parameters: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiChatCompletionResponse {
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    choices: Vec<OpenAiChatChoice>,
-    #[serde(default)]
-    usage: Option<OpenAiChatUsage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiChatChoice {
-    #[serde(default)]
-    message: Option<OpenAiChatMessage>,
-    #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiChatUsage {
-    #[serde(default)]
-    prompt_tokens: Option<u64>,
-    #[serde(default)]
-    completion_tokens: Option<u64>,
-}
-
-fn extract_chat_content_text(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .filter_map(|item| item.get("text").and_then(|v| v.as_str()))
-            .collect::<Vec<_>>()
-            .join(""),
-        _ => String::new(),
+fn responses_reasoning_delta(event: &serde_json::Value) -> Option<String> {
+    let event_type = event.get("type")?.as_str()?;
+    if event_type == "response.reasoning_summary_text.delta"
+        || event_type == "response.reasoning.delta"
+    {
+        return event
+            .get("delta")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
     }
+    None
 }
 
 fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
@@ -2517,6 +1988,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses 404 should fall back to chat");
@@ -2567,6 +2044,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("legacy text payload should parse");
@@ -2613,6 +2096,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses payload should parse tool calls");
@@ -2675,6 +2164,12 @@ mod tests {
                 prompt_cache_key: Some("session-42".to_string()),
                 previous_response_id: Some("resp_prev".to_string()),
                 prompt_window_generation: Some(3),
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses request should include cache fields");
@@ -2742,6 +2237,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("empty responses payload should fall back to stream aggregation");
@@ -2800,6 +2301,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("chat stream should start");
@@ -2862,6 +2369,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses request should include function_call_output");
@@ -2881,6 +2394,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         let input = OpenAiProvider::to_responses_input(&request);
@@ -2909,6 +2434,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         let input = OpenAiProvider::to_responses_input(&request);
@@ -2970,6 +2507,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         let input = OpenAiProvider::to_responses_input(&request);
@@ -3023,7 +2572,7 @@ mod tests {
         message.parts[1].operation_id = Some("call_1".to_owned());
         message.parts[3].operation_id = Some("call_2".to_owned());
 
-        let messages = OpenAiProvider::to_chat_messages(&CompletionRequest {
+        let messages = request_to_chat_messages(&CompletionRequest {
             model: ModelId::new("gpt-4o"),
             system: None,
             messages: vec![message],
@@ -3033,6 +2582,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         });
         let json = serde_json::to_value(&messages).expect("chat messages should serialize");
         let items = json.as_array().expect("chat messages should be an array");
@@ -3064,6 +2625,18 @@ mod tests {
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+
+            stop_sequences: Vec::new(),
+
+            top_p: None,
+
+            top_k: None,
+
+            seed: None,
+
+            thinking: None,
+
+            response_format: None,
         };
 
         let input = OpenAiProvider::to_responses_input(&request);
@@ -3149,6 +2722,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses stream should start");
@@ -3184,6 +2763,7 @@ mod tests {
                     assert_eq!(usage.output_tokens, 2);
                     completed = true;
                 }
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
             }
         }
 
@@ -3225,6 +2805,12 @@ mod tests {
                 prompt_cache_key: Some("session-42".to_string()),
                 previous_response_id: Some("resp_prev".to_string()),
                 prompt_window_generation: Some(7),
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("responses stream should start");
@@ -3413,6 +2999,12 @@ mod tests {
                 prompt_cache_key: None,
                 previous_response_id: None,
                 prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
             })
             .await
             .expect("stream should start");
@@ -3452,6 +3044,7 @@ mod tests {
                     assert_eq!(usage.output_tokens, 3);
                     saw_completed = true;
                 }
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
             }
         }
 

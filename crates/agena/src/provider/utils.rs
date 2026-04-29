@@ -1,6 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use base64::Engine as _;
+use futures_core::Stream;
+use futures_util::StreamExt as _;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -10,6 +12,11 @@ use crate::error::{AppError, ProviderErrorKind};
 use crate::message::{
     AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, TodoListPart,
     TodoPriority, TodoStatus, ToolExecutionPart, ToolInvocation,
+};
+use crate::model::{ModelId, ProviderId};
+use crate::provider::{
+    CompletionFinishReason, CompletionResponse, CompletionStreamEvent, CompletionToolCall,
+    CompletionUsage, ManagedCredential, should_retry_credential,
 };
 use crate::role::Role;
 use crate::session::{MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_TOOL_RESULT_PRUNED};
@@ -1046,6 +1053,232 @@ fn classify_stream_error(provider_id: &str, code: Option<&str>, message: &str) -
         retryable: false,
         kind,
     }
+}
+
+/// Credential-refresh loop shared by all HTTP providers.
+///
+/// `build` is called with the current API key each attempt; on 401/403 the
+/// credential is force-refreshed once before giving up.
+pub async fn send_with_credential_refresh<F>(
+    api_key: &ManagedCredential,
+    mut build: F,
+) -> Result<reqwest::Response, AppError>
+where
+    F: FnMut(&str) -> reqwest::RequestBuilder,
+{
+    let mut force_refresh = false;
+    loop {
+        let key = if force_refresh {
+            api_key.force_refresh().await?
+        } else {
+            api_key.resolve().await?
+        };
+
+        let response = build(key.as_str()).send().await?;
+        if !force_refresh && should_retry_credential(response.status()) {
+            force_refresh = true;
+            continue;
+        }
+        return Ok(response);
+    }
+}
+
+/// State accumulated while draining a streaming response.
+#[derive(Default)]
+struct AggregatedToolCallState {
+    id: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+/// Drain a `CompletionStreamEvent` stream and assemble a `CompletionResponse`.
+///
+/// Handles all four event kinds: `TextDelta`, `ThinkingDelta`, `ToolCallDelta`,
+/// and `Completed`. The `provider_id` and `fallback_model` are used only when
+/// the stream closes without a `Completed` event.
+pub async fn aggregate_stream<S>(
+    provider_id: &str,
+    fallback_model: ModelId,
+    stream: S,
+) -> Result<CompletionResponse, AppError>
+where
+    S: Stream<Item = Result<CompletionStreamEvent, AppError>> + Unpin,
+{
+    let mut stream = stream;
+    let mut text = String::new();
+    let mut reasoning_text = String::new();
+    let mut tool_calls: BTreeMap<String, AggregatedToolCallState> = BTreeMap::new();
+    let mut completed: Option<(
+        ProviderId,
+        ModelId,
+        Option<CompletionFinishReason>,
+        Option<CompletionUsage>,
+        Option<serde_json::Value>,
+    )> = None;
+
+    while let Some(item) = stream.next().await {
+        match item? {
+            CompletionStreamEvent::TextDelta { delta, .. } => {
+                text.push_str(delta.as_str());
+            }
+            CompletionStreamEvent::ThinkingDelta { delta, .. } => {
+                reasoning_text.push_str(delta.as_str());
+            }
+            CompletionStreamEvent::ToolCallDelta {
+                stream_key,
+                id,
+                name,
+                arguments_delta,
+                ..
+            } => {
+                let state = tool_calls.entry(stream_key).or_default();
+                if let Some(id) = id {
+                    state.id = Some(id);
+                }
+                if let Some(name) = name {
+                    state.name = Some(name);
+                }
+                state.arguments.push_str(arguments_delta.as_str());
+            }
+            CompletionStreamEvent::Completed {
+                provider_id: pid,
+                model,
+                finish_reason,
+                usage,
+                provider_metadata,
+            } => {
+                completed = Some((pid, model, finish_reason, usage, provider_metadata));
+            }
+        }
+    }
+
+    let (pid, model, finish_reason, usage, provider_metadata) =
+        completed.unwrap_or_else(|| {
+            (
+                ProviderId::new(provider_id),
+                fallback_model,
+                None,
+                None,
+                None,
+            )
+        });
+
+    let calls = tool_calls
+        .into_iter()
+        .map(|(stream_key, state)| {
+            let id = normalize_optional_text(state.id).unwrap_or(stream_key);
+            let name = normalize_optional_text(state.name).ok_or_else(|| {
+                AppError::Provider(format!(
+                    "{provider_id} stream ended with tool call without name"
+                ))
+            })?;
+            Ok(CompletionToolCall::Function {
+                id,
+                name,
+                arguments_json: state.arguments,
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+
+    if text.is_empty() && calls.is_empty() && finish_reason.is_none() {
+        return Err(AppError::Provider(format!(
+            "{provider_id} stream aggregation produced empty completion"
+        )));
+    }
+
+    Ok(CompletionResponse {
+        provider_id: pid,
+        model,
+        text,
+        reasoning_text: (!reasoning_text.is_empty()).then_some(reasoning_text),
+        finish_reason,
+        tool_calls: calls,
+        usage,
+        provider_metadata,
+    })
+}
+
+/// Wrap an optional response_id as provider_metadata JSON.
+pub fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
+    response_id.map(|id| serde_json::json!({ "response_id": id }))
+}
+
+// ─── OpenAI-style content value helpers ──────────────────────────────────────
+// Used by both openai_compatible.rs and chat_wire.rs for building message
+// content values in the Chat Completions JSON format.
+
+fn attachment_upload_name(item: &AttachmentItem) -> String {
+    attachment_filename(item)
+        .map(str::to_owned)
+        .unwrap_or_else(|| item.summary_label())
+}
+
+fn attachment_file_content_value(item: &AttachmentItem) -> Option<serde_json::Value> {
+    let filename = attachment_upload_name(item);
+    match &item.source {
+        AttachmentSource::Base64 { .. } | AttachmentSource::DataUrl { .. } => {
+            attachment_data_url(item).map(|file_data| {
+                serde_json::json!({
+                    "type": "file",
+                    "file": {
+                        "file_data": file_data,
+                        "filename": filename,
+                    }
+                })
+            })
+        }
+        AttachmentSource::FileId { file_id } => {
+            let file_id = file_id.trim();
+            (!file_id.is_empty()).then(|| {
+                serde_json::json!({
+                    "type": "file",
+                    "file": {
+                        "file_id": file_id,
+                        "filename": filename,
+                    }
+                })
+            })
+        }
+        AttachmentSource::Url { .. } | AttachmentSource::LocalPath { .. } => None,
+    }
+}
+
+/// Serialize one `AttachmentItem` to an OpenAI Chat content-part JSON value.
+pub fn attachment_content_value(item: &AttachmentItem) -> serde_json::Value {
+    match item.kind {
+        AttachmentKind::Image => attachment_media_url(item)
+            .map(|url| serde_json::json!({ "type": "image_url", "image_url": { "url": url } }))
+            .unwrap_or_else(|| {
+                serde_json::json!({ "type": "text", "text": attachment_hint_text(item) })
+            }),
+        AttachmentKind::Audio
+        | AttachmentKind::Video
+        | AttachmentKind::Pdf
+        | AttachmentKind::File => attachment_file_content_value(item).unwrap_or_else(|| {
+            serde_json::json!({ "type": "text", "text": attachment_hint_text(item) })
+        }),
+    }
+}
+
+/// Serialize a slice of `ProjectedSessionPart`s to an OpenAI Chat `content`
+/// array value (i.e. `[{"type":"text","text":"..."},{"type":"image_url",...}]`).
+pub fn projected_parts_to_openai_chat_value(parts: &[ProjectedSessionPart]) -> serde_json::Value {
+    let items = parts
+        .iter()
+        .map(|part| match part {
+            ProjectedSessionPart::Text { text } => {
+                serde_json::json!({ "type": "text", "text": text })
+            }
+            ProjectedSessionPart::Attachment { item } => attachment_content_value(item),
+            ProjectedSessionPart::ToolCall { name, .. } => {
+                serde_json::json!({ "type": "text", "text": format!("[tool_call:{name}]") })
+            }
+            ProjectedSessionPart::ToolResult { tool_call_id, .. } => {
+                serde_json::json!({ "type": "text", "text": format!("[tool_result:{tool_call_id}]") })
+            }
+        })
+        .collect::<Vec<_>>();
+    serde_json::Value::Array(items)
 }
 
 #[derive(Debug, Deserialize, Clone)]

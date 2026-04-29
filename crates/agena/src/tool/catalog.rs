@@ -2,8 +2,8 @@ use crate::agent::Agent;
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput,
     EnterPlanModeToolInput, ExitPlanModeToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
-    ReadToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput,
-    WebFetchToolInput, WebSearchToolInput,
+    ReadToolInput, SkillRunToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput,
+    ViewFileToolInput, WebFetchToolInput, WebSearchToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -203,6 +203,14 @@ impl ToolCatalog {
             )
             .with_search_terms(["plan", "approve", "exit"])
             .with_always_load(),
+            ToolDefinition::builtin::<SkillRunToolInput>(
+                "skill_run",
+                "Run a discovered or bundled skill by name. Returns the skill's \
+                 system body so the model can follow it on subsequent turns.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["skill", "workflow", "macro", "preset"])
+            .with_always_load(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions
@@ -233,6 +241,7 @@ impl ToolCatalog {
                         | "web_search"
                         | "enter_plan_mode"
                         | "exit_plan_mode"
+                        | "skill_run"
                 )
             }
             ModelToolProfile::NoTask => tool_name != "task",

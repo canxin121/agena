@@ -13,6 +13,7 @@ mod orchestrator;
 mod plan;
 mod read;
 mod result;
+mod skill;
 mod subtask;
 mod task;
 mod todo_write;
@@ -147,6 +148,7 @@ pub struct ToolExecutor {
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     web_search_backend: crate::config::WebSearchBackend,
     plan_registry: Option<plan::PlanRegistry>,
+    skills_manager: Option<Arc<agena_skills::SkillsManager>>,
     permission_mode: PermissionExecutionMode,
 }
 
@@ -177,6 +179,7 @@ impl ToolExecutor {
             mcp_manager: None,
             web_search_backend: crate::config::WebSearchBackend::DuckDuckGoHtml,
             plan_registry: None,
+            skills_manager: None,
             permission_mode: PermissionExecutionMode::Enforced,
         }
     }
@@ -237,6 +240,15 @@ impl ToolExecutor {
 
     pub fn plan_registry(&self) -> Option<&plan::PlanRegistry> {
         self.plan_registry.as_ref()
+    }
+
+    pub fn with_skills_manager(mut self, mgr: Arc<agena_skills::SkillsManager>) -> Self {
+        self.skills_manager = Some(mgr);
+        self
+    }
+
+    pub fn skills_manager(&self) -> Option<&Arc<agena_skills::SkillsManager>> {
+        self.skills_manager.as_ref()
     }
 
     /// Refuse mutating invocations while plan mode is active for this
@@ -637,6 +649,7 @@ impl ToolExecutor {
             BuiltinToolInput::WebSearch(_) => {}
             BuiltinToolInput::EnterPlanMode(_) => {}
             BuiltinToolInput::ExitPlanMode(_) => {}
+            BuiltinToolInput::SkillRun(_) => {}
         }
 
         Ok(checks)

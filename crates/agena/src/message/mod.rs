@@ -18,6 +18,7 @@ pub use part::{
     ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
     UserInputReplyKind, UserInputRequest, UserInputRequestPart, ViewFileToolInput, WebFetchToolInput,
     WebSearchHit, WebSearchPart, WebSearchResult, WebSearchToolInput, EnterPlanModeToolInput,
-    ExitPlanModeToolInput, SkillRunToolInput, canonical_builtin_name,
+    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, SkillRunToolInput,
+    canonical_builtin_name,
 };
 pub use usage::MessageUsage;

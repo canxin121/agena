@@ -1,9 +1,10 @@
 use crate::agent::Agent;
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput,
-    EnterPlanModeToolInput, ExitPlanModeToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
-    ReadToolInput, SkillRunToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput,
-    ViewFileToolInput, WebFetchToolInput, WebSearchToolInput,
+    EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput,
+    GlobToolInput, GrepToolInput, MonitorToolInput, ReadToolInput, SkillRunToolInput, TaskToolInput,
+    TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
+    WebSearchToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -211,6 +212,23 @@ impl ToolCatalog {
             )
             .with_search_terms(["skill", "workflow", "macro", "preset"])
             .with_always_load(),
+            ToolDefinition::builtin::<EnterWorktreeToolInput>(
+                "enter_worktree",
+                "Create or attach to a git worktree under .agena/worktrees and \
+                 switch the session into it.",
+                ToolBehavior::Mutating,
+            )
+            .with_search_terms(["git", "worktree", "branch", "isolate"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<ExitWorktreeToolInput>(
+                "exit_worktree",
+                "Leave the current worktree.  action=keep preserves the worktree, \
+                 action=remove deletes it (refuses unless discard_changes=true \
+                 when there are uncommitted changes).",
+                ToolBehavior::Mutating,
+            )
+            .with_search_terms(["git", "worktree", "exit", "cleanup"])
+            .with_deferred_loading(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions

@@ -439,7 +439,8 @@ fn build_tool_executor(
     )
     .with_plugin_manager(plugins)
     .with_web_search_backend(resolution.config.web.search.resolve())
-    .with_plan_registry(crate::tool::plan_registry_for_executor());
+    .with_plan_registry(crate::tool::plan_registry_for_executor())
+    .with_worktree_registry(crate::tool::worktree_registry_for_executor());
 
     if let Ok(mgr) = agena_skills::SkillsManager::build(Some(workspace_root)) {
         executor = executor.with_skills_manager(Arc::new(mgr));

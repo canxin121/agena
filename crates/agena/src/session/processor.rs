@@ -1027,6 +1027,13 @@ fn placeholder_builtin_tool_input(name: &str) -> BuiltinToolInput {
             name: String::new(),
             args: None,
         }),
+        "enter_worktree" => {
+            BuiltinToolInput::EnterWorktree(crate::message::EnterWorktreeToolInput::default())
+        }
+        "exit_worktree" => BuiltinToolInput::ExitWorktree(crate::message::ExitWorktreeToolInput {
+            action: "keep".to_string(),
+            discard_changes: false,
+        }),
         other => BuiltinToolInput::Task(TaskToolInput {
             description: String::new(),
             prompt: format!("placeholder for unsupported builtin {other}"),
@@ -1096,6 +1103,8 @@ pub(crate) fn parse_tool_invocation(
         "enter_plan_mode" => BuiltinToolInput::EnterPlanMode(parse_input::<crate::message::EnterPlanModeToolInput>(arguments_json)?),
         "exit_plan_mode" => BuiltinToolInput::ExitPlanMode(parse_input::<crate::message::ExitPlanModeToolInput>(arguments_json)?),
         "skill_run" => BuiltinToolInput::SkillRun(parse_input::<crate::message::SkillRunToolInput>(arguments_json)?),
+        "enter_worktree" => BuiltinToolInput::EnterWorktree(parse_input::<crate::message::EnterWorktreeToolInput>(arguments_json)?),
+        "exit_worktree" => BuiltinToolInput::ExitWorktree(parse_input::<crate::message::ExitWorktreeToolInput>(arguments_json)?),
         other => {
             return Err(AppError::Provider(format!(
                 "unsupported builtin tool call from model: {other}"

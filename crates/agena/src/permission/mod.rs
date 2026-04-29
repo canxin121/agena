@@ -119,6 +119,8 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
         BuiltinToolInput::EnterPlanMode(_) => "enter_plan_mode",
         BuiltinToolInput::ExitPlanMode(_) => "exit_plan_mode",
         BuiltinToolInput::SkillRun(_) => "skill_run",
+        BuiltinToolInput::EnterWorktree(_) => "enter_worktree",
+        BuiltinToolInput::ExitWorktree(_) => "exit_worktree",
     }
 }
 

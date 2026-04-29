@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod event;
+pub mod memory;
 pub mod message;
 pub mod model;
 pub mod permission;

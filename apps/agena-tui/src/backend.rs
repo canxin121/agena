@@ -561,6 +561,27 @@ impl Backend {
             .context("failed to materialize continued session state")
     }
 
+    /// Best-effort cancel of the in-flight turn for `session_id`. Forwards
+    /// to `SessionManager::cancel_active_turn`; the manager owns the
+    /// `CancellationToken` for the spawned turn task. If no turn is
+    /// active this is a no-op.
+    pub async fn cancel_turn(&self, session_id: i64) -> Result<()> {
+        self.session_manager()?
+            .cancel_active_turn(session_id)
+            .await
+            .context("failed to cancel active turn")
+    }
+
+    /// Inject `parts` as a steer message into the in-flight turn. Returns
+    /// `Err` when there is no active turn or the turn is in a phase that
+    /// no longer accepts steers (the caller should re-queue).
+    pub async fn steer_input(&self, session_id: i64, parts: Vec<PartContent>) -> Result<()> {
+        self.session_manager()?
+            .steer_input(session_id, parts)
+            .await
+            .context("failed to steer turn")
+    }
+
     pub async fn reply_permission_with_options(
         &self,
         session_id: i64,

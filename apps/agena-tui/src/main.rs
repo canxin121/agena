@@ -2,10 +2,13 @@ mod app;
 mod backend;
 mod clipboard;
 mod commands;
+mod composer_queue;
 mod external_editor;
 mod external_pager;
 mod i18n;
+mod keybindings;
 mod terminal;
+mod tui_config;
 mod ui_text;
 
 use std::{
@@ -68,6 +71,8 @@ struct RunCommand {
     log_file: Option<PathBuf>,
     #[arg(long, env = "AGENA_TUI_LOG_STDERR")]
     log_stderr: bool,
+    #[arg(long, env = "AGENA_TUI_CONFIG")]
+    tui_config: Option<PathBuf>,
 }
 
 impl AgenaTuiCli {
@@ -81,6 +86,7 @@ impl AgenaTuiCli {
             locale: None,
             log_file: None,
             log_stderr: false,
+            tui_config: None,
         }))
     }
 
@@ -121,6 +127,7 @@ impl AgenaTuiCli {
 
         let backend = Backend::new(runtime, db, workspace_root);
         let i18n = I18n::resolve(command.locale.as_deref(), config_locale.as_deref());
+        let tui_config = tui_config::TuiConfig::load(command.tui_config.clone());
         let mut terminal = terminal::TerminalGuard::enter()
             .map_err(|error| AppError::Internal(error.to_string()))?;
         let mut app = App::new(
@@ -128,6 +135,7 @@ impl AgenaTuiCli {
             LaunchOptions {
                 initial_session_id: command.session,
                 initial_session_search: command.search,
+                tui_config,
             },
             i18n,
         );

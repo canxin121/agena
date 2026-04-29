@@ -10,6 +10,7 @@ members = [
     "crates/agena-api-server",
     "crates/agena-client",
     "crates/agena-http-api",
+    "crates/agena-mcp-client",
     "crates/agena-plugin-host",
     "crates/agena-plugin-sdk",
 ]

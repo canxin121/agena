@@ -104,6 +104,7 @@ pub struct ResolvedConfig {
     pub runtime: RuntimeConfig,
     pub permission: PermissionConfig,
     pub plugins: PluginConfig,
+    pub mcp: McpConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
 }
 
@@ -430,4 +431,51 @@ impl From<OpenAiApiModeConfig> for OpenAiApiMode {
             OpenAiApiModeConfig::Auto => Self::Auto,
         }
     }
+}
+
+// ─────────────────────────── MCP ────────────────────────────────────
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    /// Map of `<server_name> -> <transport spec>`.
+    pub servers: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(tag = "transport", rename_all = "snake_case")]
+pub enum McpServerConfig {
+    /// Spawn a child process and exchange newline-delimited JSON over
+    /// its stdin/stdout (the typical MCP server style).
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default)]
+        cwd: Option<PathBuf>,
+    },
+    /// Connect to an HTTP-based MCP server.  `mode = "sse"` uses the
+    /// legacy long-lived GET /sse channel; `mode = "streamable_http"` uses
+    /// the current spec where every POST may stream frames in its
+    /// response body.
+    Http {
+        url: String,
+        #[serde(default = "default_http_mode")]
+        mode: McpHttpMode,
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+    },
+}
+
+fn default_http_mode() -> McpHttpMode {
+    McpHttpMode::StreamableHttp
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpHttpMode {
+    Sse,
+    StreamableHttp,
 }

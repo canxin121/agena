@@ -1033,6 +1033,19 @@ pub(crate) fn parse_tool_invocation(
 
     if !matches!(tool.source, ToolSource::Builtin) {
         let parsed = parse_custom_input(arguments_json)?;
+        // MCP tools are advertised as `mcp:<server>:<tool>` (see
+        // `ToolExecutor::catalogued_tools`).  Decode that name back into
+        // a structured `Mcp` invocation so the executor can dispatch
+        // through the MCP connection manager.
+        if let Some(rest) = tool.name.strip_prefix("mcp:") {
+            if let Some((server, mcp_tool)) = rest.split_once(':') {
+                return Ok(ToolInvocation::Mcp {
+                    server: server.to_string(),
+                    tool: mcp_tool.to_string(),
+                    input: parsed,
+                });
+            }
+        }
         return Ok(ToolInvocation::Custom {
             name: tool.name.clone(),
             input: parsed,

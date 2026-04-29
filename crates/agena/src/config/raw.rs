@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::{
-    AuthConfig, ConfigEnvironment, ConfigError, OpenAiApiModeConfig, PermissionConfig,
+    AuthConfig, ConfigEnvironment, ConfigError, McpConfig, OpenAiApiModeConfig, PermissionConfig,
     PluginConfig, ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig,
     RuntimeConfig, StreamTransportMode, TracingConfig, UiConfig, provider_presets,
 };
@@ -100,6 +100,7 @@ pub(crate) struct RawConfig {
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
     pub(crate) plugins: Option<PluginConfig>,
+    pub(crate) mcp: Option<McpConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
     pub(crate) modes: BTreeMap<String, RawModeConfig>,
 }
@@ -113,6 +114,7 @@ impl RawConfig {
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
+        merge_option_struct(&mut self.mcp, overlay.mcp);
         merge_map(&mut self.providers, overlay.providers);
         merge_map(&mut self.modes, overlay.modes);
     }
@@ -135,6 +137,7 @@ impl RawConfig {
             && self.runtime.is_none()
             && self.permission.is_none()
             && self.plugins.is_none()
+            && self.mcp.is_none()
             && self.providers.is_empty()
             && self.modes.is_empty()
     }
@@ -309,6 +312,7 @@ impl RawConfig {
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
         let permission = PermissionConfig::from_raw(self.permission.unwrap_or_default());
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
+        let mcp: McpConfig = self.mcp.unwrap_or_default();
 
         let providers = self
             .providers
@@ -323,6 +327,7 @@ impl RawConfig {
             runtime,
             permission,
             plugins,
+            mcp,
             providers,
         })
     }
@@ -372,6 +377,16 @@ impl Merge for PluginConfig {
             self.list = overlay.list;
         }
         self.timeouts = overlay.timeouts;
+    }
+}
+
+impl Merge for McpConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        // A more-specific layer fully replaces server entries with the same
+        // name; entries it doesn't mention pass through unchanged.
+        for (name, server) in overlay.servers {
+            self.servers.insert(name, server);
+        }
     }
 }
 

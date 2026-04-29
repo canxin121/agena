@@ -15,7 +15,7 @@ use crate::{
 use super::{
     AuthConfig, ConfigEnvironment, ConfigError, McpConfig, OpenAiApiModeConfig, PermissionConfig,
     PluginConfig, ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig,
-    RuntimeConfig, StreamTransportMode, TracingConfig, UiConfig, provider_presets,
+    RuntimeConfig, StreamTransportMode, TracingConfig, UiConfig, WebToolsConfig, provider_presets,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -101,6 +101,7 @@ pub(crate) struct RawConfig {
     pub(crate) permission: Option<RawPermissionConfig>,
     pub(crate) plugins: Option<PluginConfig>,
     pub(crate) mcp: Option<McpConfig>,
+    pub(crate) web: Option<WebToolsConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
     pub(crate) modes: BTreeMap<String, RawModeConfig>,
 }
@@ -115,6 +116,7 @@ impl RawConfig {
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_option_struct(&mut self.mcp, overlay.mcp);
+        merge_option_struct(&mut self.web, overlay.web);
         merge_map(&mut self.providers, overlay.providers);
         merge_map(&mut self.modes, overlay.modes);
     }
@@ -138,6 +140,7 @@ impl RawConfig {
             && self.permission.is_none()
             && self.plugins.is_none()
             && self.mcp.is_none()
+            && self.web.is_none()
             && self.providers.is_empty()
             && self.modes.is_empty()
     }
@@ -313,6 +316,7 @@ impl RawConfig {
         let permission = PermissionConfig::from_raw(self.permission.unwrap_or_default());
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
         let mcp: McpConfig = self.mcp.unwrap_or_default();
+        let web: WebToolsConfig = self.web.unwrap_or_default();
 
         let providers = self
             .providers
@@ -328,6 +332,7 @@ impl RawConfig {
             permission,
             plugins,
             mcp,
+            web,
             providers,
         })
     }
@@ -387,6 +392,14 @@ impl Merge for McpConfig {
         for (name, server) in overlay.servers {
             self.servers.insert(name, server);
         }
+    }
+}
+
+impl Merge for WebToolsConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        // Whole-struct replace.  WebToolsConfig is small and there's no
+        // sensible per-field overlay semantics to preserve.
+        *self = overlay;
     }
 }
 

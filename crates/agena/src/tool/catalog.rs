@@ -2,7 +2,7 @@ use crate::agent::Agent;
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, GlobToolInput,
     GrepToolInput, MonitorToolInput, ReadToolInput, TaskToolInput, TodoWriteToolInput,
-    ToolSearchToolInput, ViewFileToolInput,
+    ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput, WebSearchToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -168,6 +168,22 @@ impl ToolCatalog {
                 "stream output",
             ])
             .with_deferred_loading(),
+            ToolDefinition::builtin::<WebFetchToolInput>(
+                "web_fetch",
+                "Fetch a URL and return its content as Markdown. HTTP is upgraded to HTTPS; \
+                 cached for 15 minutes.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["web", "fetch", "download", "url", "http", "page"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<WebSearchToolInput>(
+                "web_search",
+                "Search the web. Backend selectable in config (tavily, exa, brave, or \
+                 duckduckgo_html as zero-config default).",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["web", "search", "google", "ddg", "find online"])
+            .with_deferred_loading(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions
@@ -194,6 +210,8 @@ impl ToolCatalog {
                         | "tool_search"
                         | "todo_write"
                         | "ask_user"
+                        | "web_fetch"
+                        | "web_search"
                 )
             }
             ModelToolProfile::NoTask => tool_name != "task",

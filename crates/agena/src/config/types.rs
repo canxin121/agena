@@ -105,6 +105,7 @@ pub struct ResolvedConfig {
     pub permission: PermissionConfig,
     pub plugins: PluginConfig,
     pub mcp: McpConfig,
+    pub web: WebToolsConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
 }
 
@@ -478,4 +479,89 @@ fn default_http_mode() -> McpHttpMode {
 pub enum McpHttpMode {
     Sse,
     StreamableHttp,
+}
+
+// ─────────────────────────── Web tools ──────────────────────────────
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct WebToolsConfig {
+    pub fetch_enabled: bool,
+    pub search: WebSearchConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct WebSearchConfig {
+    pub backend: WebSearchBackendKind,
+    /// Reads from `tavily_api_key`, `exa_api_key`, `brave_api_key` —
+    /// when missing, the tool falls back to the corresponding env var.
+    pub tavily_api_key: Option<String>,
+    pub exa_api_key: Option<String>,
+    pub brave_api_key: Option<String>,
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        Self {
+            backend: WebSearchBackendKind::DuckDuckGoHtml,
+            tavily_api_key: None,
+            exa_api_key: None,
+            brave_api_key: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchBackendKind {
+    Tavily,
+    Exa,
+    Brave,
+    DuckDuckGoHtml,
+}
+
+/// Resolved variant used at runtime — bundles each backend with the
+/// credentials it actually needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebSearchBackend {
+    Tavily { api_key: String },
+    Exa { api_key: String },
+    Brave { api_key: String },
+    DuckDuckGoHtml,
+}
+
+impl WebSearchBackend {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Tavily { .. } => "tavily",
+            Self::Exa { .. } => "exa",
+            Self::Brave { .. } => "brave",
+            Self::DuckDuckGoHtml => "duckduckgo_html",
+        }
+    }
+}
+
+impl WebSearchConfig {
+    /// Materialize the resolved backend, reading API keys from config or
+    /// falling back to the conventional env var.
+    pub fn resolve(&self) -> WebSearchBackend {
+        fn pick(cfg: &Option<String>, env_key: &str) -> String {
+            cfg.clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| std::env::var(env_key).unwrap_or_default())
+        }
+        match self.backend {
+            WebSearchBackendKind::Tavily => WebSearchBackend::Tavily {
+                api_key: pick(&self.tavily_api_key, "TAVILY_API_KEY"),
+            },
+            WebSearchBackendKind::Exa => WebSearchBackend::Exa {
+                api_key: pick(&self.exa_api_key, "EXA_API_KEY"),
+            },
+            WebSearchBackendKind::Brave => WebSearchBackend::Brave {
+                api_key: pick(&self.brave_api_key, "BRAVE_API_KEY"),
+            },
+            WebSearchBackendKind::DuckDuckGoHtml => WebSearchBackend::DuckDuckGoHtml,
+        }
+    }
 }

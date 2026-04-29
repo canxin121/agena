@@ -114,6 +114,8 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
         BuiltinToolInput::TodoWrite(_) => "todo_write",
         BuiltinToolInput::AskUser(_) => "ask_user",
         BuiltinToolInput::Monitor(_) => "monitor",
+        BuiltinToolInput::WebFetch(_) => "web_fetch",
+        BuiltinToolInput::WebSearch(_) => "web_search",
     }
 }
 

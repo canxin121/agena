@@ -58,7 +58,9 @@ impl ToolOutputTruncator {
             | BuiltinToolOutput::ToolSearch { .. }
             | BuiltinToolOutput::TodoWrite { .. }
             | BuiltinToolOutput::AskUser { .. }
-            | BuiltinToolOutput::Monitor { .. } => {}
+            | BuiltinToolOutput::Monitor { .. }
+            | BuiltinToolOutput::WebFetch { .. }
+            | BuiltinToolOutput::WebSearch { .. } => {}
         }
 
         execution

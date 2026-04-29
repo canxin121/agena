@@ -2,6 +2,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use arc_swap::ArcSwap;
 use chrono::Utc;
+use tokio::sync::mpsc;
 
 use crate::AppError;
 use crate::event::{ErrorInfo, EventKind, RunFailedEvent, RunStartedEvent};
@@ -21,6 +22,7 @@ use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissi
 
 use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
+use super::control::{TurnControl, TurnControlError, TurnRegistry};
 use super::model::{
     MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionListRequest, SessionPendingTool,
     SessionStatus, SessionSummary,
@@ -187,6 +189,7 @@ pub struct SessionManager {
     publisher: Arc<crate::event::EventPublisher>,
     bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>>,
     execution: ArcSwap<SessionManagerState>,
+    turn_registry: Arc<TurnRegistry>,
 }
 
 impl SessionManager {
@@ -221,6 +224,7 @@ impl SessionManager {
             publisher,
             bus,
             execution: ArcSwap::from_pointee(state),
+            turn_registry: Arc::new(TurnRegistry::new()),
         }
     }
 
@@ -339,7 +343,22 @@ impl SessionManager {
 
     pub async fn submit_user_turn(
         &self,
+        request: SessionUserTurnRequest,
+    ) -> Result<Session, AppError> {
+        let session_id = request.session_id;
+        let (control, steer_rx) = self.turn_registry.register(session_id).await;
+        let result = self.submit_user_turn_inner(request, control.clone(), steer_rx).await;
+        self.turn_registry
+            .unregister_if_matches(session_id, &control)
+            .await;
+        result
+    }
+
+    async fn submit_user_turn_inner(
+        &self,
         mut request: SessionUserTurnRequest,
+        control: Arc<TurnControl>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
 
@@ -440,7 +459,7 @@ impl SessionManager {
             .append_history_items(session, user_history_items, state.cache_policy())
             .await?;
 
-        self.run_until_stable(session, &request.options, state)
+        self.run_until_stable(session, &request.options, state, control, steer_rx)
             .await
     }
 
@@ -448,13 +467,43 @@ impl SessionManager {
         &self,
         request: SessionContinueRequest,
     ) -> Result<Session, AppError> {
+        let session_id = request.session_id;
+        let (control, steer_rx) = self.turn_registry.register(session_id).await;
         let state = self.execution_state();
         let session = self
             .store
             .load_session(request.session_id, state.cache_policy())
             .await?;
-        self.run_until_stable(session, &request.options, state)
+        let result = self
+            .run_until_stable(session, &request.options, state, control.clone(), steer_rx)
+            .await;
+        self.turn_registry
+            .unregister_if_matches(session_id, &control)
+            .await;
+        result
+    }
+
+    /// External entry: cancel the in-flight turn for `session_id`. Returns
+    /// `Ok(())` if a token was signalled, `Err` if no turn is active.
+    pub async fn cancel_active_turn(&self, session_id: i64) -> Result<(), AppError> {
+        self.turn_registry
+            .cancel(session_id)
             .await
+            .map_err(turn_control_to_app_error)
+    }
+
+    /// External entry: inject `parts` as a steer message into the in-flight
+    /// turn for `session_id`. Returns `Err` if no turn is active or the
+    /// channel was closed.
+    pub async fn steer_input(
+        &self,
+        session_id: i64,
+        parts: Vec<PartContent>,
+    ) -> Result<(), AppError> {
+        self.turn_registry
+            .steer(session_id, parts)
+            .await
+            .map_err(turn_control_to_app_error)
     }
 
     pub async fn rewind_session(&self, request: SessionRewindRequest) -> Result<Session, AppError> {
@@ -547,7 +596,7 @@ impl SessionManager {
             }
         }
 
-        self.run_until_stable(session, &request.options, state)
+        self.run_until_stable_for(request.session_id, session, &request.options, state)
             .await
     }
 
@@ -617,8 +666,29 @@ impl SessionManager {
             }
         }
 
-        self.run_until_stable(session, &request.options, state)
+        self.run_until_stable_for(request.session_id, session, &request.options, state)
             .await
+    }
+
+    /// Convenience wrapper that registers a fresh `TurnControl` for
+    /// `session_id`, runs the loop, then unregisters. Used by entry points
+    /// that don't already own a control (continuation-style: permission
+    /// reply, user-input reply).
+    async fn run_until_stable_for(
+        &self,
+        session_id: i64,
+        session: Session,
+        options: &SessionRunOptions,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let (control, steer_rx) = self.turn_registry.register(session_id).await;
+        let result = self
+            .run_until_stable(session, options, state, control.clone(), steer_rx)
+            .await;
+        self.turn_registry
+            .unregister_if_matches(session_id, &control)
+            .await;
+        result
     }
 
     async fn run_until_stable(
@@ -626,8 +696,30 @@ impl SessionManager {
         mut session: Session,
         options: &SessionRunOptions,
         state: Arc<SessionManagerState>,
+        control: Arc<TurnControl>,
+        mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
         for _ in 0..state.config.max_turn_loops {
+            // External cancel — surface as the same TurnAborted shape we
+            // use elsewhere so the projection sees a clean boundary.
+            if control.cancel.is_cancelled() {
+                self.persist_run_failed_event(
+                    session.id,
+                    "turn cancelled by user".to_string(),
+                    state.clone(),
+                )
+                .await?;
+                return Ok(session);
+            }
+
+            // Drain any steer messages that arrived since the last
+            // iteration. Each becomes a User message appended to the
+            // transcript before the next model turn — so the model sees
+            // the new input on its next step.
+            session = self
+                .drain_steer_input(session, &mut steer_rx, options, state.clone())
+                .await?;
+
             session.refresh_derived();
             if session.blocked() {
                 return Ok(session);
@@ -707,7 +799,9 @@ impl SessionManager {
                 SessionStatus::AwaitingModel => {}
             }
 
-            session = self.run_model_turn(session, options, state.clone()).await?;
+            session = self
+                .run_model_turn(session, options, state.clone(), control.clone())
+                .await?;
         }
 
         Err(AppError::Internal(
@@ -720,6 +814,7 @@ impl SessionManager {
         mut session: Session,
         options: &SessionRunOptions,
         state: Arc<SessionManagerState>,
+        control: Arc<TurnControl>,
     ) -> Result<Session, AppError> {
         let mut compacted_rounds = 0_u8;
 
@@ -839,6 +934,7 @@ impl SessionManager {
                 part_ids: processor_ids.part_ids,
                 next_call_id: session.next_call_id(),
                 event_publisher: Some(Arc::clone(&self.publisher)),
+                cancel: Some(control.cancel.clone()),
             };
 
             self.store
@@ -855,7 +951,14 @@ impl SessionManager {
             // boundary event before invoking the processor. The processor
             // currently mints its own TurnId internally; we use the one from
             // its result to wrap the matching TurnCompleted/TurnAborted.
-            match state.processor.run_turn(run).await {
+            let processor_fut = state.processor.run_turn(run);
+            let turn_outcome = tokio::select! {
+                res = processor_fut => res,
+                _ = control.cancel.cancelled() => {
+                    Err(AppError::Internal("turn cancelled by user".to_string()))
+                }
+            };
+            match turn_outcome {
                 Ok(result) => {
                     let turn_id = result.turn_id;
                     let terminal_error = result.terminal_error;
@@ -1671,6 +1774,54 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Drain every pending steer message (non-blocking) and append each as
+    /// a User message before the next model turn. Mirrors Codex's
+    /// `push_pending_input` semantics: a user steer becomes the next input
+    /// the model sees.
+    async fn drain_steer_input(
+        &self,
+        mut session: Session,
+        steer_rx: &mut mpsc::UnboundedReceiver<Vec<PartContent>>,
+        options: &SessionRunOptions,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        loop {
+            let parts = match steer_rx.try_recv() {
+                Ok(parts) => parts,
+                Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                    return Ok(session);
+                }
+            };
+            let ids = self.store.reserve_message_ids(parts.len()).await?;
+            let user_message = build_message(
+                ids,
+                Role::User,
+                MessageStatus::Completed,
+                parts,
+                MessageMetadata {
+                    source: MessageSource::User,
+                    parent_message_id: session
+                        .last_conversation_message()
+                        .map(|m| m.id),
+                    generated_by_call_id: None,
+                    model_provider_id: options.model.provider_id.to_string(),
+                    model_id: options.model.model_id.to_string(),
+                    tags: Vec::new(),
+                },
+            );
+            session.messages.push(user_message.clone());
+            session = self
+                .persist_session_changes(
+                    session,
+                    vec![user_message],
+                    Vec::new(),
+                    None,
+                    state.clone(),
+                )
+                .await?;
+        }
+    }
+
     fn execute_pending_tool(
         &self,
         state: &SessionManagerState,
@@ -1701,6 +1852,17 @@ impl SessionManager {
 
     fn execution_state(&self) -> Arc<SessionManagerState> {
         self.execution.load_full()
+    }
+}
+
+fn turn_control_to_app_error(err: TurnControlError) -> AppError {
+    match err {
+        TurnControlError::NoActiveTurn(id) => {
+            AppError::Internal(format!("no in-flight turn for session {id}"))
+        }
+        TurnControlError::SteerClosed => {
+            AppError::Internal("steer channel closed for session".to_string())
+        }
     }
 }
 
@@ -3562,5 +3724,150 @@ mod tests {
             received.contains(&"turn_started"),
             "bus should carry TurnStarted, got: {received:?}"
         );
+    }
+
+    /// Cancel a turn while the provider stream is still pending. The
+    /// processor must observe the cancellation token and surface a
+    /// terminal error rather than running to completion.
+    #[tokio::test]
+    async fn cancel_active_turn_aborts_a_running_turn() {
+        struct SlowProvider;
+
+        #[async_trait]
+        impl ModelProvider for SlowProvider {
+            fn id(&self) -> &str {
+                "slow"
+            }
+            fn default_model(&self) -> &ModelId {
+                static M: std::sync::LazyLock<ModelId> =
+                    std::sync::LazyLock::new(|| ModelId::new("slow-model"));
+                &M
+            }
+            async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+                Ok(vec![ProviderModel::new("slow", "slow-model")])
+            }
+            async fn complete(
+                &self,
+                _: CompletionRequest,
+            ) -> Result<CompletionResponse, AppError> {
+                Err(AppError::Provider("streaming only".into()))
+            }
+            async fn complete_stream(
+                &self,
+                _: CompletionRequest,
+            ) -> Result<
+                std::pin::Pin<
+                    Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>,
+                >,
+                AppError,
+            > {
+                let s = async_stream::stream! {
+                    // First chunk arrives quickly so the turn is "live".
+                    yield Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: ProviderId::new("slow"),
+                        model: ModelId::new("slow-model"),
+                        delta: "thinking".to_string(),
+                    });
+                    // Then we stall — long enough that the test can issue
+                    // the cancel before the next chunk would have arrived.
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    yield Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: ProviderId::new("slow"),
+                        model: ModelId::new("slow-model"),
+                        delta: "should never arrive".to_string(),
+                    });
+                };
+                Ok(Box::pin(s))
+            }
+        }
+
+        fn slow_options() -> SessionRunOptions {
+            SessionRunOptions {
+                model: ModelRef::new("slow", "slow-model"),
+                system: None,
+                temperature: None,
+                max_output_tokens: Some(64),
+            }
+        }
+
+        let workspace = TempWorkspace::new();
+        let manager = Arc::new(
+            build_manager_with_provider(
+                &workspace.root,
+                PermissionPolicy::allow_all(),
+                SessionManagerConfig::default(),
+                ContextPolicy::default(),
+                SlowProvider,
+            )
+            .await,
+        );
+
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "cancel-test".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create");
+        let session_id = created.id;
+
+        let mgr = Arc::clone(&manager);
+        let submit = tokio::spawn(async move {
+            mgr.submit_user_turn(SessionUserTurnRequest {
+                session_id,
+                options: slow_options(),
+                parts: vec![PartContent::text("ping")],
+            })
+            .await
+        });
+
+        // Wait long enough for the turn to register with TurnRegistry —
+        // 50ms is plenty given the first delta is yielded immediately.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        manager
+            .cancel_active_turn(session_id)
+            .await
+            .expect("cancel should find active turn");
+
+        // The submit future should resolve quickly now (not after 60s).
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), submit)
+            .await
+            .expect("submit should complete after cancel")
+            .expect("join");
+        // The session run reports an error because the turn was aborted.
+        assert!(result.is_err(), "expected turn to be reported as failed/cancelled");
+    }
+
+    /// `cancel_active_turn` for a session with no in-flight turn returns
+    /// the corresponding error, never panics.
+    #[tokio::test]
+    async fn cancel_with_no_active_turn_is_a_clean_error() {
+        let workspace = TempWorkspace::new();
+        let manager = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+        let err = manager.cancel_active_turn(1234).await.unwrap_err();
+        assert!(matches!(err, AppError::Internal(_)));
+    }
+
+    /// `steer_input` against a session with no active turn surfaces the
+    /// "no in-flight turn" error so callers can fall back gracefully.
+    #[tokio::test]
+    async fn steer_with_no_active_turn_is_a_clean_error() {
+        let workspace = TempWorkspace::new();
+        let manager = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+        let err = manager
+            .steer_input(99, vec![PartContent::text("late")])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::Internal(_)));
     }
 }

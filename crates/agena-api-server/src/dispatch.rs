@@ -13,8 +13,8 @@ use agena::{
 };
 use agena_api::{
     commands::{
-        Command, CommandResult, ContinueRunParams, CreateSessionParams, ReplyPermissionParams,
-        ReplyUserInputParams, SubmitTurnParams,
+        CancelTurnParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
+        ReplyPermissionParams, ReplyUserInputParams, SubmitTurnParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
@@ -103,12 +103,14 @@ pub async fn dispatch_command(
             let session = manager.continue_session(request).await?;
             Ok(CommandResult::Session(session_to_resource(&session)))
         }
-        Command::CancelTurn(_params) => {
-            // Core does not yet expose cancellation through SessionManager —
-            // the underlying processor handles it via the run-state machine.
-            // Surface as Ack for now; concrete cancellation API will be
-            // added when the provider abstraction exposes a stop handle.
-            Ok(CommandResult::Ack)
+        Command::CancelTurn(CancelTurnParams { session_id }) => {
+            // Best-effort: if the turn just finished moments before the
+            // cancel arrived, NoActiveTurn is normal — surface as Ack so
+            // the client doesn't spin on it.
+            match manager.cancel_active_turn(session_id).await {
+                Ok(()) => Ok(CommandResult::Ack),
+                Err(_) => Ok(CommandResult::Ack),
+            }
         }
         Command::ReplyPermission(ReplyPermissionParams {
             session_id,

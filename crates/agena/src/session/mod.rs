@@ -1,6 +1,7 @@
 mod cache;
 mod context_governor;
 mod context_policy;
+pub(crate) mod control;
 pub(crate) mod history;
 pub mod ids;
 mod manager;

@@ -39,6 +39,11 @@ pub(crate) struct SessionRunRequest {
     /// unified bus while the turn is in flight. `None` keeps test harnesses
     /// terse — they observe the buffered `client_events` on the result.
     pub event_publisher: Option<Arc<EventPublisher>>,
+    /// Optional cancel handle. When the token fires the stream loop
+    /// terminates between provider events and surfaces a `TurnAbortReason::
+    /// Cancelled`-shaped terminal error. `None` keeps the legacy "run to
+    /// completion" semantics for callers that don't have a control object.
+    pub cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 #[derive(Debug)]
@@ -363,7 +368,17 @@ impl SessionProcessor {
         let mut finish_reason_enum = FinishReason::default();
         let mut provider_metadata = None;
 
-        while let Some(item) = stream.next().await {
+        let cancel = run.cancel.clone();
+        loop {
+            let next = match cancel.as_ref() {
+                Some(token) => tokio::select! {
+                    biased;
+                    _ = token.cancelled() => None,
+                    item = stream.next() => item,
+                },
+                None => stream.next().await,
+            };
+            let Some(item) = next else { break };
             match item {
                 Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
                     let part_id = match active_text_part {
@@ -450,6 +465,16 @@ impl SessionProcessor {
                     break;
                 }
             }
+        }
+
+        // If the cancel token tripped, the loop above broke without an
+        // explicit provider error. Surface a synthetic terminal error so
+        // the caller knows the turn was cancelled rather than completed.
+        if provider_err.is_none()
+            && let Some(token) = cancel.as_ref()
+            && token.is_cancelled()
+        {
+            provider_err = Some(AppError::Internal("turn cancelled by user".to_string()));
         }
 
         if let Some(part_id) = active_text_part {
@@ -1397,6 +1422,7 @@ mod tests {
                 part_ids: ProcessorPartIdAllocator::for_test(200),
                 next_call_id: 300,
                 event_publisher: None,
+                cancel: None,
             })
             .await
             .expect("processor run should succeed");
@@ -1503,6 +1529,7 @@ mod tests {
                 part_ids: ProcessorPartIdAllocator::for_test(200),
                 next_call_id: 300,
                 event_publisher: None,
+                cancel: None,
             })
             .await
             .expect("processor run should succeed");
@@ -1606,6 +1633,7 @@ mod tests {
                 part_ids: ProcessorPartIdAllocator::for_test(200),
                 next_call_id: 300,
                 event_publisher: Some(event_publisher.clone()),
+                cancel: None,
             })
             .await
             .expect("processor run should succeed");

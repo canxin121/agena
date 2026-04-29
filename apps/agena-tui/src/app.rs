@@ -48,10 +48,13 @@ use crate::clipboard::{
     normalize_pasted_path, paste_image_to_temp_png, pasted_image_format, set_clipboard_text,
 };
 use crate::commands::{self, CommandId, CommandSpec};
+use crate::composer_queue::{ComposerQueue, QueuePriority, QueuedMessage};
 use crate::external_editor::{edit_text, open_path};
 use crate::external_pager::page_text;
 use crate::i18n::I18n;
+use crate::keybindings::{ComposerAction, ComposerKeyBindings};
 use crate::terminal;
+use crate::tui_config::TuiConfig;
 use crate::ui_text;
 
 const MESSAGE_PAGE_SIZE: u64 = 40;
@@ -70,6 +73,7 @@ const PROMPT_SUMMARY_TAG: &str = "prompt_summary";
 pub struct LaunchOptions {
     pub initial_session_id: Option<i64>,
     pub initial_session_search: Option<String>,
+    pub tui_config: TuiConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -128,6 +132,14 @@ pub struct App {
     /// [`AppMessage::SessionEventArrived`]. Aborted whenever the active
     /// session changes so we don't accumulate stale subscriptions.
     active_subscription: Option<tokio::task::JoinHandle<()>>,
+    /// Pending messages typed by the user while the AI was working. Drained
+    /// FIFO once the active turn finishes. See `composer_queue.rs`.
+    queue: ComposerQueue,
+    keybindings: ComposerKeyBindings,
+    /// Last time the user pressed Esc inside the composer; used to detect
+    /// a double-tap that clears the input.
+    last_esc_at: Option<Instant>,
+    double_esc_window: Duration,
 }
 
 impl Drop for App {
@@ -240,6 +252,22 @@ enum AppMessage {
     SessionEventArrived {
         session_id: i64,
         triggers_refresh: bool,
+    },
+    /// Result of a `request_steer_input` call. `result` is `Ok` when the
+    /// backend accepted the steer; `Err` when the turn was no longer
+    /// steerable (e.g. terminal phase). On error we re-enqueue the draft
+    /// so the user's intent isn't dropped.
+    SteerSubmitted {
+        session_id: i64,
+        draft: ComposerDraft,
+        result: UiResult<()>,
+    },
+    /// Result of a `request_cancel_turn` call. We always treat the in-flight
+    /// turn as gone when this lands, regardless of success — the user has
+    /// already signalled cancel intent.
+    TurnCancelled {
+        session_id: i64,
+        result: UiResult<()>,
     },
 }
 
@@ -430,6 +458,7 @@ enum FlashLevel {
     Success,
     Warning,
     Error,
+    Info,
 }
 
 #[derive(Default)]
@@ -479,37 +508,37 @@ struct RunOptionsState {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ComposerDraft {
-    text: String,
-    items: Vec<ComposerItem>,
-    elements: Vec<ComposerDraftElement>,
+pub struct ComposerDraft {
+    pub text: String,
+    pub items: Vec<ComposerItem>,
+    pub elements: Vec<ComposerDraftElement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ComposerItem {
+pub enum ComposerItem {
     Attachment(StagedAttachment),
     LargePaste(StagedPaste),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StagedAttachment {
-    path: PathBuf,
-    placeholder: String,
-    label: String,
-    is_temp: bool,
+pub struct StagedAttachment {
+    pub(crate) path: PathBuf,
+    pub(crate) placeholder: String,
+    pub(crate) label: String,
+    pub(crate) is_temp: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StagedPaste {
-    placeholder: String,
-    label: String,
-    text: String,
+pub struct StagedPaste {
+    pub(crate) placeholder: String,
+    pub(crate) label: String,
+    pub(crate) text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ComposerDraftElement {
-    placeholder: String,
-    range: Range<usize>,
+pub struct ComposerDraftElement {
+    pub(crate) placeholder: String,
+    pub range: Range<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -642,6 +671,8 @@ impl App {
                 Some(format!("failed to load composer drafts: {error}")),
             ),
         };
+        let keybindings = launch.tui_config.keybindings.clone();
+        let double_esc_window = Duration::from_millis(launch.tui_config.double_esc_window_ms);
         let mut app = Self {
             backend,
             i18n: i18n.clone(),
@@ -677,6 +708,10 @@ impl App {
             pending_ui_action: None,
             current_lineage: None,
             active_subscription: None,
+            queue: ComposerQueue::new(),
+            keybindings,
+            last_esc_at: None,
+            double_esc_window,
         };
         if let Some(draft) = app.draft_store.get(DraftSlot::NewSession).cloned() {
             app.restore_composer_draft(draft);
@@ -802,6 +837,20 @@ impl App {
         }
 
         if self.handle_overlay_key(key) {
+            return;
+        }
+
+        // ESC while a turn is in flight — global priority. Cancels the
+        // active turn before falling through to focus-specific Esc.
+        // Mirrors Claude Code's `useCancelRequest` priority order.
+        if matches!(key.code, KeyCode::Esc)
+            && key.modifiers.is_empty()
+            && self.transcript.submitting
+            && let Some(session_id) = self.transcript.session_id
+        {
+            self.transcript.submitting = false;
+            self.submitting_session_ids.remove(&session_id);
+            self.request_cancel_turn(session_id);
             return;
         }
 
@@ -1385,6 +1434,38 @@ impl App {
     }
 
     fn handle_composer_key(&mut self, key: KeyEvent) {
+        // Esc handling is special — double-tap clears the input. We track
+        // it before consulting the configurable bindings.
+        if matches!(key.code, KeyCode::Esc) && key.modifiers.is_empty() {
+            self.handle_composer_esc();
+            return;
+        }
+        // Configurable bindings take precedence over the legacy hardcoded
+        // map. The defaults preserve the user's stated preference:
+        // Enter = queue, Ctrl+Enter = submit, Shift+Enter / Ctrl+J = newline.
+        if let Some(action) = self.keybindings.match_action(&key) {
+            match action {
+                ComposerAction::Submit => {
+                    self.submit_or_steer();
+                    return;
+                }
+                ComposerAction::Queue => {
+                    self.queue_or_submit();
+                    return;
+                }
+                ComposerAction::Newline => {
+                    self.composer.insert_explicit_newline();
+                    return;
+                }
+                ComposerAction::EditQueue => {
+                    if self.try_pop_queue_into_editor() {
+                        return;
+                    }
+                    // Fall through to normal cursor-up behavior when queue
+                    // is empty.
+                }
+            }
+        }
         match key.code {
             KeyCode::F(3) => {
                 self.open_file_attach_overlay();
@@ -1395,23 +1476,6 @@ impl App {
             }
             KeyCode::F(6) => {
                 self.pending_ui_action = Some(UiAction::AttachClipboardImage);
-            }
-            KeyCode::Enter if key.modifiers.is_empty() => {
-                if self.composer.should_insert_newline_on_enter() {
-                    self.composer.insert_newline_from_enter();
-                } else {
-                    self.submit_composer();
-                }
-            }
-            KeyCode::Enter
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) =>
-            {
-                self.composer.insert_explicit_newline();
-            }
-            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.composer.insert_explicit_newline();
             }
             KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_file_attach_overlay();
@@ -1426,14 +1490,59 @@ impl App {
             KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.pending_ui_action = Some(UiAction::AttachClipboardImage);
             }
-            KeyCode::Esc => {
-                self.focus = Focus::Transcript;
-            }
             _ => {
                 self.composer.handle_multiline_input_key(key);
                 self.sync_composer_items_with_editor();
             }
         }
+    }
+
+    /// Single-Esc → leave composer focus. Double-Esc within the configured
+    /// window → clear the input. Mirrors Claude Code's "double tap esc to
+    /// clear input" affordance.
+    fn handle_composer_esc(&mut self) {
+        let now = Instant::now();
+        let double = self
+            .last_esc_at
+            .map(|prev| now.duration_since(prev) <= self.double_esc_window)
+            .unwrap_or(false);
+        if double {
+            self.composer = Editor::default();
+            self.composer_items.clear();
+            self.last_esc_at = None;
+            return;
+        }
+        self.last_esc_at = Some(now);
+        self.focus = Focus::Transcript;
+    }
+
+    /// UP / EditQueue binding: pull every editable queued message back into
+    /// the editor for editing. Returns true if anything was pulled (so the
+    /// caller skips the default cursor-up behavior).
+    fn try_pop_queue_into_editor(&mut self) -> bool {
+        // Only pull the queue when the cursor is at the top line of the
+        // editor — otherwise UP is a normal cursor movement.
+        if !self.composer.cursor_on_first_line() {
+            return false;
+        }
+        let Some(combined) = self.queue.pop_all_editable() else {
+            return false;
+        };
+        // Merge the queued draft on top of whatever's already in the
+        // editor.
+        let mut existing = self.take_composer_draft();
+        if !existing.text.is_empty() && !existing.text.ends_with('\n') {
+            existing.text.push_str("\n\n");
+        }
+        let prev_len = existing.text.len();
+        existing.text.push_str(combined.text.as_str());
+        for mut element in combined.elements {
+            element.range = (element.range.start + prev_len)..(element.range.end + prev_len);
+            existing.elements.push(element);
+        }
+        existing.items.extend(combined.items);
+        self.restore_composer_draft(existing);
+        true
     }
 
     fn handle_message(&mut self, message: AppMessage) {
@@ -1510,6 +1619,14 @@ impl App {
                 session_id,
                 triggers_refresh,
             } => self.handle_session_event_arrived(session_id, triggers_refresh),
+            AppMessage::SteerSubmitted {
+                session_id,
+                draft,
+                result,
+            } => self.handle_steer_submitted(session_id, draft, result),
+            AppMessage::TurnCancelled { session_id, result } => {
+                self.handle_turn_cancelled(session_id, result)
+            }
         }
     }
 
@@ -1700,6 +1817,9 @@ impl App {
                 self.transcript.apply_execution(execution);
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
+                // Pop the next pending message and submit it. Mirrors
+                // Codex's `maybe_send_next_queued_input` post-turn.
+                self.try_drain_queue_one();
             }
             Err(error) => {
                 self.transcript.pending_restore_draft = None;
@@ -1707,6 +1827,74 @@ impl App {
                     self.restore_composer_draft(draft);
                 }
                 self.flash_error(error);
+                // Pause draining: a failed turn typically means the user
+                // wants to inspect the error rather than fire the next
+                // queued message blindly. They can press Up to recover
+                // the queue contents.
+            }
+        }
+    }
+
+    /// Pop one editable message from the queue and submit it. Called
+    /// whenever an in-flight turn completes successfully so the user sees
+    /// their pending messages run automatically.
+    fn try_drain_queue_one(&mut self) {
+        if self.transcript.submitting {
+            return;
+        }
+        let Some(msg) = self.queue.pop_next() else {
+            return;
+        };
+        // Reuse the normal submit path. We stash it into the editor
+        // first so any error path can put the text back in front of the
+        // user.
+        self.restore_composer_draft(msg.draft);
+        self.submit_composer();
+    }
+
+    fn handle_steer_submitted(
+        &mut self,
+        _session_id: i64,
+        draft: ComposerDraft,
+        result: UiResult<()>,
+    ) {
+        match result {
+            Ok(()) => {}
+            Err(error) => {
+                // Backend rejected the steer (turn no longer steerable).
+                // Don't drop the user's message — push it onto the front
+                // of the queue so it goes out at the next turn boundary.
+                self.queue.push(QueuedMessage {
+                    draft,
+                    priority: QueuePriority::Now,
+                    editable: true,
+                });
+                self.flash_warning(format!(
+                    "{}: {}",
+                    ui_text::t(&self.i18n, "flash-steer-failed-fallback-queue"),
+                    error
+                ));
+            }
+        }
+    }
+
+    fn handle_turn_cancelled(&mut self, session_id: i64, result: UiResult<()>) {
+        if self.transcript.session_id == Some(session_id) {
+            self.transcript.submitting = false;
+        }
+        self.submitting_session_ids.remove(&session_id);
+        match result {
+            Ok(()) => {
+                self.flash_info(ui_text::t(&self.i18n, "flash-turn-cancelled"));
+            }
+            Err(error) => {
+                // Even on error we already cleared submitting locally —
+                // surface the failure but don't try to recover state.
+                self.flash_warning(format!(
+                    "{}: {}",
+                    ui_text::t(&self.i18n, "flash-cancel-failed"),
+                    error
+                ));
             }
         }
     }
@@ -2417,6 +2605,47 @@ impl App {
         });
     }
 
+    /// Steer the in-flight turn by injecting `parts` as a new user message
+    /// the model will see on its next step. If the backend reports the
+    /// turn is no longer steerable, fall back to enqueueing the original
+    /// draft so it isn't lost.
+    fn request_steer_input(
+        &mut self,
+        session_id: i64,
+        parts: Vec<PartContent>,
+        draft: ComposerDraft,
+    ) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .steer_input(session_id, parts)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::SteerSubmitted {
+                session_id,
+                draft,
+                result,
+            });
+        });
+        self.flash_info(ui_text::t(&self.i18n, "flash-steer-sent"));
+    }
+
+    /// Ask the backend to cancel the in-flight turn for `session_id`.
+    /// Best-effort: even if the backend hasn't fully wired cancellation,
+    /// we clear the local `submitting` flag so the user regains control.
+    fn request_cancel_turn(&mut self, session_id: i64) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .cancel_turn(session_id)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::TurnCancelled { session_id, result });
+        });
+    }
+
     fn request_permission_reply(
         &mut self,
         session_id: i64,
@@ -2546,6 +2775,79 @@ impl App {
                 result,
             });
         });
+    }
+
+    /// Primary submit action (Ctrl+Enter by default). When the AI is
+    /// idle, sends a normal turn. When the AI is mid-turn, attempts to
+    /// `steer_input` (Phase 3) — i.e. inject the message into the live
+    /// turn so the model sees it on its next step. If the backend rejects
+    /// the steer (e.g. the turn is in a non-steerable phase), we fall
+    /// back to enqueueing the message so it isn't lost.
+    fn submit_or_steer(&mut self) {
+        self.composer.flush_all_pending_input();
+        let draft = self.take_composer_draft();
+        if draft.is_empty() {
+            return;
+        }
+        // Slash-commands always run locally regardless of AI state.
+        if commands::parse_command(draft.text.as_str()).is_some() {
+            self.restore_composer_draft(draft);
+            self.submit_composer();
+            return;
+        }
+        if !self.transcript.submitting {
+            self.restore_composer_draft(draft);
+            self.submit_composer();
+            return;
+        }
+        let Some(session_id) = self.transcript.session_id else {
+            // No active session — fall back to normal submit which will
+            // create one.
+            self.restore_composer_draft(draft);
+            self.submit_composer();
+            return;
+        };
+        let parts = match self.build_submission_parts(&draft) {
+            Ok(parts) => parts,
+            Err(error) => {
+                self.restore_composer_draft(draft);
+                self.flash_error(error);
+                return;
+            }
+        };
+        self.request_steer_input(session_id, parts, draft);
+    }
+
+    /// Secondary submit action (bare Enter by default). When the AI is
+    /// idle, sends immediately. When the AI is mid-turn, the message is
+    /// appended to the local pending queue and drained on turn
+    /// completion. Mirrors Claude Code's default behavior.
+    fn queue_or_submit(&mut self) {
+        // Preserve the legacy paste-burst behavior: if a multi-character
+        // paste burst is active, an Enter inside it should be treated as
+        // a literal newline rather than a submit/queue.
+        if self.composer.should_insert_newline_on_enter() {
+            self.composer.insert_newline_from_enter();
+            return;
+        }
+        self.composer.flush_all_pending_input();
+        let draft = self.take_composer_draft();
+        if draft.is_empty() {
+            return;
+        }
+        // Slash-commands always run locally — never queue.
+        if commands::parse_command(draft.text.as_str()).is_some() {
+            self.restore_composer_draft(draft);
+            self.submit_composer();
+            return;
+        }
+        if self.transcript.submitting {
+            self.queue.enqueue(draft);
+            self.flash_info(ui_text::t(&self.i18n, "flash-message-queued"));
+            return;
+        }
+        self.restore_composer_draft(draft);
+        self.submit_composer();
     }
 
     fn submit_composer(&mut self) {
@@ -3330,6 +3632,110 @@ impl App {
             CommandId::Parent => self.open_parent_session(),
             CommandId::Status => {
                 self.flash_success(self.current_runtime_status_summary());
+            }
+            CommandId::Btw => self.handle_btw_command(args),
+            CommandId::Queue => self.handle_queue_command(args),
+        }
+    }
+
+    /// `/btw <question>` — fork a child session and submit the question
+    /// there *without* touching the parent transcript. Mirrors Claude
+    /// Code's "side question" affordance. The parent turn keeps running
+    /// (or stays idle) untouched; the user can switch to the new session
+    /// via the sessions pane to read the answer.
+    fn handle_btw_command(&mut self, args: &str) {
+        let question = args.trim();
+        if question.is_empty() {
+            self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => "/btw <question>"),
+            ));
+            return;
+        }
+        let parent_id = self
+            .transcript
+            .session_id
+            .or_else(|| self.sessions.current_selected_id());
+        let title = format!("btw: {}", derive_session_title(question));
+        let prompt = question.to_string();
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        let options = self.run_options.to_request();
+        tokio::spawn(async move {
+            let create = backend.create_session(title, parent_id).await;
+            match create {
+                Ok(session) => {
+                    let session_id = session.id;
+                    let parts = vec![PartContent::text(prompt)];
+                    let result = backend
+                        .submit_parts_turn_with_options(session_id, parts, options)
+                        .await
+                        .map_err(|error| error.to_string());
+                    // Reuse the existing turn-submitted message — the
+                    // handler will route the new session into the UI if
+                    // appropriate, otherwise just refresh the list.
+                    let _ = tx.send(AppMessage::SessionTurnSubmitted {
+                        session_id,
+                        draft: ComposerDraft::default(),
+                        result,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(AppMessage::SessionCreated {
+                        submit_draft: None,
+                        result: Err(err.to_string()),
+                    });
+                }
+            }
+        });
+        self.flash_info(ui_text::t(&self.i18n, "flash-btw-spawned"));
+    }
+
+    /// `/queue [list|clear|pop]` — inspect or manage the pending message
+    /// queue.
+    ///   * `list` (default): flash a one-liner showing how many entries
+    ///     and the first preview.
+    ///   * `clear`: drop every queued message.
+    ///   * `pop`: pull the head editable entry back into the editor.
+    fn handle_queue_command(&mut self, args: &str) {
+        let action = args.trim().to_lowercase();
+        match action.as_str() {
+            "" | "list" | "ls" | "show" => {
+                if self.queue.is_empty() {
+                    self.flash_info(ui_text::t(&self.i18n, "flash-queue-empty"));
+                    return;
+                }
+                let preview = self.queue.first_preview(60).unwrap_or_default();
+                self.flash_info(self.i18n.text_args(
+                    "flash-queue-list",
+                    &crate::fl_args!(
+                        "count" => self.queue.len() as i64,
+                        "preview" => preview,
+                    ),
+                ));
+            }
+            "clear" | "drop" => {
+                if self.queue.is_empty() {
+                    self.flash_info(ui_text::t(&self.i18n, "flash-queue-empty"));
+                    return;
+                }
+                let count = self.queue.len();
+                self.queue.clear();
+                self.flash_success(self.i18n.text_args(
+                    "flash-queue-cleared",
+                    &crate::fl_args!("count" => count as i64),
+                ));
+            }
+            "pop" | "edit" => {
+                if !self.try_pop_queue_into_editor() {
+                    self.flash_info(ui_text::t(&self.i18n, "flash-queue-empty"));
+                }
+            }
+            _ => {
+                self.flash_warning(self.i18n.text_args(
+                    "flash-command-usage",
+                    &crate::fl_args!("usage" => "/queue [list|clear|pop]"),
+                ));
             }
         }
     }
@@ -4658,6 +5064,19 @@ impl App {
         if let Some(summary) = self.run_options.summary() {
             title = format!("{title}[{summary}] ");
         }
+        // Queue indicator in the composer title — `· N queued · preview…`
+        // (mirrors Claude Code's `· N queued`). Only shown when non-empty.
+        if !self.queue.is_empty() {
+            let preview = self.queue.first_preview(40).unwrap_or_default();
+            if preview.is_empty() {
+                title = format!("{title}· {} queued ", self.queue.len());
+            } else {
+                title = format!("{title}· {} queued · {preview} ", self.queue.len());
+            }
+        }
+        if self.transcript.submitting {
+            title = format!("{title}· esc to interrupt ");
+        }
         let block = Block::default().title(title).borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -4694,6 +5113,7 @@ impl App {
                     FlashLevel::Success => Style::default().fg(Color::Green),
                     FlashLevel::Warning => Style::default().fg(Color::Yellow),
                     FlashLevel::Error => Style::default().fg(Color::Red),
+                    FlashLevel::Info => Style::default().fg(Color::Cyan),
                 },
             )
         } else {
@@ -5242,6 +5662,10 @@ impl App {
 
     fn flash_success(&mut self, text: impl Into<String>) {
         self.flash(FlashLevel::Success, text);
+    }
+
+    fn flash_info(&mut self, text: impl Into<String>) {
+        self.flash(FlashLevel::Info, text);
     }
 }
 
@@ -6512,6 +6936,13 @@ impl Editor {
             .bytes()
             .filter(|byte| *byte == b'\n')
             .count()
+    }
+
+    /// True when there's no preceding newline before the cursor — used by
+    /// the queue-edit shortcut so UP only steals the keystroke when the
+    /// user is on the editor's first line.
+    fn cursor_on_first_line(&self) -> bool {
+        self.current_line_index() == 0
     }
 
     fn current_line_start(&self) -> usize {

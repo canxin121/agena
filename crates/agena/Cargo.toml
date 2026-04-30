@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 agena-mcp-client = { path = "../agena-mcp-client" }
+agena-mcp-server = { path = "../agena-mcp-server" }
 agena-lsp = { path = "../agena-lsp" }
 agena-keyring-store = { path = "../agena-keyring-store" }
 agena-scheduler = { path = "../agena-scheduler" }

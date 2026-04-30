@@ -2,9 +2,20 @@ use std::{
     fs,
     io::{self, Write},
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
+use agena_mcp_client::protocol::{
+    CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult,
+    PromptDescriptor, PromptMessage, ReadResourceParams, ReadResourceResult, ResourceContents,
+    ResourceDescriptor, ToolDescriptor,
+};
+use agena_mcp_server::{McpServerBackend, McpServerError};
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use serde::Serialize;
@@ -16,7 +27,9 @@ use crate::{
         LoadConfigRequest, ProcessEnvironment,
     },
     error::AppError,
-    message::{ApplyPatchToolInput, BuiltinToolInput, PartContent},
+    message::{
+        ApplyPatchToolInput, BuiltinToolInput, PartContent, StructuredObject, ToolInvocation,
+    },
     model::ModelRef,
     permission::{PermissionPolicy, ToolPermissionPolicy},
     provider::{
@@ -29,8 +42,8 @@ use crate::{
     runtime::{AgenaRuntime, TracingFilterReloadHandle},
     session::{
         Session, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
-        SessionListRequest, SessionRunOptions, SessionRuntimeStatus, SessionSummary,
-        SessionUserTurnRequest,
+        SessionListRequest, SessionManager, SessionRunOptions, SessionRuntimeStatus,
+        SessionSummary, SessionUserTurnRequest,
     },
     storage::StorageConfig,
     tool::{ApplyPatchExecution, ToolExecutor},
@@ -65,6 +78,7 @@ pub enum AgenaCommand {
     Fork(ForkArgs),
     Login(LoginArgs),
     Logout(LogoutArgs),
+    McpServer(McpServerArgs),
     Provider(ProviderCommand),
     Resume(ResumeArgs),
     Review(ReviewArgs),
@@ -104,6 +118,12 @@ pub struct SessionsCommand {
 
 #[derive(Debug, Clone, Args, Default)]
 pub struct ServeCommand {}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpServerArgs {
+    #[arg(long = "workspace", alias = "cwd")]
+    pub workspace: Option<PathBuf>,
+}
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AuthSubcommand {
@@ -418,6 +438,7 @@ impl AgenaCli {
             Some(AgenaCommand::Fork(args)) => self.run_fork(args).await,
             Some(AgenaCommand::Login(args)) => self.run_login(loader, args).await,
             Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args),
+            Some(AgenaCommand::McpServer(args)) => self.run_mcp_server(args).await,
             Some(AgenaCommand::Provider(command)) => self.run_provider(loader, command).await,
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
             Some(AgenaCommand::Review(args)) => self.run_review(args).await,
@@ -672,6 +693,13 @@ impl AgenaCli {
         let output = self.render_fork_command(args).await?;
         println!("{output}");
         Ok(())
+    }
+
+    async fn run_mcp_server(self, args: McpServerArgs) -> Result<(), AppError> {
+        let backend = self.mcp_server_backend(args).await?;
+        agena_mcp_server::serve_stdio(backend)
+            .await
+            .map_err(|err| AppError::Config(err.to_string()))
     }
 
     async fn run_review(self, args: ReviewArgs) -> Result<(), AppError> {
@@ -1091,12 +1119,250 @@ impl AgenaCli {
         }
     }
 
+    async fn mcp_server_backend(&self, args: McpServerArgs) -> Result<AgenaMcpBackend, AppError> {
+        let runtime = self
+            .session_runtime_with_workspace(args.workspace.as_ref())
+            .await?;
+        let snapshot = runtime.current_snapshot();
+        let agent = Agent::new("mcp-server", PermissionPolicy::allow_all())
+            .with_tool_policy(ToolPermissionPolicy::allow_all());
+        let skills = Arc::new(
+            agena_skills::SkillsManager::build(Some(runtime.workspace_root()))
+                .map_err(|err| AppError::Config(err.to_string()))?,
+        );
+        let executor = ToolExecutor::new(runtime.workspace_root().to_path_buf(), agent)
+            .with_plugin_manager(snapshot.plugin_manager())
+            .with_skills_manager(Arc::clone(&skills));
+        Ok(AgenaMcpBackend {
+            executor,
+            skills,
+            session_manager: runtime.session_manager(),
+            workspace_root: runtime.workspace_root().to_path_buf(),
+            next_call_id: Arc::new(AtomicI64::new(1)),
+        })
+    }
+
     pub fn load_request(&self) -> LoadConfigRequest {
         LoadConfigRequest {
             config_path: self.config.clone(),
             mode: self.mode.clone(),
             overrides: self.overrides.clone(),
         }
+    }
+}
+
+#[derive(Clone)]
+struct AgenaMcpBackend {
+    executor: ToolExecutor,
+    skills: Arc<agena_skills::SkillsManager>,
+    session_manager: Option<Arc<SessionManager>>,
+    workspace_root: PathBuf,
+    next_call_id: Arc<AtomicI64>,
+}
+
+#[async_trait]
+impl McpServerBackend for AgenaMcpBackend {
+    async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
+        Ok(self
+            .executor
+            .available_tools()
+            .into_iter()
+            .map(|tool| ToolDescriptor {
+                name: tool.name,
+                description: Some(tool.description),
+                input_schema: Some(tool.input_schema),
+            })
+            .collect())
+    }
+
+    async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError> {
+        let name = params.name;
+        let input = structured_tool_input(params.arguments)?;
+        let invocation = mcp_tool_invocation(name.as_str(), input)?;
+        let call_id = self.next_call_id.fetch_add(1, Ordering::SeqCst);
+        let result = self
+            .executor
+            .execute_invocation_detailed(&invocation, -1, call_id);
+        match result {
+            Ok(execution) => {
+                self.audit_tool_call(name.as_str(), call_id, false, None)
+                    .await;
+                let text = if execution.view.output_text.is_empty() {
+                    serde_json::to_string_pretty(&execution.output)
+                        .unwrap_or_else(|_| "<empty output>".to_owned())
+                } else {
+                    execution.view.output_text
+                };
+                Ok(agena_mcp_server::text_result(text))
+            }
+            Err(err) => {
+                let message = err.to_string();
+                self.audit_tool_call(name.as_str(), call_id, true, Some(message.as_str()))
+                    .await;
+                Ok(agena_mcp_server::text_error(message))
+            }
+        }
+    }
+
+    async fn list_resources(&self) -> Result<Vec<ResourceDescriptor>, McpServerError> {
+        let mut resources = vec![ResourceDescriptor {
+            uri: "agena://workspace".to_owned(),
+            name: Some("Workspace".to_owned()),
+            description: Some("Current Agena workspace root".to_owned()),
+            mime_type: Some("text/plain".to_owned()),
+        }];
+        if self.session_manager.is_some() {
+            resources.push(ResourceDescriptor {
+                uri: "agena://sessions".to_owned(),
+                name: Some("Sessions".to_owned()),
+                description: Some("Recent Agena session metadata".to_owned()),
+                mime_type: Some("application/json".to_owned()),
+            });
+        }
+        Ok(resources)
+    }
+
+    async fn read_resource(
+        &self,
+        params: ReadResourceParams,
+    ) -> Result<ReadResourceResult, McpServerError> {
+        let (text, mime_type) = match params.uri.as_str() {
+            "agena://workspace" => (
+                self.workspace_root.display().to_string(),
+                Some("text/plain".to_owned()),
+            ),
+            "agena://sessions" => {
+                let manager = self
+                    .session_manager
+                    .as_ref()
+                    .ok_or_else(|| McpServerError::NotFound(params.uri.clone()))?;
+                let sessions = manager
+                    .list_session_summaries(SessionListRequest {
+                        offset: 0,
+                        limit: Some(50),
+                    })
+                    .await
+                    .map_err(|err| McpServerError::Backend(err.to_string()))?;
+                (
+                    serde_json::to_string_pretty(&sessions)
+                        .map_err(|err| McpServerError::Backend(err.to_string()))?,
+                    Some("application/json".to_owned()),
+                )
+            }
+            other => return Err(McpServerError::NotFound(other.to_owned())),
+        };
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents {
+                uri: params.uri,
+                mime_type,
+                text: Some(text),
+                blob: None,
+            }],
+        })
+    }
+
+    async fn list_prompts(&self) -> Result<Vec<PromptDescriptor>, McpServerError> {
+        Ok(self
+            .skills
+            .list()
+            .into_iter()
+            .map(|skill| PromptDescriptor {
+                name: skill.frontmatter.name,
+                description: Some(skill.frontmatter.description),
+                arguments: Vec::new(),
+            })
+            .collect())
+    }
+
+    async fn get_prompt(&self, params: GetPromptParams) -> Result<GetPromptResult, McpServerError> {
+        let skill = self
+            .skills
+            .get(params.name.as_str())
+            .map_err(|err| McpServerError::NotFound(err.to_string()))?;
+        let mut body = skill.body;
+        if let Some(arguments) = params.arguments
+            && !arguments.is_empty()
+        {
+            body.push_str("\n\nArguments:\n");
+            for (key, value) in arguments {
+                body.push_str(&format!("- {key}: {value}\n"));
+            }
+        }
+        Ok(GetPromptResult {
+            description: Some(skill.frontmatter.description),
+            messages: vec![PromptMessage {
+                role: "user".to_owned(),
+                content: ContentBlock::Text { text: body },
+            }],
+        })
+    }
+}
+
+impl AgenaMcpBackend {
+    async fn audit_tool_call(
+        &self,
+        tool_name: &str,
+        call_id: i64,
+        is_error: bool,
+        error: Option<&str>,
+    ) {
+        let Some(manager) = self.session_manager.as_ref() else {
+            return;
+        };
+        let payload = serde_json::json!({
+            "tool_name": tool_name,
+            "call_id": call_id,
+            "is_error": is_error,
+            "error": error,
+        });
+        let _ = manager
+            .event_publisher()
+            .publish(
+                Default::default(),
+                crate::event::EventKind::PluginEvent(crate::event::PluginEventPayload {
+                    plugin_id: "agena.mcp_server".to_owned(),
+                    kind_label: "mcp_tool_call".to_owned(),
+                    payload,
+                }),
+            )
+            .await;
+    }
+}
+
+fn structured_tool_input(
+    arguments: Option<serde_json::Value>,
+) -> Result<StructuredObject, McpServerError> {
+    StructuredObject::try_from(arguments.unwrap_or_else(|| serde_json::json!({})))
+        .map_err(McpServerError::InvalidParams)
+}
+
+fn mcp_tool_invocation(
+    name: &str,
+    input: StructuredObject,
+) -> Result<ToolInvocation, McpServerError> {
+    if let Some(builtin) = BuiltinToolInput::from_custom(name, &input) {
+        return Ok(builtin.into_invocation());
+    }
+    if let Some((server, tool)) = parse_external_mcp_tool_name(name) {
+        return Ok(ToolInvocation::Mcp {
+            server,
+            tool,
+            input,
+        });
+    }
+    Ok(ToolInvocation::Custom {
+        name: name.to_owned(),
+        input,
+    })
+}
+
+fn parse_external_mcp_tool_name(name: &str) -> Option<(String, String)> {
+    let mut parts = name.splitn(3, ':');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("mcp"), Some(server), Some(tool)) if !server.is_empty() && !tool.is_empty() => {
+            Some((server.to_owned(), tool.to_owned()))
+        }
+        _ => None,
     }
 }
 
@@ -1646,6 +1912,21 @@ store_path = "{}"
         let DebugSubcommand::Session(args) = command.command;
         assert_eq!(args.session_id, 42);
         assert!(args.json);
+
+        let mcp_server = AgenaCli::parse_from(["agena", "mcp-server", "--cwd", "."]);
+        let Some(AgenaCommand::McpServer(args)) = mcp_server.command else {
+            panic!("expected mcp-server command");
+        };
+        assert_eq!(args.workspace, Some(PathBuf::from(".")));
+    }
+
+    #[test]
+    fn mcp_tool_name_parser_handles_external_tools() {
+        assert_eq!(
+            parse_external_mcp_tool_name("mcp:github:create_issue"),
+            Some(("github".to_owned(), "create_issue".to_owned()))
+        );
+        assert_eq!(parse_external_mcp_tool_name("read"), None);
     }
 
     #[test]

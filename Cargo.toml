@@ -13,6 +13,7 @@ members = [
     "crates/agena-keyring-store",
     "crates/agena-lsp",
     "crates/agena-mcp-client",
+    "crates/agena-mcp-server",
     "crates/agena-plugin-host",
     "crates/agena-plugin-sdk",
     "crates/agena-rollout",

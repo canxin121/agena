@@ -63,6 +63,7 @@ dependencies = [
  "agena-keyring-store",
  "agena-lsp",
  "agena-mcp-client",
+ "agena-mcp-server",
  "agena-plugin-host",
  "agena-scheduler",
  "agena-skills",
@@ -277,6 +278,19 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "agena-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "agena-mcp-client",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

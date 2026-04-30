@@ -367,6 +367,11 @@ fn file_change_part_summary(part: &FileChangePart) -> Option<String> {
 }
 
 fn file_change_entry_summary(change: &FileChangeEntry) -> String {
+    if change.kind == FileChangeKind::Moved {
+        if let Some(from_path) = change.from_path.as_deref() {
+            return format!("{from_path} -> {} (moved)", change.path);
+        }
+    }
     format!("{} ({})", change.path, file_change_kind_label(change.kind))
 }
 
@@ -375,6 +380,7 @@ const fn file_change_kind_label(kind: FileChangeKind) -> &'static str {
         FileChangeKind::Added => "added",
         FileChangeKind::Updated => "updated",
         FileChangeKind::Deleted => "deleted",
+        FileChangeKind::Moved => "moved",
     }
 }
 
@@ -525,6 +531,7 @@ mod tests {
                 changes: vec![crate::message::FileChangeEntry {
                     path: "result.txt".to_string(),
                     kind: FileChangeKind::Added,
+                    from_path: None,
                 }],
             }),
         );

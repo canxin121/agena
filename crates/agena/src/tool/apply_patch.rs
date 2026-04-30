@@ -13,6 +13,8 @@ use super::{ToolError, ToolExecutor};
 pub struct AppliedFileChange {
     pub path: String,
     pub kind: PatchOpKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,21 +24,33 @@ pub struct ApplyPatchExecution {
     pub before_hash: String,
     pub after_hash: String,
     pub inverse_patch: String,
+    pub diff: String,
+    pub progress: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PatchOpKind {
     Add,
     Update,
     Delete,
+    Move,
 }
 
 #[derive(Debug, Clone)]
 enum PatchOp {
-    Add { path: String, content: String },
-    Delete { path: String },
-    Update { path: String, hunks: Vec<Hunk> },
+    Add {
+        path: String,
+        content: String,
+    },
+    Delete {
+        path: String,
+    },
+    Update {
+        path: String,
+        move_to: Option<String>,
+        hunks: Vec<Hunk>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +74,8 @@ pub fn execute(
     let mut after_state = String::new();
     let mut inverse_sections = Vec::new();
     let mut changed_files = Vec::new();
+    let mut diff_sections = Vec::new();
+    let mut progress = ops.iter().map(describe_planned_op).collect::<Vec<_>>();
 
     for op in ops {
         match op {
@@ -79,9 +95,12 @@ pub fn execute(
                 fs::write(&absolute, &content)?;
 
                 inverse_sections.push(format!("*** Delete File: {path}"));
+                diff_sections.push(render_file_diff(None, Some((&path, &content))));
+                progress.push(format!("applied add {path}"));
                 changed_files.push(AppliedFileChange {
                     path,
                     kind: PatchOpKind::Add,
+                    from_path: None,
                 });
             }
             PatchOp::Delete { path } => {
@@ -100,33 +119,87 @@ pub fn execute(
                 fs::remove_file(&absolute)?;
 
                 inverse_sections.push(render_add_file_section(&path, &original));
+                diff_sections.push(render_file_diff(Some((&path, &original)), None));
+                progress.push(format!("applied delete {path}"));
                 changed_files.push(AppliedFileChange {
                     path,
                     kind: PatchOpKind::Delete,
+                    from_path: None,
                 });
             }
-            PatchOp::Update { path, hunks } => {
-                let absolute = absolute_path(executor.workspace_root(), &path);
-                executor.ensure_edit_permission(&absolute)?;
-                if !absolute.exists() {
+            PatchOp::Update {
+                path,
+                move_to,
+                hunks,
+            } => {
+                let source = absolute_path(executor.workspace_root(), &path);
+                executor.ensure_edit_permission(&source)?;
+                if !source.exists() {
                     return Err(ToolError::InvalidPatch(format!(
                         "update file target does not exist: {path}"
                     )));
                 }
 
-                let original = fs::read_to_string(&absolute)?;
-                let updated = apply_hunks(&original, &hunks)?;
+                let original = fs::read_to_string(&source)?;
+                let updated = apply_hunks(&path, &original, &hunks)?;
 
-                before_state.push_str(&format!("U:{path}:{original}\n"));
-                after_state.push_str(&format!("U:{path}:{updated}\n"));
+                if let Some(target_path) = move_to {
+                    let target = absolute_path(executor.workspace_root(), &target_path);
+                    executor.ensure_edit_permission(&target)?;
+                    ensure_parent(&target)?;
+                    if source != target && target.exists() {
+                        return Err(ToolError::InvalidPatch(format!(
+                            "move target already exists: {target_path}"
+                        )));
+                    }
 
-                fs::write(&absolute, &updated)?;
+                    before_state.push_str(&format!("M:{path}:{original}\n"));
+                    after_state.push_str(&format!("M:{target_path}:{updated}\n"));
 
-                inverse_sections.push(render_update_inverse_section(&path, &updated, &original));
-                changed_files.push(AppliedFileChange {
-                    path,
-                    kind: PatchOpKind::Update,
-                });
+                    if source == target {
+                        fs::write(&source, &updated)?;
+                    } else {
+                        fs::write(&target, &updated)?;
+                        fs::remove_file(&source)?;
+                    }
+
+                    inverse_sections.push(render_update_inverse_section(
+                        &path,
+                        Some(&target_path),
+                        &updated,
+                        &original,
+                    ));
+                    diff_sections.push(render_file_diff(
+                        Some((&path, &original)),
+                        Some((&target_path, &updated)),
+                    ));
+                    progress.push(format!("applied move {path} -> {target_path}"));
+                    changed_files.push(AppliedFileChange {
+                        path: target_path,
+                        kind: PatchOpKind::Move,
+                        from_path: Some(path),
+                    });
+                } else {
+                    let absolute = source;
+                    before_state.push_str(&format!("U:{path}:{original}\n"));
+                    after_state.push_str(&format!("U:{path}:{updated}\n"));
+
+                    fs::write(&absolute, &updated)?;
+
+                    inverse_sections.push(render_update_inverse_section(
+                        &path, None, &updated, &original,
+                    ));
+                    diff_sections.push(render_file_diff(
+                        Some((&path, &original)),
+                        Some((&path, &updated)),
+                    ));
+                    progress.push(format!("applied update {path}"));
+                    changed_files.push(AppliedFileChange {
+                        path,
+                        kind: PatchOpKind::Update,
+                        from_path: None,
+                    });
+                }
             }
         }
     }
@@ -143,19 +216,26 @@ pub fn execute(
         before_hash: sha256_hex(&before_state),
         after_hash: sha256_hex(&after_state),
         inverse_patch,
+        diff: diff_sections.join("\n"),
+        progress,
     })
 }
 
 pub(crate) fn planned_paths(text: &str) -> Result<Vec<String>, ToolError> {
     let ops = parse_patch(text)?;
-    Ok(ops
-        .into_iter()
-        .map(|op| match op {
-            PatchOp::Add { path, .. } | PatchOp::Delete { path } | PatchOp::Update { path, .. } => {
-                path
+    let mut paths = Vec::new();
+    for op in ops {
+        match op {
+            PatchOp::Add { path, .. } | PatchOp::Delete { path } => paths.push(path),
+            PatchOp::Update { path, move_to, .. } => {
+                paths.push(path);
+                if let Some(target) = move_to {
+                    paths.push(target);
+                }
             }
-        })
-        .collect())
+        }
+    }
+    Ok(paths)
 }
 
 fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
@@ -213,12 +293,25 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
 
         if let Some(path) = line.strip_prefix("*** Update File: ") {
             idx += 1;
+            let mut move_to = None;
             let mut hunks = Vec::new();
             let mut old_lines = Vec::new();
             let mut new_lines = Vec::new();
 
-            while idx < lines.len() - 1 && !lines[idx].starts_with("*** ") {
+            while idx < lines.len() - 1 {
                 let l = lines[idx];
+                if let Some(target) = l.strip_prefix("*** Move to: ") {
+                    if move_to.replace(target.to_string()).is_some() {
+                        return Err(ToolError::InvalidPatch(format!(
+                            "duplicate move target for update file: {path}"
+                        )));
+                    }
+                    idx += 1;
+                    continue;
+                }
+                if l.starts_with("*** ") {
+                    break;
+                }
                 if l.starts_with("@@") {
                     if !old_lines.is_empty() || !new_lines.is_empty() {
                         hunks.push(Hunk {
@@ -250,7 +343,7 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
                 }
 
                 return Err(ToolError::InvalidPatch(format!(
-                    "invalid update hunk line: {l}"
+                    "invalid update hunk line in {path}: {l}"
                 )));
             }
 
@@ -261,7 +354,7 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
                 });
             }
 
-            if hunks.is_empty() {
+            if hunks.is_empty() && move_to.is_none() {
                 return Err(ToolError::InvalidPatch(format!(
                     "update file has no hunks: {path}"
                 )));
@@ -269,6 +362,7 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
 
             ops.push(PatchOp::Update {
                 path: path.to_string(),
+                move_to,
                 hunks,
             });
             continue;
@@ -282,15 +376,18 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
     Ok(ops)
 }
 
-fn apply_hunks(original: &str, hunks: &[Hunk]) -> Result<String, ToolError> {
+fn apply_hunks(path: &str, original: &str, hunks: &[Hunk]) -> Result<String, ToolError> {
     let mut content = normalize_lf(original);
-    for hunk in hunks {
+    for (index, hunk) in hunks.iter().enumerate() {
         if hunk.old.is_empty() {
             content.push_str(&hunk.new);
             continue;
         }
         let pos = content.find(&hunk.old).ok_or_else(|| {
-            ToolError::InvalidPatch("failed to locate update hunk in target file".to_string())
+            ToolError::InvalidPatch(format!(
+                "failed to locate update hunk {} in target file: {path}",
+                index + 1
+            ))
         })?;
         content.replace_range(pos..(pos + hunk.old.len()), &hunk.new);
     }
@@ -313,15 +410,85 @@ fn render_add_file_section(path: &str, content: &str) -> String {
     lines.join("\n")
 }
 
-fn render_update_inverse_section(path: &str, now_content: &str, before_content: &str) -> String {
-    let mut lines = vec![format!("*** Update File: {path}"), "@@".to_string()];
-    for line in normalize_lf(now_content).lines() {
-        lines.push(format!("-{line}"));
+fn render_update_inverse_section(
+    original_path: &str,
+    current_path: Option<&str>,
+    now_content: &str,
+    before_content: &str,
+) -> String {
+    let mut lines = vec![format!(
+        "*** Update File: {}",
+        current_path.unwrap_or(original_path)
+    )];
+    if current_path.is_some() {
+        lines.push(format!("*** Move to: {original_path}"));
     }
-    for line in normalize_lf(before_content).lines() {
-        lines.push(format!("+{line}"));
+    if now_content != before_content {
+        lines.push("@@".to_string());
+        for line in normalize_lf(now_content).lines() {
+            lines.push(format!("-{line}"));
+        }
+        for line in normalize_lf(before_content).lines() {
+            lines.push(format!("+{line}"));
+        }
     }
     lines.join("\n")
+}
+
+fn render_file_diff(before: Option<(&str, &str)>, after: Option<(&str, &str)>) -> String {
+    let before_path = before.map(|(path, _)| path);
+    let after_path = after.map(|(path, _)| path);
+    let display_before = before_path.unwrap_or("/dev/null");
+    let display_after = after_path.unwrap_or("/dev/null");
+    let mut lines = vec![format!(
+        "diff --git a/{} b/{}",
+        before_path.unwrap_or(display_after),
+        after_path.unwrap_or(display_before)
+    )];
+
+    match (before_path, after_path) {
+        (None, Some(_)) => lines.push("new file mode 100644".to_string()),
+        (Some(_), None) => lines.push("deleted file mode 100644".to_string()),
+        (Some(from), Some(to)) if from != to => {
+            lines.push(format!("rename from {from}"));
+            lines.push(format!("rename to {to}"));
+        }
+        _ => {}
+    }
+
+    lines.push(format!(
+        "--- {}",
+        before_path.map_or("/dev/null".to_string(), |p| format!("a/{p}"))
+    ));
+    lines.push(format!(
+        "+++ {}",
+        after_path.map_or("/dev/null".to_string(), |p| format!("b/{p}"))
+    ));
+    lines.push("@@".to_string());
+
+    if let Some((_, content)) = before {
+        for line in normalize_lf(content).lines() {
+            lines.push(format!("-{line}"));
+        }
+    }
+    if let Some((_, content)) = after {
+        for line in normalize_lf(content).lines() {
+            lines.push(format!("+{line}"));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn describe_planned_op(op: &PatchOp) -> String {
+    match op {
+        PatchOp::Add { path, .. } => format!("parsed add {path}"),
+        PatchOp::Delete { path } => format!("parsed delete {path}"),
+        PatchOp::Update { path, move_to, .. } => match move_to {
+            Some(target) => format!("parsed move {path} -> {target}"),
+            None => format!("parsed update {path}"),
+        },
+    }
 }
 
 fn absolute_path(workspace_root: &Path, file_path: &str) -> PathBuf {

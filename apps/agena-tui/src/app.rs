@@ -10,8 +10,9 @@ use std::{
 use agena::{
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
-        AttachmentKind, BuiltinToolInput, MessagePart, PartContent, ToolExecutionPart,
-        ToolInvocation, UserInputReply, UserInputReplyKind, UserInputRequest,
+        AttachmentKind, BuiltinToolInput, BuiltinToolOutput, FileChangeKind, MessagePart,
+        PartContent, ToolExecutionPart, ToolInvocation, UserInputReply, UserInputReplyKind,
+        UserInputRequest,
     },
     model::ModelRef,
     permission::PermissionReplyKind,
@@ -7286,9 +7287,18 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
                 style: Style::default().fg(Color::Magenta),
             });
             for entry in &change.changes {
+                let path = if entry.kind == FileChangeKind::Moved {
+                    entry
+                        .from_path
+                        .as_ref()
+                        .map(|from_path| format!("{from_path} -> {}", entry.path))
+                        .unwrap_or_else(|| entry.path.clone())
+                } else {
+                    entry.path.clone()
+                };
                 out.push(RenderedLine::plain(format!(
                     "    - {} ({})",
-                    entry.path,
+                    path,
                     ui_text::file_change_kind_label(i18n, entry.kind)
                 )));
             }
@@ -7451,6 +7461,7 @@ fn render_tool_execution(
             invocation,
             output_text,
             blocks,
+            details,
             ..
         } => {
             out.push(RenderedLine {
@@ -7465,6 +7476,19 @@ fn render_tool_execution(
             });
             if !output_text.trim().is_empty() {
                 push_multiline(out, "    ", output_text, Style::default(), width);
+            }
+            if let Some(diff) = apply_patch_diff(details) {
+                out.push(RenderedLine::dim(format!(
+                    "    diff ({} lines)",
+                    diff.lines().count()
+                )));
+                push_multiline(
+                    out,
+                    "    ",
+                    diff.as_str(),
+                    Style::default().fg(Color::DarkGray),
+                    width,
+                );
             }
             if !blocks.is_empty() {
                 out.push(RenderedLine::dim(ui_text::message_tool_result_blocks(
@@ -7502,6 +7526,13 @@ fn render_tool_execution(
                 push_multiline(out, "    ", output_text, Style::default(), width);
             }
         }
+    }
+}
+
+fn apply_patch_diff(details: &agena::message::ToolOutput) -> Option<String> {
+    match details.as_builtin()? {
+        BuiltinToolOutput::ApplyPatch { diff, .. } if !diff.trim().is_empty() => Some(diff),
+        _ => None,
     }
 }
 

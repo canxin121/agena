@@ -6,6 +6,16 @@ use super::{
     todo_write, tool_search, view_file, web_fetch, web_search, worktree,
 };
 
+fn apply_patch_output_text(result: &apply_patch::ApplyPatchExecution) -> String {
+    let mut lines = vec![format!(
+        "Applied {} file changes in patch operation {}.",
+        result.files.len(),
+        result.operation_id
+    )];
+    lines.extend(result.progress.iter().map(|line| format!("- {line}")));
+    lines.join("\n")
+}
+
 pub(super) fn execute_builtin(
     executor: &ToolExecutor,
     input: &BuiltinToolInput,
@@ -25,21 +35,22 @@ pub(super) fn execute_builtin(
                             super::apply_patch::PatchOpKind::Add => FileChangeKind::Added,
                             super::apply_patch::PatchOpKind::Update => FileChangeKind::Updated,
                             super::apply_patch::PatchOpKind::Delete => FileChangeKind::Deleted,
+                            super::apply_patch::PatchOpKind::Move => FileChangeKind::Moved,
                         },
+                        from_path: f.from_path.clone(),
                     })
                     .collect(),
                 before_hash: Some(result.before_hash.clone()),
                 after_hash: Some(result.after_hash.clone()),
                 inverse_patch: result.inverse_patch.clone(),
+                diff: result.diff.clone(),
+                progress: result.progress.clone(),
             };
 
+            let output_text = apply_patch_output_text(&result);
             let mut view = ToolExecutionView::simple(
                 format!("Apply patch ({})", result.operation_id),
-                format!(
-                    "Applied {} file changes in patch operation {}.",
-                    result.files.len(),
-                    result.operation_id
-                ),
+                output_text,
             );
             view.metadata
                 .insert("operation_id".to_string(), result.operation_id.clone());

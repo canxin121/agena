@@ -166,6 +166,7 @@ pub fn file_change_kind_label(i18n: &I18n, kind: FileChangeKind) -> String {
         FileChangeKind::Added => t(i18n, "file-change-added"),
         FileChangeKind::Updated => t(i18n, "file-change-updated"),
         FileChangeKind::Deleted => t(i18n, "file-change-deleted"),
+        FileChangeKind::Moved => "moved".to_string(),
     }
 }
 

@@ -87,6 +87,8 @@ pub struct FileChangePart {
 pub struct FileChangeEntry {
     pub path: String,
     pub kind: FileChangeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,6 +97,7 @@ pub enum FileChangeKind {
     Added,
     Updated,
     Deleted,
+    Moved,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

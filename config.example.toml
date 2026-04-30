@@ -3,6 +3,11 @@ mode = "dev"
 [tracing]
 filter = "info"
 
+[auth]
+# auto prefers the OS keyring and falls back to store_path when keyring is unavailable.
+store_backend = "auto"
+# store_path = "~/.agena/auth.json"
+
 [runtime.provider_http]
 timeout_secs = 120
 connect_timeout_secs = 15

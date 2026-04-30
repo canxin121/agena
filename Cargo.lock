@@ -60,6 +60,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "agena"
 version = "0.1.0"
 dependencies = [
+ "agena-keyring-store",
  "agena-lsp",
  "agena-mcp-client",
  "agena-plugin-host",
@@ -228,6 +229,15 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "agena-keyring-store"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "parking_lot",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3348,6 +3358,16 @@ checksum = "b49715b7073f385ba4bc528e5747d02e66cb39c6146efb66b781f131f0fb399c"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "keyring"
+version = "3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
+dependencies = [
+ "log",
+ "zeroize",
 ]
 
 [[package]]

@@ -14,8 +14,8 @@ pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvi
 pub use overrides::ConfigOverride;
 pub use types::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, AuthConfig,
-    BedrockAuthConfig, CloudflareAiGatewayProviderOptions, CodexProviderOptions, ConfigModeName,
-    ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource,
+    AuthStoreBackend, BedrockAuthConfig, CloudflareAiGatewayProviderOptions, CodexProviderOptions,
+    ConfigModeName, ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource,
     CopilotProviderOptions, GitlabProviderOptions, GoogleVertexAuthConfig,
     GoogleVertexProviderOptions, HttpProviderConfig, LspConfig, LspServerConfig, McpConfig,
     McpHttpAuthConfig, McpHttpMode, McpServerConfig, MemoryConfig, OpenAiApiModeConfig,

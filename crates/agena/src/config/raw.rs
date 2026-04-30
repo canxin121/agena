@@ -13,10 +13,10 @@ use crate::{
 };
 
 use super::{
-    AuthConfig, ConfigEnvironment, ConfigError, McpConfig, MemoryConfig, OpenAiApiModeConfig,
-    PermissionConfig, PluginConfig, ProjectInstructionsConfig, ProviderAliasConfig,
-    ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, StreamTransportMode,
-    TracingConfig, UiConfig, WebToolsConfig, provider_presets,
+    AuthConfig, AuthStoreBackend, ConfigEnvironment, ConfigError, McpConfig, MemoryConfig,
+    OpenAiApiModeConfig, PermissionConfig, PluginConfig, ProjectInstructionsConfig,
+    ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig,
+    StreamTransportMode, TracingConfig, UiConfig, WebToolsConfig, provider_presets,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -315,11 +315,12 @@ impl RawConfig {
                 .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_owned()),
         };
 
+        let raw_auth = self.auth.unwrap_or_default();
         let auth = AuthConfig {
-            store_path: self
-                .auth
-                .and_then(|value| value.store_path)
+            store_path: raw_auth
+                .store_path
                 .unwrap_or_else(FileAuthStore::default_path),
+            store_backend: raw_auth.store_backend.unwrap_or_default(),
         };
         let ui = UiConfig {
             locale: self
@@ -475,11 +476,13 @@ impl Merge for RawTracingConfig {
 #[serde(default)]
 pub(crate) struct RawAuthConfig {
     pub(crate) store_path: Option<PathBuf>,
+    pub(crate) store_backend: Option<AuthStoreBackend>,
 }
 
 impl Merge for RawAuthConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.store_path, overlay.store_path);
+        merge_option(&mut self.store_backend, overlay.store_backend);
     }
 }
 

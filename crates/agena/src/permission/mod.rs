@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::message::BuiltinToolInput;
+use crate::message::{BashToolInput, BuiltinToolInput};
 
 pub use request::{
     PendingPermission, PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
@@ -52,6 +52,40 @@ pub enum PermissionDecision {
 pub struct ToolPermissionPolicy {
     default_mode: PermissionMode,
     tool_modes: HashMap<String, PermissionMode>,
+    bash_rules: Vec<BashPatternRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BashPatternRule {
+    matcher: GlobMatcher,
+    pattern: String,
+    mode: PermissionMode,
+}
+
+impl BashPatternRule {
+    pub fn new(
+        pattern: impl Into<String>,
+        mode: PermissionMode,
+    ) -> Result<Self, PermissionConfigError> {
+        let pattern = pattern.into();
+        let glob = Glob::new(&pattern).map_err(|source| PermissionConfigError::InvalidGlob {
+            pattern: pattern.clone(),
+            source,
+        })?;
+        Ok(Self {
+            matcher: glob.compile_matcher(),
+            pattern,
+            mode,
+        })
+    }
+
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
+
+    pub fn mode(&self) -> PermissionMode {
+        self.mode
+    }
 }
 
 impl ToolPermissionPolicy {
@@ -59,6 +93,7 @@ impl ToolPermissionPolicy {
         Self {
             default_mode,
             tool_modes: HashMap::new(),
+            bash_rules: Vec::new(),
         }
     }
 
@@ -76,7 +111,30 @@ impl ToolPermissionPolicy {
         self
     }
 
+    /// Append a bash command pattern rule. Patterns use `globset` glob syntax
+    /// against the literal command string (e.g. `git status`, `rm *`,
+    /// `pnpm *`). Rules are evaluated in registration order; the first match
+    /// wins. Bash-pattern rules apply *only* to `BuiltinToolInput::Bash` and
+    /// override the per-tool default for that one invocation when matched.
+    pub fn with_bash_pattern_rule(
+        mut self,
+        pattern: impl Into<String>,
+        mode: PermissionMode,
+    ) -> Result<Self, PermissionConfigError> {
+        self.bash_rules.push(BashPatternRule::new(pattern, mode)?);
+        Ok(self)
+    }
+
+    pub fn bash_rules(&self) -> &[BashPatternRule] {
+        &self.bash_rules
+    }
+
     pub fn check_builtin(&self, input: &BuiltinToolInput) -> PermissionDecision {
+        if let BuiltinToolInput::Bash(bash) = input
+            && let Some(decision) = self.evaluate_bash_pattern(bash)
+        {
+            return decision;
+        }
         self.check_tool_name(builtin_name(input))
     }
 
@@ -98,6 +156,34 @@ impl ToolPermissionPolicy {
                 reason: format!("tool '{name}' denied by policy"),
             },
         }
+    }
+
+    fn evaluate_bash_pattern(&self, bash: &BashToolInput) -> Option<PermissionDecision> {
+        let normalized = bash.command.trim();
+        if normalized.is_empty() {
+            return None;
+        }
+        for rule in &self.bash_rules {
+            if rule.matcher.is_match(normalized) {
+                let decision = match rule.mode {
+                    PermissionMode::Allow => PermissionDecision::Allow,
+                    PermissionMode::Ask => PermissionDecision::Ask {
+                        reason: format!(
+                            "bash command matches `{}` and requires confirmation",
+                            rule.pattern
+                        ),
+                    },
+                    PermissionMode::Deny => PermissionDecision::Deny {
+                        reason: format!(
+                            "bash command matches `{}` and is denied by policy",
+                            rule.pattern
+                        ),
+                    },
+                };
+                return Some(decision);
+            }
+        }
+        None
     }
 }
 
@@ -607,6 +693,105 @@ mod tests {
                 assert!(reason.contains("apply_patch"));
             }
             other => panic!("expected ask decision, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bash_pattern_rule_allows_matching_command_even_when_default_is_ask() {
+        let policy = ToolPermissionPolicy::new(PermissionMode::Allow)
+            .with_builtin_mode("bash", PermissionMode::Ask)
+            .with_bash_pattern_rule("git *", PermissionMode::Allow)
+            .expect("git glob compiles");
+
+        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "git status".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        assert_eq!(policy.check_builtin(&bash), PermissionDecision::Allow);
+
+        let other = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "make".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        match policy.check_builtin(&other) {
+            PermissionDecision::Ask { reason } => assert!(reason.contains("bash")),
+            other => panic!("expected ask decision, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bash_pattern_rule_can_demand_confirmation_for_dangerous_command() {
+        let policy = ToolPermissionPolicy::new(PermissionMode::Allow)
+            .with_bash_pattern_rule("rm *", PermissionMode::Ask)
+            .expect("rm glob compiles");
+
+        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "rm -rf build".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        match policy.check_builtin(&bash) {
+            PermissionDecision::Ask { reason } => assert!(reason.contains("`rm *`")),
+            other => panic!("expected ask decision, got {other:?}"),
+        }
+
+        // Non-bash invocations are unaffected by bash pattern rules.
+        let read = BuiltinToolInput::Read(ReadToolInput {
+            file_path: "README.md".to_string(),
+            offset: None,
+            limit: None,
+        });
+        assert_eq!(policy.check_builtin(&read), PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn bash_pattern_rule_first_match_wins() {
+        let policy = ToolPermissionPolicy::new(PermissionMode::Ask)
+            .with_bash_pattern_rule("git push *", PermissionMode::Ask)
+            .expect("first rule compiles")
+            .with_bash_pattern_rule("git *", PermissionMode::Allow)
+            .expect("second rule compiles");
+
+        let push = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "git push origin master".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        match policy.check_builtin(&push) {
+            PermissionDecision::Ask { reason } => assert!(reason.contains("`git push *`")),
+            other => panic!("expected ask decision, got {other:?}"),
+        }
+
+        let status = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "git status".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        assert_eq!(policy.check_builtin(&status), PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn bash_without_matching_pattern_falls_through_to_tool_default() {
+        let policy = ToolPermissionPolicy::new(PermissionMode::Deny)
+            .with_bash_pattern_rule("git *", PermissionMode::Allow)
+            .expect("rule compiles");
+
+        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "make build".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        match policy.check_builtin(&bash) {
+            PermissionDecision::Deny { reason } => assert!(reason.contains("bash")),
+            other => panic!("expected deny decision, got {other:?}"),
         }
     }
 

@@ -50,7 +50,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | Resume / share | ✅ | ✅ | ✅ snapshot+share | ⚠️ rollout 有，UX 未做 |
 | TUI | ✅ ratatui | ✅ Ink+Vim | ✅ Solid+OpenTUI | ⚠️ Phase 2 推进中 |
 | 多 Provider | ✅ | 单家 | ✅ | ✅ **领先** |
-| Cost/Token UX | ✅ /cost | ✅ /cost+budget | ✅ | ⚠️ 后端有 UI 未透出 |
+| Cost/Token UX | ✅ /cost | ✅ /cost+budget | ✅ | ⚠️ 后端聚合已完成（#16），UI 透出待办 |
 | Doom-loop 检测 | ⚠️ | ⚠️ | ✅ ≥3 重复阻止 | ❌ **缺失** |
 | 后台任务+通知 | ✅ Monitor | ✅ Monitor+Push | ⚠️ | ⚠️ 通知通道未接 |
 
@@ -145,7 +145,9 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 
 - [ ] **#13 TUI Phase 2/3**：ratatui slash-command 弹层、cost 面板、并行 subagent 树视图、Vim 模式
 - [x] **#14 Provider 补充（部分）** ✅ ：内置 `ollama` / `lmstudio` 本地 preset（OpenAI 兼容、`OLLAMA_HOST` / `LMSTUDIO_HOST` 自动识别）。仍待补：xAI Grok、Mistral 专用 preset。
-- [ ] **#16 Cost / Token 透出**：`/cost` 命令、TUI 状态栏 token 计数、按 provider 价格估算
+- [ ] **#16 Cost / Token 透出（后端已完成 ✅）**：
+  - [x] `session::cost::summarize(messages) -> SessionCostSummary`：聚合 assistant 消息的 `MessageUsage`，按 `(provider, model)` 分组、含 turns / input / output / reasoning / cache_write / cache_read tokens 与 USD cost；提供 `one_line()` 给状态栏直显；6 单测覆盖
+  - 待办：`/cost` slash 命令接入、TUI 状态栏 token 计数、按 provider 价格估算（pricing table）
 
 ---
 

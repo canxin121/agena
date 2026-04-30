@@ -40,6 +40,11 @@ pub type ServerRequestHandler = Arc<
         + Sync,
 >;
 
+/// Handler invoked when the server sends a notification (no response is
+/// expected). Receives `(method, params)`.
+pub type ServerNotificationHandler =
+    Arc<dyn Fn(String, Value) + Send + Sync>;
+
 pub struct McpClient {
     inner: Arc<Inner>,
 }
@@ -49,6 +54,7 @@ struct Inner {
     next_id: AtomicI64,
     pending: DashMap<RequestId, oneshot::Sender<JsonRpcResponse>>,
     server_handler: arc_swap::ArcSwapOption<ServerRequestHandler>,
+    notification_handler: arc_swap::ArcSwapOption<ServerNotificationHandler>,
     server_caps: arc_swap::ArcSwapOption<ServerCapabilities>,
     server_info: arc_swap::ArcSwapOption<Implementation>,
     request_timeout: Duration,
@@ -63,6 +69,7 @@ impl McpClient {
             next_id: AtomicI64::new(1),
             pending: DashMap::new(),
             server_handler: arc_swap::ArcSwapOption::from(None),
+            notification_handler: arc_swap::ArcSwapOption::from(None),
             server_caps: arc_swap::ArcSwapOption::from(None),
             server_info: arc_swap::ArcSwapOption::from(None),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
@@ -74,6 +81,13 @@ impl McpClient {
 
     pub fn set_server_request_handler(&self, handler: ServerRequestHandler) {
         self.inner.server_handler.store(Some(Arc::new(handler)));
+    }
+
+    /// Install a handler called for every server notification frame
+    /// (e.g. `notifications/tools/list_changed`). Replaces any prior
+    /// handler.
+    pub fn set_notification_handler(&self, handler: ServerNotificationHandler) {
+        self.inner.notification_handler.store(Some(Arc::new(handler)));
     }
 
     pub fn server_capabilities(&self) -> Option<Arc<ServerCapabilities>> {
@@ -248,9 +262,10 @@ async fn reader_loop(inner: Arc<Inner>) {
                     method = %n.method,
                     "server notification"
                 );
-                // We currently don't surface notifications to callers; future
-                // work: route resource/tool list_changed back into the
-                // connection manager so the catalog refreshes.
+                if let Some(handler) = inner.notification_handler.load_full() {
+                    let params = n.params.unwrap_or(Value::Null);
+                    (handler)(n.method, params);
+                }
             }
             InboundMessage::Request(req) => {
                 let handler = inner.server_handler.load_full();

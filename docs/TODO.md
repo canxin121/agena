@@ -39,7 +39,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | 沙盒 / 命令隔离 | ✅ landlock+bwrap+seatbelt | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 已弃用 procwarden，#15 第一阶段完成（`tool::shell`），第二阶段权限层增强待办 |
 | Hooks 事件 | ✅ | ✅ 8 种事件 | ⚠️ plugin 钩子 | ✅ 7 事件 + shell + HTTP hook 形态（#1 第二阶段进行中） |
 | Plan Mode | ✅ | ✅ Enter/ExitPlanMode | ✅ plan agent | ✅ 已接通会话流 + 只读 bash 放行（#3 基本完成） |
-| Subagent | ✅ SubAgentSource | ✅ Task tool | ✅ @subagent_type | ⚠️ 调度协议不完整 |
+| Subagent | ✅ SubAgentSource | ✅ Task tool | ✅ @subagent_type | ⚠️ 自定义 profile 注册表已完成（#6），调度接入待办 |
 | Slash commands | ✅ 27+ | ✅ 50+ | ✅ commands/*.md | ❌ 缺中心 dispatcher |
 | 自定义命令 | ✅ | ✅ | ✅ | ⚠️ 后端加载器已完成（#2），TUI / CLI dispatcher 待接入 |
 | Skill 系统 | ✅ | ✅ 17+ | ✅ | ✅ |
@@ -94,10 +94,9 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 
 ### P1：Agent 协作（4 周）
 
-- [ ] **#6 Subagent 调度协议完善**
-  - `subtask.rs` 加：parent → child 上下文裁剪、子代理结果回流摘要、超时/中断
-  - `Agent` 加 `subagent_type` 注册表（`.agena/agents/*.md` 定义）
-  - 内置 subagent types：`explorer / planner / reviewer / refactorer`，配模板提示词
+- [ ] **#6 Subagent 调度协议完善（注册表已完成 ✅）**
+  - [x] **自定义 subagent profiles 注册表**（`crates/agena/src/agents/`）：扫 `.agena/agents/*.md`（向上 walk）+ `~/.agena/agents/*.md`，frontmatter 支持 `description / allowed_tools / model / aliases`，body 即 system prompt；Project > User > Builtin 优先级，aliases 解析为同一 profile，malformed 文件 warn 不阻断；8 单测覆盖
+  - 待办：`subtask.rs` 接入 `SubagentRegistry`（`Task` 工具按 `subagent_type` 名字解析为 profile）；parent → child 上下文裁剪、子代理结果回流摘要、超时/中断；内置 explorer / planner / reviewer / refactorer 模板（bundled）
 
 - [ ] **#7 后台任务 + 推送通知通道**
   - `monitor_tool.rs` 加桌面通知后端（notify-rust）+ 手机推送（webhook 可配）

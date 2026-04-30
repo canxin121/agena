@@ -101,23 +101,56 @@ fn load_provider_presets(
 ) -> Result<Vec<ProviderPresetRecord>, ConfigError> {
     let path = presets_cache_path(env);
 
-    if path.exists() {
-        return read_presets_file(path.as_path());
-    }
-
-    let presets = fetch_provider_presets()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ConfigError::ReadFile {
-            path: parent.to_path_buf(),
+    let mut presets = if path.exists() {
+        read_presets_file(path.as_path())?
+    } else {
+        let fetched = fetch_provider_presets()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|source| ConfigError::ReadFile {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        let encoded = serde_json::to_vec(&fetched)?;
+        fs::write(&path, encoded).map_err(|source| ConfigError::ReadFile {
+            path: path.clone(),
             source,
         })?;
-    }
-    let encoded = serde_json::to_vec(&presets)?;
-    fs::write(&path, encoded).map_err(|source| ConfigError::ReadFile {
-        path: path.clone(),
-        source,
-    })?;
+        fetched
+    };
+
+    inject_builtin_presets(&mut presets);
     Ok(presets)
+}
+
+/// Built-in presets for local model runtimes that ship with no API key and
+/// run on a known localhost port. We inject these unconditionally so users
+/// can name them in `[providers]` without depending on models.dev.
+fn inject_builtin_presets(presets: &mut Vec<ProviderPresetRecord>) {
+    for builtin in builtin_presets() {
+        if !presets.iter().any(|p| p.id == builtin.id) {
+            presets.push(builtin);
+        }
+    }
+}
+
+fn builtin_presets() -> Vec<ProviderPresetRecord> {
+    vec![
+        ProviderPresetRecord {
+            id: "ollama".to_string(),
+            npm: Some("@ai-sdk/openai-compatible".to_string()),
+            api: Some("http://localhost:11434/v1".to_string()),
+            env: Vec::new(),
+            default_model: None,
+        },
+        ProviderPresetRecord {
+            id: "lmstudio".to_string(),
+            npm: Some("@ai-sdk/openai-compatible".to_string()),
+            api: Some("http://localhost:1234/v1".to_string()),
+            env: Vec::new(),
+            default_model: None,
+        },
+    ]
 }
 
 fn read_presets_file(path: &Path) -> Result<Vec<ProviderPresetRecord>, ConfigError> {
@@ -371,6 +404,37 @@ fn apply_openai_compatible_preset(
                 } else {
                     raw.api_key = Some("public".to_owned());
                 }
+            }
+        }
+        "ollama" | "lmstudio" => {
+            // Local runtimes accept any token, including none. Honor
+            // OLLAMA_HOST / LMSTUDIO_HOST overrides for non-default ports.
+            let host_env = if provider_id == "ollama" {
+                "OLLAMA_HOST"
+            } else {
+                "LMSTUDIO_HOST"
+            };
+            if raw.base_url.is_none() {
+                if let Some(host) = env.var(host_env).and_then(normalize_text) {
+                    let normalized = if host.starts_with("http://") || host.starts_with("https://")
+                    {
+                        host
+                    } else {
+                        format!("http://{host}")
+                    };
+                    let trimmed = normalized.trim_end_matches('/').to_string();
+                    let with_v1 = if trimmed.ends_with("/v1") {
+                        trimmed
+                    } else {
+                        format!("{trimmed}/v1")
+                    };
+                    raw.base_url = Some(with_v1);
+                } else {
+                    set_base_url(raw, preset, provider_id)?;
+                }
+            }
+            if raw.api_key.is_none() && raw.api_key_env.is_none() {
+                raw.api_key = Some("local".to_owned());
             }
         }
         "cloudflare-workers-ai" => {

@@ -297,6 +297,90 @@ kind = "preset"
 }
 
 #[test]
+fn preset_ollama_resolves_to_localhost_with_local_token() {
+    let presets = write_temp_presets("[]");
+    let path = write_temp_config(
+        r#"
+[providers.ollama]
+kind = "preset"
+default_model = "qwen2.5-coder:7b"
+"#,
+    );
+
+    let env = TestEnvironment {
+        vars: BTreeMap::from([(
+            "AGENA_PROVIDER_PRESETS_PATH".to_owned(),
+            presets.display().to_string(),
+        )]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("ollama preset should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("ollama")
+        .expect("ollama provider should exist");
+
+    match &provider.definition {
+        ProviderDefinition::OpenAiCompatible(config) => {
+            assert_eq!(config.base_url, "http://localhost:11434/v1");
+            assert_eq!(config.default_model, "qwen2.5-coder:7b");
+            assert_eq!(config.api_key.as_deref(), Some("local"));
+            assert!(config.api_key_env.is_none());
+        }
+        other => panic!("expected openai-compatible preset, got {other:?}"),
+    }
+}
+
+#[test]
+fn preset_ollama_honors_ollama_host_env() {
+    let presets = write_temp_presets("[]");
+    let path = write_temp_config(
+        r#"
+[providers.ollama]
+kind = "preset"
+default_model = "llama3"
+"#,
+    );
+
+    let env = TestEnvironment {
+        vars: BTreeMap::from([
+            (
+                "AGENA_PROVIDER_PRESETS_PATH".to_owned(),
+                presets.display().to_string(),
+            ),
+            ("OLLAMA_HOST".to_owned(), "192.168.1.10:11434".to_owned()),
+        ]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("ollama preset should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("ollama")
+        .expect("ollama provider should exist");
+
+    match &provider.definition {
+        ProviderDefinition::OpenAiCompatible(config) => {
+            assert_eq!(config.base_url, "http://192.168.1.10:11434/v1");
+        }
+        other => panic!("expected openai-compatible preset, got {other:?}"),
+    }
+}
+
+#[test]
 fn preset_opencode_uses_public_key_when_no_api_key_is_available() {
     let presets = write_temp_presets(
         r#"[{"id":"opencode","npm":"@ai-sdk/openai-compatible","api":"https://opencode.ai/zen/v1","env":["OPENCODE_API_KEY"],"default_model":"gemini-3-pro"}]"#,

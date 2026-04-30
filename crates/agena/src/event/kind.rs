@@ -87,7 +87,6 @@ impl EventKind {
             Self::RunStarted(_)
                 | Self::RunFailed(_)
                 | Self::StreamError(_)
-                | Self::MessagePartUpdated(_)
                 | Self::MessagePartDelta(_)
                 | Self::CommandBegin(_)
                 | Self::CommandOutputDelta(_)
@@ -107,7 +106,6 @@ pub const UI_KINDS: &[&str] = &[
     "run_started",
     "run_failed",
     "stream_error",
-    "message_part_updated",
     "message_part_delta",
     "command_begin",
     "command_output_delta",
@@ -124,6 +122,7 @@ pub const HISTORY_KINDS: &[&str] = &[
     "tool_call_issued",
     "tool_call_completed",
     "system_notice_appended",
+    "message_part_updated",
     "message_revised",
     "plugin_event",
 ];
@@ -204,7 +203,10 @@ mod tests {
         let ui: std::collections::HashSet<&str> = UI_KINDS.iter().copied().collect();
         let history: std::collections::HashSet<&str> = HISTORY_KINDS.iter().copied().collect();
         // No overlap
-        assert!(ui.is_disjoint(&history), "UI and history kinds must not overlap");
+        assert!(
+            ui.is_disjoint(&history),
+            "UI and history kinds must not overlap"
+        );
         // Together they cover all kinds
         let union: std::collections::HashSet<&str> = ui.union(&history).copied().collect();
         assert_eq!(union, all, "UI ∪ history must equal all kinds");

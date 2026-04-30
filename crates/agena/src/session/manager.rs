@@ -1986,7 +1986,7 @@ fn build_message(
 }
 
 fn tool_call_id_for(resolved: &ResolvedPendingTool) -> HistoryToolCallId {
-    HistoryToolCallId::new(format!("call_{}", resolved.call_id))
+    HistoryToolCallId::new(resolved.operation_id.clone())
 }
 
 fn resolve_pending_tool(
@@ -2424,7 +2424,7 @@ mod tests {
     use async_trait::async_trait;
     use futures_core::Stream;
     use futures_util::stream;
-    use sea_orm::Database;
+    use sea_orm::{Database, DatabaseConnection};
     use uuid::Uuid;
 
     use crate::agent::Agent;
@@ -2432,11 +2432,12 @@ mod tests {
     use crate::event::EventKind;
     use crate::message::{
         ApplyPatchToolInput, AskUserToolInput, AttachmentSource, BuiltinToolOutput, McpToolOutput,
-        ToolAttachment, ToolExecutionPart, ToolOutput, ToolResultBlock, ToolSearchToolInput,
-        UserInputOption, UserInputQuestion, UserInputReply, UserInputReplyKind,
+        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
+        ToolOutput, ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion,
+        UserInputReply, UserInputReplyKind,
     };
     use crate::model::{ModelId, ModelRef, ProviderId};
-    use crate::permission::PermissionPolicy;
+    use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
     use crate::provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ModelProvider, ProviderModel, ProviderRegistry,
@@ -2642,6 +2643,26 @@ mod tests {
                     }
                 })
             });
+            let todo_result = request.messages.iter().find_map(|message| {
+                if message.role != Role::Tool {
+                    return None;
+                }
+                message.parts.iter().find_map(|part| {
+                    if part.operation_id.as_deref() != Some("call_todo_1") {
+                        return None;
+                    }
+                    match part.content.as_ref() {
+                        Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                            ..
+                        })) => Some(Ok(())),
+                        Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
+                            error_message,
+                            ..
+                        })) => Some(Err(error_message.clone())),
+                        _ => None,
+                    }
+                })
+            });
             let apply_patch_tool_loaded = request.messages.iter().any(|message| {
                 message.parts.iter().any(|part| {
                     let details = match part.content.as_ref() {
@@ -2659,7 +2680,51 @@ mod tests {
                 })
             });
 
-            let events = if last_user_text.contains("patch")
+            let events = if last_user_text.contains("permission todo") && todo_result.is_none() {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
+                        stream_key: "call_todo_1".to_string(),
+                        id: Some("call_todo_1".to_string()),
+                        name: Some("todo_write".to_string()),
+                        arguments_delta: serde_json::to_string(&TodoWriteToolInput {
+                            items: vec![TodoItem {
+                                content: "confirm permission recovery".to_string(),
+                                status: TodoStatus::Completed,
+                                priority: TodoPriority::Low,
+                            }],
+                        })
+                        .expect("serialize todo input"),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if let Some(todo_result) = todo_result {
+                let delta = match todo_result {
+                    Ok(()) => "permission todo done".to_string(),
+                    Err(_) => "permission todo failed".to_string(),
+                };
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
+                        delta,
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if last_user_text.contains("patch")
                 && tool_result.is_none()
                 && !apply_patch_tool_loaded
             {
@@ -2835,13 +2900,71 @@ mod tests {
             .expect("failed to create sqlite db");
         init_schema(&db).await.expect("failed to init schema");
 
+        build_manager_with_provider_on_db(
+            root,
+            db,
+            permission_policy,
+            ToolPermissionPolicy::allow_all(),
+            config,
+            context_policy,
+            provider,
+        )
+        .await
+    }
+
+    async fn open_temp_database(root: &std::path::Path, name: &str) -> DatabaseConnection {
+        let path = root.join(name);
+        let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+            .await
+            .expect("failed to create sqlite db");
+        init_schema(&db).await.expect("failed to init schema");
+        db
+    }
+
+    async fn build_manager_with_provider_on_db<P>(
+        root: &std::path::Path,
+        db: DatabaseConnection,
+        permission_policy: PermissionPolicy,
+        tool_policy: ToolPermissionPolicy,
+        config: SessionManagerConfig,
+        context_policy: ContextPolicy,
+        provider: P,
+    ) -> SessionManager
+    where
+        P: ModelProvider + 'static,
+    {
         let mut registry = ProviderRegistry::new();
         registry.register(provider);
         let processor =
             SessionProcessor::new(Arc::new(registry), ContextGovernor::new(context_policy));
-        let executor = ToolExecutor::new(root, Agent::new("build", permission_policy));
+        let executor = ToolExecutor::new(
+            root,
+            Agent::new("build", permission_policy).with_tool_policy(tool_policy),
+        );
 
         SessionManager::new(db, processor, executor).with_config(config)
+    }
+
+    async fn resume_event_sequence(manager: &SessionManager) {
+        manager
+            .event_publisher()
+            .resume_from_store()
+            .await
+            .expect("event sequence should resume from persisted history");
+    }
+
+    fn pending_permission_request_id(session: &Session) -> String {
+        session
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find_map(|part| match part.content.as_ref() {
+                Some(PartContent::PermissionRequest(request)) if request.reply.is_none() => {
+                    Some(request.request.request_id.clone())
+                }
+                _ => None,
+            })
+            .expect("session should contain a pending permission request")
     }
 
     fn run_options() -> SessionRunOptions {
@@ -3832,6 +3955,274 @@ mod tests {
             })
             .expect("dangling turn must be repaired with a TurnAborted marker");
         assert_eq!(aborted.reason, TurnAbortReason::ProcessRestart);
+    }
+
+    #[tokio::test]
+    async fn restart_after_interrupted_turn_can_continue_session() {
+        use crate::session::history::TurnAbortReason;
+
+        struct RestartableProvider {
+            stall: bool,
+        }
+
+        #[async_trait]
+        impl ModelProvider for RestartableProvider {
+            fn id(&self) -> &str {
+                "restartable"
+            }
+
+            fn default_model(&self) -> &ModelId {
+                static MODEL: std::sync::LazyLock<ModelId> =
+                    std::sync::LazyLock::new(|| ModelId::new("restartable-model"));
+                &MODEL
+            }
+
+            async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+                Ok(vec![ProviderModel::new("restartable", "restartable-model")])
+            }
+
+            async fn complete(
+                &self,
+                _request: CompletionRequest,
+            ) -> Result<CompletionResponse, AppError> {
+                Err(AppError::Provider(
+                    "restartable provider streams only".into(),
+                ))
+            }
+
+            async fn complete_stream(
+                &self,
+                _request: CompletionRequest,
+            ) -> Result<
+                std::pin::Pin<
+                    Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>,
+                >,
+                AppError,
+            > {
+                if self.stall {
+                    let stream = async_stream::stream! {
+                        yield Ok(CompletionStreamEvent::TextDelta {
+                            provider_id: ProviderId::new("restartable"),
+                            model: ModelId::new("restartable-model"),
+                            delta: "partial".to_string(),
+                        });
+                        std::future::pending::<()>().await;
+                    };
+                    return Ok(Box::pin(stream));
+                }
+
+                Ok(Box::pin(stream::iter(vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: ProviderId::new("restartable"),
+                        model: ModelId::new("restartable-model"),
+                        delta: "recovered reply".to_string(),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: ProviderId::new("restartable"),
+                        model: ModelId::new("restartable-model"),
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ])))
+            }
+        }
+
+        fn restartable_options() -> SessionRunOptions {
+            SessionRunOptions {
+                model: ModelRef::new("restartable", "restartable-model"),
+                system: None,
+                temperature: None,
+                max_output_tokens: Some(128),
+            }
+        }
+
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "interrupted-resume.db").await;
+        let first = Arc::new(
+            build_manager_with_provider_on_db(
+                &workspace.root,
+                db.clone(),
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+                SessionManagerConfig::default(),
+                ContextPolicy::default(),
+                RestartableProvider { stall: true },
+            )
+            .await,
+        );
+        let created = first
+            .create_session(SessionCreateRequest {
+                title: "interrupted-resume".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let session_id = created.id;
+
+        let running = {
+            let manager = Arc::clone(&first);
+            tokio::spawn(async move {
+                manager
+                    .submit_user_turn(SessionUserTurnRequest {
+                        session_id,
+                        options: restartable_options(),
+                        parts: vec![PartContent::text("start then restart")],
+                    })
+                    .await
+            })
+        };
+
+        for _ in 0..20 {
+            let has_model_turn = first
+                .list_session_events(session_id)
+                .await
+                .expect("history should load")
+                .iter()
+                .any(|record| {
+                    matches!(
+                        &record.kind,
+                        EventKind::TurnStarted(payload)
+                            if payload.provider_id == "restartable"
+                    )
+                });
+            if has_model_turn {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        running.abort();
+        assert!(
+            running
+                .await
+                .expect_err("turn task should be aborted")
+                .is_cancelled()
+        );
+        let interrupted_turn = HistoryTurnId::new();
+        first
+            .event_publisher()
+            .publish(
+                crate::event::PublishContext::for_session(session_id),
+                EventKind::TurnStarted(TurnStarted {
+                    turn_id: interrupted_turn,
+                    model_id: "restartable-model".into(),
+                    provider_id: "restartable".into(),
+                    request_digest: None,
+                }),
+            )
+            .await
+            .expect("interrupted turn should be persisted");
+        drop(first);
+
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RestartableProvider { stall: false },
+        )
+        .await;
+        resume_event_sequence(&second).await;
+
+        let recovered = second
+            .continue_session(SessionContinueRequest {
+                session_id,
+                options: restartable_options(),
+            })
+            .await
+            .expect("continue should recover after restart");
+        let history = second
+            .list_session_events(session_id)
+            .await
+            .expect("history should load");
+
+        assert!(history.iter().any(|record| {
+            matches!(
+                &record.kind,
+                EventKind::TurnAborted(payload)
+                    if payload.turn_id == interrupted_turn
+                        && payload.reason == TurnAbortReason::ProcessRestart
+            )
+        }));
+        assert!(recovered.messages.iter().any(|message| {
+            message.role == Role::Assistant && message.as_text_lossy().contains("recovered reply")
+        }));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn blocked_permission_survives_restart_and_reply_continues() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "permission-resume.db").await;
+        let tool_policy =
+            ToolPermissionPolicy::allow_all().with_builtin_mode("todo_write", PermissionMode::Ask);
+        let first = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            tool_policy.clone(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = first
+            .create_session(SessionCreateRequest {
+                title: "permission-resume".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let session_id = created.id;
+        let blocked = first
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id,
+                options: run_options(),
+                parts: vec![PartContent::text("permission todo")],
+            })
+            .await
+            .expect("turn should block on permission");
+        let request_id = pending_permission_request_id(&blocked);
+        assert!(blocked.blocked());
+        drop(first);
+
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            tool_policy,
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        resume_event_sequence(&second).await;
+        let reloaded = second
+            .get_session(session_id)
+            .await
+            .expect("session should reload");
+        assert!(reloaded.blocked());
+
+        let completed = second
+            .reply_permission(SessionPermissionReplyRequest {
+                session_id,
+                options: run_options(),
+                reply: PermissionReply {
+                    request_id,
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+            })
+            .await
+            .expect("permission reply should continue session");
+
+        assert!(!completed.blocked());
+        assert!(completed.messages.iter().any(|message| {
+            message.role == Role::Assistant
+                && message.as_text_lossy().contains("permission todo done")
+        }));
     }
 
     /// Phase 3 of the event-system refactor: every legacy `SessionEvent` and

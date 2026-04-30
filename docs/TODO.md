@@ -41,7 +41,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | Plan Mode | ✅ | ✅ Enter/ExitPlanMode | ✅ plan agent | ⚠️ 有 plan.rs，未与 session 接通 |
 | Subagent | ✅ SubAgentSource | ✅ Task tool | ✅ @subagent_type | ⚠️ 调度协议不完整 |
 | Slash commands | ✅ 27+ | ✅ 50+ | ✅ commands/*.md | ❌ 缺中心 dispatcher |
-| 自定义命令 | ✅ | ✅ | ✅ | ❌ **缺失** |
+| 自定义命令 | ✅ | ✅ | ✅ | ⚠️ 后端加载器已完成（#2），TUI / CLI dispatcher 待接入 |
 | Skill 系统 | ✅ | ✅ 17+ | ✅ | ✅ |
 | Memory（CLAUDE.md） | ✅ 两阶段 | ✅ MEMORY.md 索引 | ✅ AGENTS.md | ⚠️ 自动写回未做 |
 | MCP（OAuth+动态注册） | ✅ | ✅ | ✅ | ⚠️ OAuth 待补 |
@@ -71,11 +71,9 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
     - `~/.agena/settings.json` 命名空间镜像（目前 `agena.toml` 已就位）
     - PreToolUse 审批 UI（`PermissionRuntime` 后端已就绪，hook 已能 deny → 待 TUI/CLI 接入弹窗）
 
-- [ ] **#2 Slash Commands 中央 dispatcher + 自定义命令**
-  - 新 `agena/src/commands/`（mod.rs + builtin/ + custom.rs）
-  - 内置：`/help /clear /compact /plan /resume /cost /memory /init /review /worktree /tasks /config /share /doctor`
-  - 自定义：扫 `.agena/commands/*.md`、`~/.agena/commands/*.md`，frontmatter 指定 model / allowed_tools / argument-hint
-  - TUI / CLI 共用 dispatcher
+- [ ] **#2 Slash Commands 中央 dispatcher + 自定义命令（自定义命令后端已完成 ✅）**
+  - [x] **自定义命令加载器**（`crates/agena/src/commands/`）：扫 `.agena/commands/*.md`（向上 walk）+ `~/.agena/commands/*.md`，frontmatter 支持 `description / argument-hint / allowed_tools / model / aliases`，body 支持 `$1..$N` + `$ARGUMENTS` 替换；项目覆盖用户、aliases 解析为同一 command；8 个单测覆盖（含 walk-up 发现、冲突优先级、aliases 去重）
+  - 待办：内置 slash 中央 dispatcher（`/help /clear /compact /plan /resume /cost /memory /init /review /worktree /tasks /config /share /doctor`），TUI / CLI 共用
 
 - [ ] **#3 Plan Mode 接通会话流**
   - `plan.rs` 已有 `PlanRegistry`，扩展为模式：进入 plan 后强制 `tool_policy = read_only`，禁止 Edit/Write/Bash 写

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
+use tracing::Instrument;
 
 use crate::error::AppError;
 use crate::event::{
@@ -303,6 +304,12 @@ impl SessionProcessor {
         &self,
         mut run: SessionRunRequest,
     ) -> Result<SessionRunResult, AppError> {
+        let processor_span = tracing::info_span!(
+            "session.processor_turn",
+            session_id = run.session_id,
+            provider_id = %run.model.provider_id,
+            model_id = %run.model.model_id,
+        );
         let mut client_events = Vec::new();
         self.apply_chat_system_transform_hook(run.session_id, &mut run.completion)
             .await;
@@ -319,6 +326,7 @@ impl SessionProcessor {
         let mut stream = self
             .provider_registry
             .complete_stream(&run.model, run.completion.clone())
+            .instrument(processor_span.clone())
             .await?;
 
         let assistant_message_id = run.next_message_id;

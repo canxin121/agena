@@ -9,6 +9,7 @@ agena-app-server-protocol = { path = "../agena-app-server-protocol" }
 agena-mcp-client = { path = "../agena-mcp-client" }
 agena-mcp-server = { path = "../agena-mcp-server" }
 agena-lsp = { path = "../agena-lsp" }
+agena-otel = { path = "../agena-otel" }
 agena-keyring-store = { path = "../agena-keyring-store" }
 agena-scheduler = { path = "../agena-scheduler" }
 agena-skills = { path = "../agena-skills" }

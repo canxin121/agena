@@ -206,6 +206,7 @@ flash-max-output-invalid = invalid max output token value
 flash-system-set = system prompt override updated
 flash-system-cleared = system prompt override cleared
 flash-runtime-status = runtime overrides: {$summary}
+flash-diagnostics-summary = diagnostics: cwd={$cwd} session={$session} queue={$queue} runtime={$runtime}
 runtime-status-default = session defaults
 
 message-role-user = user
@@ -331,4 +332,5 @@ command-system-summary = Set or clear the system prompt override
 command-fork-summary = Create a child session from the current session
 command-children-summary = Open the child-session picker
 command-parent-summary = Jump to the parent session
+command-diagnostics-summary = Show a sanitized diagnostics summary for feedback
 command-status-summary = Show the current runtime override summary

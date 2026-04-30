@@ -16,7 +16,8 @@ use super::{
     AuthConfig, AuthStoreBackend, ConfigEnvironment, ConfigError, McpConfig, MemoryConfig,
     OpenAiApiModeConfig, PermissionConfig, PluginConfig, ProjectInstructionsConfig,
     ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig,
-    StreamTransportMode, TracingConfig, UiConfig, WebToolsConfig, provider_presets,
+    StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
+    provider_presets,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -96,6 +97,7 @@ impl RawConfigFile {
 pub(crate) struct RawConfig {
     pub(crate) mode: Option<String>,
     pub(crate) tracing: Option<RawTracingConfig>,
+    pub(crate) telemetry: Option<RawTelemetryConfig>,
     pub(crate) auth: Option<RawAuthConfig>,
     pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
@@ -115,6 +117,7 @@ impl RawConfig {
     pub(crate) fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.mode, overlay.mode);
         merge_option_struct(&mut self.tracing, overlay.tracing);
+        merge_option_struct(&mut self.telemetry, overlay.telemetry);
         merge_option_struct(&mut self.auth, overlay.auth);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
@@ -133,6 +136,7 @@ impl RawConfig {
 
     pub(crate) fn merge_mode(&mut self, overlay: RawModeConfig) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
+        merge_option_struct(&mut self.telemetry, overlay.telemetry);
         merge_option_struct(&mut self.auth, overlay.auth);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
@@ -148,6 +152,7 @@ impl RawConfig {
     pub(crate) fn is_empty(&self) -> bool {
         self.mode.is_none()
             && self.tracing.is_none()
+            && self.telemetry.is_none()
             && self.auth.is_none()
             && self.ui.is_none()
             && self.runtime.is_none()
@@ -180,6 +185,27 @@ impl RawConfig {
                 .tracing
                 .get_or_insert_with(RawTracingConfig::default)
                 .filter = Some(filter);
+        }
+        if let Some(enabled) = env.var("AGENA_TELEMETRY_ENABLED") {
+            config
+                .telemetry
+                .get_or_insert_with(RawTelemetryConfig::default)
+                .enabled = Some(parse_bool("AGENA_TELEMETRY_ENABLED", enabled.as_str())?);
+        }
+        if let Some(service_name) = env.var("AGENA_OTEL_SERVICE_NAME") {
+            config
+                .telemetry
+                .get_or_insert_with(RawTelemetryConfig::default)
+                .service_name = Some(service_name);
+        }
+        if let Some(endpoint) = env
+            .var("AGENA_OTEL_ENDPOINT")
+            .or_else(|| env.var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
+        {
+            config
+                .telemetry
+                .get_or_insert_with(RawTelemetryConfig::default)
+                .otlp_endpoint = Some(endpoint);
         }
         if let Some(locale) = env.var("AGENA_LOCALE") {
             config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale);
@@ -314,6 +340,20 @@ impl RawConfig {
                 .and_then(|value| value.filter)
                 .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_owned()),
         };
+        let raw_telemetry = self.telemetry.unwrap_or_default();
+        let telemetry = TelemetryConfig {
+            enabled: raw_telemetry.enabled.unwrap_or(false),
+            service_name: raw_telemetry
+                .service_name
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| TelemetryConfig::default().service_name),
+            otlp_endpoint: raw_telemetry
+                .otlp_endpoint
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            headers: raw_telemetry.headers,
+        };
 
         let raw_auth = self.auth.unwrap_or_default();
         let auth = AuthConfig {
@@ -346,6 +386,7 @@ impl RawConfig {
 
         Ok(ResolvedConfig {
             tracing,
+            telemetry,
             auth,
             ui,
             runtime,
@@ -366,6 +407,7 @@ impl RawConfig {
 pub(crate) struct RawModeConfig {
     pub(crate) extends: Option<String>,
     pub(crate) tracing: Option<RawTracingConfig>,
+    pub(crate) telemetry: Option<RawTelemetryConfig>,
     pub(crate) auth: Option<RawAuthConfig>,
     pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
@@ -381,6 +423,7 @@ impl RawModeConfig {
     pub(crate) fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.extends, overlay.extends);
         merge_option_struct(&mut self.tracing, overlay.tracing);
+        merge_option_struct(&mut self.telemetry, overlay.telemetry);
         merge_option_struct(&mut self.auth, overlay.auth);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
@@ -469,6 +512,25 @@ pub(crate) struct RawTracingConfig {
 impl Merge for RawTracingConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.filter, overlay.filter);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct RawTelemetryConfig {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) service_name: Option<String>,
+    pub(crate) otlp_endpoint: Option<String>,
+    #[serde(default)]
+    pub(crate) headers: BTreeMap<String, String>,
+}
+
+impl Merge for RawTelemetryConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.enabled, overlay.enabled);
+        merge_option(&mut self.service_name, overlay.service_name);
+        merge_option(&mut self.otlp_endpoint, overlay.otlp_endpoint);
+        self.headers.extend(overlay.headers);
     }
 }
 

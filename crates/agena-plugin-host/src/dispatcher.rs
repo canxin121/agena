@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Serialize, de::DeserializeOwned};
+use tracing::Instrument;
 
 use crate::error::TransportError;
 use crate::host::LoadedPlugin;
@@ -50,8 +51,16 @@ pub async fn call_with_timeout(
     params: serde_json::Value,
     timeout: Duration,
 ) -> Result<serde_json::Value, TransportError> {
+    let hook_span = tracing::info_span!(
+        "hook.call",
+        plugin = %plugin.manifest.name,
+        method = method_name,
+    );
     let fut = plugin.transport.dispatch(method_name, params);
-    match tokio::time::timeout(timeout, fut).await {
+    match tokio::time::timeout(timeout, fut)
+        .instrument(hook_span)
+        .await
+    {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => {
             tracing::warn!(

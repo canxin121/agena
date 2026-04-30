@@ -153,6 +153,34 @@ fn env_provider_id_normalization_matches_hyphenated_names() {
 }
 
 #[test]
+fn env_telemetry_config_enables_otlp_exporter() {
+    let env = TestEnvironment {
+        vars: BTreeMap::from([
+            ("AGENA_TELEMETRY_ENABLED".to_owned(), "true".to_owned()),
+            (
+                "AGENA_OTEL_SERVICE_NAME".to_owned(),
+                "agena-test".to_owned(),
+            ),
+            (
+                "AGENA_OTEL_ENDPOINT".to_owned(),
+                "http://127.0.0.1:4318/v1/traces".to_owned(),
+            ),
+        ]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest::default())
+        .expect("telemetry env config should load");
+
+    assert!(resolution.config.telemetry.enabled);
+    assert_eq!(resolution.config.telemetry.service_name, "agena-test");
+    assert_eq!(
+        resolution.config.telemetry.otlp_endpoint.as_deref(),
+        Some("http://127.0.0.1:4318/v1/traces")
+    );
+}
+
+#[test]
 fn example_config_parses_successfully() {
     let path = write_temp_config(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

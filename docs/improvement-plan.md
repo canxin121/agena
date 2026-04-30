@@ -544,6 +544,8 @@
 
 ## 阶段 14：Telemetry / OTel
 
+状态：已完成（新增默认关闭的 OTel/OTLP tracing 配置与 CLI/TUI 初始化，关键 session/provider/tool/hook 链路已打 span，并提供 CLI/TUI 脱敏 diagnostics 入口）。
+
 ### 14.1 新增 telemetry 基础设施
 
 - 目标：提供 opt-in 观测能力。

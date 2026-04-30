@@ -206,6 +206,7 @@ flash-max-output-invalid = 无效的 max output token 值
 flash-system-set = system prompt 覆盖已更新
 flash-system-cleared = system prompt 覆盖已清除
 flash-runtime-status = 运行时覆盖：{$summary}
+flash-diagnostics-summary = 诊断：cwd={$cwd} 会话={$session} 队列={$queue} 运行时={$runtime}
 runtime-status-default = 使用会话默认设置
 
 message-role-user = 用户
@@ -331,4 +332,5 @@ command-system-summary = 设置或清除 system prompt 覆盖
 command-fork-summary = 从当前会话创建一个子会话
 command-children-summary = 打开子会话选择器
 command-parent-summary = 跳转到父会话
+command-diagnostics-summary = 显示用于反馈的脱敏诊断摘要
 command-status-summary = 显示当前运行时覆盖摘要

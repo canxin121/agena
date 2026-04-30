@@ -103,6 +103,7 @@ impl fmt::Display for ConfigModeName {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResolvedConfig {
     pub tracing: TracingConfig,
+    pub telemetry: agena_otel::TelemetryConfig,
     pub auth: AuthConfig,
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,

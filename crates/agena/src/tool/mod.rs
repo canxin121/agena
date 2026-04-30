@@ -829,6 +829,10 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        let tool_name = invocation_name(invocation);
+        let _tool_span =
+            tracing::info_span!("tool.call", session_id, call_id, tool = tool_name.as_str(),)
+                .entered();
         if let Some(builtin) = invocation.as_builtin() {
             let mut execution: ToolInvocationExecution = self
                 .execute_builtin_detailed_with_context(

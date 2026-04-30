@@ -340,6 +340,26 @@ button {
   background: rgba(31, 111, 99, 0.08);
 }
 
+.file-tree {
+  margin-top: 12px;
+}
+
+.file-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  color: inherit;
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .message-list {
   display: grid;
   gap: 14px;

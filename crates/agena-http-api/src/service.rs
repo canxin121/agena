@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs, io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use chrono::{DateTime, Utc};
 use path_clean::PathClean;
@@ -15,8 +20,8 @@ use agena::{
         entities,
     },
     message::{
-        ExecutionStatus, Message, MessagePart, PartContent,
-        PermissionRequestPart, UserInputRequest, UserInputRequestPart,
+        ExecutionStatus, Message, MessagePart, PartContent, PermissionRequestPart,
+        UserInputRequest, UserInputRequestPart,
     },
     model::ModelRef,
     permission::PermissionMode,
@@ -29,8 +34,9 @@ use super::{
         MessageListQuery, MessageResource, PartLoadMode, PermissionRuleListQuery,
         PermissionRuleResource, PermissionRuleWriteRequest, SessionCreateRequest,
         SessionEventListQuery, SessionExecutionResource, SessionReplaceRequest, SessionResource,
-        SessionRunOptionsRequest, SessionRunState, WorkspaceListQuery, WorkspaceResolveRequest,
-        WorkspaceResource, WorkspaceWriteRequest,
+        SessionRunOptionsRequest, SessionRunState, WorkspaceFileKind, WorkspaceFileNode,
+        WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
+        WorkspaceResolveRequest, WorkspaceResource, WorkspaceWriteRequest,
     },
     error::ApiError,
     pagination::{
@@ -85,7 +91,6 @@ impl ApiService {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self { db }
     }
-
 
     pub async fn list_workspaces(
         &self,
@@ -160,6 +165,57 @@ impl ApiService {
             &row,
             counts.get(&row.id).copied(),
         )?))
+    }
+
+    pub async fn list_workspace_files(
+        &self,
+        workspace_id: i64,
+        query: WorkspaceFileTreeQuery,
+    ) -> ApiResult<WorkspaceFileTreeResource> {
+        let row = entities::workspace::Entity::find_by_id(workspace_id)
+            .one(self.db.as_ref())
+            .await
+            .map_err(db_error)?
+            .ok_or_else(|| ApiError::not_found(format!("workspace not found: {workspace_id}")))?;
+        let root = PathBuf::from(row.path);
+        let root = root
+            .canonicalize()
+            .map_err(|error| workspace_fs_error(root.as_path(), error))?;
+        if !root.is_dir() {
+            return Err(ApiError::bad_request(format!(
+                "workspace root is not a directory: {}",
+                root.display()
+            )));
+        }
+
+        let relative_path = clean_workspace_relative_path(query.path.as_deref())?;
+        let target = root.join(&relative_path).clean();
+        let target = target
+            .canonicalize()
+            .map_err(|error| workspace_fs_error(target.as_path(), error))?;
+        if !target.starts_with(&root) {
+            return Err(ApiError::bad_request(
+                "workspace file path escapes workspace root",
+            ));
+        }
+        if !target.is_dir() {
+            return Err(ApiError::bad_request(format!(
+                "workspace path is not a directory: {}",
+                workspace_relative_path(&relative_path)
+            )));
+        }
+
+        let depth = query.depth.unwrap_or(2).min(8);
+        let mut remaining = query.limit.unwrap_or(500).clamp(1, 2_000);
+        let entries =
+            read_workspace_entries(root.as_path(), target.as_path(), depth, &mut remaining)?;
+
+        Ok(WorkspaceFileTreeResource {
+            workspace_id,
+            root: root.display().to_string(),
+            path: workspace_relative_path(&relative_path),
+            entries,
+        })
     }
 
     pub async fn create_workspace(
@@ -459,7 +515,13 @@ impl ApiService {
         });
         slice.reverse();
 
-        Ok(build_page(slice, has_more, next_cursor, PageOrder::Asc, limit)?)
+        Ok(build_page(
+            slice,
+            has_more,
+            next_cursor,
+            PageOrder::Asc,
+            limit,
+        )?)
     }
 
     pub async fn list_messages(
@@ -507,7 +569,13 @@ impl ApiService {
             .map(|m| message_resource_from_message(session.id, m, query.parts))
             .collect();
 
-        Ok(build_page(items, has_more, next_cursor, PageOrder::Asc, limit)?)
+        Ok(build_page(
+            items,
+            has_more,
+            next_cursor,
+            PageOrder::Asc,
+            limit,
+        )?)
     }
 
     pub async fn get_message(
@@ -842,9 +910,7 @@ impl ApiService {
             session: session_resource,
             blocked: session.blocked(),
             run_state: SessionRunState::from(session.status()),
-            latest_event_seq: self
-                .latest_session_event_seq(manager, session.id)
-                .await?,
+            latest_event_seq: self.latest_session_event_seq(manager, session.id).await?,
             pending_permission_requests: pending_permission_requests(session),
             pending_user_input_requests: pending_user_input_requests(session),
         })
@@ -888,8 +954,7 @@ impl ApiService {
             .map_err(api_error_from_app)?;
         let mut sorted: Vec<&Message> = session.messages.iter().collect();
         sorted.sort_by(|a, b| {
-            (b.created_at.timestamp_millis(), b.id)
-                .cmp(&(a.created_at.timestamp_millis(), a.id))
+            (b.created_at.timestamp_millis(), b.id).cmp(&(a.created_at.timestamp_millis(), a.id))
         });
         for m in sorted {
             let provider_id = m.metadata.model_provider_id.trim();
@@ -989,7 +1054,6 @@ impl ApiService {
             .map(|model| session_resource(model, &message_stats, &child_counts))
             .collect()
     }
-
 }
 
 fn workspace_resource(
@@ -1003,6 +1067,125 @@ fn workspace_resource(
         updated_at: timestamp_millis_to_utc(row.updated_at_ms)?,
         session_count,
     })
+}
+
+fn clean_workspace_relative_path(value: Option<&str>) -> ApiResult<PathBuf> {
+    let mut cleaned = PathBuf::new();
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(cleaned);
+    };
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err(ApiError::bad_request(
+            "workspace file path must be relative",
+        ));
+    }
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => cleaned.push(part),
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(ApiError::bad_request(
+                    "workspace file path cannot contain parent or root components",
+                ));
+            }
+        }
+    }
+    Ok(cleaned)
+}
+
+fn read_workspace_entries(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    remaining: &mut usize,
+) -> ApiResult<Vec<WorkspaceFileNode>> {
+    if *remaining == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = fs::read_dir(dir)
+        .map_err(|error| workspace_fs_error(dir, error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| workspace_fs_error(dir, error))?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    let mut nodes = Vec::new();
+    for entry in entries {
+        if *remaining == 0 {
+            break;
+        }
+
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(path.as_path())
+            .map_err(|error| workspace_fs_error(path.as_path(), error))?;
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_dir() {
+            WorkspaceFileKind::Directory
+        } else if file_type.is_file() {
+            WorkspaceFileKind::File
+        } else if file_type.is_symlink() {
+            WorkspaceFileKind::Symlink
+        } else {
+            WorkspaceFileKind::Other
+        };
+        *remaining -= 1;
+        let children = if kind == WorkspaceFileKind::Directory && depth > 0 {
+            Some(read_workspace_entries(
+                root,
+                path.as_path(),
+                depth - 1,
+                remaining,
+            )?)
+        } else {
+            None
+        };
+        nodes.push(WorkspaceFileNode {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: path
+                .strip_prefix(root)
+                .map(workspace_relative_path)
+                .unwrap_or_else(|_| path.display().to_string()),
+            kind,
+            size: (kind == WorkspaceFileKind::File).then_some(metadata.len()),
+            children,
+        });
+    }
+    nodes.sort_by(|left, right| {
+        let left_dir = left.kind == WorkspaceFileKind::Directory;
+        let right_dir = right.kind == WorkspaceFileKind::Directory;
+        right_dir
+            .cmp(&left_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    Ok(nodes)
+}
+
+fn workspace_relative_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn workspace_fs_error(path: &Path, error: io::Error) -> ApiError {
+    match error.kind() {
+        io::ErrorKind::NotFound => {
+            ApiError::not_found(format!("workspace file path not found: {}", path.display()))
+        }
+        io::ErrorKind::PermissionDenied => ApiError::bad_request(format!(
+            "workspace file path cannot be read: {}",
+            path.display()
+        )),
+        _ => ApiError::internal(format!(
+            "workspace file path error for {}: {}",
+            path.display(),
+            error
+        )),
+    }
 }
 
 fn session_resource(
@@ -1268,4 +1451,3 @@ fn pending_user_input_requests(session: &Session) -> Vec<UserInputRequest> {
         })
         .collect()
 }
-

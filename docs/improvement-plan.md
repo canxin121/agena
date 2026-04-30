@@ -507,6 +507,8 @@
 
 ## 阶段 13：Studio Web
 
+状态：已完成（Web 可回复 blocked session 权限请求、管理 provider/auth 与权限规则，并通过 Workspace 页面浏览文件树；Chat 保留 tool patch diff 展示）。
+
 ### 13.1 Permission UI
 
 - 目标：Web/Studio 中可处理权限请求。

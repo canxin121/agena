@@ -433,6 +433,7 @@ impl SessionManager {
                 generated_by_call_id: None,
                 model_provider_id: request.options.model.provider_id.to_string(),
                 model_id: request.options.model.model_id.to_string(),
+                provider_metadata: None,
                 tags: Vec::new(),
             },
         );
@@ -771,9 +772,10 @@ impl SessionManager {
                 return Ok(session);
             }
 
-            if let Some(tool) = session.next_pending_tool() {
+            let pending_tools = session.pending_tools();
+            if !pending_tools.is_empty() {
                 session = self
-                    .resolve_pending_tool(session, tool, state.clone())
+                    .resolve_pending_tools(session, pending_tools, state.clone())
                     .await?;
                 continue;
             }
@@ -816,6 +818,7 @@ impl SessionManager {
                                     generated_by_call_id: None,
                                     model_provider_id: options.model.provider_id.to_string(),
                                     model_id: options.model.model_id.to_string(),
+                                    provider_metadata: None,
                                     tags: Vec::new(),
                                 },
                             );
@@ -1372,6 +1375,7 @@ impl SessionManager {
                 generated_by_call_id: None,
                 model_provider_id: options.model.provider_id.to_string(),
                 model_id: options.model.model_id.to_string(),
+                provider_metadata: None,
                 tags: vec![MESSAGE_TAG_PROMPT_SUMMARY.to_string()],
             },
         );
@@ -1426,6 +1430,154 @@ impl SessionManager {
         session.runtime.prompt_window.generation += 1;
         session.runtime.clear_provider_anchors();
         session.runtime.clear_prompt_tokens();
+    }
+
+    async fn resolve_pending_tools(
+        &self,
+        mut session: Session,
+        pending_tools: Vec<SessionPendingTool>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let mut resolved_tools = Vec::new();
+        for pending_tool in pending_tools {
+            let Some(resolved) = self
+                .prepare_concurrent_pending_tool(&mut session, &pending_tool, state.as_ref())
+                .await?
+            else {
+                break;
+            };
+            resolved_tools.push(resolved);
+        }
+
+        if resolved_tools.len() < 2 {
+            if let Some(tool) = session.next_pending_tool() {
+                return self.resolve_pending_tool(session, tool, state).await;
+            }
+            return Ok(session);
+        }
+
+        let executions = self
+            .execute_pending_tools_concurrently(state.clone(), session.id, resolved_tools.clone())
+            .await?;
+        for (resolved, result) in resolved_tools.into_iter().zip(executions) {
+            match result {
+                Ok(execution) => {
+                    session = self
+                        .apply_tool_success(
+                            session,
+                            &resolved.pending,
+                            execution,
+                            None,
+                            None,
+                            state.clone(),
+                        )
+                        .await?;
+                }
+                Err(ToolError::UserInputRequired(input)) => {
+                    return self
+                        .apply_user_input_request(session, &resolved.pending, input, state)
+                        .await;
+                }
+                Err(err) => return Err(tool_error_to_app_error(err)),
+            }
+        }
+
+        Ok(session)
+    }
+
+    async fn prepare_concurrent_pending_tool(
+        &self,
+        session: &mut Session,
+        pending_tool: &SessionPendingTool,
+        state: &SessionManagerState,
+    ) -> Result<Option<ResolvedPendingTool>, AppError> {
+        let before_prepare = session.clone();
+        let mut resolved = resolve_pending_tool(session, pending_tool)?;
+        let prepared = state
+            .tool_executor
+            .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
+            .map_err(tool_error_to_app_error)?;
+        if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
+            let current_title = match session
+                .part(&resolved.pending.part)
+                .and_then(|part| part.content.as_ref())
+            {
+                Some(PartContent::ToolExecution(ToolExecutionPart::Pending { title, .. })) => {
+                    title.clone()
+                }
+                _ => format!("Tool {}", tool_name(&resolved.invocation)),
+            };
+
+            resolved.invocation = prepared.invocation.clone();
+            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool part not found: message={}, part={}",
+                    resolved.pending.part.message_id, resolved.pending.part.part_id
+                ))
+            })?;
+            tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
+                call_id: resolved.call_id,
+                invocation: prepared.invocation,
+                title: prepared.title_override.unwrap_or(current_title),
+                lifecycle: resolved.lifecycle.clone(),
+            }));
+        }
+
+        state
+            .tool_executor
+            .enforce_plan_mode_for(&resolved.invocation, session.id)
+            .map_err(tool_error_to_app_error)?;
+
+        if !state
+            .tool_executor
+            .is_concurrency_safe_invocation(&resolved.invocation)
+        {
+            *session = before_prepare;
+            return Ok(None);
+        }
+
+        for check in state
+            .tool_executor
+            .collect_permission_checks_for_invocation(&resolved.invocation)
+            .map_err(tool_error_to_app_error)?
+        {
+            if !matches!(
+                self.resolve_permission_decision(&check).await?,
+                PermissionDecision::Allow
+            ) {
+                *session = before_prepare;
+                return Ok(None);
+            }
+        }
+
+        Ok(Some(resolved))
+    }
+
+    async fn execute_pending_tools_concurrently(
+        &self,
+        state: Arc<SessionManagerState>,
+        session_id: i64,
+        pending_tools: Vec<ResolvedPendingTool>,
+    ) -> Result<Vec<Result<ToolInvocationExecution, ToolError>>, AppError> {
+        let mut handles = Vec::with_capacity(pending_tools.len());
+        for pending_tool in pending_tools {
+            let executor = state.tool_executor.clone();
+            handles.push(tokio::task::spawn_blocking(move || {
+                executor.execute_invocation_detailed(
+                    &pending_tool.invocation,
+                    session_id,
+                    pending_tool.call_id,
+                )
+            }));
+        }
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            results.push(handle.await.map_err(|err| {
+                AppError::Internal(format!("concurrent tool task failed: {err}"))
+            })?);
+        }
+        Ok(results)
     }
 
     async fn resolve_pending_tool(
@@ -1891,6 +2043,7 @@ impl SessionManager {
                     generated_by_call_id: None,
                     model_provider_id: options.model.provider_id.to_string(),
                     model_id: options.model.model_id.to_string(),
+                    provider_metadata: None,
                     tags: Vec::new(),
                 },
             );
@@ -2092,6 +2245,7 @@ fn build_tool_message(
             generated_by_call_id: Some(pending_tool.call_id),
             model_provider_id: String::new(),
             model_id: String::new(),
+            provider_metadata: None,
             tags: Vec::new(),
         },
         usage: None,

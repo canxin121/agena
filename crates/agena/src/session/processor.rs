@@ -12,8 +12,9 @@ use crate::event::{
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, ExecutionStatus,
     GlobToolInput, GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource,
-    MessageStatus, PartContent, ReadToolInput, StructuredObject, TaskToolInput, TimeRange,
-    TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput, ViewFileToolInput,
+    MessageStatus, PartContent, ReadToolInput, ReasoningPart, StructuredObject, TaskToolInput,
+    TimeRange, TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput,
+    ViewFileToolInput,
 };
 use crate::model::ModelRef;
 use crate::provider::{
@@ -329,6 +330,7 @@ impl SessionProcessor {
             generated_by_call_id: None,
             model_provider_id: run.model.provider_id.to_string(),
             model_id: run.completion.model.to_string(),
+            provider_metadata: None,
             tags: Vec::new(),
         };
 
@@ -353,6 +355,7 @@ impl SessionProcessor {
         }
 
         let mut active_text_part: Option<i64> = None;
+        let mut active_reasoning_part: Option<i64> = None;
         let mut pending_calls: BTreeMap<String, PendingToolCall> = BTreeMap::new();
         let mut part_delta_sequences = BTreeMap::<i64, u64>::new();
         let mut provider_err: Option<AppError> = None;
@@ -374,6 +377,9 @@ impl SessionProcessor {
             let Some(item) = next else { break };
             match item {
                 Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
                     let part_id = match active_text_part {
                         Some(part_id) => part_id,
                         None => {
@@ -413,6 +419,9 @@ impl SessionProcessor {
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
                     }
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
 
                     let pending = pending_calls.entry(stream_key).or_default();
                     if let Some(id) = id {
@@ -450,7 +459,39 @@ impl SessionProcessor {
                     finish = finish_reason.map(|item| format!("{item:?}"));
                     provider_metadata = completed_provider_metadata;
                 }
-                Ok(CompletionStreamEvent::ThinkingDelta { .. }) => {}
+                Ok(CompletionStreamEvent::ThinkingDelta { delta, .. }) => {
+                    if let Some(part_id) = active_text_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    let part_id = match active_reasoning_part {
+                        Some(part_id) => part_id,
+                        None => {
+                            let part_id = run.part_ids.reserve().await?;
+                            self.start_reasoning_part(&mut assistant, part_id, Utc::now())?;
+                            self.emit_part_updated(&run, &assistant, part_id).await?;
+                            active_reasoning_part = Some(part_id);
+                            part_id
+                        }
+                    };
+
+                    self.append_reasoning_delta(&mut assistant, part_id, delta.as_str())?;
+                    turn_buffer
+                        .push_reasoning_delta(delta.as_str())
+                        .map_err(|err| AppError::Internal(err.to_string()))?;
+
+                    let seq = part_delta_sequences.entry(part_id).or_default();
+                    *seq += 1;
+                    self.emit_part_delta(
+                        &run,
+                        &assistant,
+                        part_id,
+                        None,
+                        PartDeltaField::ReasoningSummary,
+                        delta,
+                        *seq,
+                    )
+                    .await?;
+                }
                 Err(err) => {
                     provider_err = Some(err);
                     break;
@@ -469,6 +510,9 @@ impl SessionProcessor {
         }
 
         if let Some(part_id) = active_text_part {
+            complete_part_status(&mut assistant, part_id)?;
+        }
+        if let Some(part_id) = active_reasoning_part {
             complete_part_status(&mut assistant, part_id)?;
         }
 
@@ -509,6 +553,7 @@ impl SessionProcessor {
         let _ = assistant.transition_state(MessageStatus::Completed);
         assistant.finish = finish;
         assistant.usage = usage.clone();
+        assistant.metadata.provider_metadata = provider_metadata.clone();
 
         if let Some(usage_ref) = usage {
             turn_buffer
@@ -601,6 +646,31 @@ impl SessionProcessor {
         Ok(())
     }
 
+    fn start_reasoning_part(
+        &self,
+        assistant: &mut Message,
+        part_id: i64,
+        created_at: DateTime<Utc>,
+    ) -> Result<(), AppError> {
+        let mut part = MessagePart::with_content(
+            part_id,
+            assistant.id,
+            created_at,
+            ExecutionStatus::Pending,
+            PartContent::Reasoning(ReasoningPart {
+                summary: Vec::new(),
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        );
+        part.part_index = assistant.parts.len() as i32;
+        assistant.parts.push(part);
+        if assistant.state == MessageStatus::Pending {
+            let _ = assistant.transition_state(MessageStatus::InProgress);
+        }
+        Ok(())
+    }
+
     fn append_text_delta(
         &self,
         assistant: &mut Message,
@@ -623,6 +693,33 @@ impl SessionProcessor {
         if !part.append_text_delta(delta) {
             return Err(AppError::Internal(format!(
                 "failed to append text delta to part {part_id}: kind mismatch"
+            )));
+        }
+        Ok(())
+    }
+
+    fn append_reasoning_delta(
+        &self,
+        assistant: &mut Message,
+        part_id: i64,
+        delta: &str,
+    ) -> Result<(), AppError> {
+        let part = assistant
+            .parts
+            .iter_mut()
+            .find(|part| part.id == part_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "active reasoning part missing from assistant snapshot: {part_id}"
+                ))
+            })?;
+        if part.status == ExecutionStatus::Pending {
+            part.transition_status(ExecutionStatus::InProgress)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+        if !part.append_reasoning_summary_delta(delta.to_string()) {
+            return Err(AppError::Internal(format!(
+                "failed to append reasoning delta to part {part_id}: kind mismatch"
             )));
         }
         Ok(())
@@ -1580,6 +1677,111 @@ mod tests {
             other => panic!("expected tool execution part, got {other:?}"),
         }
         assert_eq!(assistant.parts[1].operation_id.as_deref(), Some("call_1"));
+    }
+
+    #[tokio::test]
+    async fn run_turn_persists_reasoning_and_provider_metadata() {
+        let mut registry = ProviderRegistry::new();
+        registry.register(OrderedStreamProvider {
+            events: vec![
+                CompletionStreamEvent::ThinkingDelta {
+                    provider_id: ProviderId::new("ordered-stream"),
+                    model: ModelId::new("ordered-model"),
+                    delta: "think ".to_owned(),
+                },
+                CompletionStreamEvent::ThinkingDelta {
+                    provider_id: ProviderId::new("ordered-stream"),
+                    model: ModelId::new("ordered-model"),
+                    delta: "again".to_owned(),
+                },
+                CompletionStreamEvent::TextDelta {
+                    provider_id: ProviderId::new("ordered-stream"),
+                    model: ModelId::new("ordered-model"),
+                    delta: "done".to_owned(),
+                },
+                CompletionStreamEvent::Completed {
+                    provider_id: ProviderId::new("ordered-stream"),
+                    model: ModelId::new("ordered-model"),
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: Some(json!({"response_id": "resp_1"})),
+                },
+            ],
+        });
+
+        let processor = SessionProcessor::new(
+            Arc::new(registry),
+            ContextGovernor::new(crate::session::ContextPolicy::default()),
+        );
+        let (event_publisher, store) = test_publisher();
+
+        let result = processor
+            .run_turn(SessionRunRequest {
+                session_id: 1,
+                model: ModelRef::new("ordered-stream", "ordered-model"),
+                completion: CompletionRequest {
+                    model: ModelId::new("ordered-model"),
+                    system: None,
+                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                    tools: Vec::new(),
+                    temperature: None,
+                    max_output_tokens: Some(64),
+                    prompt_cache_key: None,
+                    previous_response_id: None,
+                    prompt_window_generation: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking: None,
+                    response_format: None,
+                },
+                next_message_id: 100,
+                part_ids: ProcessorPartIdAllocator::for_test(200),
+                next_call_id: 300,
+                event_publisher: Some(event_publisher),
+                cancel: None,
+            })
+            .await
+            .expect("processor run should succeed");
+
+        let assistant = result
+            .state
+            .into_iter()
+            .find(|message| message.id == 100)
+            .expect("assistant message should be present");
+
+        assert_eq!(assistant.parts.len(), 2);
+        assert_eq!(
+            assistant.parts[0].reasoning_summary(),
+            Some(&["think ".to_string(), "again".to_string()][..])
+        );
+        assert_eq!(assistant.parts[1].text(), Some("done"));
+        assert_eq!(
+            assistant.metadata.provider_metadata,
+            Some(json!({"response_id": "resp_1"}))
+        );
+
+        let events: Vec<EventKind> = store
+            .events
+            .lock()
+            .expect("test store lock")
+            .iter()
+            .map(|e| e.kind.clone())
+            .collect();
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                EventKind::MessagePartDelta(MessagePartDeltaEvent {
+                    message_id,
+                    part_id,
+                    field: PartDeltaField::ReasoningSummary,
+                    delta,
+                    seq,
+                    ..
+                }) if *message_id == 100 && *part_id == 200 && delta == "think " && *seq == 1
+            )
+        }));
     }
 
     #[tokio::test]

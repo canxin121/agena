@@ -734,6 +734,16 @@ impl Session {
         })
     }
 
+    pub(crate) fn pending_tools(&self) -> Vec<SessionPendingTool> {
+        self.pending_operations
+            .iter()
+            .filter_map(|pending| match pending {
+                SessionPendingOperation::Tool { tool } => Some(tool.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(crate) fn part(&self, part_ref: &SessionPartRef) -> Option<&MessagePart> {
         let message = self.messages.get(part_ref.message_index)?;
         if message.id != part_ref.message_id {

@@ -46,7 +46,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | Memory（CLAUDE.md） | ✅ 两阶段 | ✅ MEMORY.md 索引 + AGENA/AGENTS/CLAUDE.md 链式 | ✅ AGENTS.md | ✅ store 编程 API + AGENA/AGENTS/CLAUDE.md 链式查找已完成（#5 后端） |
 | MCP（OAuth+动态注册） | ✅ | ✅ | ✅ | ⚠️ OAuth 待补 |
 | LSP 集成 | ❌ | ❌ | ✅ **招牌** | ❌ **缺失** |
-| Worktree | ❌ | ✅ | ✅ | ⚠️ 有但未对外 |
+| Worktree | ❌ | ✅ | ✅ | ⚠️ 后端 list/prune API 已完成（#11），TUI/CLI 接入待办 |
 | Resume / share | ✅ | ✅ | ✅ snapshot+share | ⚠️ rollout 有，UX 未做 |
 | TUI | ✅ ratatui | ✅ Ink+Vim | ✅ Solid+OpenTUI | ⚠️ Phase 2 推进中 |
 | 多 Provider | ✅ | 单家 | ✅ | ✅ **领先** |
@@ -133,9 +133,10 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - 工具：`lsp_definition / lsp_references / lsp_diagnostics / lsp_rename`
   - apply_patch 后自动取诊断回喂模型
 
-- [ ] **#11 Worktree 生命周期对外**
-  - 现有 `worktree.rs` 注册表，TUI / CLI 暴露 `EnterWorktree / ExitWorktree`
-  - `.agena/worktrees/` 自动清理钩子 + tmux 集成可选
+- [ ] **#11 Worktree 生命周期对外（后端 API 完成 ✅）**
+  - [x] **API 暴露**：`worktree::list_active(&registry)`（按 session 列出活跃 worktree）+ `list_managed(workspace, &registry)`（扫 `.agena/worktrees/` 并与 git/registry 交叉验证，标记 `is_stale`）+ `prune_stale(workspace, &registry)`（删除孤儿目录）
+  - [x] 类型对外：`ActiveWorktree { session_id, path, branch, created_here }` / `ManagedWorktree { path, session_id, branch, registered_with_git }`，5 单测覆盖
+  - 待办：TUI / CLI 暴露 `EnterWorktree / ExitWorktree` 命令；`.agena/worktrees/` 启动时自动调 `prune_stale`；tmux 集成可选
 
 - [ ] **#12 Resume / Share / Snapshot UX**
   - `agena-rollout` 加 replay 命令：`agena resume <session-id>`

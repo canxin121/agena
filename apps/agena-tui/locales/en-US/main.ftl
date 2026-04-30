@@ -78,7 +78,7 @@ help-composer-line-10 = Alt+P opens the command palette, and slash commands like
 help-section-actions = Actions
 help-actions-line-1 = n create session, s opens the resume picker, b opens branch history, [ opens parent session, ] opens child sessions
 help-actions-line-2 = r continue a blocked or pending session
-help-actions-line-3 = a/A/d/D reply to the first pending permission request
+help-actions-line-3 = p opens the permission prompt, a/A/d/D quickly reply to the first pending permission request
 help-actions-line-4 = u open the first pending user-input request
 help-actions-line-5 = Mouse capture is disabled so terminal selection/copy still works
 help-actions-line-6 = q or Ctrl+C exit
@@ -96,6 +96,14 @@ overlay-attach-prompt = Type a path or search term. Enter attaches the selected 
 overlay-attach-no-match = No matching files
 overlay-attach-matches = Matches
 overlay-attach-footer = Enter attach | Tab fill selected path | Up/Down move | Esc close
+
+overlay-permission-title = Permission Request
+overlay-permission-request-id = request_id: {$request_id}
+overlay-permission-action-tool = tool: {$tool}
+overlay-permission-action-path = path {$access}: {$path}
+overlay-permission-reason = reason: {$reason}
+overlay-permission-session = session: #{$session}
+overlay-permission-footer = Enter reply | a allow once | s allow session | d deny | Esc close
 
 overlay-user-input-title = Pending User Input
 overlay-user-input-request-id = request_id: {$request_id}
@@ -227,6 +235,7 @@ message-tool-running = tool running: {$label}
 message-tool-done = tool done: {$label}
 message-tool-failed = tool failed: {$label}
 message-tool-result-blocks = {$count} result blocks
+message-tool-output-collapsed =     … {$lines} more line(s) hidden; open transcript pager for full context
 
 todo-status-pending = pending
 todo-status-in-progress = in_progress

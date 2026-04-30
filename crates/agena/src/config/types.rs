@@ -11,7 +11,8 @@ use crate::{
     provider::{
         OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
         ProviderCapabilityOverrideRule, ProviderHttpClientConfig, ProviderRequestRetryConfig,
-        ProviderRuntimeConfig, ProviderStreamReplayConfig, ThinkingRequest, auth::FileAuthStore,
+        ProviderRuntimeConfig, ProviderStreamReplayConfig, ThinkingRequest,
+        auth::{ConfiguredAuthStore, FileAuthStore, KeyringAuthStore},
     },
 };
 
@@ -155,8 +156,17 @@ impl ResolvedConfig {
         Ok(policy)
     }
 
-    pub fn auth_store(&self) -> FileAuthStore {
-        FileAuthStore::new(self.auth.store_path.clone())
+    pub fn auth_store(&self) -> ConfiguredAuthStore {
+        let file = FileAuthStore::new(self.auth.store_path.clone());
+        match self.auth.store_backend {
+            AuthStoreBackend::File => ConfiguredAuthStore::File(file),
+            AuthStoreBackend::Auto => {
+                ConfiguredAuthStore::Keyring(KeyringAuthStore::system(file, true))
+            }
+            AuthStoreBackend::Keyring => {
+                ConfiguredAuthStore::Keyring(KeyringAuthStore::system(file, false))
+            }
+        }
     }
 }
 
@@ -168,6 +178,16 @@ pub struct TracingConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuthConfig {
     pub store_path: PathBuf,
+    pub store_backend: AuthStoreBackend,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthStoreBackend {
+    #[default]
+    Auto,
+    File,
+    Keyring,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

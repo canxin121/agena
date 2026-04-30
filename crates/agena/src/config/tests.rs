@@ -172,6 +172,31 @@ fn example_config_parses_successfully() {
 }
 
 #[test]
+fn auth_store_backend_config_loads_and_modes_override() {
+    let path = write_temp_config(
+        r#"
+mode = "file-auth"
+
+[auth]
+store_backend = "auto"
+
+[modes.file-auth.auth]
+store_backend = "file"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("auth config should load");
+
+    assert_eq!(resolution.config.auth.store_backend, AuthStoreBackend::File);
+}
+
+#[test]
 fn memory_project_instruction_config_loads_and_modes_override() {
     let path = write_temp_config(
         r#"

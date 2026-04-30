@@ -113,11 +113,11 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
     - [x] `tool/mod.rs` / `tool/bash.rs`：`SandboxPolicy` → `ExecutionPolicy`、`execute_sandboxed_command` → `execute_shell_command`、`ToolError::Sandbox` → `ToolError::Shell`，删除无状态 `sandbox_manager` 字段
     - [x] `agena-plugin-sdk/src/host_api.rs`：删除 `execute_sandboxed_command` 钩子与 `SandboxCommandRequest` / `SandboxCommandResponse` / `SandboxMode` 类型（零外部调用）
     - [x] `cargo test -p agena --lib -- --test-threads=1` 367/367 通过（含 `bash_builtin_blocks_obvious_write_commands_in_read_only_policy` 关键回归测试）
-  - **第二阶段：权限层增强（待办）** — 参考 opencode `permission.{edit,bash,read,task,...}` + Claude Code `settings.json [permissions]`
-    - 现有 `permission/` store 已支持 allow / ask / deny + glob — 扩展到 bash 命令模式（`rg:*`、`git status`、`pnpm *`）
-    - 新增 `[permissions]` 段在 `~/.agena/settings.json` 与项目 `.agena/settings.json`
-    - 三档权限模式：`auto` / `ask` / `plan`（继承 plan 模式的只读语义）
-    - PreToolUse 钩子前置：UI/CLI 弹审批，记忆"始终允许"决策
+  - **第二阶段：权限层增强（进行中）** — 参考 opencode `permission.{edit,bash,read,task,...}` + Claude Code `settings.json [permissions]`
+    - [x] **bash 命令模式 allow/ask/deny**：`ToolPermissionPolicy::with_bash_pattern_rule` + `[[permission.bash]]` 配置段（`pattern` + `mode`），首匹配胜出，仅作用于 `BuiltinToolInput::Bash`，4 个单测 + 1 个端到端 config 测试
+    - [ ] 三档权限模式：`auto` / `ask` / `plan`（继承 plan 模式的只读语义）
+    - [ ] PreToolUse 钩子前置：UI/CLI 弹审批，记忆"始终允许"决策（`PermissionRuntime` 已有 AllowAlways/DenyAlways 持久化路径，待 UI 接入）
+    - [ ] 把 `[permissions]` 同步进 `~/.agena/settings.json` 命名空间（目前只有 TOML config）
   - 文档：新 `docs/PERMISSIONS.md` 取代原计划的 `docs/SANDBOX.md`
 
 ### P2：横向能力（4–6 周）

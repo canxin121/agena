@@ -47,7 +47,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | MCP（OAuth+动态注册） | ✅ | ✅ | ✅ | ⚠️ OAuth 待补 |
 | LSP 集成 | ❌ | ❌ | ✅ **招牌** | ❌ **缺失** |
 | Worktree | ❌ | ✅ | ✅ | ⚠️ 后端 list/prune API 已完成（#11），TUI/CLI 接入待办 |
-| Resume / share | ✅ | ✅ | ✅ snapshot+share | ⚠️ rollout 有，UX 未做 |
+| Resume / share | ✅ | ✅ | ✅ snapshot+share | ⚠️ 后端 ShareBundle / SessionSummary / 路径脱敏完成（#12），CLI/HTTP UI 待办 |
 | TUI | ✅ ratatui | ✅ Ink+Vim | ✅ Solid+OpenTUI | ⚠️ Phase 2 推进中 |
 | 多 Provider | ✅ | 单家 | ✅ | ✅ **领先** |
 | Cost/Token UX | ✅ /cost | ✅ /cost+budget | ✅ | ⚠️ 后端聚合已完成（#16），UI 透出待办 |
@@ -138,9 +138,10 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - [x] 类型对外：`ActiveWorktree { session_id, path, branch, created_here }` / `ManagedWorktree { path, session_id, branch, registered_with_git }`，5 单测覆盖
   - 待办：TUI / CLI 暴露 `EnterWorktree / ExitWorktree` 命令；`.agena/worktrees/` 启动时自动调 `prune_stale`；tmux 集成可选
 
-- [ ] **#12 Resume / Share / Snapshot UX**
-  - `agena-rollout` 加 replay 命令：`agena resume <session-id>`
-  - Share：序列化为只读链接（http-api-server 路由 `/share/:id`）
+- [ ] **#12 Resume / Share / Snapshot UX（后端 share API 完成 ✅）**
+  - [x] `agena-rollout::share` 模块：`SessionSummary { session_id, agena_version, started_at, last_event_at, frame_count, tool_call_count, model_id, source_path }` + `ShareBundle { schema_version, summary, meta, frames }`；`summarize_session(path)` 单文件 + `summarize_directory(root)` 按 last_event_at 倒序聚合
+  - [x] `share_bundle(path, opts)` + `ShareOptions { redact_paths, redact_prefixes }`：自动用 `$HOME` 重写为 `~/...`，可附加 workspace prefix → `~/<workspace>/...`；session_meta + frames 全部覆盖；6 单测含 home redaction 端到端
+  - 待办：`agena resume <session-id>` CLI 子命令；`http-api-server` `/share/:id` 路由（消费 ShareBundle）；replay 直接重建 Session 状态而非只 import 视图
 
 ### P3：打磨与差异化（持续）
 

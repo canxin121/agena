@@ -9,7 +9,7 @@
 - 核心 `agena` crate：agent / runtime / session / tool / provider / permission / config / memory / message / event / storage / db
 - 三层 API：HTTP REST（v1，35+ 端点）、WebSocket/SSE/Unix-IPC（v2）、Rust Client SDK
 - 插件体系：`agena-plugin-host` + `agena-plugin-sdk`（动态 / WASM 插件，ABI 稳定）
-- `procwarden` 沙盒已接入（`tool/mod.rs` 引入 `SandboxManager` / `SandboxPolicy`）— **拟移除**：实际不可用，转向 opencode / Claude Code 风格的权限审批模型（见 #15）
+- `procwarden` 沙盒已**移除**（#15 第一阶段）— 改为权限规则 store 兜底；`tool::shell` 提供超时 + loader-env 清洗
 
 **Provider（13 家，领先同类）**
 OpenAI / OpenAI-compatible / Codex(Responses) / Anthropic / Gemini / Bedrock / Vertex / Cloudflare AI Gateway / GitHub Copilot（device code） / GitLab OAuth / opencode 中继
@@ -36,7 +36,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 |---|---|---|---|---|
 | Agent loop | ✅ | ✅ | ✅ | ✅ |
 | 自动 compact | ✅ inline+remote | ✅ 时间/token | ✅ session compaction | ⚠️ 有痕迹，策略不完整 |
-| 沙盒 / 命令隔离 | ✅ landlock+bwrap+seatbelt | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 规则匹配（无系统沙盒） | ⚠️ procwarden 已接入但**计划移除**，改走规则匹配路线 |
+| 沙盒 / 命令隔离 | ✅ landlock+bwrap+seatbelt | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 已弃用 procwarden，#15 第一阶段完成（`tool::shell`），第二阶段权限层增强待办 |
 | Hooks 事件 | ✅ | ✅ 8 种事件 | ⚠️ plugin 钩子 | ❌ **缺失** |
 | Plan Mode | ✅ | ✅ Enter/ExitPlanMode | ✅ plan agent | ⚠️ 有 plan.rs，未与 session 接通 |
 | Subagent | ✅ SubAgentSource | ✅ Task tool | ✅ @subagent_type | ⚠️ 调度协议不完整 |
@@ -105,13 +105,15 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - 在 `manager::run_until_stable` 每轮迭代前扫描历史，若同 `(tool, args_json)` 连续 ≥ N 次则中断 turn 并发布 `RunFailed` 事件
   - 5 个单测覆盖：连续命中、输入差异不命中、关闭策略、跨消息聚合、不同工具重置计数
 
-- [ ] **#15 移除 procwarden 沙盒，改用 opencode / Claude Code 风格的权限审批系统** 🔥
+- [ ] **#15 移除 procwarden 沙盒，改用 opencode / Claude Code 风格的权限审批系统** 🔥（**第一阶段完成**）
   - 背景：procwarden（landlock+bwrap）在跨发行版 / 容器 / Mac 上几乎不可用，价值不抵成本
-  - 范围：
-    - 删除 `procwarden` crate，从 workspace 与 `tool/bash.rs` / `tool/mod.rs` 解耦 `SandboxManager` / `SandboxPolicy` / `SandboxCommandRequest` 调用
-    - 删除 `apps/agena-studio-server` 等其他 procwarden 依赖
-    - 把 bash / write / edit / patch 工具的执行路径回退为 `tokio::process::Command` 直跑，由权限层兜底
-  - 权限层增强（参考 opencode `permission.{edit,bash,read,task,...}` + Claude Code `settings.json [permissions]`）：
+  - **第一阶段：删除 procwarden（已完成 ✅）**
+    - [x] 删除 `procwarden` crate dep（`crates/agena/Cargo.toml`）
+    - [x] 新增 `crates/agena/src/tool/shell.rs`：`ExecutionPolicy { ReadOnly / WorkspaceWrite / DangerFullAccess }` + `ShellRequest` / `ShellOutput` / `ShellError` + `execute()`，含 watchdog 超时与 loader-env 清洗（`LD_PRELOAD` / `DYLD_*` / `BASH_FUNC_*` 等），6 个单测覆盖
+    - [x] `tool/mod.rs` / `tool/bash.rs`：`SandboxPolicy` → `ExecutionPolicy`、`execute_sandboxed_command` → `execute_shell_command`、`ToolError::Sandbox` → `ToolError::Shell`，删除无状态 `sandbox_manager` 字段
+    - [x] `agena-plugin-sdk/src/host_api.rs`：删除 `execute_sandboxed_command` 钩子与 `SandboxCommandRequest` / `SandboxCommandResponse` / `SandboxMode` 类型（零外部调用）
+    - [x] `cargo test -p agena --lib -- --test-threads=1` 367/367 通过（含 `bash_builtin_blocks_obvious_write_commands_in_read_only_policy` 关键回归测试）
+  - **第二阶段：权限层增强（待办）** — 参考 opencode `permission.{edit,bash,read,task,...}` + Claude Code `settings.json [permissions]`
     - 现有 `permission/` store 已支持 allow / ask / deny + glob — 扩展到 bash 命令模式（`rg:*`、`git status`、`pnpm *`）
     - 新增 `[permissions]` 段在 `~/.agena/settings.json` 与项目 `.agena/settings.json`
     - 三档权限模式：`auto` / `ask` / `plan`（继承 plan 模式的只读语义）

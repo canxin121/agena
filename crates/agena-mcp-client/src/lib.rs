@@ -11,11 +11,13 @@ pub mod client;
 pub mod error;
 pub mod manager;
 pub mod protocol;
+pub mod token_store;
 pub mod transport;
 
 pub use client::{McpClient, ServerRequestHandler};
 pub use error::{McpError, McpResult};
-pub use manager::{ConnectedServer, McpConnectionManager, ServerSpec};
+pub use manager::{ConnectedServer, HttpAuth, McpConnectionManager, ServerSpec, TokenStore};
+pub use token_store::{FileTokenStore, TokenStoreError};
 pub use protocol::{
     CallToolResult, ContentBlock, CreateMessageParams, CreateMessageResult, GetPromptResult,
     InitializeResult, JsonRpcError, ListPromptsResult, ListResourcesResult, ListToolsResult,

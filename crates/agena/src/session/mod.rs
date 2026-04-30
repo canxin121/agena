@@ -1,4 +1,5 @@
 mod cache;
+mod compaction_worker;
 mod context_governor;
 mod context_policy;
 pub mod cost;

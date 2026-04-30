@@ -53,7 +53,11 @@ pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use definition::{ToolBehavior, ToolDefinition, ToolLoadPriority, ToolSource};
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
 pub use shell::{ExecutionPolicy, ShellError, ShellOutput, ShellRequest};
-pub use worktree::{WorktreeRegistry, registry_for_executor as worktree_registry_for_executor};
+pub use worktree::{
+    ActiveWorktree, ManagedWorktree, WorktreeRegistry, list_active as worktree_list_active,
+    list_managed as worktree_list_managed, prune_stale as worktree_prune_stale,
+    registry_for_executor as worktree_registry_for_executor,
+};
 pub use monitor::{
     MonitorError, MonitorRead, MonitorRegistry, MonitorService, MonitorStart, MonitorStopOutcome,
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,

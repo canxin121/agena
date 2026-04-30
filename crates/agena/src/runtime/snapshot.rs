@@ -433,10 +433,19 @@ fn build_tool_executor(
     workspace_root: &Path,
     resolution: &ConfigResolution,
 ) -> ToolExecutor {
-    let mut executor = ToolExecutor::new(
-        workspace_root.to_path_buf(),
-        Agent::new("build", resolution.config.permission_policy()),
-    )
+    let tool_policy = match resolution.config.tool_permission_policy() {
+        Ok(policy) => policy,
+        Err(err) => {
+            tracing::warn!(
+                target: "agena::config::permission",
+                "ignoring invalid bash permission rule: {err}; falling back to allow_all"
+            );
+            crate::permission::ToolPermissionPolicy::allow_all()
+        }
+    };
+    let agent =
+        Agent::new("build", resolution.config.permission_policy()).with_tool_policy(tool_policy);
+    let mut executor = ToolExecutor::new(workspace_root.to_path_buf(), agent)
     .with_plugin_manager(plugins)
     .with_web_search_backend(resolution.config.web.search.resolve())
     .with_plan_registry(crate::tool::plan_registry_for_executor())

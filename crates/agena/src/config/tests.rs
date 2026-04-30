@@ -381,6 +381,65 @@ default_model = "llama3"
 }
 
 #[test]
+fn permission_bash_rules_load_from_toml_and_compile_into_tool_policy() {
+    let path = write_temp_config(
+        r#"
+[permission]
+default_read = "allow"
+default_write = "deny"
+
+[[permission.bash]]
+pattern = "git *"
+mode = "allow"
+
+[[permission.bash]]
+pattern = "rm *"
+mode = "ask"
+"#,
+    );
+
+    let env = TestEnvironment::default();
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    assert_eq!(resolution.config.permission.bash_rules.len(), 2);
+    assert_eq!(resolution.config.permission.bash_rules[0].pattern, "git *");
+
+    let policy = resolution
+        .config
+        .tool_permission_policy()
+        .expect("tool policy compiles");
+    assert_eq!(policy.bash_rules().len(), 2);
+
+    let git_status = crate::message::BuiltinToolInput::Bash(crate::message::BashToolInput {
+        command: "git status".to_string(),
+        description: String::new(),
+        timeout_ms: None,
+        workdir: None,
+    });
+    assert_eq!(
+        policy.check_builtin(&git_status),
+        crate::permission::PermissionDecision::Allow
+    );
+
+    let rm = crate::message::BuiltinToolInput::Bash(crate::message::BashToolInput {
+        command: "rm -rf node_modules".to_string(),
+        description: String::new(),
+        timeout_ms: None,
+        workdir: None,
+    });
+    match policy.check_builtin(&rm) {
+        crate::permission::PermissionDecision::Ask { .. } => {}
+        other => panic!("expected ask decision, got {other:?}"),
+    }
+}
+
+#[test]
 fn preset_opencode_uses_public_key_when_no_api_key_is_available() {
     let presets = write_temp_presets(
         r#"[{"id":"opencode","npm":"@ai-sdk/openai-compatible","api":"https://opencode.ai/zen/v1","env":["OPENCODE_API_KEY"],"default_model":"gemini-3-pro"}]"#,

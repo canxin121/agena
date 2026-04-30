@@ -416,6 +416,57 @@ timeout_ms = 5000
 }
 
 #[test]
+fn permission_execution_mode_and_deny_patterns_load_from_toml() {
+    let path = write_temp_config(
+        r#"
+[permission]
+mode = "ask"
+
+[[permission.bash]]
+pattern = "git *"
+mode = "allow"
+
+[[permission.bash_deny]]
+pattern = "rm -rf /*"
+"#,
+    );
+
+    let env = TestEnvironment::default();
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    assert_eq!(
+        resolution.config.permission.execution_mode,
+        crate::permission::ExecutionMode::Ask
+    );
+    assert_eq!(resolution.config.permission.bash_deny_patterns.len(), 1);
+
+    let policy = resolution
+        .config
+        .tool_permission_policy()
+        .expect("tool policy compiles");
+    assert_eq!(policy.execution_mode(), crate::permission::ExecutionMode::Ask);
+
+    // Dangerous command rejected by deny pattern even though mode=ask would
+    // otherwise just prompt.
+    let danger = crate::message::BuiltinToolInput::Bash(crate::message::BashToolInput {
+        command: "rm -rf /tmp/oops".to_string(),
+        description: String::new(),
+        timeout_ms: None,
+        workdir: None,
+    });
+    match policy.check_builtin(&danger) {
+        crate::permission::PermissionDecision::Deny { .. } => {}
+        other => panic!("expected Deny, got {other:?}"),
+    }
+}
+
+#[test]
 fn permission_bash_rules_load_from_toml_and_compile_into_tool_policy() {
     let path = write_temp_config(
         r#"

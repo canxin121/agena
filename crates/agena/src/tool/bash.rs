@@ -1,7 +1,7 @@
 use std::cmp::min;
 use std::collections::HashMap;
 
-use procwarden::{SandboxCommandRequest, SandboxPolicy};
+use super::shell::{ExecutionPolicy, ShellRequest};
 
 use crate::message::{BashToolInput, BuiltinToolOutput};
 use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
@@ -26,7 +26,7 @@ pub(super) fn execute(
     }
 
     let analysis = analyze_command(input.command.as_str());
-    if matches!(executor.sandbox_policy(), SandboxPolicy::ReadOnly)
+    if matches!(executor.sandbox_policy(), ExecutionPolicy::ReadOnly)
         && let CommandClassification::Mutating { reason } = &analysis.classification
     {
         return Err(ToolError::PermissionDenied(format!(
@@ -89,14 +89,14 @@ pub(super) fn execute(
     let (final_command, final_cwd) =
         command_after_hook.unwrap_or_else(|| (input.command.clone(), cwd));
 
-    let request = SandboxCommandRequest {
+    let request = ShellRequest {
         command: shell_command_for_platform(&final_command),
         cwd: final_cwd,
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS)),
     };
 
-    let execution = executor.execute_sandboxed_command(&request)?;
+    let execution = executor.execute_shell_command(&request)?;
 
     // Plugin chain: command.execute.after. Plugins can observe or rewrite
     // stdout/stderr; we use the (potentially patched) combined output.

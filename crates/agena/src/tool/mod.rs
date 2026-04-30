@@ -14,6 +14,7 @@ mod orchestrator;
 mod plan;
 mod read;
 mod result;
+mod shell;
 mod skill;
 mod subtask;
 mod task;
@@ -46,14 +47,12 @@ use crate::plugin::{
     ToolSource as SdkToolSource,
     sdk::{ShellEnvInput as PluginShellEnvInput, ToolBehavior as SdkToolBehavior},
 };
-use procwarden::{
-    SandboxCommandRequest, SandboxError, SandboxExecOutput, SandboxManager, SandboxPolicy,
-};
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use definition::{ToolBehavior, ToolDefinition, ToolLoadPriority, ToolSource};
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
+pub use shell::{ExecutionPolicy, ShellError, ShellOutput, ShellRequest};
 pub use worktree::{WorktreeRegistry, registry_for_executor as worktree_registry_for_executor};
 pub use monitor::{
     MonitorError, MonitorRead, MonitorRegistry, MonitorService, MonitorStart, MonitorStopOutcome,
@@ -125,8 +124,8 @@ pub enum ToolError {
     InvalidGlobPattern(#[from] globset::Error),
     #[error("invalid regex pattern: {0}")]
     InvalidRegexPattern(#[from] regex::Error),
-    #[error("sandbox error: {0}")]
-    Sandbox(#[from] SandboxError),
+    #[error("shell error: {0}")]
+    Shell(#[from] ShellError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("plugin error: {0}")]
@@ -145,8 +144,7 @@ pub struct ToolExecutor {
     subtask_manager: Arc<dyn SubtaskSessionManager>,
     monitor_registry: Option<Arc<dyn MonitorService>>,
     truncator: ToolOutputTruncator,
-    sandbox_policy: SandboxPolicy,
-    sandbox_manager: SandboxManager,
+    sandbox_policy: ExecutionPolicy,
     plugins: Arc<PluginHost>,
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     web_search_backend: crate::config::WebSearchBackend,
@@ -162,14 +160,14 @@ impl ToolExecutor {
         Self::with_sandbox_policy(
             workspace_root,
             agent,
-            SandboxPolicy::new_workspace_write_policy(),
+            ExecutionPolicy::workspace_write(),
         )
     }
 
     pub fn with_sandbox_policy(
         workspace_root: impl Into<PathBuf>,
         agent: Agent,
-        sandbox_policy: SandboxPolicy,
+        sandbox_policy: ExecutionPolicy,
     ) -> Self {
         Self {
             workspace_root: workspace_root.into(),
@@ -179,7 +177,6 @@ impl ToolExecutor {
             monitor_registry: monitor::default_registry(),
             truncator: ToolOutputTruncator::default(),
             sandbox_policy,
-            sandbox_manager: SandboxManager::new(),
             plugins: PluginHost::new_empty(),
             mcp_manager: None,
             web_search_backend: crate::config::WebSearchBackend::DuckDuckGoHtml,
@@ -325,7 +322,7 @@ impl ToolExecutor {
         &self.agent
     }
 
-    pub fn sandbox_policy(&self) -> &SandboxPolicy {
+    pub fn sandbox_policy(&self) -> &ExecutionPolicy {
         &self.sandbox_policy
     }
 
@@ -1015,13 +1012,11 @@ impl ToolExecutor {
         }
     }
 
-    pub(crate) fn execute_sandboxed_command(
+    pub(crate) fn execute_shell_command(
         &self,
-        request: &SandboxCommandRequest,
-    ) -> Result<SandboxExecOutput, ToolError> {
-        self.sandbox_manager
-            .execute(request, self.sandbox_policy(), self.workspace_root())
-            .map_err(ToolError::from)
+        request: &ShellRequest,
+    ) -> Result<ShellOutput, ToolError> {
+        shell::execute(request, self.sandbox_policy()).map_err(ToolError::from)
     }
 
     pub(crate) fn display_path(&self, path: &Path) -> String {
@@ -1307,9 +1302,8 @@ mod tests {
     use crate::plugin::sdk::prelude::*;
     use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
-    use procwarden::SandboxPolicy;
 
-    use super::{ToolBehavior, ToolError, ToolExecutor, ToolSource};
+    use super::{ExecutionPolicy, ToolBehavior, ToolError, ToolExecutor, ToolSource};
 
     #[derive(Debug)]
     struct TempWorkspace {
@@ -1335,7 +1329,7 @@ mod tests {
         ToolExecutor::new(root, agent)
     }
 
-    fn build_executor_with_policy(root: &Path, policy: SandboxPolicy) -> ToolExecutor {
+    fn build_executor_with_policy(root: &Path, policy: ExecutionPolicy) -> ToolExecutor {
         let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
         ToolExecutor::with_sandbox_policy(root, agent, policy)
     }
@@ -1868,7 +1862,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor_with_policy(
             &workspace.root,
-            SandboxPolicy::new_read_only_policy().with_world_writable_audit(false),
+            ExecutionPolicy::read_only(),
         );
 
         let result = executor
@@ -1907,7 +1901,7 @@ mod tests {
             .expect("failed to seed notes file");
         let executor = build_executor_with_policy(
             &workspace.root,
-            SandboxPolicy::new_read_only_policy().with_world_writable_audit(false),
+            ExecutionPolicy::read_only(),
         );
 
         let result = executor
@@ -1959,7 +1953,7 @@ mod tests {
         fs::write(workspace.root.join("right.txt"), "beta\n").expect("failed to write right file");
         let executor = build_executor_with_policy(
             &workspace.root,
-            SandboxPolicy::new_read_only_policy().with_world_writable_audit(false),
+            ExecutionPolicy::read_only(),
         );
 
         let result = executor
@@ -2001,7 +1995,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor_with_policy(
             &workspace.root,
-            SandboxPolicy::new_read_only_policy().with_world_writable_audit(false),
+            ExecutionPolicy::read_only(),
         );
 
         let err = executor
@@ -2109,7 +2103,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor_with_policy(
             &workspace.root,
-            SandboxPolicy::new_read_only_policy().with_world_writable_audit(false),
+            ExecutionPolicy::read_only(),
         )
         .with_plugin_manager(build_plugin_manager());
 

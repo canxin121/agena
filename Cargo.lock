@@ -439,6 +439,7 @@ version = "0.1.0"
 dependencies = [
  "agena",
  "agena-http-api",
+ "agena-skills",
  "anyhow",
  "arboard",
  "base64 0.22.1",

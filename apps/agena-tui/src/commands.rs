@@ -333,7 +333,7 @@ pub fn find_command(name: &str) -> Option<&'static CommandSpec> {
     })
 }
 
-pub fn parse_command(input: &str) -> Option<ParsedCommand> {
+pub fn parse_invocation(input: &str) -> Option<(&str, &str)> {
     let trimmed = input.trim();
     if !trimmed.starts_with('/') || trimmed.starts_with("//") {
         return None;
@@ -346,6 +346,11 @@ pub fn parse_command(input: &str) -> Option<ParsedCommand> {
     let mut parts = content.splitn(2, char::is_whitespace);
     let name = parts.next()?;
     let args = parts.next().unwrap_or("").trim();
+    Some((name, args))
+}
+
+pub fn parse_command(input: &str) -> Option<ParsedCommand> {
+    let (name, args) = parse_invocation(input)?;
     let spec = find_command(name)?;
     Some(ParsedCommand {
         spec,
@@ -377,6 +382,13 @@ mod tests {
         let parsed = parse_command("/temp 0.2").expect("command should parse");
         assert_eq!(parsed.spec.id, CommandId::Temperature);
         assert_eq!(parsed.args, "0.2");
+    }
+
+    #[test]
+    fn parse_invocation_preserves_unknown_command_names() {
+        let (name, args) = parse_invocation("/custom run this").expect("invocation should parse");
+        assert_eq!(name, "custom");
+        assert_eq!(args, "run this");
     }
 
     #[test]

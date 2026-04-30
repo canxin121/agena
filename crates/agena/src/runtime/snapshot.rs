@@ -481,12 +481,31 @@ fn build_tool_executor(
 fn build_mcp_manager(
     config: &crate::config::McpConfig,
 ) -> Arc<agena_mcp_client::McpConnectionManager> {
-    use agena_mcp_client::{HttpTransportMode, McpConnectionManager, ServerSpec};
+    use agena_mcp_client::{
+        FileTokenStore, HttpTransportMode, McpConnectionManager, ServerSpec, TokenStore,
+    };
 
-    let manager = Arc::new(McpConnectionManager::new(
+    let mut manager = McpConnectionManager::new(
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
-    ));
+    );
+
+    // Best-effort: open the on-disk token store so HttpAuth::BearerFromStore
+    // can resolve. A missing file is fine; a corrupt one is logged and the
+    // store is left unset (runtime continues, just without token lookup).
+    match FileTokenStore::open_default() {
+        Ok(store) => {
+            manager.set_token_store(Arc::new(store) as Arc<dyn TokenStore>);
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "agena::mcp",
+                "failed to open default token store: {err}"
+            );
+        }
+    }
+
+    let manager = Arc::new(manager);
     // Connect each configured server in the background.  Failures only
     // disable that one server — the rest of the runtime keeps booting.
     for (name, entry) in &config.servers {
@@ -501,7 +520,7 @@ fn build_mcp_manager(
                     cwd: cwd.clone(),
                 }
             }
-            crate::config::McpServerConfig::Http { url, mode, headers } => {
+            crate::config::McpServerConfig::Http { url, mode, headers, auth } => {
                 let parsed = match url::Url::parse(url) {
                     Ok(u) => u,
                     Err(e) => {
@@ -518,10 +537,27 @@ fn build_mcp_manager(
                         HttpTransportMode::StreamableHttp
                     }
                 };
+                let auth = auth.as_ref().map(|cfg| match cfg {
+                    crate::config::McpHttpAuthConfig::Bearer { token } => {
+                        agena_mcp_client::HttpAuth::Bearer(token.clone())
+                    }
+                    crate::config::McpHttpAuthConfig::BearerFromEnv { env } => {
+                        agena_mcp_client::HttpAuth::BearerFromEnv(env.clone())
+                    }
+                    crate::config::McpHttpAuthConfig::BearerFromStore => {
+                        agena_mcp_client::HttpAuth::BearerFromStore
+                    }
+                    crate::config::McpHttpAuthConfig::Custom { headers } => {
+                        agena_mcp_client::HttpAuth::Custom(
+                            headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                        )
+                    }
+                });
                 ServerSpec::Http {
                     url: parsed,
                     mode,
                     headers: headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                    auth,
                 }
             }
         };

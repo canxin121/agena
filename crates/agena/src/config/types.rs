@@ -502,7 +502,22 @@ pub enum McpServerConfig {
         mode: McpHttpMode,
         #[serde(default)]
         headers: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<McpHttpAuthConfig>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum McpHttpAuthConfig {
+    /// Static `Authorization: Bearer <token>`.
+    Bearer { token: String },
+    /// Read the bearer token from the named env var at connect time.
+    BearerFromEnv { env: String },
+    /// Resolve via the runtime's MCP token store.
+    BearerFromStore,
+    /// Free-form header map.
+    Custom { headers: BTreeMap<String, String> },
 }
 
 fn default_http_mode() -> McpHttpMode {

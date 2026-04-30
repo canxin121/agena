@@ -381,6 +381,41 @@ default_model = "llama3"
 }
 
 #[test]
+fn hook_entries_load_from_toml() {
+    let path = write_temp_config(
+        r#"
+[[hooks]]
+event = "user_prompt_submit"
+command = "echo $AGENA_PROMPT"
+
+[[hooks]]
+event = "tool_before"
+command = "/usr/local/bin/audit"
+matcher = { tool = "bash" }
+timeout_ms = 5000
+"#,
+    );
+
+    let env = TestEnvironment::default();
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let entries = resolution.config.hooks.entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].event, crate::hooks::HookEvent::UserPromptSubmit);
+    assert_eq!(entries[0].command, "echo $AGENA_PROMPT");
+    assert!(entries[0].matcher.tool.is_none());
+    assert_eq!(entries[1].event, crate::hooks::HookEvent::ToolBefore);
+    assert_eq!(entries[1].matcher.tool.as_deref(), Some("bash"));
+    assert_eq!(entries[1].timeout_ms, Some(5000));
+}
+
+#[test]
 fn permission_bash_rules_load_from_toml_and_compile_into_tool_policy() {
     let path = write_temp_config(
         r#"
@@ -661,9 +696,10 @@ default_model = "gpt-4.1-mini"
         .build_plugin_host()
         .await
         .expect("plugin host should build");
-    assert_eq!(host.plugins().len(), 2);
+    assert_eq!(host.plugins().len(), 3);
     assert_eq!(host.plugins()[0].id, "agena-memory");
-    assert_eq!(host.plugins()[1].id, crate::tool::builtins_plugin_id());
+    assert_eq!(host.plugins()[1].id, crate::hooks::ShellHookPlugin::id());
+    assert_eq!(host.plugins()[2].id, crate::tool::builtins_plugin_id());
 }
 
 #[tokio::test]
@@ -699,9 +735,10 @@ default_model = "gpt-4.1-mini"
         .expect("host build accepts but skips broken plugins");
     // The bogus cdylib entry is skipped; only the in-process built-in plugins
     // remain.
-    assert_eq!(host.plugins().len(), 2);
+    assert_eq!(host.plugins().len(), 3);
     assert_eq!(host.plugins()[0].id, "agena-memory");
-    assert_eq!(host.plugins()[1].id, crate::tool::builtins_plugin_id());
+    assert_eq!(host.plugins()[1].id, crate::hooks::ShellHookPlugin::id());
+    assert_eq!(host.plugins()[2].id, crate::tool::builtins_plugin_id());
 }
 
 fn write_temp_config(content: &str) -> PathBuf {

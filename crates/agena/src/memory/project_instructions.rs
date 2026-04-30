@@ -20,6 +20,15 @@ pub struct ProjectInstructionLayer {
     pub truncated: bool,
 }
 
+/// Read a user-global instruction file from `~/.agena`, if one exists.
+pub fn discover_global() -> Option<ProjectInstructionLayer> {
+    home_dir().and_then(|home| discover_global_in(home.join(".agena").as_path()))
+}
+
+fn discover_global_in(dir: &Path) -> Option<ProjectInstructionLayer> {
+    read_first_match(dir)
+}
+
 /// Walk from `workspace_root` upward, collecting one matching instruction
 /// file per directory (first-listed name wins per dir). Layers are returned
 /// outermost first so callers can render them as a top-down prompt section.
@@ -69,10 +78,15 @@ fn read_truncated(path: &Path) -> io::Result<(String, bool)> {
     if raw.len() <= MAX_FILE_BYTES {
         return Ok((raw, false));
     }
-    let cut_at = raw[..MAX_FILE_BYTES]
-        .rfind('\n')
-        .unwrap_or(MAX_FILE_BYTES);
+    let cut_at = raw[..MAX_FILE_BYTES].rfind('\n').unwrap_or(MAX_FILE_BYTES);
     Ok((raw[..cut_at].to_string(), true))
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(PathBuf::from)
 }
 
 /// Render the layers as a Markdown section ready to splice into the system
@@ -168,6 +182,17 @@ mod tests {
             .unwrap();
         assert!(our.truncated, "expected layer to be marked truncated");
         assert!(our.content.len() <= MAX_FILE_BYTES);
+    }
+
+    #[test]
+    fn discovers_global_instruction_file_from_agena_dir() {
+        let dir = tmp_dir("global").join(".agena");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("AGENTS.md"), "global instructions").unwrap();
+
+        let layer = discover_global_in(&dir).expect("global layer should load");
+        assert!(layer.path.ends_with("AGENTS.md"));
+        assert_eq!(layer.content, "global instructions");
     }
 
     #[test]

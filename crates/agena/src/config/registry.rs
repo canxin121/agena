@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use aws_credential_types::Credentials;
 
@@ -101,7 +97,7 @@ impl super::ConfigResolution {
             )
             .register_static(
                 "agena-memory",
-                crate::memory::new_memory_plugin(),
+                crate::memory::new_memory_plugin(self.config.memory.clone()),
             )
             .register_static(
                 crate::hooks::ShellHookPlugin::id(),

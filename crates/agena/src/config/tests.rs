@@ -172,6 +172,34 @@ fn example_config_parses_successfully() {
 }
 
 #[test]
+fn memory_project_instruction_config_loads_and_modes_override() {
+    let path = write_temp_config(
+        r#"
+mode = "quiet"
+
+[memory.project_instructions]
+enabled = true
+include_global = true
+
+[modes.quiet.memory.project_instructions]
+enabled = false
+include_global = false
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("memory config should load");
+
+    assert!(!resolution.config.memory.project_instructions.enabled);
+    assert!(!resolution.config.memory.project_instructions.include_global);
+}
+
+#[test]
 fn hooks_parse_from_root_config() {
     let path = write_temp_config(
         r#"

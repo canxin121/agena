@@ -13,9 +13,10 @@ use crate::{
 };
 
 use super::{
-    AuthConfig, ConfigEnvironment, ConfigError, McpConfig, OpenAiApiModeConfig, PermissionConfig,
-    PluginConfig, ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig,
-    RuntimeConfig, StreamTransportMode, TracingConfig, UiConfig, WebToolsConfig, provider_presets,
+    AuthConfig, ConfigEnvironment, ConfigError, McpConfig, MemoryConfig, OpenAiApiModeConfig,
+    PermissionConfig, PluginConfig, ProjectInstructionsConfig, ProviderAliasConfig,
+    ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, StreamTransportMode,
+    TracingConfig, UiConfig, WebToolsConfig, provider_presets,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -100,6 +101,7 @@ pub(crate) struct RawConfig {
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
     pub(crate) plugins: Option<PluginConfig>,
+    pub(crate) memory: Option<MemoryConfig>,
     pub(crate) mcp: Option<McpConfig>,
     pub(crate) lsp: Option<crate::config::types::LspConfig>,
     pub(crate) web: Option<WebToolsConfig>,
@@ -118,6 +120,7 @@ impl RawConfig {
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
+        merge_option_struct(&mut self.memory, overlay.memory);
         merge_option_struct(&mut self.mcp, overlay.mcp);
         merge_option_struct(&mut self.lsp, overlay.lsp);
         merge_option_struct(&mut self.web, overlay.web);
@@ -135,6 +138,7 @@ impl RawConfig {
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
+        merge_option_struct(&mut self.memory, overlay.memory);
         merge_map(&mut self.providers, overlay.providers);
         if !overlay.hooks.is_empty() {
             self.hooks = overlay.hooks;
@@ -149,6 +153,7 @@ impl RawConfig {
             && self.runtime.is_none()
             && self.permission.is_none()
             && self.plugins.is_none()
+            && self.memory.is_none()
             && self.mcp.is_none()
             && self.lsp.is_none()
             && self.web.is_none()
@@ -327,6 +332,7 @@ impl RawConfig {
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
         let permission = PermissionConfig::from_raw(self.permission.unwrap_or_default());
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
+        let memory: MemoryConfig = self.memory.unwrap_or_default();
         let mcp: McpConfig = self.mcp.unwrap_or_default();
         let lsp: crate::config::types::LspConfig = self.lsp.unwrap_or_default();
         let web: WebToolsConfig = self.web.unwrap_or_default();
@@ -344,6 +350,7 @@ impl RawConfig {
             runtime,
             permission,
             plugins,
+            memory,
             mcp,
             lsp,
             web,
@@ -363,6 +370,7 @@ pub(crate) struct RawModeConfig {
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
     pub(crate) plugins: Option<PluginConfig>,
+    pub(crate) memory: Option<MemoryConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "hooks")]
     pub(crate) hooks: Vec<crate::hooks::HookEntry>,
@@ -377,6 +385,7 @@ impl RawModeConfig {
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
+        merge_option_struct(&mut self.memory, overlay.memory);
         merge_map(&mut self.providers, overlay.providers);
         if !overlay.hooks.is_empty() {
             self.hooks = overlay.hooks;
@@ -434,6 +443,19 @@ impl Merge for WebToolsConfig {
 impl Merge for RawModeConfig {
     fn merge_from(&mut self, overlay: Self) {
         Self::merge_from(self, overlay);
+    }
+}
+
+impl Merge for MemoryConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        self.project_instructions
+            .merge_from(overlay.project_instructions);
+    }
+}
+
+impl Merge for ProjectInstructionsConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        *self = overlay;
     }
 }
 

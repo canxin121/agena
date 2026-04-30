@@ -18,14 +18,13 @@ pub use types::{
     ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource,
     CopilotProviderOptions, GitlabProviderOptions, GoogleVertexAuthConfig,
     GoogleVertexProviderOptions, HttpProviderConfig, LspConfig, LspServerConfig, McpConfig,
-    McpHttpAuthConfig, McpHttpMode, McpServerConfig,
-    OpenAiApiModeConfig,
+    McpHttpAuthConfig, McpHttpMode, McpServerConfig, MemoryConfig, OpenAiApiModeConfig,
     OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PermissionConfig, PluginConfig,
-    ProviderAliasConfig, ProviderDefinition, ProviderHttpConfig, RequestRetryConfig,
-    ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeJanitorConfig,
-    RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions, StreamReplayConfig,
-    StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend, WebSearchBackendKind,
-    WebSearchConfig, WebToolsConfig,
+    ProjectInstructionsConfig, ProviderAliasConfig, ProviderDefinition, ProviderHttpConfig,
+    RequestRetryConfig, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig,
+    RuntimeJanitorConfig, RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions,
+    StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend,
+    WebSearchBackendKind, WebSearchConfig, WebToolsConfig,
 };
 
 pub(crate) use error::{parse_numeric, parse_permission_mode};

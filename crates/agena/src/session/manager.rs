@@ -43,6 +43,7 @@ pub struct SessionManagerConfig {
     pub cache_ttl: Duration,
     pub cache_max_bytes: usize,
     pub max_turn_loops: usize,
+    pub doom_loop: crate::session::DoomLoopPolicy,
 }
 
 impl Default for SessionManagerConfig {
@@ -52,6 +53,7 @@ impl Default for SessionManagerConfig {
             cache_ttl: Duration::from_secs(15 * 60),
             cache_max_bytes: 64 * 1024 * 1024,
             max_turn_loops: 16,
+            doom_loop: crate::session::DoomLoopPolicy::default(),
         }
     }
 }
@@ -722,6 +724,22 @@ impl SessionManager {
 
             session.refresh_derived();
             if session.blocked() {
+                return Ok(session);
+            }
+
+            if let Some(hit) = super::doom_loop::detect(
+                session.messages.as_slice(),
+                state.config.doom_loop,
+            ) {
+                tracing::warn!(
+                    target: "agena::session::doom_loop",
+                    session_id = session.id,
+                    tool = %hit.tool_label,
+                    repeat = hit.repeat_count,
+                    "aborting turn: doom-loop detected"
+                );
+                self.persist_run_failed_event(session.id, hit.message(), state.clone())
+                    .await?;
                 return Ok(session);
             }
 
@@ -3050,6 +3068,7 @@ mod tests {
                 cache_ttl: Duration::from_secs(60),
                 cache_max_bytes: usize::MAX,
                 max_turn_loops: 16,
+            doom_loop: crate::session::DoomLoopPolicy::default(),
             },
         )
         .await;
@@ -3354,6 +3373,7 @@ mod tests {
                 cache_ttl: Duration::from_secs(60),
                 cache_max_bytes: usize::MAX,
                 max_turn_loops: 16,
+            doom_loop: crate::session::DoomLoopPolicy::default(),
             },
             ContextPolicy::default(),
             RecordingProvider::new(requests.clone()),

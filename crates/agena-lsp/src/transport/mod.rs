@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::error::{LspError, LspResult};
+use crate::error::LspResult;
 use crate::protocol::InboundMessage;
 
 #[async_trait]

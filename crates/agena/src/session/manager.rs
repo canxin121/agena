@@ -1257,7 +1257,7 @@ impl SessionManager {
         );
         let prompt_budget =
             self.prompt_budget_for_turn(&session, options, tools.as_slice(), state.as_ref());
-        let Some(plan) = prompt_window::plan_compaction(
+        let Some(mut plan) = prompt_window::plan_compaction(
             active_messages,
             state.processor.keep_tail_messages(),
             prompt_budget.max_prompt_chars,
@@ -1292,16 +1292,31 @@ impl SessionManager {
                 messages: sdk_messages,
                 strategy: "summarize".to_string(),
             };
-            if let Err(err) = state
+            match state
                 .tool_executor
                 .plugin_manager()
                 .dispatch_session_compacting(compacting_input)
                 .await
             {
-                tracing::warn!(
-                    target: "agena_plugin_host::session_compacting",
-                    "session.compacting hook failed (continuing): {err}"
-                );
+                Ok(outcome) => {
+                    if let Some(text) = outcome.summary {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            tracing::debug!(
+                                target: "agena_plugin_host::session_compacting",
+                                session_id = session.id,
+                                "compaction summary replaced by plugin"
+                            );
+                            plan.summary_text = trimmed.to_string();
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "agena_plugin_host::session_compacting",
+                        "session.compacting hook failed (continuing): {err}"
+                    );
+                }
             }
         }
 

@@ -33,7 +33,26 @@ pub enum ServerSpec {
         url: Url,
         mode: HttpTransportMode,
         headers: HashMap<String, String>,
+        auth: Option<HttpAuth>,
     },
+}
+
+/// Authentication strategy for HTTP MCP servers. Materialized into an
+/// `Authorization` header at connect time; explicit `headers` always win
+/// when both are set.
+#[derive(Debug, Clone)]
+pub enum HttpAuth {
+    /// Static `Authorization: Bearer <token>` header. Most cloud-hosted
+    /// MCP servers use this.
+    Bearer(String),
+    /// Resolve the bearer token at connect time by reading the named env
+    /// var. Empty / missing values are treated as "no auth" with a warn.
+    BearerFromEnv(String),
+    /// Read the bearer token from the per-server entry in
+    /// [`crate::TokenStore`] (configured separately).
+    BearerFromStore,
+    /// Free-form: every (header, value) pair is set verbatim.
+    Custom(HashMap<String, String>),
 }
 
 pub struct ConnectedServer {
@@ -44,10 +63,11 @@ pub struct ConnectedServer {
 
 #[derive(Default)]
 pub struct McpConnectionManager {
-    inner: RwLock<Inner>,
+    inner: Arc<RwLock<Inner>>,
     sampling_handler: arc_swap::ArcSwapOption<ServerRequestHandler>,
     client_name: String,
     client_version: String,
+    token_store: Option<Arc<dyn TokenStore>>,
 }
 
 #[derive(Default)]
@@ -62,7 +82,13 @@ impl McpConnectionManager {
             sampling_handler: arc_swap::ArcSwapOption::from(None),
             client_name: client_name.into(),
             client_version: client_version.into(),
+            token_store: None,
         }
+    }
+
+    /// Install a token store so `HttpAuth::BearerFromStore` can resolve.
+    pub fn set_token_store(&mut self, store: Arc<dyn TokenStore>) {
+        self.token_store = Some(store);
     }
 
     /// Install the handler that will be called when *any* MCP server
@@ -78,7 +104,10 @@ impl McpConnectionManager {
                 let t = StdioTransport::spawn(&command, &args, &env, cwd.as_ref()).await?;
                 McpClient::new(Arc::new(t))
             }
-            ServerSpec::Http { url, mode, headers } => {
+            ServerSpec::Http { url, mode, mut headers, auth } => {
+                if let Some(auth) = auth {
+                    apply_http_auth(name, auth, &mut headers, self.token_store.as_deref());
+                }
                 let t = HttpTransport::connect(url, mode, headers).await?;
                 McpClient::new(Arc::new(t))
             }
@@ -87,6 +116,54 @@ impl McpConnectionManager {
         if let Some(h) = self.sampling_handler.load_full() {
             client.set_server_request_handler((*h).clone());
         }
+        // Auto-refresh the tools cache when the server sends
+        // notifications/tools/list_changed. We hold a weak ref so the
+        // notification handler does not keep the manager alive past its
+        // owners.
+        let weak_inner = Arc::downgrade(&self.inner);
+        let server_name_owned = name.to_string();
+        let client_arc_for_handler: Arc<McpClient> = Arc::new(client);
+        let client_weak = Arc::downgrade(&client_arc_for_handler);
+        client_arc_for_handler.set_notification_handler(Arc::new(move |method, _params| {
+            if method != crate::protocol::method::TOOLS_LIST_CHANGED {
+                return;
+            }
+            let Some(inner) = weak_inner.upgrade() else {
+                return;
+            };
+            let Some(client) = client_weak.upgrade() else {
+                return;
+            };
+            let server_name = server_name_owned.clone();
+            tokio::spawn(async move {
+                let tools = match client.list_tools().await {
+                    Ok(r) => r.tools,
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "agena_mcp_client::manager",
+                            server = %server_name,
+                            "auto-refresh after tools/list_changed failed: {err}"
+                        );
+                        return;
+                    }
+                };
+                let mut g = inner.write().await;
+                if let Some(existing) = g.servers.get_mut(&server_name) {
+                    let new_server = Arc::new(ConnectedServer {
+                        name: existing.name.clone(),
+                        client: existing.client.clone(),
+                        tools,
+                    });
+                    *existing = new_server;
+                    tracing::debug!(
+                        target: "agena_mcp_client::manager",
+                        server = %server_name,
+                        "tool catalog refreshed via list_changed"
+                    );
+                }
+            });
+        }));
+        let client = client_arc_for_handler;
         client
             .initialize(&self.client_name, &self.client_version)
             .await?;
@@ -102,7 +179,7 @@ impl McpConnectionManager {
         };
         let connected = Arc::new(ConnectedServer {
             name: name.to_string(),
-            client: Arc::new(client),
+            client,
             tools,
         });
         let mut g = self.inner.write().await;
@@ -190,5 +267,185 @@ impl McpConnectionManager {
         for (_, s) in std::mem::take(&mut g.servers) {
             let _ = s.client.shutdown().await;
         }
+    }
+}
+
+/// Pluggable per-server credential lookup. Implementations resolve a
+/// bearer token by server name; missing entries return `None`.
+pub trait TokenStore: Send + Sync {
+    fn bearer(&self, server: &str) -> Option<String>;
+}
+
+const AUTH_HEADER: &str = "Authorization";
+
+fn apply_http_auth(
+    server: &str,
+    auth: HttpAuth,
+    headers: &mut HashMap<String, String>,
+    store: Option<&dyn TokenStore>,
+) {
+    if has_auth_header(headers) {
+        tracing::debug!(
+            target: "agena_mcp_client::auth",
+            server,
+            "explicit Authorization header set; skipping HttpAuth"
+        );
+        return;
+    }
+    match auth {
+        HttpAuth::Bearer(token) => set_bearer(headers, &token, server),
+        HttpAuth::BearerFromEnv(var) => match std::env::var(&var).ok().filter(|t| !t.is_empty()) {
+            Some(token) => set_bearer(headers, &token, server),
+            None => tracing::warn!(
+                target: "agena_mcp_client::auth",
+                server,
+                env = %var,
+                "HttpAuth::BearerFromEnv referenced an unset env var"
+            ),
+        },
+        HttpAuth::BearerFromStore => {
+            let token = store
+                .and_then(|s| s.bearer(server))
+                .filter(|t| !t.is_empty());
+            match token {
+                Some(token) => set_bearer(headers, &token, server),
+                None => tracing::warn!(
+                    target: "agena_mcp_client::auth",
+                    server,
+                    "HttpAuth::BearerFromStore had no token (store missing or empty)"
+                ),
+            }
+        }
+        HttpAuth::Custom(map) => {
+            for (k, v) in map {
+                headers.entry(k).or_insert(v);
+            }
+        }
+    }
+}
+
+fn has_auth_header(headers: &HashMap<String, String>) -> bool {
+    headers
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case(AUTH_HEADER))
+}
+
+fn set_bearer(headers: &mut HashMap<String, String>, token: &str, server: &str) {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        tracing::warn!(
+            target: "agena_mcp_client::auth",
+            server,
+            "bearer token resolved to an empty string; not setting Authorization"
+        );
+        return;
+    }
+    headers.insert(AUTH_HEADER.to_string(), format!("Bearer {trimmed}"));
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct StaticStore {
+        token: Option<String>,
+    }
+
+    impl TokenStore for StaticStore {
+        fn bearer(&self, _server: &str) -> Option<String> {
+            self.token.clone()
+        }
+    }
+
+    #[test]
+    fn explicit_auth_header_is_preserved() {
+        let mut headers = HashMap::new();
+        headers.insert("authorization".into(), "Bearer pre-existing".into());
+        apply_http_auth(
+            "srv",
+            HttpAuth::Bearer("override".to_string()),
+            &mut headers,
+            None,
+        );
+        assert_eq!(headers["authorization"], "Bearer pre-existing");
+    }
+
+    #[test]
+    fn bearer_static_token_sets_header() {
+        let mut headers = HashMap::new();
+        apply_http_auth(
+            "srv",
+            HttpAuth::Bearer("abc".to_string()),
+            &mut headers,
+            None,
+        );
+        assert_eq!(headers[AUTH_HEADER], "Bearer abc");
+    }
+
+    #[test]
+    fn bearer_from_env_resolves() {
+        let var = "AGENA_TEST_MCP_TOKEN_RESOLVED";
+        unsafe { std::env::set_var(var, "from-env") };
+        let mut headers = HashMap::new();
+        apply_http_auth(
+            "srv",
+            HttpAuth::BearerFromEnv(var.to_string()),
+            &mut headers,
+            None,
+        );
+        assert_eq!(headers[AUTH_HEADER], "Bearer from-env");
+        unsafe { std::env::remove_var(var) };
+    }
+
+    #[test]
+    fn bearer_from_env_missing_does_not_set_header() {
+        let mut headers = HashMap::new();
+        apply_http_auth(
+            "srv",
+            HttpAuth::BearerFromEnv("AGENA_TEST_MCP_TOKEN_MISSING".to_string()),
+            &mut headers,
+            None,
+        );
+        assert!(!headers.contains_key(AUTH_HEADER));
+    }
+
+    #[test]
+    fn bearer_from_store_uses_supplied_store() {
+        let store = StaticStore {
+            token: Some("from-store".into()),
+        };
+        let mut headers = HashMap::new();
+        apply_http_auth(
+            "srv",
+            HttpAuth::BearerFromStore,
+            &mut headers,
+            Some(&store as &dyn TokenStore),
+        );
+        assert_eq!(headers[AUTH_HEADER], "Bearer from-store");
+    }
+
+    #[test]
+    fn empty_token_does_not_set_header() {
+        let mut headers = HashMap::new();
+        apply_http_auth(
+            "srv",
+            HttpAuth::Bearer("   ".to_string()),
+            &mut headers,
+            None,
+        );
+        assert!(!headers.contains_key(AUTH_HEADER));
+    }
+
+    #[test]
+    fn custom_headers_do_not_override_existing() {
+        let mut headers = HashMap::new();
+        headers.insert("X-Existing".to_string(), "keep".to_string());
+        let mut custom = HashMap::new();
+        custom.insert("X-Existing".to_string(), "lose".to_string());
+        custom.insert("X-Added".to_string(), "ok".to_string());
+        apply_http_auth("srv", HttpAuth::Custom(custom), &mut headers, None);
+        assert_eq!(headers["X-Existing"], "keep");
+        assert_eq!(headers["X-Added"], "ok");
     }
 }

@@ -1,6 +1,7 @@
 mod cache;
 mod context_governor;
 mod context_policy;
+pub mod cost;
 pub(crate) mod control;
 mod doom_loop;
 pub(crate) mod history;
@@ -15,6 +16,7 @@ pub use ids::{MessageId, PartId, ToolCallId, TurnId};
 
 pub use context_governor::ContextGovernor;
 pub use context_policy::ContextPolicy;
+pub use cost::{ModelCostBreakdown, SessionCostSummary};
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionManager,

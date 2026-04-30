@@ -8,10 +8,12 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use lsp_types::{
-    ClientCapabilities, Diagnostic, GotoDefinitionParams, GotoDefinitionResponse, Hover,
-    HoverParams, InitializeParams, InitializeResult, Location, PartialResultParams, Position,
-    PublishDiagnosticsParams, ReferenceContext, ReferenceParams, TextDocumentIdentifier,
-    TextDocumentPositionParams, Uri, WorkDoneProgressParams,
+    ClientCapabilities, Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    InitializeParams, InitializeResult, Location, PartialResultParams, Position,
+    PublishDiagnosticsParams, ReferenceContext, ReferenceParams, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, Uri,
+    VersionedTextDocumentIdentifier, WorkDoneProgressParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -44,6 +46,16 @@ struct Inner {
     notifications: Mutex<Option<mpsc::UnboundedSender<ServerNotification>>>,
     diagnostics: DashMap<Uri, Vec<Diagnostic>>,
     initialized: arc_swap::ArcSwapOption<InitializeResult>,
+    /// Track which URIs we've sent didOpen for (and their content hash +
+    /// version), so we can decide between didOpen / didChange.
+    open_docs: DashMap<Uri, OpenDocState>,
+}
+
+#[derive(Debug, Clone)]
+struct OpenDocState {
+    version: i32,
+    content_hash: u64,
+    language_id: String,
 }
 
 impl LspClient {
@@ -55,6 +67,7 @@ impl LspClient {
             notifications: Mutex::new(None),
             diagnostics: DashMap::new(),
             initialized: arc_swap::ArcSwapOption::from(None),
+            open_docs: DashMap::new(),
         });
         let inner_for_reader = inner.clone();
         tokio::spawn(async move { reader_loop(inner_for_reader).await });
@@ -121,6 +134,74 @@ impl LspClient {
         let _: Option<Value> = self.request_opt("shutdown", Value::Null).await?;
         let _ = self.notify("exit", Value::Null).await;
         let _ = self.inner.transport.close().await;
+        Ok(())
+    }
+
+    /// Make sure the server has the current contents of `uri`. Sends
+    /// `didOpen` on first sight, `didChange` if we've already opened it
+    /// and the content hash differs, and is a no-op otherwise. Safe to
+    /// call before every LSP request.
+    pub async fn sync_document(
+        &self,
+        uri: Uri,
+        text: String,
+        language_id: &str,
+    ) -> LspResult<()> {
+        let hash = hash_str(&text);
+        let entry = self.inner.open_docs.get(&uri).map(|r| r.value().clone());
+        match entry {
+            None => {
+                let state = OpenDocState {
+                    version: 1,
+                    content_hash: hash,
+                    language_id: language_id.to_string(),
+                };
+                self.inner.open_docs.insert(uri.clone(), state);
+                let params = DidOpenTextDocumentParams {
+                    text_document: TextDocumentItem {
+                        uri,
+                        language_id: language_id.to_string(),
+                        version: 1,
+                        text,
+                    },
+                };
+                self.notify("textDocument/didOpen", params).await
+            }
+            Some(prev) if prev.content_hash == hash => Ok(()),
+            Some(prev) => {
+                let new_version = prev.version.saturating_add(1);
+                self.inner.open_docs.insert(
+                    uri.clone(),
+                    OpenDocState {
+                        version: new_version,
+                        content_hash: hash,
+                        language_id: prev.language_id.clone(),
+                    },
+                );
+                let params = DidChangeTextDocumentParams {
+                    text_document: VersionedTextDocumentIdentifier {
+                        uri,
+                        version: new_version,
+                    },
+                    content_changes: vec![TextDocumentContentChangeEvent {
+                        range: None,
+                        range_length: None,
+                        text,
+                    }],
+                };
+                self.notify("textDocument/didChange", params).await
+            }
+        }
+    }
+
+    /// Tell the server to drop a document we previously opened.
+    pub async fn close_document(&self, uri: Uri) -> LspResult<()> {
+        if self.inner.open_docs.remove(&uri).is_some() {
+            let params = DidCloseTextDocumentParams {
+                text_document: TextDocumentIdentifier { uri },
+            };
+            self.notify("textDocument/didClose", params).await?;
+        }
         Ok(())
     }
 
@@ -313,3 +394,11 @@ async fn handle_notification(inner: &Inner, n: JsonRpcNotification) {
 }
 
 // `Inner` is private; consumers should call `LspClient::*` methods.
+
+fn hash_str(text: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}

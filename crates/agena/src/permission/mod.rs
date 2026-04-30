@@ -307,6 +307,10 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
         BuiltinToolInput::CronList(_) => "cron_list",
         BuiltinToolInput::CronDelete(_) => "cron_delete",
         BuiltinToolInput::ScheduleWakeup(_) => "schedule_wakeup",
+        BuiltinToolInput::LspDefinition(_) => "lsp_definition",
+        BuiltinToolInput::LspReferences(_) => "lsp_references",
+        BuiltinToolInput::LspHover(_) => "lsp_hover",
+        BuiltinToolInput::LspDiagnostics(_) => "lsp_diagnostics",
     }
 }
 
@@ -453,7 +457,9 @@ impl PermissionPolicy {
         }
 
         match access {
-            AccessKind::Read => decide_from_mode(self.default_read, "matched default read permission"),
+            AccessKind::Read => {
+                decide_from_mode(self.default_read, "matched default read permission")
+            }
             AccessKind::Write => {
                 decide_from_mode(self.default_write, "matched default write permission")
             }

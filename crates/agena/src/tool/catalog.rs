@@ -257,6 +257,34 @@ impl ToolCatalog {
             )
             .with_search_terms(["wakeup", "remind", "later", "delay"])
             .with_deferred_loading(),
+            ToolDefinition::builtin::<crate::message::LspDefinitionToolInput>(
+                "lsp_definition",
+                "Resolve the symbol at file_path:line:character to its definition site(s) via the configured LSP server.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["lsp", "definition", "go to def", "jump"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<crate::message::LspReferencesToolInput>(
+                "lsp_references",
+                "List every reference to the symbol at file_path:line:character via the configured LSP server.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["lsp", "references", "callers", "usages"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<crate::message::LspHoverToolInput>(
+                "lsp_hover",
+                "Read the hover documentation / type signature for the symbol at file_path:line:character.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["lsp", "hover", "type", "signature", "docs"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<crate::message::LspDiagnosticsToolInput>(
+                "lsp_diagnostics",
+                "Return the latest LSP-published diagnostics (errors / warnings / hints) for a file.",
+                ToolBehavior::ReadOnly,
+            )
+            .with_search_terms(["lsp", "diagnostics", "errors", "warnings", "lint"])
+            .with_deferred_loading(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions

@@ -69,7 +69,11 @@ impl ToolOutputTruncator {
             | BuiltinToolOutput::CronCreate { .. }
             | BuiltinToolOutput::CronList { .. }
             | BuiltinToolOutput::CronDelete { .. }
-            | BuiltinToolOutput::ScheduleWakeup { .. } => {}
+            | BuiltinToolOutput::ScheduleWakeup { .. }
+            | BuiltinToolOutput::LspDefinition { .. }
+            | BuiltinToolOutput::LspReferences { .. }
+            | BuiltinToolOutput::LspHover { .. }
+            | BuiltinToolOutput::LspDiagnostics { .. } => {}
         }
 
         execution

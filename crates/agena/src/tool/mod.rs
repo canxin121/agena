@@ -7,6 +7,7 @@ mod cron;
 mod definition;
 mod glob;
 mod grep;
+mod lsp;
 mod mcp;
 mod monitor;
 mod monitor_tool;
@@ -41,33 +42,32 @@ use crate::permission::{
     PermissionRuntimeDecision,
 };
 use crate::plugin::{
-    PluginHost, ToolAfterInput as PluginToolAfterInput,
-    ToolBeforeInput as PluginToolBeforeInput, ToolDefinitionInput as PluginToolDefinitionInput,
-    ToolFailureInput as PluginToolFailureInput, ToolInvokeInput as PluginToolInvokeInput,
-    ToolSource as SdkToolSource,
+    PluginHost, ToolAfterInput as PluginToolAfterInput, ToolBeforeInput as PluginToolBeforeInput,
+    ToolDefinitionInput as PluginToolDefinitionInput, ToolFailureInput as PluginToolFailureInput,
+    ToolInvokeInput as PluginToolInvokeInput, ToolSource as SdkToolSource,
     sdk::{ShellEnvInput as PluginShellEnvInput, ToolBehavior as SdkToolBehavior},
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use definition::{ToolBehavior, ToolDefinition, ToolLoadPriority, ToolSource};
-pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
-pub use shell::{ExecutionPolicy, ShellError, ShellOutput, ShellRequest};
-pub use worktree::{
-    ActiveWorktree, ManagedWorktree, WorktreeRegistry, list_active as worktree_list_active,
-    list_managed as worktree_list_managed, prune_stale as worktree_prune_stale,
-    registry_for_executor as worktree_registry_for_executor,
-};
 pub use monitor::{
     MonitorError, MonitorRead, MonitorRegistry, MonitorService, MonitorStart, MonitorStopOutcome,
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,
 };
+pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
 pub use result::{BuiltinExecution, ToolExecutionView, ToolInvocationExecution};
+pub use shell::{ExecutionPolicy, ShellError, ShellOutput, ShellRequest};
 pub use subtask::{
     InMemorySubtaskSessionManager, SubtaskSession, SubtaskSessionError, SubtaskSessionManager,
     SubtaskSessionRequest,
 };
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
+pub use worktree::{
+    ActiveWorktree, ManagedWorktree, WorktreeRegistry, list_active as worktree_list_active,
+    list_managed as worktree_list_managed, prune_stale as worktree_prune_stale,
+    registry_for_executor as worktree_registry_for_executor,
+};
 
 /// Stable id used to register the built-in plugin with a [`PluginHost`].
 pub fn builtins_plugin_id() -> &'static str {
@@ -162,11 +162,7 @@ pub struct ToolExecutor {
 
 impl ToolExecutor {
     pub fn new(workspace_root: impl Into<PathBuf>, agent: Agent) -> Self {
-        Self::with_sandbox_policy(
-            workspace_root,
-            agent,
-            ExecutionPolicy::workspace_write(),
-        )
+        Self::with_sandbox_policy(workspace_root, agent, ExecutionPolicy::workspace_write())
     }
 
     pub fn with_sandbox_policy(
@@ -231,10 +227,7 @@ impl ToolExecutor {
         self.mcp_manager.as_ref()
     }
 
-    pub fn with_web_search_backend(
-        mut self,
-        backend: crate::config::WebSearchBackend,
-    ) -> Self {
+    pub fn with_web_search_backend(mut self, backend: crate::config::WebSearchBackend) -> Self {
         self.web_search_backend = backend;
         self
     }
@@ -308,9 +301,18 @@ impl ToolExecutor {
             let name = crate::permission::builtin_name(&builtin);
             let allowed = matches!(
                 name,
-                "read" | "view_file" | "glob" | "grep" | "tool_search" | "todo_write"
-                    | "ask_user" | "monitor" | "web_fetch" | "web_search"
-                    | "enter_plan_mode" | "exit_plan_mode"
+                "read"
+                    | "view_file"
+                    | "glob"
+                    | "grep"
+                    | "tool_search"
+                    | "todo_write"
+                    | "ask_user"
+                    | "monitor"
+                    | "web_fetch"
+                    | "web_search"
+                    | "enter_plan_mode"
+                    | "exit_plan_mode"
             );
             if allowed {
                 return Ok(());
@@ -462,9 +464,9 @@ impl ToolExecutor {
                 if existing.contains(&name) {
                     continue;
                 }
-                let schema = tool.input_schema.unwrap_or_else(|| {
-                    serde_json::json!({"type": "object", "properties": {}})
-                });
+                let schema = tool
+                    .input_schema
+                    .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
                 let description = tool.description.unwrap_or_default();
                 definitions.push(ToolDefinition::plugin(
                     name,
@@ -702,6 +704,22 @@ impl ToolExecutor {
             BuiltinToolInput::CronList(_) => {}
             BuiltinToolInput::CronDelete(_) => {}
             BuiltinToolInput::ScheduleWakeup(_) => {}
+            BuiltinToolInput::LspDefinition(payload) => {
+                let target = self.resolve_target_path(&payload.file_path);
+                self.push_path_checks(&mut checks, AccessKind::Read, &target);
+            }
+            BuiltinToolInput::LspReferences(payload) => {
+                let target = self.resolve_target_path(&payload.file_path);
+                self.push_path_checks(&mut checks, AccessKind::Read, &target);
+            }
+            BuiltinToolInput::LspHover(payload) => {
+                let target = self.resolve_target_path(&payload.file_path);
+                self.push_path_checks(&mut checks, AccessKind::Read, &target);
+            }
+            BuiltinToolInput::LspDiagnostics(payload) => {
+                let target = self.resolve_target_path(&payload.file_path);
+                self.push_path_checks(&mut checks, AccessKind::Read, &target);
+            }
         }
 
         Ok(checks)
@@ -716,8 +734,8 @@ impl ToolExecutor {
         let tool_name = invocation_name(invocation).to_owned();
         let source = invocation_source(invocation, self.plugins.as_ref());
         let input_json = invocation_input_json(invocation)?;
-        let input_value: serde_json::Value =
-            serde_json::from_str(&input_json).map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+        let input_value: serde_json::Value = serde_json::from_str(&input_json)
+            .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
         let hooked = self
             .plugins
@@ -851,7 +869,11 @@ impl ToolExecutor {
                 self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
                 Ok(execution)
             }
-            ToolInvocation::Mcp { server, tool, input } => {
+            ToolInvocation::Mcp {
+                server,
+                tool,
+                input,
+            } => {
                 let manager = self.mcp_manager.as_ref().ok_or_else(|| {
                     ToolError::UnsupportedInvocation(format!(
                         "mcp:{server}:{tool} (no MCP manager configured)"
@@ -917,12 +939,8 @@ impl ToolExecutor {
         let action = PermissionAction::BuiltinTool {
             tool_name: crate::permission::builtin_name(input).to_string(),
         };
-        match runtime.decide_or_request_with_plugins(
-            session_id,
-            action,
-            base,
-            Some(&self.plugins),
-        ) {
+        match runtime.decide_or_request_with_plugins(session_id, action, base, Some(&self.plugins))
+        {
             Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Allow)) => Ok(
                 PermissionedBuiltinExecution::Executed(self.execute_builtin_detailed(input)?),
             ),
@@ -987,8 +1005,7 @@ impl ToolExecutor {
         if let (Some(payload_value), ToolOutput::Custom { output }) =
             (hooked.payload, &mut execution.output)
         {
-            output.payload =
-                parse_custom_payload(&payload_value.to_string()).unwrap_or_default();
+            output.payload = parse_custom_payload(&payload_value.to_string()).unwrap_or_default();
         }
 
         Ok(())
@@ -1270,12 +1287,12 @@ fn collect_loaded_tool_names(
         .iter()
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.content.as_ref() {
-            Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                details, ..
-            })) => match details.as_builtin() {
-                Some(BuiltinToolOutput::ToolSearch { loaded_tools, .. }) => Some(loaded_tools),
-                _ => None,
-            },
+            Some(PartContent::ToolExecution(ToolExecutionPart::Completed { details, .. })) => {
+                match details.as_builtin() {
+                    Some(BuiltinToolOutput::ToolSearch { loaded_tools, .. }) => Some(loaded_tools),
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .flatten()
@@ -1305,7 +1322,7 @@ fn parse_custom_payload(payload_json: &str) -> Result<StructuredObject, ToolErro
 
 #[cfg(test)]
 mod tests {
-    
+
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1884,10 +1901,7 @@ mod tests {
         }
 
         let workspace = TempWorkspace::new();
-        let executor = build_executor_with_policy(
-            &workspace.root,
-            ExecutionPolicy::read_only(),
-        );
+        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
 
         let result = executor
             .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
@@ -1923,10 +1937,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("notes.txt"), "alpha\nbeta\n")
             .expect("failed to seed notes file");
-        let executor = build_executor_with_policy(
-            &workspace.root,
-            ExecutionPolicy::read_only(),
-        );
+        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
 
         let result = executor
             .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
@@ -1975,10 +1986,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("left.txt"), "alpha\n").expect("failed to write left file");
         fs::write(workspace.root.join("right.txt"), "beta\n").expect("failed to write right file");
-        let executor = build_executor_with_policy(
-            &workspace.root,
-            ExecutionPolicy::read_only(),
-        );
+        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
 
         let result = executor
             .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
@@ -2017,10 +2025,7 @@ mod tests {
         }
 
         let workspace = TempWorkspace::new();
-        let executor = build_executor_with_policy(
-            &workspace.root,
-            ExecutionPolicy::read_only(),
-        );
+        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
 
         let err = executor
             .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
@@ -2125,11 +2130,8 @@ mod tests {
         }
 
         let workspace = TempWorkspace::new();
-        let executor = build_executor_with_policy(
-            &workspace.root,
-            ExecutionPolicy::read_only(),
-        )
-        .with_plugin_manager(build_plugin_manager());
+        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only())
+            .with_plugin_manager(build_plugin_manager());
 
         let execution = executor
             .execute_invocation_detailed(
@@ -2163,8 +2165,9 @@ mod tests {
 
         let workspace = TempWorkspace::new();
         let registry = super::plan_registry_for_executor();
-        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::workspace_write())
-            .with_plan_registry(registry.clone());
+        let executor =
+            build_executor_with_policy(&workspace.root, ExecutionPolicy::workspace_write())
+                .with_plan_registry(registry.clone());
 
         // Activate plan mode for session 7.
         registry.write().insert(
@@ -2227,8 +2230,9 @@ mod tests {
 
         let workspace = TempWorkspace::new();
         let registry = super::plan_registry_for_executor();
-        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::workspace_write())
-            .with_plan_registry(registry.clone());
+        let executor =
+            build_executor_with_policy(&workspace.root, ExecutionPolicy::workspace_write())
+                .with_plan_registry(registry.clone());
         registry.write().insert(
             42,
             PlanState {

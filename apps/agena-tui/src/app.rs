@@ -7549,6 +7549,27 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
             BuiltinToolInput::ScheduleWakeup(input) => {
                 format!("schedule_wakeup +{}s", input.delay_seconds)
             }
+            BuiltinToolInput::LspDefinition(input) => {
+                format!(
+                    "lsp_definition {}:{}:{}",
+                    input.file_path, input.line, input.character
+                )
+            }
+            BuiltinToolInput::LspReferences(input) => {
+                format!(
+                    "lsp_references {}:{}:{}",
+                    input.file_path, input.line, input.character
+                )
+            }
+            BuiltinToolInput::LspHover(input) => {
+                format!(
+                    "lsp_hover {}:{}:{}",
+                    input.file_path, input.line, input.character
+                )
+            }
+            BuiltinToolInput::LspDiagnostics(input) => {
+                format!("lsp_diagnostics {}", input.file_path)
+            }
         };
     }
     match invocation {

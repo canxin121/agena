@@ -6,8 +6,8 @@ use futures_util::StreamExt;
 
 use crate::error::AppError;
 use crate::event::{
-    ErrorInfo, EventKind, EventPublisher, MessagePartDeltaEvent,
-    MessagePartUpdatedEvent, PartDeltaField, PublishContext, StreamErrorEvent,
+    ErrorInfo, EventKind, EventPublisher, MessagePartDeltaEvent, MessagePartUpdatedEvent,
+    PartDeltaField, PublishContext, StreamErrorEvent,
 };
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, ExecutionStatus,
@@ -113,11 +113,7 @@ impl SessionProcessor {
         };
         match plugins.dispatch_chat_params(input).await {
             Ok(updated) => {
-                if let Some(t) = updated
-                    .params
-                    .get("temperature")
-                    .and_then(|v| v.as_f64())
-                {
+                if let Some(t) = updated.params.get("temperature").and_then(|v| v.as_f64()) {
                     request.temperature = Some(t as f32);
                 }
                 if let Some(m) = updated
@@ -173,11 +169,7 @@ impl SessionProcessor {
     /// Apply the `chat.message` hook chain to every outgoing message before
     /// the provider request goes out. Messages whose `content` becomes
     /// `Value::Null` (the SDK's drop signal) are filtered out.
-    async fn apply_chat_message_hook(
-        &self,
-        session_id: i64,
-        request: &mut CompletionRequest,
-    ) {
+    async fn apply_chat_message_hook(&self, session_id: i64, request: &mut CompletionRequest) {
         let Some(plugins) = &self.plugins else { return };
         if plugins.is_empty() {
             return;
@@ -212,7 +204,9 @@ impl SessionProcessor {
                         continue;
                     }
                     // Re-serialize the (potentially patched) content back onto msg.
-                    if let Ok(patched) = serde_json::from_value::<Vec<crate::message::MessagePart>>(after.message.content) {
+                    if let Ok(patched) = serde_json::from_value::<Vec<crate::message::MessagePart>>(
+                        after.message.content,
+                    ) {
                         msg.parts = patched;
                     }
                     kept.push(msg);
@@ -282,10 +276,9 @@ impl SessionProcessor {
                         role == sdk_msg.role
                     }) {
                         let mut msg = original.clone();
-                        if let Ok(parts) = serde_json::from_value::<
-                            Vec<crate::message::MessagePart>,
-                        >(sdk_msg.content)
-                        {
+                        if let Ok(parts) = serde_json::from_value::<Vec<crate::message::MessagePart>>(
+                            sdk_msg.content,
+                        ) {
                             msg.parts = parts;
                         }
                         patched.push(msg);
@@ -428,9 +421,7 @@ impl SessionProcessor {
                     if let Some(name) = name {
                         pending.name = Some(name);
                     }
-                    pending
-                        .arguments_json
-                        .push_str(arguments_delta.as_str());
+                    pending.arguments_json.push_str(arguments_delta.as_str());
                     self.ensure_pending_tool_call_part(
                         &mut run,
                         &mut assistant,
@@ -650,8 +641,10 @@ impl SessionProcessor {
             let call_id = run.next_call_id;
             run.next_call_id += 1;
             let start = Utc::now();
-            let invocation =
-                placeholder_tool_invocation(pending.name.as_deref(), run.completion.tools.as_slice());
+            let invocation = placeholder_tool_invocation(
+                pending.name.as_deref(),
+                run.completion.tools.as_slice(),
+            );
             let mut part = MessagePart::with_content(
                 part_id,
                 assistant.id,
@@ -726,7 +719,9 @@ impl SessionProcessor {
                 .iter_mut()
                 .find(|part| part.id == part_id)
                 .ok_or_else(|| {
-                    AppError::Internal(format!("tool part missing from assistant snapshot: {part_id}"))
+                    AppError::Internal(format!(
+                        "tool part missing from assistant snapshot: {part_id}"
+                    ))
                 })?;
             if part.operation_id.as_deref() != Some(operation_id.as_str()) {
                 part.operation_id = Some(operation_id);
@@ -768,7 +763,9 @@ impl SessionProcessor {
                 .iter_mut()
                 .find(|part| part.id == part_id)
                 .ok_or_else(|| {
-                    AppError::Internal(format!("tool part missing from assistant snapshot: {part_id}"))
+                    AppError::Internal(format!(
+                        "tool part missing from assistant snapshot: {part_id}"
+                    ))
                 })?;
             part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
                 call_id,
@@ -846,7 +843,7 @@ impl SessionProcessor {
         };
 
         let _ = assistant; // assistant snapshot is no longer needed: events
-                           // carry their own routing context.
+        // carry their own routing context.
         let kind = EventKind::MessagePartDelta(MessagePartDeltaEvent {
             session_id: run.session_id,
             message_id: assistant.id,
@@ -1039,17 +1036,40 @@ fn placeholder_builtin_tool_input(name: &str) -> BuiltinToolInput {
             prompt: String::new(),
             max_age_days: 7,
         }),
-        "cron_list" => {
-            BuiltinToolInput::CronList(crate::message::CronListToolInput::default())
+        "cron_list" => BuiltinToolInput::CronList(crate::message::CronListToolInput::default()),
+        "cron_delete" => {
+            BuiltinToolInput::CronDelete(crate::message::CronDeleteToolInput { id: String::new() })
         }
-        "cron_delete" => BuiltinToolInput::CronDelete(crate::message::CronDeleteToolInput {
-            id: String::new(),
-        }),
         "schedule_wakeup" => {
             BuiltinToolInput::ScheduleWakeup(crate::message::ScheduleWakeupToolInput {
                 delay_seconds: 0,
                 prompt: String::new(),
                 reason: None,
+            })
+        }
+        "lsp_definition" => {
+            BuiltinToolInput::LspDefinition(crate::message::LspDefinitionToolInput {
+                file_path: String::new(),
+                line: 0,
+                character: 0,
+            })
+        }
+        "lsp_references" => {
+            BuiltinToolInput::LspReferences(crate::message::LspReferencesToolInput {
+                file_path: String::new(),
+                line: 0,
+                character: 0,
+                include_declaration: true,
+            })
+        }
+        "lsp_hover" => BuiltinToolInput::LspHover(crate::message::LspHoverToolInput {
+            file_path: String::new(),
+            line: 0,
+            character: 0,
+        }),
+        "lsp_diagnostics" => {
+            BuiltinToolInput::LspDiagnostics(crate::message::LspDiagnosticsToolInput {
+                file_path: String::new(),
             })
         }
         other => BuiltinToolInput::Task(TaskToolInput {
@@ -1116,17 +1136,51 @@ pub(crate) fn parse_tool_invocation(
             BuiltinToolInput::TodoWrite(parse_input::<TodoWriteToolInput>(arguments_json)?)
         }
         "ask_user" => BuiltinToolInput::AskUser(parse_input::<AskUserToolInput>(arguments_json)?),
-        "web_fetch" => BuiltinToolInput::WebFetch(parse_input::<crate::message::WebFetchToolInput>(arguments_json)?),
-        "web_search" => BuiltinToolInput::WebSearch(parse_input::<crate::message::WebSearchToolInput>(arguments_json)?),
-        "enter_plan_mode" => BuiltinToolInput::EnterPlanMode(parse_input::<crate::message::EnterPlanModeToolInput>(arguments_json)?),
-        "exit_plan_mode" => BuiltinToolInput::ExitPlanMode(parse_input::<crate::message::ExitPlanModeToolInput>(arguments_json)?),
-        "skill_run" => BuiltinToolInput::SkillRun(parse_input::<crate::message::SkillRunToolInput>(arguments_json)?),
-        "enter_worktree" => BuiltinToolInput::EnterWorktree(parse_input::<crate::message::EnterWorktreeToolInput>(arguments_json)?),
-        "exit_worktree" => BuiltinToolInput::ExitWorktree(parse_input::<crate::message::ExitWorktreeToolInput>(arguments_json)?),
-        "cron_create" => BuiltinToolInput::CronCreate(parse_input::<crate::message::CronCreateToolInput>(arguments_json)?),
-        "cron_list" => BuiltinToolInput::CronList(parse_input::<crate::message::CronListToolInput>(arguments_json)?),
-        "cron_delete" => BuiltinToolInput::CronDelete(parse_input::<crate::message::CronDeleteToolInput>(arguments_json)?),
-        "schedule_wakeup" => BuiltinToolInput::ScheduleWakeup(parse_input::<crate::message::ScheduleWakeupToolInput>(arguments_json)?),
+        "web_fetch" => BuiltinToolInput::WebFetch(
+            parse_input::<crate::message::WebFetchToolInput>(arguments_json)?,
+        ),
+        "web_search" => BuiltinToolInput::WebSearch(parse_input::<
+            crate::message::WebSearchToolInput,
+        >(arguments_json)?),
+        "enter_plan_mode" => BuiltinToolInput::EnterPlanMode(parse_input::<
+            crate::message::EnterPlanModeToolInput,
+        >(arguments_json)?),
+        "exit_plan_mode" => BuiltinToolInput::ExitPlanMode(parse_input::<
+            crate::message::ExitPlanModeToolInput,
+        >(arguments_json)?),
+        "skill_run" => BuiltinToolInput::SkillRun(
+            parse_input::<crate::message::SkillRunToolInput>(arguments_json)?,
+        ),
+        "enter_worktree" => BuiltinToolInput::EnterWorktree(parse_input::<
+            crate::message::EnterWorktreeToolInput,
+        >(arguments_json)?),
+        "exit_worktree" => BuiltinToolInput::ExitWorktree(parse_input::<
+            crate::message::ExitWorktreeToolInput,
+        >(arguments_json)?),
+        "cron_create" => BuiltinToolInput::CronCreate(parse_input::<
+            crate::message::CronCreateToolInput,
+        >(arguments_json)?),
+        "cron_list" => BuiltinToolInput::CronList(
+            parse_input::<crate::message::CronListToolInput>(arguments_json)?,
+        ),
+        "cron_delete" => BuiltinToolInput::CronDelete(parse_input::<
+            crate::message::CronDeleteToolInput,
+        >(arguments_json)?),
+        "schedule_wakeup" => BuiltinToolInput::ScheduleWakeup(parse_input::<
+            crate::message::ScheduleWakeupToolInput,
+        >(arguments_json)?),
+        "lsp_definition" => BuiltinToolInput::LspDefinition(parse_input::<
+            crate::message::LspDefinitionToolInput,
+        >(arguments_json)?),
+        "lsp_references" => BuiltinToolInput::LspReferences(parse_input::<
+            crate::message::LspReferencesToolInput,
+        >(arguments_json)?),
+        "lsp_hover" => BuiltinToolInput::LspHover(
+            parse_input::<crate::message::LspHoverToolInput>(arguments_json)?,
+        ),
+        "lsp_diagnostics" => BuiltinToolInput::LspDiagnostics(parse_input::<
+            crate::message::LspDiagnosticsToolInput,
+        >(arguments_json)?),
         other => {
             return Err(AppError::Provider(format!(
                 "unsupported builtin tool call from model: {other}"
@@ -1212,10 +1266,7 @@ mod tests {
         let bus: Arc<dyn crate::event::EventBus<EventKind>> =
             Arc::new(InProcessEventBus::<EventKind>::new(64));
         let seq = Arc::new(SequenceAllocator::new());
-        (
-            Arc::new(EventPublisher::new(seq, store_dyn, bus)),
-            store,
-        )
+        (Arc::new(EventPublisher::new(seq, store_dyn, bus)), store)
     }
 
     #[derive(Default)]
@@ -1480,12 +1531,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
-                stop_sequences: Vec::new(),
-                top_p: None,
-                top_k: None,
-                seed: None,
-                thinking: None,
-                response_format: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking: None,
+                    response_format: None,
                 },
                 next_message_id: 100,
                 part_ids: ProcessorPartIdAllocator::for_test(200),
@@ -1587,12 +1638,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
-                stop_sequences: Vec::new(),
-                top_p: None,
-                top_k: None,
-                seed: None,
-                thinking: None,
-                response_format: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking: None,
+                    response_format: None,
                 },
                 next_message_id: 100,
                 part_ids: ProcessorPartIdAllocator::for_test(200),
@@ -1691,12 +1742,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
-                stop_sequences: Vec::new(),
-                top_p: None,
-                top_k: None,
-                seed: None,
-                thinking: None,
-                response_format: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking: None,
+                    response_format: None,
                 },
                 next_message_id: 100,
                 part_ids: ProcessorPartIdAllocator::for_test(200),

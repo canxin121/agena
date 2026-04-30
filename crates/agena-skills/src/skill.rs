@@ -6,6 +6,7 @@ use crate::error::{SkillError, SkillResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkillFrontmatter {
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -42,9 +43,23 @@ impl Skill {
         Ok(skill)
     }
 
+    /// Parse a user command markdown file from disk.
+    pub fn from_command_path(path: impl AsRef<Path>) -> SkillResult<Self> {
+        let path = path.as_ref();
+        let raw = std::fs::read_to_string(path)?;
+        let default_name = path.file_stem().and_then(|name| name.to_str());
+        let mut skill = Self::from_raw_with_default_name(&raw, default_name)?;
+        skill.source_path = Some(path.to_path_buf());
+        Ok(skill)
+    }
+
     /// Parse a SKILL.md from in-memory text.  The frontmatter is required;
     /// the body is everything after it.
     pub fn from_raw(raw: &str) -> SkillResult<Self> {
+        Self::from_raw_with_default_name(raw, None)
+    }
+
+    fn from_raw_with_default_name(raw: &str, default_name: Option<&str>) -> SkillResult<Self> {
         let stripped = raw.strip_prefix("---\n").ok_or_else(|| {
             SkillError::Malformed("SKILL.md must start with '---' frontmatter".into())
         })?;
@@ -53,9 +68,13 @@ impl Skill {
         })?;
         let yaml = &stripped[..end];
         let body = stripped[end + 4..].trim_start_matches('\n').to_string();
-        let fm: SkillFrontmatter = serde_yaml::from_str(yaml)?;
+        let mut fm: SkillFrontmatter = serde_yaml::from_str(yaml)?;
         if fm.name.trim().is_empty() {
-            return Err(SkillError::Malformed("SKILL.md `name` is required".into()));
+            if let Some(default_name) = default_name.filter(|name| !name.trim().is_empty()) {
+                fm.name = default_name.to_string();
+            } else {
+                return Err(SkillError::Malformed("SKILL.md `name` is required".into()));
+            }
         }
         Ok(Self {
             frontmatter: fm,

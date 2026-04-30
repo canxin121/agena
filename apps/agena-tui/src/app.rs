@@ -23,6 +23,7 @@ use agena_http_api::{
     MessageResource, PaginatedResponse, ProviderSummaryResource, SessionExecutionResource,
     SessionResource, SessionRunOptionsRequest,
 };
+use agena_skills::Skill;
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -76,6 +77,7 @@ const PROMPT_SUMMARY_TAG: &str = "prompt_summary";
 pub struct LaunchOptions {
     pub initial_session_id: Option<i64>,
     pub initial_session_search: Option<String>,
+    pub workspace_root: Option<PathBuf>,
     pub tui_config: TuiConfig,
 }
 
@@ -139,6 +141,7 @@ pub struct App {
     /// FIFO once the active turn finishes. See `composer_queue.rs`.
     queue: ComposerQueue,
     keybindings: ComposerKeyBindings,
+    user_commands: Vec<Skill>,
     /// Last time the user pressed Esc inside the composer; used to detect
     /// a double-tap that clears the input.
     last_esc_at: Option<Instant>,
@@ -389,10 +392,17 @@ struct PickerItem {
 #[derive(Debug, Clone)]
 enum PickerValue {
     Command(&'static CommandSpec),
+    UserCommand(Skill),
     Provider(ProviderSummaryResource),
     Model(ModelRef),
     Session(i64),
     Message(i64),
+}
+
+#[derive(Debug, Clone)]
+struct ParsedUserCommand {
+    command: Skill,
+    args: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -683,6 +693,9 @@ impl App {
             ),
         };
         let keybindings = launch.tui_config.keybindings.clone();
+        let user_commands = agena_skills::SkillsManager::build(launch.workspace_root.as_deref())
+            .map(|manager| manager.list_commands())
+            .unwrap_or_default();
         let double_esc_window = Duration::from_millis(launch.tui_config.double_esc_window_ms);
         let mut app = Self {
             backend,
@@ -721,6 +734,7 @@ impl App {
             active_subscription: None,
             queue: ComposerQueue::new(),
             keybindings,
+            user_commands,
             last_esc_at: None,
             double_esc_window,
         };
@@ -2851,6 +2865,23 @@ impl App {
         });
     }
 
+    fn is_local_command(&self, input: &str) -> bool {
+        commands::parse_command(input).is_some() || self.parse_user_command(input).is_some()
+    }
+
+    fn parse_user_command(&self, input: &str) -> Option<ParsedUserCommand> {
+        let (name, args) = commands::parse_invocation(input)?;
+        let command = self
+            .user_commands
+            .iter()
+            .find(|command| command.matches(name))?
+            .clone();
+        Some(ParsedUserCommand {
+            command,
+            args: args.to_string(),
+        })
+    }
+
     /// Primary submit action (Ctrl+Enter by default). When the AI is
     /// idle, sends a normal turn. When the AI is mid-turn, attempts to
     /// `steer_input` (Phase 3) — i.e. inject the message into the live
@@ -2864,7 +2895,7 @@ impl App {
             return;
         }
         // Slash-commands always run locally regardless of AI state.
-        if commands::parse_command(draft.text.as_str()).is_some() {
+        if self.is_local_command(draft.text.as_str()) {
             self.restore_composer_draft(draft);
             self.submit_composer();
             return;
@@ -2910,7 +2941,7 @@ impl App {
             return;
         }
         // Slash-commands always run locally — never queue.
-        if commands::parse_command(draft.text.as_str()).is_some() {
+        if self.is_local_command(draft.text.as_str()) {
             self.restore_composer_draft(draft);
             self.submit_composer();
             return;
@@ -2942,6 +2973,19 @@ impl App {
                 return;
             }
             self.execute_command(parsed.spec, parsed.args.as_str());
+            return;
+        }
+
+        if let Some(parsed) = self.parse_user_command(draft.text.as_str()) {
+            if !draft.items.is_empty() {
+                self.restore_composer_draft(draft);
+                self.flash_warning(ui_text::t(
+                    &self.i18n,
+                    "flash-command-does-not-support-attachments",
+                ));
+                return;
+            }
+            self.execute_user_command(parsed.command, parsed.args.as_str());
             return;
         }
 
@@ -3081,20 +3125,31 @@ impl App {
     }
 
     fn open_command_palette(&mut self) {
+        let mut all_items = commands::COMMANDS
+            .iter()
+            .map(|spec| PickerItem {
+                label: spec.invocation(),
+                detail: ui_text::t(&self.i18n, spec.summary_key),
+                value: PickerValue::Command(spec),
+            })
+            .collect::<Vec<_>>();
+        all_items.extend(
+            self.user_commands
+                .iter()
+                .cloned()
+                .map(|command| PickerItem {
+                    label: user_command_invocation(&command),
+                    detail: command.frontmatter.description.clone(),
+                    value: PickerValue::UserCommand(command),
+                }),
+        );
         let mut overlay = PickerOverlay {
             title: ui_text::t(&self.i18n, "overlay-commands-title"),
             prompt: ui_text::t(&self.i18n, "overlay-commands-prompt"),
             empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
             footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
             input: Editor::default(),
-            all_items: commands::COMMANDS
-                .iter()
-                .map(|spec| PickerItem {
-                    label: spec.invocation(),
-                    detail: ui_text::t(&self.i18n, spec.summary_key),
-                    value: PickerValue::Command(spec),
-                })
-                .collect(),
+            all_items,
             items: Vec::new(),
             selected: 0,
             loading: false,
@@ -3387,6 +3442,10 @@ impl App {
                 commands::command_matches_query(spec, query)
                     || item.detail.to_ascii_lowercase().contains(query)
             }
+            (PickerKind::Commands, PickerValue::UserCommand(command)) => {
+                user_command_matches_query(command, query)
+                    || item.detail.to_ascii_lowercase().contains(query)
+            }
             (PickerKind::WorkspaceSessions, PickerValue::Session(session_id))
             | (PickerKind::Lineage { .. }, PickerValue::Session(session_id)) => {
                 item.label.to_ascii_lowercase().contains(query)
@@ -3416,6 +3475,9 @@ impl App {
                 } else {
                     self.execute_command(spec, "");
                 }
+            }
+            (PickerKind::Commands, PickerValue::UserCommand(command)) => {
+                self.prefill_user_command(&command);
             }
             (PickerKind::WorkspaceSessions, PickerValue::Session(session_id)) => {
                 self.open_session(
@@ -3475,6 +3537,21 @@ impl App {
             return;
         }
         self.composer.set_text(format!("/{} ", spec.name));
+        self.composer.cursor = self.composer.text().len();
+        self.focus = Focus::Composer;
+    }
+
+    fn prefill_user_command(&mut self, command: &Skill) {
+        if !self.composer.text().trim().is_empty() || !self.composer_items.is_empty() {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-command-prefill-requires-empty-composer",
+            ));
+            self.focus = Focus::Composer;
+            return;
+        }
+        self.composer
+            .set_text(format!("/{} ", command.frontmatter.name));
         self.composer.cursor = self.composer.text().len();
         self.focus = Focus::Composer;
     }
@@ -3729,6 +3806,26 @@ impl App {
             }
             CommandId::Btw => self.handle_btw_command(args),
             CommandId::Queue => self.handle_queue_command(args),
+        }
+    }
+
+    fn execute_user_command(&mut self, command: Skill, args: &str) {
+        let prompt = render_user_command_prompt(&command, args);
+        if prompt.trim().is_empty() {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
+            return;
+        }
+        let draft = ComposerDraft {
+            text: prompt,
+            ..ComposerDraft::default()
+        };
+        let target_session_id = self
+            .transcript
+            .session_id
+            .or_else(|| self.sessions.current_selected_id());
+        match target_session_id {
+            Some(session_id) => self.request_submit_turn(session_id, draft),
+            None => self.create_session(Some(draft)),
         }
     }
 
@@ -5277,7 +5374,20 @@ impl App {
             Overlay::Help => {
                 let area = centered_rect(area, 92, 36);
                 frame.render_widget(Clear, area);
-                let text = ui_text::help_lines(&self.i18n)
+                let mut help_lines = ui_text::help_lines(&self.i18n);
+                if !self.user_commands.is_empty() {
+                    help_lines.push(String::new());
+                    help_lines.push(ui_text::t(&self.i18n, "help-section-user-commands"));
+                    help_lines.extend(self.user_commands.iter().map(|command| {
+                        let description = command.frontmatter.description.trim();
+                        if description.is_empty() {
+                            user_command_invocation(command)
+                        } else {
+                            format!("{} — {}", user_command_invocation(command), description)
+                        }
+                    }));
+                }
+                let text = help_lines
                     .into_iter()
                     .enumerate()
                     .map(|(index, value)| {
@@ -9229,6 +9339,45 @@ fn split_command_args_once(value: &str) -> Option<(&str, &str)> {
     }
 }
 
+fn user_command_invocation(command: &Skill) -> String {
+    format!("/{} <args>", command.frontmatter.name)
+}
+
+fn user_command_matches_query(command: &Skill, query: &str) -> bool {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    command
+        .frontmatter
+        .name
+        .to_ascii_lowercase()
+        .contains(query.as_str())
+        || command
+            .frontmatter
+            .aliases
+            .iter()
+            .any(|alias| alias.to_ascii_lowercase().contains(query.as_str()))
+        || command
+            .frontmatter
+            .description
+            .to_ascii_lowercase()
+            .contains(query.as_str())
+}
+
+fn render_user_command_prompt(command: &Skill, args: &str) -> String {
+    let body = command.body.trim();
+    let args = args.trim();
+    if body.contains("$ARGUMENTS") {
+        return body.replace("$ARGUMENTS", args);
+    }
+    if args.is_empty() {
+        body.to_string()
+    } else {
+        format!("{body}\n\nUser arguments:\n{args}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9239,6 +9388,7 @@ mod tests {
             UserInputQuestion,
         },
     };
+    use agena_skills::SkillFrontmatter;
     use chrono::Utc;
 
     #[test]
@@ -9247,6 +9397,26 @@ mod tests {
             derive_session_title("\n\n  hello world  \nnext"),
             "hello world"
         );
+    }
+
+    #[test]
+    fn user_command_prompt_replaces_arguments_placeholder() {
+        let command = Skill {
+            frontmatter: SkillFrontmatter {
+                name: "fix".to_string(),
+                description: "Fix a bug".to_string(),
+                aliases: vec!["repair".to_string()],
+                ..SkillFrontmatter::default()
+            },
+            body: "Fix this: $ARGUMENTS".to_string(),
+            source_path: None,
+        };
+
+        assert_eq!(
+            render_user_command_prompt(&command, "panic on startup"),
+            "Fix this: panic on startup"
+        );
+        assert!(user_command_matches_query(&command, "repair"));
     }
 
     #[test]

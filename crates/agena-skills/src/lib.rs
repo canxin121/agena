@@ -9,6 +9,9 @@
 //! 3. `~/.claude/skills/` (claude-code-compatible)
 //! 4. Built-in bundled skills (compiled into the binary)
 //!
+//! User slash commands are discovered from `<workspace>/.agena/commands/*.md`
+//! and `~/.agena/commands/*.md` with the same frontmatter format.
+//!
 //! A skill is a directory with a `SKILL.md` that looks like:
 //!
 //! ```markdown

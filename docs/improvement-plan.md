@@ -479,6 +479,8 @@
 
 ## 阶段 12：Slash command 与 Skills 集成
 
+状态：已完成（`~/.agena/commands/*.md` 与 `.agena/commands/*.md` 可作为用户 slash command 加载、补全并执行）。
+
 ### 12.1 用户 markdown command loader
 
 - 目标：`~/.agena/commands/foo.md` 或 `.agena/commands/foo.md` 自动成为 `/foo`。

@@ -125,7 +125,7 @@ impl AgenaTuiCli {
             .build()
             .await?;
 
-        let backend = Backend::new(runtime, db, workspace_root);
+        let backend = Backend::new(runtime, db, workspace_root.clone());
         let i18n = I18n::resolve(command.locale.as_deref(), config_locale.as_deref());
         let tui_config = tui_config::TuiConfig::load(command.tui_config.clone());
         let mut terminal = terminal::TerminalGuard::enter()
@@ -135,6 +135,7 @@ impl AgenaTuiCli {
             LaunchOptions {
                 initial_session_id: command.session,
                 initial_session_search: command.search,
+                workspace_root: Some(workspace_root),
                 tui_config,
             },
             i18n,

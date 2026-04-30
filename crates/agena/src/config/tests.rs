@@ -408,7 +408,7 @@ timeout_ms = 5000
     let entries = resolution.config.hooks.entries();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].event, crate::hooks::HookEvent::UserPromptSubmit);
-    assert_eq!(entries[0].command, "echo $AGENA_PROMPT");
+    assert_eq!(entries[0].command.as_deref(), Some("echo $AGENA_PROMPT"));
     assert!(entries[0].matcher.tool.is_none());
     assert_eq!(entries[1].event, crate::hooks::HookEvent::ToolBefore);
     assert_eq!(entries[1].matcher.tool.as_deref(), Some("bash"));

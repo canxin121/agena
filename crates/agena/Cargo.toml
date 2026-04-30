@@ -33,7 +33,7 @@ imagesize = "0.13.0"
 oauth2 = { version = "4.4.2", default-features = false, features = ["reqwest", "rustls-tls"] }
 mime_guess = "2.0.5"
 path-clean = "1.0.1"
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "stream"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "stream", "blocking"] }
 html2md = "0.2.15"
 lru = "0.16.2"
 parking_lot = "0.12.5"

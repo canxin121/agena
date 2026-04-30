@@ -43,7 +43,7 @@ use super::{
     projection::HistoryFold,
     transcript::{TranscriptBlock, TranscriptContent, TranscriptToolOutput},
 };
-use crate::event::{DomainEvent, EventKind};
+use crate::event::{DomainEvent, EventKind, MessagePartUpdatedEvent};
 
 /// Output of a `SessionViewBuilder` fold.
 ///
@@ -208,18 +208,18 @@ impl SessionViewBuilder {
         });
     }
 
-    fn handle_tool_call_issued(&mut self, payload: &ToolCallIssued) -> Result<(), SessionViewError> {
+    fn handle_tool_call_issued(
+        &mut self,
+        payload: &ToolCallIssued,
+    ) -> Result<(), SessionViewError> {
         let part_id = self.alloc_part_id();
         let turn = self.ensure_turn(payload.turn_id);
 
         // Locate the assistant message inside this turn that owns this call.
-        let assistant_index = turn
-            .messages
-            .iter()
-            .position(|buffered| {
-                buffered.message.role == Role::Assistant
-                    && buffered.message.id == payload.message_id.raw()
-            });
+        let assistant_index = turn.messages.iter().position(|buffered| {
+            buffered.message.role == Role::Assistant
+                && buffered.message.id == payload.message_id.raw()
+        });
 
         let Some(assistant_index) = assistant_index else {
             // Issuing a tool call against a missing assistant message would be
@@ -271,11 +271,6 @@ impl SessionViewBuilder {
         let Some(location) = location else {
             return Err(SessionViewError::UnknownToolCall(payload.call_id.clone()));
         };
-        if location.turn_id != payload.turn_id {
-            // Cross-turn completion — treat as unknown.
-            return Err(SessionViewError::UnknownToolCall(payload.call_id.clone()));
-        }
-
         let output_text = match &payload.output {
             TranscriptToolOutput::Text { text } => text.clone(),
             TranscriptToolOutput::Pruned { replacement } => replacement.clone(),
@@ -320,13 +315,15 @@ impl SessionViewBuilder {
         };
 
         let key = MessageKey::new(payload.completed_at, MessageId(message_id));
-        self.ensure_turn(payload.turn_id)
-            .messages
-            .push(BufferedMessage {
+        if let Some(turn) = self.turn_state.get_mut(&location.turn_id) {
+            turn.messages.push(BufferedMessage {
                 key,
                 message,
                 issued_calls: Vec::new(),
             });
+        } else {
+            self.finalized.insert(key, message);
+        }
         Ok(())
     }
 
@@ -362,6 +359,28 @@ impl SessionViewBuilder {
         };
         let key = MessageKey::new(payload.created_at, payload.message_id);
         self.finalized.insert(key, message);
+    }
+
+    fn handle_message_part_updated(&mut self, payload: &MessagePartUpdatedEvent) {
+        let key = MessageKey {
+            created_at: payload.message_created_at,
+            message_id: payload.message_id,
+        };
+        if let Some(message) = self.finalized.get_mut(&key) {
+            apply_message_part_update(message, payload);
+            return;
+        }
+
+        for state in self.turn_state.values_mut() {
+            for buffered in &mut state.messages {
+                if buffered.message.id == payload.message_id
+                    && buffered.message.created_at == payload.message_created_at
+                {
+                    apply_message_part_update(&mut buffered.message, payload);
+                    return;
+                }
+            }
+        }
     }
 
     fn close_turn(&mut self, turn_id: TurnId) {
@@ -415,19 +434,18 @@ impl HistoryFold for SessionViewBuilder {
                 RevisionKind::Compacted => {
                     self.compacted_messages.insert(*target_message_id);
                 }
-                RevisionKind::ToolResultPruned { .. }
-                | RevisionKind::AttachmentStripped { .. } => {
+                RevisionKind::ToolResultPruned { .. } | RevisionKind::AttachmentStripped { .. } => {
                     // The session view shows the latest state of each message
                     // — the on-disk message bodies have already been rewritten
                     // by the upstream pruner/stripper. Nothing to do here.
                 }
             },
+            EventKind::MessagePartUpdated(payload) => self.handle_message_part_updated(payload),
             // Runtime / UI projection events do not contribute to the
             // transcript view.
             EventKind::RunStarted(_)
             | EventKind::RunFailed(_)
             | EventKind::StreamError(_)
-            | EventKind::MessagePartUpdated(_)
             | EventKind::MessagePartDelta(_)
             | EventKind::CommandBegin(_)
             | EventKind::CommandOutputDelta(_)
@@ -459,6 +477,26 @@ impl HistoryFold for SessionViewBuilder {
 }
 
 // ─── helpers ───────────────────────────────────────────────────────────────
+
+fn apply_message_part_update(message: &mut Message, payload: &MessagePartUpdatedEvent) {
+    if message.id != payload.message_id || message.role != payload.message_role {
+        return;
+    }
+
+    message.state = payload.message_state;
+    let mut part = payload.part.clone();
+    part.message_id = payload.message_id;
+    if let Some(existing) = message
+        .parts
+        .iter_mut()
+        .find(|existing| existing.id == part.id)
+    {
+        *existing = part;
+    } else {
+        message.parts.push(part);
+        message.parts.sort_by_key(|part| part.part_index);
+    }
+}
 
 #[allow(dead_code)]
 fn with_source(mut metadata: MessageMetadata, source: MessageSource) -> MessageMetadata {
@@ -522,7 +560,8 @@ fn parts_from_transcript<F: FnMut() -> i64>(
             continue;
         };
         let part_id = alloc_part_id();
-        let mut part = MessagePart::with_content(part_id, message_id, created_at, status, part_content);
+        let mut part =
+            MessagePart::with_content(part_id, message_id, created_at, status, part_content);
         part.part_index = idx as i32;
         parts.push(part);
     }
@@ -550,13 +589,13 @@ fn synthetic_tool_message_id(call_id: &ToolCallId) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{EventKind, DomainEvent};
+    use crate::event::{DomainEvent, EventKind};
+    use crate::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
     use crate::session::history::{
         AssistantMessageCompleted, FinishReason, SystemNoticeAppended, SystemNoticeKind,
         ToolCallCompleted, ToolCallIssued, TurnAbortReason, TurnAborted, TurnCompleted,
         TurnStarted, UserMessageAppended, fold_history,
     };
-    use crate::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
     use chrono::Utc;
     use smol_str::SmolStr;
     use uuid::Uuid;
@@ -629,7 +668,9 @@ mod tests {
             .iter_mut()
             .enumerate()
             .for_each(|(i, r)| r.meta.seq_global = i as i64);
-        fold_history::<SessionViewBuilder>(&records).unwrap().unwrap()
+        fold_history::<SessionViewBuilder>(&records)
+            .unwrap()
+            .unwrap()
     }
 
     #[test]
@@ -683,7 +724,9 @@ mod tests {
         let tool_part = &view.messages[0].parts[1];
         assert!(matches!(
             tool_part.content.as_ref(),
-            Some(PartContent::ToolExecution(ToolExecutionPart::Pending { .. }))
+            Some(PartContent::ToolExecution(
+                ToolExecutionPart::Pending { .. }
+            ))
         ));
         assert_eq!(tool_part.operation_id.as_deref(), Some("call_alpha"));
 
@@ -720,7 +763,10 @@ mod tests {
         let view = run(records);
         assert_eq!(view.messages.len(), 2);
         let texts: Vec<String> = view.messages.iter().map(Message::as_text_lossy).collect();
-        assert_eq!(texts, vec!["kept-user".to_string(), "kept-asst".to_string()]);
+        assert_eq!(
+            texts,
+            vec!["kept-user".to_string(), "kept-asst".to_string()]
+        );
     }
 
     #[test]
@@ -765,11 +811,7 @@ mod tests {
             .find(|m| m.role == Role::System)
             .expect("system notice projected");
         assert_eq!(system.as_text_lossy(), "summary text");
-        assert!(
-            system
-                .metadata
-                .has_tag("system_notice:compaction_summary")
-        );
+        assert!(system.metadata.has_tag("system_notice:compaction_summary"));
     }
 
     #[test]

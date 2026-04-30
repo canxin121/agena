@@ -4,7 +4,10 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    permission::{PermissionMode, PermissionPolicy},
+    permission::{
+        BashPatternRule, PermissionConfigError, PermissionMode, PermissionPolicy,
+        ToolPermissionPolicy,
+    },
     provider::{
         OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode, ProviderCapabilityOverrideRule,
         ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
@@ -136,6 +139,14 @@ impl ResolvedConfig {
             .with_external_directory_default(self.permission.default_external_directory)
     }
 
+    pub fn tool_permission_policy(&self) -> Result<ToolPermissionPolicy, PermissionConfigError> {
+        let mut policy = ToolPermissionPolicy::allow_all();
+        for rule in &self.permission.bash_rules {
+            policy = policy.with_bash_pattern_rule(rule.pattern.clone(), rule.mode)?;
+        }
+        Ok(policy)
+    }
+
     pub fn auth_store(&self) -> FileAuthStore {
         FileAuthStore::new(self.auth.store_path.clone())
     }
@@ -210,6 +221,20 @@ pub struct PermissionConfig {
     pub default_read: PermissionMode,
     pub default_write: PermissionMode,
     pub default_external_directory: PermissionMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bash_rules: Vec<BashRuleConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BashRuleConfig {
+    pub pattern: String,
+    pub mode: PermissionMode,
+}
+
+impl BashRuleConfig {
+    pub fn compile(&self) -> Result<BashPatternRule, PermissionConfigError> {
+        BashPatternRule::new(self.pattern.clone(), self.mode)
+    }
 }
 
 pub use agena_plugin_host::PluginsConfig as PluginConfig;

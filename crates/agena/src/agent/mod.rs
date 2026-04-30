@@ -45,6 +45,11 @@ impl Agent {
         }
     }
 
+    pub fn with_tool_policy(mut self, tool_policy: ToolPermissionPolicy) -> Self {
+        self.tool_policy = tool_policy;
+        self
+    }
+
     pub fn authorize_builtin_tool(&self, input: &BuiltinToolInput) -> PermissionDecision {
         if self.disable {
             return PermissionDecision::Deny {

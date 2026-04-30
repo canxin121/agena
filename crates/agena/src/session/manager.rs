@@ -22,6 +22,7 @@ use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissi
 
 use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
+use super::compaction_worker::CompactionWorker;
 use super::control::{TurnControl, TurnControlError, TurnRegistry};
 use super::history::{
     FinishReason, MessageId as HistoryMessageId, MessageRevised, RevisionKind, ToolCallCompleted,
@@ -172,6 +173,7 @@ struct ResolvedPendingTool {
 struct SessionManagerState {
     processor: SessionProcessor,
     tool_executor: ToolExecutor,
+    compaction_worker: CompactionWorker,
     config: SessionManagerConfig,
 }
 
@@ -184,6 +186,7 @@ impl SessionManagerState {
         Self {
             processor,
             tool_executor,
+            compaction_worker: CompactionWorker,
             config,
         }
     }
@@ -1298,11 +1301,15 @@ impl SessionManager {
         );
         let prompt_budget =
             self.prompt_budget_for_turn(&session, options, tools.as_slice(), state.as_ref());
-        let Some(mut plan) = prompt_window::plan_compaction(
-            active_messages,
-            state.processor.keep_tail_messages(),
-            prompt_budget.max_prompt_chars,
-        ) else {
+        let Some(mut plan) = state
+            .compaction_worker
+            .plan_compaction(
+                active_messages.to_vec(),
+                state.processor.keep_tail_messages(),
+                prompt_budget.max_prompt_chars,
+            )
+            .await?
+        else {
             return Err(AppError::Internal(
                 "prompt window cannot be compacted further".to_string(),
             ));

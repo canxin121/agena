@@ -49,6 +49,14 @@ const SYNTHETIC_TOOL_FAILED_PLACEHOLDER: &str = "[Tool execution failed without 
 const TOOL_RESULT_PRUNE_MIN_CHARS: usize = 12_000;
 const TOOL_RESULT_PRUNE_PROTECT_CHARS: usize = 24_000;
 const TOOL_RESULT_PROTECTED_USER_TURNS: usize = 2;
+const COMPACTION_SUMMARY_HEADING: &str = "Conversation summary (compacted):";
+const COMPACTION_SUMMARY_SECTIONS: [&str; 5] = [
+    "Goal",
+    "Instructions",
+    "Discoveries",
+    "Accomplished",
+    "Relevant files / directories",
+];
 
 static FILE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -984,26 +992,29 @@ pub(crate) fn strip_attachment_payloads(message: &mut Message) -> bool {
 
 fn build_compaction_summary(messages: &[Message]) -> String {
     let sections = summary_sections(messages);
-    let mut lines = vec![
-        "Conversation summary (compacted):".to_string(),
-        String::new(),
-    ];
-    lines.extend(render_summary_section("Goal", sections.goal));
+    let mut lines = vec![COMPACTION_SUMMARY_HEADING.to_string(), String::new()];
+    lines.extend(render_summary_section(
+        COMPACTION_SUMMARY_SECTIONS[0],
+        sections.goal,
+    ));
     lines.push(String::new());
     lines.extend(render_summary_section(
-        "Instructions",
+        COMPACTION_SUMMARY_SECTIONS[1],
         sections.instructions,
     ));
     lines.push(String::new());
-    lines.extend(render_summary_section("Discoveries", sections.discoveries));
+    lines.extend(render_summary_section(
+        COMPACTION_SUMMARY_SECTIONS[2],
+        sections.discoveries,
+    ));
     lines.push(String::new());
     lines.extend(render_summary_section(
-        "Accomplished",
+        COMPACTION_SUMMARY_SECTIONS[3],
         sections.accomplished,
     ));
     lines.push(String::new());
     lines.extend(render_summary_section(
-        "Relevant files / directories",
+        COMPACTION_SUMMARY_SECTIONS[4],
         sections.relevant_files,
     ));
     lines.join("\n")
@@ -1784,6 +1795,29 @@ mod tests {
         assert!(plan.summary_text.contains("- one"));
         assert!(plan.summary_text.contains("## Accomplished"));
         assert!(plan.summary_text.contains("- two"));
+    }
+
+    #[test]
+    fn compaction_summary_template_stays_stable() {
+        let mut system = Message::prompt_text(Role::System, "Always answer in Chinese.");
+        system.id = 1;
+        let mut user =
+            Message::prompt_text(Role::User, "Update crates/agena/src/session/manager.rs");
+        user.id = 2;
+        let mut tool = Message::prompt_tool_result("call_1", "Found compact_prompt_window");
+        tool.id = 3;
+        let mut assistant = Message::prompt_text(Role::Assistant, "Wired the compaction worker.");
+        assistant.id = 4;
+        let mut tail = Message::prompt_text(Role::User, "Continue");
+        tail.id = 5;
+
+        let plan = plan_compaction(&[system, user, tool, assistant, tail], 1, 32_000)
+            .expect("plan should exist");
+
+        assert_eq!(
+            plan.summary_text,
+            "Conversation summary (compacted):\n\n## Goal\n- Update crates/agena/src/session/manager.rs\n\n## Instructions\n- Always answer in Chinese.\n\n## Discoveries\n- [tool_result:call_1]\n\n## Accomplished\n- Wired the compaction worker.\n\n## Relevant files / directories\n- crates/agena/src/session/manager.rs"
+        );
     }
 
     #[test]

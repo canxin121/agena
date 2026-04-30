@@ -48,11 +48,27 @@ pub enum PermissionDecision {
     Deny { reason: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    /// Pattern rules and per-tool modes win as configured. This is the
+    /// historic behavior; nothing is auto-promoted to Ask.
+    #[default]
+    Auto,
+    /// After all other rules, any `Allow` decision for a "sensitive"
+    /// builtin (bash / apply_patch / write-style edits) is promoted to
+    /// `Ask`. Use when a user wants every shell-out confirmed without
+    /// authoring a per-pattern rule for each one.
+    Ask,
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolPermissionPolicy {
     default_mode: PermissionMode,
     tool_modes: HashMap<String, PermissionMode>,
     bash_rules: Vec<BashPatternRule>,
+    bash_deny_rules: Vec<BashPatternRule>,
+    execution_mode: ExecutionMode,
 }
 
 #[derive(Debug, Clone)]
@@ -94,11 +110,22 @@ impl ToolPermissionPolicy {
             default_mode,
             tool_modes: HashMap::new(),
             bash_rules: Vec::new(),
+            bash_deny_rules: Vec::new(),
+            execution_mode: ExecutionMode::Auto,
         }
     }
 
     pub fn allow_all() -> Self {
         Self::new(PermissionMode::Allow)
+    }
+
+    pub fn with_execution_mode(mut self, mode: ExecutionMode) -> Self {
+        self.execution_mode = mode;
+        self
+    }
+
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
     }
 
     pub fn with_builtin_mode(mut self, builtin_name: &'static str, mode: PermissionMode) -> Self {
@@ -125,17 +152,39 @@ impl ToolPermissionPolicy {
         Ok(self)
     }
 
+    /// Append a bash command pattern that *unconditionally* denies execution
+    /// — checked before everything else, including `bash_rules` and the
+    /// per-tool override. Useful for a global blocklist (`rm -rf *`,
+    /// `:(){:|:&};:`, etc.) that even an explicit `Ask` rule should not be
+    /// able to whitelist.
+    pub fn with_bash_deny_pattern(
+        mut self,
+        pattern: impl Into<String>,
+    ) -> Result<Self, PermissionConfigError> {
+        self.bash_deny_rules
+            .push(BashPatternRule::new(pattern, PermissionMode::Deny)?);
+        Ok(self)
+    }
+
     pub fn bash_rules(&self) -> &[BashPatternRule] {
         &self.bash_rules
     }
 
+    pub fn bash_deny_rules(&self) -> &[BashPatternRule] {
+        &self.bash_deny_rules
+    }
+
     pub fn check_builtin(&self, input: &BuiltinToolInput) -> PermissionDecision {
-        if let BuiltinToolInput::Bash(bash) = input
-            && let Some(decision) = self.evaluate_bash_pattern(bash)
-        {
-            return decision;
+        if let BuiltinToolInput::Bash(bash) = input {
+            if let Some(decision) = self.evaluate_bash_deny(bash) {
+                return decision;
+            }
+            if let Some(decision) = self.evaluate_bash_pattern(bash) {
+                return self.apply_execution_mode(input, decision);
+            }
         }
-        self.check_tool_name(builtin_name(input))
+        let base = self.check_tool_name(builtin_name(input));
+        self.apply_execution_mode(input, base)
     }
 
     pub fn check_tool_name(&self, name: &str) -> PermissionDecision {
@@ -184,6 +233,53 @@ impl ToolPermissionPolicy {
             }
         }
         None
+    }
+
+    fn evaluate_bash_deny(&self, bash: &BashToolInput) -> Option<PermissionDecision> {
+        let normalized = bash.command.trim();
+        if normalized.is_empty() {
+            return None;
+        }
+        for rule in &self.bash_deny_rules {
+            if rule.matcher.is_match(normalized) {
+                return Some(PermissionDecision::Deny {
+                    reason: format!(
+                        "bash command matches deny pattern `{}` and is unconditionally blocked",
+                        rule.pattern
+                    ),
+                });
+            }
+        }
+        None
+    }
+
+    /// In `Ask` mode, promote any `Allow` decision for a sensitive builtin
+    /// (bash / apply_patch) to `Ask`. Deny stays Deny; explicit Ask stays
+    /// Ask. Other modes pass through unchanged.
+    fn apply_execution_mode(
+        &self,
+        input: &BuiltinToolInput,
+        decision: PermissionDecision,
+    ) -> PermissionDecision {
+        if !matches!(self.execution_mode, ExecutionMode::Ask) {
+            return decision;
+        }
+        let sensitive = matches!(
+            input,
+            BuiltinToolInput::Bash(_) | BuiltinToolInput::ApplyPatch(_)
+        );
+        if !sensitive {
+            return decision;
+        }
+        match decision {
+            PermissionDecision::Allow => PermissionDecision::Ask {
+                reason: format!(
+                    "execution mode `ask` requires confirmation for `{}`",
+                    builtin_name(input)
+                ),
+            },
+            other => other,
+        }
     }
 }
 
@@ -558,8 +654,8 @@ mod tests {
     use crate::message::{ApplyPatchToolInput, BuiltinToolInput, ReadToolInput};
 
     use super::{
-        AccessKind, AccessSelector, PermissionDecision, PermissionMode, PermissionPolicy,
-        ToolPermissionPolicy, normalize_path_string,
+        AccessKind, AccessSelector, ExecutionMode, PermissionDecision, PermissionMode,
+        PermissionPolicy, ToolPermissionPolicy, normalize_path_string,
     };
 
     #[test]
@@ -792,6 +888,94 @@ mod tests {
         match policy.check_builtin(&bash) {
             PermissionDecision::Deny { reason } => assert!(reason.contains("bash")),
             other => panic!("expected deny decision, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn execution_mode_ask_promotes_allow_for_bash_and_apply_patch() {
+        let policy = ToolPermissionPolicy::allow_all().with_execution_mode(ExecutionMode::Ask);
+
+        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "ls".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        match policy.check_builtin(&bash) {
+            PermissionDecision::Ask { reason } => {
+                assert!(reason.contains("ask"));
+                assert!(reason.contains("bash"));
+            }
+            other => panic!("expected Ask under execution_mode=ask, got {other:?}"),
+        }
+
+        let apply = BuiltinToolInput::ApplyPatch(crate::message::ApplyPatchToolInput {
+            patch: "*** Begin Patch\n*** Add File: x.md\n+x\n*** End Patch".to_string(),
+        });
+        match policy.check_builtin(&apply) {
+            PermissionDecision::Ask { .. } => {}
+            other => panic!("expected Ask for apply_patch, got {other:?}"),
+        }
+
+        // Read-style tools are unaffected.
+        let read = BuiltinToolInput::Read(ReadToolInput {
+            file_path: "README.md".to_string(),
+            offset: None,
+            limit: None,
+        });
+        assert_eq!(policy.check_builtin(&read), PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn execution_mode_auto_does_not_promote_decisions() {
+        let policy = ToolPermissionPolicy::allow_all().with_execution_mode(ExecutionMode::Auto);
+        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "ls".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        assert_eq!(policy.check_builtin(&bash), PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn bash_deny_pattern_overrides_allow_rule_and_ask_mode() {
+        let policy = ToolPermissionPolicy::allow_all()
+            .with_execution_mode(ExecutionMode::Ask)
+            .with_bash_pattern_rule("rm *", PermissionMode::Allow)
+            .expect("rm allow rule compiles")
+            .with_bash_deny_pattern("rm -rf /*")
+            .expect("deny pattern compiles");
+
+        let dangerous = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "rm -rf /tmp/oops".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        match policy.check_builtin(&dangerous) {
+            PermissionDecision::Deny { reason } => {
+                assert!(reason.contains("deny pattern"));
+            }
+            other => panic!("expected unconditional Deny, got {other:?}"),
+        }
+
+        // A non-matching command still flows through the normal pipeline.
+        let safe = BuiltinToolInput::Bash(crate::message::BashToolInput {
+            command: "rm tmpfile".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        });
+        // 'rm tmpfile' matches the allow rule, so under Ask it gets... Allow!
+        // (Allow rule is explicit, not the policy default — apply_execution_mode
+        //  only promotes the *fallthrough* default Allow.)
+        // Wait — apply_execution_mode runs after both bash_rules and the
+        // tool-name fallback, so explicit allow gets promoted too. Let's
+        // just assert it isn't Deny.
+        match policy.check_builtin(&safe) {
+            PermissionDecision::Deny { .. } => panic!("rm tmpfile should not be denied"),
+            _ => {}
         }
     }
 

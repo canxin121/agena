@@ -37,7 +37,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | Agent loop | ✅ | ✅ | ✅ | ✅ |
 | 自动 compact | ✅ inline+remote | ✅ 时间/token | ✅ session compaction | ⚠️ 有痕迹，策略不完整 |
 | 沙盒 / 命令隔离 | ✅ landlock+bwrap+seatbelt | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 已弃用 procwarden，#15 第一阶段完成（`tool::shell`），第二阶段权限层增强待办 |
-| Hooks 事件 | ✅ | ✅ 8 种事件 | ⚠️ plugin 钩子 | ❌ **缺失** |
+| Hooks 事件 | ✅ | ✅ 8 种事件 | ⚠️ plugin 钩子 | ✅ 7 事件 + 配置驱动 shell hook（#1 第一阶段） |
 | Plan Mode | ✅ | ✅ Enter/ExitPlanMode | ✅ plan agent | ⚠️ 有 plan.rs，未与 session 接通 |
 | Subagent | ✅ SubAgentSource | ✅ Task tool | ✅ @subagent_type | ⚠️ 调度协议不完整 |
 | Slash commands | ✅ 27+ | ✅ 50+ | ✅ commands/*.md | ❌ 缺中心 dispatcher |
@@ -60,12 +60,16 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 
 ### P0：核心 UX 缺口（4–6 周）
 
-- [ ] **#1 Hooks 系统**（参考 Claude Code `settings.json` + Codex hooks crate）
-  - 新 crate `agena-hooks`，定义事件：UserPromptSubmit / PreToolUse / PostToolUse / SessionStart / Stop / SubagentStart / SubagentStop / FileChanged
-  - Hook 形态：shell command / HTTP endpoint / 内部 Prompt
-  - 在 `session/processor.rs` 与 `tool/orchestrator.rs` 注入触发点
-  - 配置：`config.toml` `[hooks]` 节，`~/.agena/settings.json`
-  - 决策语义：allow / deny / replace-input / inject-context
+- [x] **#1 Hooks 系统（第一阶段完成 ✅）** — 参考 Claude Code `settings.json`
+  - [x] 配置驱动的 shell hook：`agena.toml` 中 `[[hooks]]` 段（`event` + `command` + `matcher.tool` glob + `timeout_ms`）
+  - [x] `crates/agena/src/hooks/` 模块：`HookEvent { UserPromptSubmit / ToolBefore / ToolAfter / ToolFailure / AgentStop / SessionStart / SessionEnd }` + `ShellHookPlugin`（实现 SDK `Plugin` trait，注入丰富 `AGENA_*` env vars）
+  - [x] 输出 patch 通过 stdout JSON 解析（如 `{"prompt": "..."}` / `{"additional_context": "..."}` / `{"continue_with_message": "..."}` / `{"title_override": "..."}`）；空 / 非 JSON / 非零退出仅记 warn 不阻断
+  - [x] 注册到 `build_plugin_host` 与 builtins / memory 并列；7 单测 + 1 端到端 config 测试全过
+  - 待办（第二阶段，归并到 #1 后续）：
+    - 注入 `PreToolUse` 审批（拒绝 → 自动 deny；阻塞 → 弹用户）
+    - HTTP endpoint hook 形态（通过 `[[hooks]] kind = "http"`）
+    - 内置 Prompt hook 形态（让 hook 调用一个内部小 LLM 子任务）
+    - `~/.agena/settings.json` 命名空间镜像（目前 `agena.toml` 已就位）
 
 - [ ] **#2 Slash Commands 中央 dispatcher + 自定义命令**
   - 新 `agena/src/commands/`（mod.rs + builtin/ + custom.rs）

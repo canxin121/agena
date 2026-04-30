@@ -1,4 +1,5 @@
 use std::{
+    fs,
     io::{self, Write},
     path::PathBuf,
     time::{Duration, Instant},
@@ -9,13 +10,15 @@ use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
 use crate::{
+    agent::Agent,
     config::{
         ConfigEnvironment, ConfigLoader, ConfigModeName, ConfigOutputFormat, ConfigOverride,
         LoadConfigRequest, ProcessEnvironment,
     },
     error::AppError,
-    message::PartContent,
+    message::{ApplyPatchToolInput, BuiltinToolInput, PartContent},
     model::ModelRef,
+    permission::{PermissionPolicy, ToolPermissionPolicy},
     provider::{
         ModelCapabilities, ModelMetadata, ProviderModel,
         auth::{
@@ -30,6 +33,7 @@ use crate::{
         SessionUserTurnRequest,
     },
     storage::StorageConfig,
+    tool::{ApplyPatchExecution, ToolExecutor},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -51,15 +55,18 @@ pub struct AgenaCli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgenaCommand {
+    Apply(ApplyArgs),
     Auth(AuthCommand),
     Config(ConfigCommand),
     Continue(ContinueArgs),
+    Debug(DebugCommand),
     Exec(ExecArgs),
     Fork(ForkArgs),
     Login(LoginArgs),
     Logout(LogoutArgs),
     Provider(ProviderCommand),
     Resume(ResumeArgs),
+    Review(ReviewArgs),
     Serve(ServeCommand),
     Sessions(SessionsCommand),
 }
@@ -74,6 +81,12 @@ pub struct AuthCommand {
 pub struct ConfigCommand {
     #[command(subcommand)]
     pub command: Option<ConfigSubcommand>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DebugCommand {
+    #[command(subcommand)]
+    pub command: DebugSubcommand,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -101,6 +114,11 @@ pub enum ConfigSubcommand {
     Resolve(ConfigResolveArgs),
     Validate,
     Mode(ConfigModeArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DebugSubcommand {
+    Session(DebugSessionArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -180,6 +198,22 @@ pub struct ContinueArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct ApplyArgs {
+    #[arg(long = "workspace", alias = "cwd")]
+    pub workspace: Option<PathBuf>,
+    #[arg(long)]
+    pub json: bool,
+    pub patch_file: PathBuf,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DebugSessionArgs {
+    pub session_id: i64,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct ExecArgs {
     #[arg(long = "workspace", alias = "cwd")]
     pub workspace: Option<PathBuf>,
@@ -192,6 +226,22 @@ pub struct ExecArgs {
     #[arg(long)]
     pub json: bool,
     pub prompt: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ReviewArgs {
+    #[arg(long = "workspace", alias = "cwd")]
+    pub workspace: Option<PathBuf>,
+    #[arg(long, default_value = "main")]
+    pub base: String,
+    #[arg(long)]
+    pub model: Option<String>,
+    #[arg(long)]
+    pub temperature: Option<f32>,
+    #[arg(long)]
+    pub max_output_tokens: Option<u32>,
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -274,8 +324,29 @@ struct SessionForkOutput {
 }
 
 #[derive(Debug, Serialize)]
+struct ApplyOutput {
+    title: String,
+    output_text: String,
+    patch: ApplyPatchExecution,
+}
+
+#[derive(Debug, Serialize)]
 struct ExecOutput {
     session: SessionDetail,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugSessionOutput {
+    session: SessionDetail,
+    messages: Vec<DebugMessageOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugMessageOutput {
+    id: i64,
+    role: Role,
+    state: crate::message::MessageStatus,
     text: String,
 }
 
@@ -330,15 +401,18 @@ impl AgenaCli {
         let loader = ConfigLoader::new(ProcessEnvironment);
 
         match self.command.clone() {
+            Some(AgenaCommand::Apply(args)) => self.run_apply(args),
             Some(AgenaCommand::Auth(command)) => self.run_auth(loader, command).await,
             Some(AgenaCommand::Config(command)) => self.run_config(loader, command),
             Some(AgenaCommand::Continue(args)) => self.run_continue(args).await,
+            Some(AgenaCommand::Debug(command)) => self.run_debug(command).await,
             Some(AgenaCommand::Exec(args)) => self.run_exec(args).await,
             Some(AgenaCommand::Fork(args)) => self.run_fork(args).await,
             Some(AgenaCommand::Login(args)) => self.run_login(loader, args).await,
             Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args),
             Some(AgenaCommand::Provider(command)) => self.run_provider(loader, command).await,
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
+            Some(AgenaCommand::Review(args)) => self.run_review(args).await,
             Some(AgenaCommand::Serve(_command)) => Err(AppError::Config(
                 "the HTTP server moved to the `apps/agena-http-api-server` app; run `cargo run -p agena-http-api-server -- --help` from the repository root".to_owned(),
             )),
@@ -373,6 +447,12 @@ impl AgenaCli {
             sessions = snapshot.session_manager().is_some(),
             "Agena started with resolved configuration"
         );
+        Ok(())
+    }
+
+    fn run_apply(self, args: ApplyArgs) -> Result<(), AppError> {
+        let output = self.render_apply_command(args)?;
+        println!("{output}");
         Ok(())
     }
 
@@ -563,6 +643,12 @@ impl AgenaCli {
         Ok(())
     }
 
+    async fn run_debug(self, command: DebugCommand) -> Result<(), AppError> {
+        let output = self.render_debug_command(command).await?;
+        println!("{output}");
+        Ok(())
+    }
+
     async fn run_exec(self, args: ExecArgs) -> Result<(), AppError> {
         let output = self.render_exec_command(args).await?;
         println!("{output}");
@@ -571,6 +657,12 @@ impl AgenaCli {
 
     async fn run_fork(self, args: ForkArgs) -> Result<(), AppError> {
         let output = self.render_fork_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
+    async fn run_review(self, args: ReviewArgs) -> Result<(), AppError> {
+        let output = self.render_review_command(args).await?;
         println!("{output}");
         Ok(())
     }
@@ -629,6 +721,38 @@ impl AgenaCli {
         }
 
         Ok(())
+    }
+
+    fn render_apply_command(&self, args: ApplyArgs) -> Result<String, AppError> {
+        let patch = fs::read_to_string(&args.patch_file)?;
+        let workspace = args
+            .workspace
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(std::env::current_dir)?;
+        let executor = ToolExecutor::new(
+            workspace,
+            Agent::new("cli", PermissionPolicy::allow_all())
+                .with_tool_policy(ToolPermissionPolicy::allow_all()),
+        );
+        let execution = executor
+            .execute_builtin_detailed(&BuiltinToolInput::ApplyPatch(ApplyPatchToolInput { patch }))
+            .map_err(|err| AppError::Config(err.to_string()))?;
+        let patch = execution.apply_patch.ok_or_else(|| {
+            AppError::Internal("apply_patch builtin did not return patch metadata".to_owned())
+        })?;
+        if args.json {
+            render_serialized(
+                ConfigOutputFormat::Json,
+                &ApplyOutput {
+                    title: execution.view.title,
+                    output_text: execution.view.output_text,
+                    patch,
+                },
+            )
+        } else {
+            Ok(format_apply_output(&patch))
+        }
     }
 
     async fn render_auth_command<E>(
@@ -720,22 +844,87 @@ impl AgenaCli {
         )
     }
 
-    async fn render_exec_command(&self, args: ExecArgs) -> Result<String, AppError> {
-        let runtime = self
-            .session_runtime_with_workspace(args.workspace.as_ref())
-            .await?;
+    async fn render_debug_command(&self, command: DebugCommand) -> Result<String, AppError> {
+        match command.command {
+            DebugSubcommand::Session(args) => self.render_debug_session_command(args).await,
+        }
+    }
+
+    async fn render_debug_session_command(
+        &self,
+        args: DebugSessionArgs,
+    ) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
             .ok_or_else(session_storage_error)?;
-        let options = resolve_run_options(
-            &runtime,
+        let session = manager.get_session(args.session_id).await?;
+        let latest_event_seq = latest_event_seq(&manager, session.id).await?;
+        let output = DebugSessionOutput {
+            session: session_detail(&session, latest_event_seq),
+            messages: session
+                .messages
+                .iter()
+                .map(|message| DebugMessageOutput {
+                    id: message.id,
+                    role: message.role,
+                    state: message.state,
+                    text: message.as_text_lossy(),
+                })
+                .collect(),
+        };
+        if args.json {
+            render_serialized(ConfigOutputFormat::Json, &output)
+        } else {
+            Ok(format_debug_session_output(&output))
+        }
+    }
+
+    async fn render_exec_command(&self, args: ExecArgs) -> Result<String, AppError> {
+        self.render_prompt_command(
+            args.workspace.as_ref(),
+            args.prompt.as_str(),
+            title_from_prompt(args.prompt.as_str()),
             args.model.as_deref(),
             args.temperature,
             args.max_output_tokens,
-        )?;
+            args.json,
+        )
+        .await
+    }
+
+    async fn render_review_command(&self, args: ReviewArgs) -> Result<String, AppError> {
+        let prompt = review_prompt(args.base.as_str());
+        self.render_prompt_command(
+            args.workspace.as_ref(),
+            prompt.as_str(),
+            format!("Review changes against {}", args.base),
+            args.model.as_deref(),
+            args.temperature,
+            args.max_output_tokens,
+            args.json,
+        )
+        .await
+    }
+
+    async fn render_prompt_command(
+        &self,
+        workspace: Option<&PathBuf>,
+        prompt: &str,
+        title: String,
+        model: Option<&str>,
+        temperature: Option<f32>,
+        max_output_tokens: Option<u32>,
+        json: bool,
+    ) -> Result<String, AppError> {
+        let runtime = self.session_runtime_with_workspace(workspace).await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        let options = resolve_run_options(&runtime, model, temperature, max_output_tokens)?;
         let created = manager
             .create_session(SessionCreateRequest {
-                title: title_from_prompt(args.prompt.as_str()),
+                title,
                 parent_session_id: None,
             })
             .await?;
@@ -743,17 +932,17 @@ impl AgenaCli {
             .submit_user_turn(SessionUserTurnRequest {
                 session_id: created.id,
                 options,
-                parts: vec![PartContent::text(args.prompt)],
+                parts: vec![PartContent::text(prompt)],
             })
             .await?;
         if session.runtime.turn.status == SessionRuntimeStatus::Blocked {
             return Err(AppError::Config(
-                "exec is blocked awaiting permission or user input".to_owned(),
+                "command is blocked awaiting permission or user input".to_owned(),
             ));
         }
         let latest_event_seq = latest_event_seq(&manager, session.id).await?;
         let text = last_assistant_text(&session).unwrap_or_default();
-        if args.json {
+        if json {
             render_serialized(
                 ConfigOutputFormat::Json,
                 &ExecOutput {
@@ -907,6 +1096,37 @@ where
         ConfigOutputFormat::Toml => toml::to_string_pretty(value)
             .map_err(|err| AppError::Config(format!("failed to render toml output: {err}"))),
     }
+}
+
+fn format_apply_output(execution: &ApplyPatchExecution) -> String {
+    let mut output = format!("applied patch: {}", execution.operation_id);
+    for file in &execution.files {
+        output.push_str(&format!("\n- {:?} {}", file.kind, file.path));
+    }
+    output
+}
+
+fn format_debug_session_output(output: &DebugSessionOutput) -> String {
+    let mut rendered = format!(
+        "session {}: {}\nstatus: {:?}\nmessages: {}",
+        output.session.id,
+        output.session.title,
+        output.session.status,
+        output.messages.len()
+    );
+    for message in &output.messages {
+        rendered.push_str(&format!(
+            "\n\n[{} #{} {}]\n{}",
+            message.role, message.id, message.state, message.text
+        ));
+    }
+    rendered
+}
+
+fn review_prompt(base: &str) -> String {
+    format!(
+        "Review the current workspace changes against `{base}`. Focus on correctness, regressions, security issues, and missing tests. Report findings first, then concise remediation guidance."
+    )
 }
 
 fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
@@ -1359,6 +1579,106 @@ store_path = "{}"
 
         assert_eq!(last_assistant_text(&session).as_deref(), Some("second"));
         assert_eq!(title_from_prompt("  hello\nworld  "), "hello world");
+    }
+
+    #[test]
+    fn developer_workflow_commands_parse() {
+        let apply = AgenaCli::parse_from([
+            "agena",
+            "apply",
+            "--workspace",
+            ".",
+            "--json",
+            "change.patch",
+        ]);
+        let Some(AgenaCommand::Apply(args)) = apply.command else {
+            panic!("expected apply command");
+        };
+        assert_eq!(args.workspace, Some(PathBuf::from(".")));
+        assert_eq!(args.patch_file, PathBuf::from("change.patch"));
+        assert!(args.json);
+
+        let review = AgenaCli::parse_from(["agena", "review", "--base", "develop"]);
+        let Some(AgenaCommand::Review(args)) = review.command else {
+            panic!("expected review command");
+        };
+        assert_eq!(args.base, "develop");
+
+        let debug = AgenaCli::parse_from(["agena", "debug", "session", "42", "--json"]);
+        let Some(AgenaCommand::Debug(command)) = debug.command else {
+            panic!("expected debug command");
+        };
+        let DebugSubcommand::Session(args) = command.command;
+        assert_eq!(args.session_id, 42);
+        assert!(args.json);
+    }
+
+    #[test]
+    fn apply_command_invokes_apply_patch_builtin() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!("agena-cli-apply-{suffix}"));
+        fs::create_dir_all(&workspace).expect("workspace should be created");
+        let patch_file = workspace.join("change.patch");
+        fs::write(
+            &patch_file,
+            "*** Begin Patch\n*** Add File: added.txt\n+created\n*** End Patch",
+        )
+        .expect("patch file should be written");
+        let cli = AgenaCli {
+            config: None,
+            mode: None,
+            overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
+            command: None,
+        };
+
+        let output = cli
+            .render_apply_command(ApplyArgs {
+                workspace: Some(workspace.clone()),
+                json: true,
+                patch_file,
+            })
+            .expect("apply should succeed");
+        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
+
+        assert_eq!(value["patch"]["files"][0]["path"], "added.txt");
+        assert_eq!(
+            fs::read_to_string(workspace.join("added.txt")).expect("file should be created"),
+            "created\n"
+        );
+    }
+
+    #[test]
+    fn debug_session_plain_output_includes_messages() {
+        let output = DebugSessionOutput {
+            session: SessionDetail {
+                id: 7,
+                parent_id: None,
+                workspace_id: 1,
+                title: "debug me".to_owned(),
+                version: 1,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                message_count: 1,
+                status: SessionRuntimeStatus::Idle,
+                latest_event_seq: Some(9),
+            },
+            messages: vec![DebugMessageOutput {
+                id: 3,
+                role: Role::Assistant,
+                state: crate::message::MessageStatus::Completed,
+                text: "done".to_owned(),
+            }],
+        };
+
+        let rendered = format_debug_session_output(&output);
+        assert!(rendered.contains("session 7: debug me"));
+        assert!(rendered.contains("[assistant #3 completed]"));
+        assert!(rendered.contains("done"));
     }
 
     #[tokio::test]

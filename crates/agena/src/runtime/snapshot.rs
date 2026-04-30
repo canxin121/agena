@@ -475,7 +475,59 @@ fn build_tool_executor(
         let manager = build_mcp_manager(&resolution.config.mcp);
         executor = executor.with_mcp_manager(manager);
     }
+
+    if !resolution.config.lsp.servers.is_empty() {
+        let registry = build_lsp_registry(workspace_root, &resolution.config.lsp);
+        executor = executor.with_lsp_registry(registry);
+    }
+
     executor
+}
+
+fn build_lsp_registry(
+    workspace_root: &Path,
+    config: &crate::config::LspConfig,
+) -> Arc<agena_lsp::LspRegistry> {
+    use agena_lsp::{LspRegistry, LspServerSpec};
+
+    let registry = Arc::new(LspRegistry::new(
+        workspace_root.to_path_buf(),
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+    ));
+
+    let registry_for_register = registry.clone();
+    let entries: Vec<(String, crate::config::LspServerConfig)> = config
+        .servers
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    tokio::spawn(async move {
+        for (name, entry) in entries {
+            let env = entry
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            let spec = LspServerSpec {
+                name: name.clone(),
+                command: entry.command.clone(),
+                args: entry.args.clone(),
+                env,
+                file_extensions: entry.file_extensions.clone(),
+                root_markers: entry.root_markers.clone(),
+                initialization_options: entry.initialization_options.clone(),
+            };
+            registry_for_register.register(spec).await;
+            tracing::info!(
+                target: "agena::lsp",
+                "registered LSP server '{name}' (lazy-spawn)"
+            );
+        }
+    });
+
+    registry
 }
 
 fn build_mcp_manager(

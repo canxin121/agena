@@ -78,7 +78,7 @@ help-composer-line-10 = Alt+P 打开命令面板，/model、/fork、/rewind 这�
 help-section-actions = 操作
 help-actions-line-1 = n 创建会话，s 打开恢复会话列表，b 打开分支历史，[ 打开父会话，] 打开子会话列表
 help-actions-line-2 = r 继续被阻塞或待处理的会话
-help-actions-line-3 = a/A/d/D 回复第一个待处理权限请求
+help-actions-line-3 = p 打开权限弹窗，a/A/d/D 快速回复第一个待处理权限请求
 help-actions-line-4 = u 打开第一个待处理用户输入请求
 help-actions-line-5 = 已禁用鼠标捕获，终端原生选择和复制仍可使用
 help-actions-line-6 = q 或 Ctrl+C 退出
@@ -96,6 +96,14 @@ overlay-attach-prompt = 输入路径或搜索词。Enter 会附加当前选中�
 overlay-attach-no-match = 没有匹配的文件
 overlay-attach-matches = 匹配结果
 overlay-attach-footer = Enter 附加 | Tab 填入选中路径 | Up/Down 移动 | Esc 关闭
+
+overlay-permission-title = 权限请求
+overlay-permission-request-id = request_id: {$request_id}
+overlay-permission-action-tool = 工具：{$tool}
+overlay-permission-action-path = 路径 {$access}：{$path}
+overlay-permission-reason = 原因：{$reason}
+overlay-permission-session = 会话：#{$session}
+overlay-permission-footer = Enter 回复 | a 允许一次 | s 会话内允许 | d 拒绝 | Esc 关闭
 
 overlay-user-input-title = 待处理用户输入
 overlay-user-input-request-id = request_id: {$request_id}
@@ -227,6 +235,7 @@ message-tool-running = 工具运行中：{$label}
 message-tool-done = 工具已完成：{$label}
 message-tool-failed = 工具失败：{$label}
 message-tool-result-blocks = {$count} 个结果块
+message-tool-output-collapsed =     … 已隐藏 {$lines} 行；可打开 transcript pager 查看完整上下文
 
 todo-status-pending = 待处理
 todo-status-in-progress = 进行中

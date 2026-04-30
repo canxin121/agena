@@ -15,7 +15,7 @@ use agena::{
         UserInputRequest,
     },
     model::ModelRef,
-    permission::PermissionReplyKind,
+    permission::{PermissionAction, PermissionReplyKind, PermissionRequest},
     provider::ProviderModel,
     role::Role,
 };
@@ -68,6 +68,8 @@ const PASTE_BURST_MIN_CHARS: u16 = 3;
 const PASTE_BURST_CHAR_INTERVAL_MS: u64 = 8;
 const PASTE_ENTER_SUPPRESS_WINDOW_MS: u64 = 120;
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
+const TOOL_CARD_PREVIEW_LINES: usize = 18;
+const TOOL_CARD_PREVIEW_CHARS: usize = 6_000;
 const PROMPT_SUMMARY_TAG: &str = "prompt_summary";
 
 #[derive(Debug, Clone, Default)]
@@ -289,6 +291,7 @@ enum Overlay {
     TranscriptSearch(LineInputOverlay),
     SessionRename(LineInputOverlay),
     FileAttach(FileAttachOverlay),
+    Permission(PermissionOverlay),
     UserInputReply(UserInputOverlay),
     Confirm(ConfirmOverlay),
     Picker(PickerOverlay),
@@ -307,6 +310,13 @@ struct UserInputOverlay {
     session_id: i64,
     request: UserInputRequest,
     input: Editor,
+}
+
+#[derive(Debug, Clone)]
+struct PermissionOverlay {
+    session_id: i64,
+    request: PermissionRequest,
+    selected: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -989,6 +999,11 @@ impl App {
             return;
         }
 
+        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('p')) {
+            self.open_permission_overlay();
+            return;
+        }
+
         if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('a')) {
             self.reply_permission(PermissionReplyKind::AllowOnce);
             return;
@@ -1034,6 +1049,7 @@ impl App {
             }
             Overlay::SessionRename(dialog) => self.handle_session_rename_overlay_key(key, dialog),
             Overlay::FileAttach(dialog) => self.handle_file_attach_overlay_key(key, dialog),
+            Overlay::Permission(dialog) => self.handle_permission_overlay_key(key, dialog),
             Overlay::UserInputReply(dialog) => self.handle_user_input_overlay_key(key, dialog),
             Overlay::Confirm(dialog) => self.handle_confirm_overlay_key(key, dialog),
             Overlay::Picker(dialog) => self.handle_picker_overlay_key(key, dialog),
@@ -1128,6 +1144,62 @@ impl App {
                 dialog.input.handle_line_input_key(key);
                 false
             }
+        }
+    }
+
+    fn handle_permission_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut PermissionOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.selected = dialog.selected.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dialog.selected = min(dialog.selected + 1, 2);
+                false
+            }
+            KeyCode::Enter => {
+                let kind = permission_overlay_kind(dialog.selected);
+                self.request_permission_reply(
+                    dialog.session_id,
+                    dialog.request.request_id.clone(),
+                    kind,
+                    ui_text::permission_reply_label(&self.i18n, kind),
+                );
+                true
+            }
+            KeyCode::Char('a') => {
+                self.request_permission_reply(
+                    dialog.session_id,
+                    dialog.request.request_id.clone(),
+                    PermissionReplyKind::AllowOnce,
+                    ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::AllowOnce),
+                );
+                true
+            }
+            KeyCode::Char('s') | KeyCode::Char('A') => {
+                self.request_permission_reply(
+                    dialog.session_id,
+                    dialog.request.request_id.clone(),
+                    PermissionReplyKind::AllowAlways,
+                    ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::AllowAlways),
+                );
+                true
+            }
+            KeyCode::Char('d') => {
+                self.request_permission_reply(
+                    dialog.session_id,
+                    dialog.request.request_id.clone(),
+                    PermissionReplyKind::DenyOnce,
+                    ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::DenyOnce),
+                );
+                true
+            }
+            _ => false,
         }
     }
 
@@ -1321,6 +1393,7 @@ impl App {
                     Self::refresh_timeline_overlay(dialog);
                 }
                 Overlay::Confirm(_) => {}
+                Overlay::Permission(_) => {}
                 Overlay::Help => {}
             }
             return;
@@ -2942,6 +3015,26 @@ impl App {
         }));
     }
 
+    fn open_permission_overlay(&mut self) {
+        let Some(execution) = self.transcript.execution.as_ref() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
+            return;
+        };
+        let Some(request) = execution.pending_permission_requests.first().cloned() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
+            return;
+        };
+        let Some(session_id) = self.transcript.session_id else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        self.overlay = Some(Overlay::Permission(PermissionOverlay {
+            session_id,
+            request,
+            selected: 0,
+        }));
+    }
+
     fn open_file_attach_overlay(&mut self) {
         let mut overlay = FileAttachOverlay {
             input: Editor::default(),
@@ -4056,6 +4149,7 @@ impl App {
                 Overlay::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::Confirm(_) => {}
+                Overlay::Permission(_) => {}
                 Overlay::Help => {}
             }
         }
@@ -5214,6 +5308,9 @@ impl App {
             Overlay::FileAttach(dialog) => {
                 self.render_file_attach_overlay(frame, area, dialog);
             }
+            Overlay::Permission(dialog) => {
+                self.render_permission_overlay(frame, area, dialog);
+            }
             Overlay::UserInputReply(dialog) => {
                 self.render_user_input_overlay(frame, area, dialog);
             }
@@ -5341,6 +5438,74 @@ impl App {
                 .saturating_add(1)
                 .saturating_add(input_view.cursor_y),
         ));
+    }
+
+    fn render_permission_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PermissionOverlay) {
+        let area = centered_rect(area, 84, 15);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(format!(
+                " {} ",
+                ui_text::t(&self.i18n, "overlay-permission-title")
+            ))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(7),
+                Constraint::Length(4),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+
+        let mut lines = Vec::new();
+        lines.push(Line::from(Span::styled(
+            self.i18n.text_args(
+                "overlay-permission-request-id",
+                &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(permission_action_label(
+            &self.i18n,
+            &dialog.request.action,
+        )));
+        lines.push(Line::from(self.i18n.text_args(
+            "overlay-permission-reason",
+            &crate::fl_args!("reason" => dialog.request.reason.clone()),
+        )));
+        if let Some(session_id) = dialog.request.session_id {
+            lines.push(Line::from(self.i18n.text_args(
+                "overlay-permission-session",
+                &crate::fl_args!("session" => session_id),
+            )));
+        }
+
+        frame.render_widget(
+            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+            rows[0],
+        );
+
+        let choices = permission_overlay_choices(&self.i18n);
+        let items = choices
+            .iter()
+            .map(|(_, label)| ListItem::new(label.clone()))
+            .collect::<Vec<_>>();
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL))
+            .highlight_style(Style::default().bg(Color::Rgb(32, 46, 64)))
+            .highlight_symbol(">> ");
+        let mut state = ListState::default();
+        state.select(Some(dialog.selected));
+        frame.render_stateful_widget(list, rows[1], &mut state);
+
+        frame.render_widget(
+            Paragraph::new(ui_text::t(&self.i18n, "overlay-permission-footer")),
+            rows[2],
+        );
     }
 
     fn render_user_input_overlay(&self, frame: &mut Frame, area: Rect, dialog: &UserInputOverlay) {
@@ -7454,7 +7619,7 @@ fn render_tool_execution(
                 style: Style::default().fg(Color::Yellow),
             });
             if !output_text.trim().is_empty() {
-                push_multiline(out, "    ", output_text, Style::default(), width);
+                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
             }
         }
         ToolExecutionPart::Completed {
@@ -7475,19 +7640,20 @@ fn render_tool_execution(
                 style: Style::default().fg(Color::Green),
             });
             if !output_text.trim().is_empty() {
-                push_multiline(out, "    ", output_text, Style::default(), width);
+                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
             }
             if let Some(diff) = apply_patch_diff(details) {
                 out.push(RenderedLine::dim(format!(
                     "    diff ({} lines)",
                     diff.lines().count()
                 )));
-                push_multiline(
+                push_tool_output_preview(
                     out,
                     "    ",
                     diff.as_str(),
                     Style::default().fg(Color::DarkGray),
                     width,
+                    i18n,
                 );
             }
             if !blocks.is_empty() {
@@ -7523,7 +7689,7 @@ fn render_tool_execution(
                 );
             }
             if !output_text.trim().is_empty() {
-                push_multiline(out, "    ", output_text, Style::default(), width);
+                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
             }
         }
     }
@@ -7606,6 +7772,131 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
     match invocation {
         ToolInvocation::Mcp { server, tool, .. } => format!("{server}/{tool}"),
         ToolInvocation::Custom { name, .. } => name.clone(),
+    }
+}
+
+fn permission_overlay_kind(selected: usize) -> PermissionReplyKind {
+    match selected {
+        0 => PermissionReplyKind::AllowOnce,
+        1 => PermissionReplyKind::AllowAlways,
+        _ => PermissionReplyKind::DenyOnce,
+    }
+}
+
+fn permission_overlay_choices(i18n: &I18n) -> [(PermissionReplyKind, String); 3] {
+    [
+        (
+            PermissionReplyKind::AllowOnce,
+            ui_text::permission_reply_label(i18n, PermissionReplyKind::AllowOnce),
+        ),
+        (
+            PermissionReplyKind::AllowAlways,
+            ui_text::permission_reply_label(i18n, PermissionReplyKind::AllowAlways),
+        ),
+        (
+            PermissionReplyKind::DenyOnce,
+            ui_text::permission_reply_label(i18n, PermissionReplyKind::DenyOnce),
+        ),
+    ]
+}
+
+fn permission_action_label(i18n: &I18n, action: &PermissionAction) -> String {
+    match action {
+        PermissionAction::BuiltinTool { tool_name } => i18n.text_args(
+            "overlay-permission-action-tool",
+            &crate::fl_args!("tool" => tool_name.clone()),
+        ),
+        PermissionAction::PathAccess {
+            access_kind,
+            target_path,
+            ..
+        } => i18n.text_args(
+            "overlay-permission-action-path",
+            &crate::fl_args!(
+                "access" => access_kind.clone(),
+                "path" => target_path.clone(),
+            ),
+        ),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolOutputPreview {
+    text: String,
+    omitted_lines: usize,
+}
+
+fn push_tool_output_preview(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    style: Style,
+    width: u16,
+    i18n: &I18n,
+) {
+    let preview = tool_output_preview(text);
+    push_multiline(out, prefix, preview.text.as_str(), style, width);
+    if preview.omitted_lines > 0 {
+        out.push(RenderedLine::dim(i18n.text_args(
+            "message-tool-output-collapsed",
+            &crate::fl_args!("lines" => preview.omitted_lines as i64),
+        )));
+    }
+}
+
+fn tool_output_preview(text: &str) -> ToolOutputPreview {
+    let total_lines = text.split('\n').count();
+    let mut preview = String::new();
+    let mut used_chars = 0_usize;
+    let mut included_lines = 0_usize;
+    let mut truncated = false;
+
+    for (index, line) in text.split('\n').enumerate() {
+        if index >= TOOL_CARD_PREVIEW_LINES {
+            truncated = true;
+            break;
+        }
+
+        let separator_chars = usize::from(index > 0);
+        let line_chars = line.chars().count();
+        if used_chars
+            .saturating_add(separator_chars)
+            .saturating_add(line_chars)
+            > TOOL_CARD_PREVIEW_CHARS
+        {
+            if index > 0 {
+                preview.push('\n');
+            }
+            let remaining = TOOL_CARD_PREVIEW_CHARS
+                .saturating_sub(used_chars)
+                .saturating_sub(separator_chars);
+            preview.extend(line.chars().take(remaining));
+            included_lines = index + 1;
+            truncated = true;
+            break;
+        }
+
+        if index > 0 {
+            preview.push('\n');
+            used_chars += 1;
+        }
+        preview.push_str(line);
+        used_chars += line_chars;
+        included_lines = index + 1;
+    }
+
+    let mut omitted_lines = if truncated {
+        total_lines.saturating_sub(included_lines)
+    } else {
+        0
+    };
+    if truncated && omitted_lines == 0 {
+        omitted_lines = 1;
+    }
+
+    ToolOutputPreview {
+        text: preview,
+        omitted_lines,
     }
 }
 
@@ -8995,6 +9286,27 @@ mod tests {
         .expect("reply should parse");
         assert_eq!(answers["lang"], vec!["Rust"]);
         assert_eq!(answers["libs"], vec!["ratatui", "crossterm"]);
+    }
+
+    #[test]
+    fn permission_overlay_maps_allow_session_and_deny_choices() {
+        assert_eq!(permission_overlay_kind(0), PermissionReplyKind::AllowOnce);
+        assert_eq!(permission_overlay_kind(1), PermissionReplyKind::AllowAlways);
+        assert_eq!(permission_overlay_kind(2), PermissionReplyKind::DenyOnce);
+        assert_eq!(permission_overlay_kind(9), PermissionReplyKind::DenyOnce);
+    }
+
+    #[test]
+    fn tool_output_preview_collapses_large_outputs() {
+        let text = (0..TOOL_CARD_PREVIEW_LINES + 3)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let preview = tool_output_preview(text.as_str());
+
+        assert_eq!(preview.text.lines().count(), TOOL_CARD_PREVIEW_LINES);
+        assert_eq!(preview.omitted_lines, 3);
     }
 
     #[test]

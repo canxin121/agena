@@ -34,6 +34,5 @@ pub(crate) use view::{SessionView, SessionViewBuilder, SessionViewError};
 pub(crate) fn fold_session_view(
     events: &[crate::event::DomainEvent],
 ) -> Result<view::SessionView, view::SessionViewError> {
-    fold_history::<SessionViewBuilder>(events)
-        .map_err(|err: view::SessionViewError| err)?
+    fold_history::<SessionViewBuilder>(events).map_err(|err: view::SessionViewError| err)?
 }

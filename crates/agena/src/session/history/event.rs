@@ -17,7 +17,6 @@ use crate::{
 // module because they are referenced verbatim by the corresponding
 // `EventKind` variants.
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TurnStarted {
     pub turn_id: TurnId,

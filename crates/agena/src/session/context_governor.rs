@@ -56,9 +56,7 @@ impl ContextGovernor {
     ) -> bool {
         let chars = prompt_window::approximate_prompt_payload_chars(messages);
         let proactive = self.policy.proactive_char_threshold(max_prompt_chars);
-        messages.len() > self.policy.max_messages
-            || chars > max_prompt_chars
-            || chars > proactive
+        messages.len() > self.policy.max_messages || chars > max_prompt_chars || chars > proactive
     }
 
     pub fn keep_tail_messages(&self) -> usize {

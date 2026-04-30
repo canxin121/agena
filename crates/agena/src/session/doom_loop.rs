@@ -21,13 +21,17 @@ pub struct DoomLoopPolicy {
 
 impl Default for DoomLoopPolicy {
     fn default() -> Self {
-        Self { repeat_threshold: 3 }
+        Self {
+            repeat_threshold: 3,
+        }
     }
 }
 
 impl DoomLoopPolicy {
     pub const fn disabled() -> Self {
-        Self { repeat_threshold: 0 }
+        Self {
+            repeat_threshold: 0,
+        }
     }
 
     pub const fn is_enabled(&self) -> bool {
@@ -122,8 +126,8 @@ fn signature_of(invocation: &ToolInvocation) -> (String, String) {
 mod tests {
     use super::*;
     use crate::message::{
-        ExecutionStatus, PartContent, StructuredField, StructuredObject,
-        StructuredValue, TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
+        ExecutionStatus, PartContent, StructuredField, StructuredObject, StructuredValue,
+        TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
     };
     use crate::role::Role;
     use chrono::Utc;
@@ -217,8 +221,16 @@ mod tests {
             invocation("bash", "ls"),
         ];
         let messages = vec![assistant_with_calls(1, calls)];
-        let hit = detect(&messages, DoomLoopPolicy { repeat_threshold: 3 });
-        assert!(hit.is_none(), "only 2 trailing identical calls, threshold is 3");
+        let hit = detect(
+            &messages,
+            DoomLoopPolicy {
+                repeat_threshold: 3,
+            },
+        );
+        assert!(
+            hit.is_none(),
+            "only 2 trailing identical calls, threshold is 3"
+        );
     }
 
     #[test]

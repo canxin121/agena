@@ -8,7 +8,8 @@ use crate::message::Message;
 use crate::session::SessionRuntimeState;
 
 use super::{
-    SessionView, SessionViewBuilder, TurnAbortReason, TurnAborted, TurnId, TurnStarted, fold_history,
+    SessionView, SessionViewBuilder, TurnAbortReason, TurnAborted, TurnId, TurnStarted,
+    fold_history,
 };
 
 #[derive(Clone)]

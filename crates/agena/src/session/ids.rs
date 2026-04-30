@@ -11,7 +11,18 @@ use uuid::Uuid;
 
 /// Stable identifier of a single message inside a session.
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Display, From,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Display,
+    From,
     Into,
 )]
 #[serde(transparent)]
@@ -25,7 +36,18 @@ impl MessageId {
 
 /// Stable identifier of a single message part (chunk) inside a message.
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Display, From,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Display,
+    From,
     Into,
 )]
 #[serde(transparent)]
@@ -44,7 +66,18 @@ impl PartId {
 /// `TurnAborted` marker is treated as in-flight on load and discarded by
 /// projection.
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Display, From,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Display,
+    From,
     Into,
 )]
 #[serde(transparent)]
@@ -66,7 +99,9 @@ impl Default for TurnId {
 ///
 /// Backed by `SmolStr` so the common short-id case stays inline and cheap to
 /// clone — these IDs flow through every projection.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Display, From)]
+#[derive(
+    Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Display, From,
+)]
 #[serde(transparent)]
 pub struct ToolCallId(pub SmolStr);
 

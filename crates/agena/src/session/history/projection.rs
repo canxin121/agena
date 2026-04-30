@@ -35,9 +35,9 @@ pub(crate) fn fold_history<F: HistoryFold>(events: &[DomainEvent]) -> Result<F::
 mod tests {
     use super::*;
     use crate::event::{EventKind, PublishContext};
+    use crate::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
     use crate::session::history::{TurnAbortReason, TurnAborted};
     use crate::session::ids::TurnId;
-    use crate::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
     use chrono::Utc;
     use uuid::Uuid;
 

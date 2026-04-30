@@ -656,14 +656,23 @@ pub(crate) struct RawPermissionConfig {
     pub(crate) default_read: Option<PermissionMode>,
     pub(crate) default_write: Option<PermissionMode>,
     pub(crate) default_external_directory: Option<PermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) mode: Option<crate::permission::ExecutionMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) bash: Vec<RawBashRuleConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) bash_deny: Vec<RawBashDenyConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RawBashRuleConfig {
     pub(crate) pattern: String,
     pub(crate) mode: PermissionMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RawBashDenyConfig {
+    pub(crate) pattern: String,
 }
 
 impl Merge for RawPermissionConfig {
@@ -674,8 +683,12 @@ impl Merge for RawPermissionConfig {
             &mut self.default_external_directory,
             overlay.default_external_directory,
         );
+        merge_option(&mut self.mode, overlay.mode);
         if !overlay.bash.is_empty() {
             self.bash = overlay.bash;
+        }
+        if !overlay.bash_deny.is_empty() {
+            self.bash_deny = overlay.bash_deny;
         }
     }
 }
@@ -688,6 +701,7 @@ impl PermissionConfig {
             default_external_directory: raw
                 .default_external_directory
                 .unwrap_or(PermissionMode::Deny),
+            execution_mode: raw.mode.unwrap_or_default(),
             bash_rules: raw
                 .bash
                 .into_iter()
@@ -695,6 +709,11 @@ impl PermissionConfig {
                     pattern: r.pattern,
                     mode: r.mode,
                 })
+                .collect(),
+            bash_deny_patterns: raw
+                .bash_deny
+                .into_iter()
+                .map(|r| r.pattern)
                 .collect(),
         }
     }

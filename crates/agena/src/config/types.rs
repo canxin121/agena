@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     permission::{
-        BashPatternRule, PermissionConfigError, PermissionMode, PermissionPolicy,
+        BashPatternRule, ExecutionMode, PermissionConfigError, PermissionMode, PermissionPolicy,
         ToolPermissionPolicy,
     },
     provider::{
@@ -142,9 +142,13 @@ impl ResolvedConfig {
     }
 
     pub fn tool_permission_policy(&self) -> Result<ToolPermissionPolicy, PermissionConfigError> {
-        let mut policy = ToolPermissionPolicy::allow_all();
+        let mut policy = ToolPermissionPolicy::allow_all()
+            .with_execution_mode(self.permission.execution_mode);
         for rule in &self.permission.bash_rules {
             policy = policy.with_bash_pattern_rule(rule.pattern.clone(), rule.mode)?;
+        }
+        for pattern in &self.permission.bash_deny_patterns {
+            policy = policy.with_bash_deny_pattern(pattern.clone())?;
         }
         Ok(policy)
     }
@@ -223,8 +227,12 @@ pub struct PermissionConfig {
     pub default_read: PermissionMode,
     pub default_write: PermissionMode,
     pub default_external_directory: PermissionMode,
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bash_rules: Vec<BashRuleConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bash_deny_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

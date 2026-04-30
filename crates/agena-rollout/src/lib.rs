@@ -11,8 +11,13 @@ pub mod error;
 pub mod frame;
 pub mod reader;
 pub mod recorder;
+pub mod share;
 
 pub use error::{RolloutError, RolloutResult};
 pub use frame::{RolloutFrame, RolloutKind, SessionMeta};
 pub use reader::{RolloutReader, list_sessions};
 pub use recorder::RolloutRecorder;
+pub use share::{
+    ShareBundle, ShareOptions, SessionSummary, share_bundle, summarize_directory,
+    summarize_session,
+};

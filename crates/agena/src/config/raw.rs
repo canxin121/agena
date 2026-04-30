@@ -104,6 +104,8 @@ pub(crate) struct RawConfig {
     pub(crate) web: Option<WebToolsConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
     pub(crate) modes: BTreeMap<String, RawModeConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "hooks")]
+    pub(crate) hooks: Vec<crate::hooks::HookEntry>,
 }
 
 impl RawConfig {
@@ -119,6 +121,9 @@ impl RawConfig {
         merge_option_struct(&mut self.web, overlay.web);
         merge_map(&mut self.providers, overlay.providers);
         merge_map(&mut self.modes, overlay.modes);
+        if !overlay.hooks.is_empty() {
+            self.hooks = overlay.hooks;
+        }
     }
 
     pub(crate) fn merge_mode(&mut self, overlay: RawModeConfig) {
@@ -143,6 +148,7 @@ impl RawConfig {
             && self.web.is_none()
             && self.providers.is_empty()
             && self.modes.is_empty()
+            && self.hooks.is_empty()
     }
 
     pub(crate) fn provider_mut(&mut self, provider_id: &str) -> &mut RawProviderConfig {
@@ -334,6 +340,7 @@ impl RawConfig {
             mcp,
             web,
             providers,
+            hooks: crate::hooks::HooksConfig::new(self.hooks),
         })
     }
 }

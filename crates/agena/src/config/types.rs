@@ -110,6 +110,8 @@ pub struct ResolvedConfig {
     pub mcp: McpConfig,
     pub web: WebToolsConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
+    #[serde(default, skip_serializing_if = "crate::hooks::HooksConfig::is_empty")]
+    pub hooks: crate::hooks::HooksConfig,
 }
 
 impl ResolvedConfig {

@@ -102,6 +102,10 @@ impl super::ConfigResolution {
             .register_static(
                 "agena-memory",
                 crate::memory::new_memory_plugin(),
+            )
+            .register_static(
+                crate::hooks::ShellHookPlugin::id(),
+                crate::hooks::ShellHookPlugin::new(self.config.hooks.clone()),
             );
         if let (Some(prev_host), Some(prev_cfg)) = (previous_host, previous_config) {
             builder = builder.with_previous(prev_host, prev_cfg);

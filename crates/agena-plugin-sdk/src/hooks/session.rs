@@ -17,6 +17,12 @@ pub struct SessionCompactingPatch {
     /// strategy. If `None`, the original list is used unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messages: Option<Vec<ChatMessage>>,
+    /// Replace the auto-generated summary entirely. Use this to wire an
+    /// LLM-backed summarizer or a remote compaction service: the host
+    /// will skip its built-in heuristic and write this text into the
+    /// transcript instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 // ── session.compacted ──────────────────────────────────────────────────────

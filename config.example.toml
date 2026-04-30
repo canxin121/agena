@@ -34,6 +34,10 @@ default_read = "allow"
 default_write = "deny"
 default_external_directory = "deny"
 
+[memory.project_instructions]
+enabled = true
+include_global = true
+
 # User-configurable hooks. Each hook can run a local shell command or POST JSON
 # to an HTTP endpoint. Hook stdout may return a JSON patch for events that
 # support mutation, such as `user_prompt_submit` or `pre_tool_use`.

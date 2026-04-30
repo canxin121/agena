@@ -9,9 +9,9 @@ use crate::{
         ToolPermissionPolicy,
     },
     provider::{
-        OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode, ProviderCapabilityOverrideRule,
-        ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
-        ProviderStreamReplayConfig, ThinkingRequest, auth::FileAuthStore,
+        OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
+        ProviderCapabilityOverrideRule, ProviderHttpClientConfig, ProviderRequestRetryConfig,
+        ProviderRuntimeConfig, ProviderStreamReplayConfig, ThinkingRequest, auth::FileAuthStore,
     },
 };
 
@@ -107,6 +107,7 @@ pub struct ResolvedConfig {
     pub runtime: RuntimeConfig,
     pub permission: PermissionConfig,
     pub plugins: PluginConfig,
+    pub memory: MemoryConfig,
     pub mcp: McpConfig,
     pub lsp: LspConfig,
     pub web: WebToolsConfig,
@@ -143,8 +144,8 @@ impl ResolvedConfig {
     }
 
     pub fn tool_permission_policy(&self) -> Result<ToolPermissionPolicy, PermissionConfigError> {
-        let mut policy = ToolPermissionPolicy::allow_all()
-            .with_execution_mode(self.permission.execution_mode);
+        let mut policy =
+            ToolPermissionPolicy::allow_all().with_execution_mode(self.permission.execution_mode);
         for rule in &self.permission.bash_rules {
             policy = policy.with_bash_pattern_rule(rule.pattern.clone(), rule.mode)?;
         }
@@ -249,6 +250,36 @@ impl BashRuleConfig {
 }
 
 pub use agena_plugin_host::PluginsConfig as PluginConfig;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MemoryConfig {
+    pub project_instructions: ProjectInstructionsConfig,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            project_instructions: ProjectInstructionsConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ProjectInstructionsConfig {
+    pub enabled: bool,
+    pub include_global: bool,
+}
+
+impl Default for ProjectInstructionsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            include_global: true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderConfig {

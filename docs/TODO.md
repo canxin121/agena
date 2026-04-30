@@ -35,7 +35,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | 能力 | Codex | Claude Code | OpenCode | **Agena** |
 |---|---|---|---|---|
 | Agent loop | ✅ | ✅ | ✅ | ✅ |
-| 自动 compact | ✅ inline+remote | ✅ 时间/token | ✅ session compaction | ⚠️ 有痕迹，策略不完整 |
+| 自动 compact | ✅ inline+remote | ✅ 时间/token | ✅ session compaction | ✅ proactive 头空 + 插件可替换 summary（#4 基本完成） |
 | 沙盒 / 命令隔离 | ✅ landlock+bwrap+seatbelt | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 已弃用 procwarden，#15 第一阶段完成（`tool::shell`），第二阶段权限层增强待办 |
 | Hooks 事件 | ✅ | ✅ 8 种事件 | ⚠️ plugin 钩子 | ✅ 7 事件 + shell + HTTP hook 形态（#1 第二阶段进行中） |
 | Plan Mode | ✅ | ✅ Enter/ExitPlanMode | ✅ plan agent | ✅ 已接通会话流 + 只读 bash 放行（#3 基本完成） |
@@ -81,10 +81,12 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - [x] 进入 plan 后 bash 仅放行 `bash::is_read_only_command()` 判定为只读的命令（`git status` / `ls` / `rg` / `cat` …）；mutating 与 unknown 一律拒绝并提示 `exit_plan_mode`；2 个新单测覆盖
   - 进一步：跨 session fork 的 plan-mode 继承策略 / TUI 状态指示
 
-- [ ] **#4 自动 Compact 策略落地**
-  - `context_governor.rs` 基础上加触发器：剩余 token < 阈值（默认 15%）/ 用户 `/compact`
-  - 双策略：本地 LLM 总结（template `templates/compact.md`） + provider 原生（Anthropic prompt cache、OpenAI Responses）
-  - 写入 `CompactedItem` 到 transcript，UI 显示折叠条
+- [x] **#4 自动 Compact 策略落地（基本完成 ✅）**
+  - [x] **proactive 触发器**：`ContextPolicy::compaction_headroom_pct`（默认 15）— prompt 占用 ≥ `100-headroom_pct` % 预算时即触发，不再等到 OOM；`compact_prompt_window` 路径不变；3 个新单测覆盖默认值 / 关闭 / 病态值
+  - [x] **LLM 总结扩展点**：`SessionCompactingPatch` 加 `summary: Option<String>` 字段，`PluginHost::dispatch_session_compacting -> SessionCompactingOutcome { messages, summary }`；`session::manager::compact_prompt_window` 收到 patch 时替换 plan.summary_text；既支持现有启发式 head-section 抽取（默认），也允许任何插件（含 Claude / OpenAI / 自托管 LLM 摘要服务）整体接管
+  - [x] 既有 `CompactionSummary` SystemNoticeKind + `MessageRevised(Compacted)` transcript 事件继续生成，UI 折叠条不需改动
+  - [x] 新增 inproc 测试：插件返回 `summary` patch → 管理器写入新文本而非启发式输出
+  - 仍待办：bundled "ask my own LLM to summarize" 子代理（可作为 #6 subagent 调度的应用而非独立工作）；prompt cache shape 在 compaction 后强制 reset 已就位（pre-existing），无额外改动
 
 - [ ] **#5 Memory 自动管理（后端基本完成 ✅）**（CLAUDE.md 等价）
   - [x] **入口链式查找**：`memory::project_instructions::discover` 从 workspace 向上 walk，按 `AGENA.md` → `AGENTS.md` → `CLAUDE.md` 优先级各目录取一份；`render_section` 拼成系统提示注入；超 50 KB 自动按行尾切并标记 truncated

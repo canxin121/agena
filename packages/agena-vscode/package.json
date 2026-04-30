@@ -1,0 +1,49 @@
+{
+  "name": "agena-vscode",
+  "displayName": "Agena",
+  "description": "Minimal Agena IDE bridge using the app-server JSON-RPC protocol.",
+  "version": "0.1.0",
+  "publisher": "agena",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:agena.start",
+    "onCommand:agena.prompt"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "agena.start",
+        "title": "Agena: Start App Server"
+      },
+      {
+        "command": "agena.prompt",
+        "title": "Agena: Send Prompt"
+      }
+    ],
+    "configuration": {
+      "title": "Agena",
+      "properties": {
+        "agena.command": {
+          "type": "string",
+          "default": "agena",
+          "description": "Agena CLI executable used to start the app-server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}

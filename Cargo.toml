@@ -5,6 +5,8 @@ members = [
     "apps/agena-http-api-server",
     "apps/agena-studio-server",
     "apps/agena-tui",
+    "crates/agena-app-server",
+    "crates/agena-app-server-protocol",
     "crates/agena",
     "crates/agena-api",
     "crates/agena-api-server",

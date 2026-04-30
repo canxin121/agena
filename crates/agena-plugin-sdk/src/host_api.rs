@@ -54,15 +54,6 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Run a command in the platform sandbox (procwarden). Used by `bash`
-    /// and `apply_patch`.
-    async fn execute_sandboxed_command(
-        &self,
-        _req: SandboxCommandRequest,
-    ) -> Result<SandboxCommandResponse> {
-        Err(unavailable())
-    }
-
     /// List all currently registered tools (used by `tool_search`).
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>> {
         Err(unavailable())
@@ -138,41 +129,6 @@ pub struct SpawnSubtaskResponse {
     pub final_text: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
-}
-
-// ---------------- sandbox command ----------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SandboxMode {
-    ReadOnly,
-    WriteSandboxed,
-    WriteUnsandboxed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SandboxCommandRequest {
-    pub command: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub env: BTreeMap<String, String>,
-    pub mode: SandboxMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    /// Paths the command needs write access to (used to widen the sandbox
-    /// policy for write-sandboxed mode).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub writable_paths: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SandboxCommandResponse {
-    pub exit_code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-    #[serde(default)]
-    pub timed_out: bool,
 }
 
 // ---------------- list_tools ----------------

@@ -295,6 +295,36 @@ impl SessionStore {
         Ok(session)
     }
 
+    pub(crate) async fn fork_session(
+        &self,
+        source: Session,
+        at_event_seq: i64,
+        title: String,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Session, AppError> {
+        let events = self.history.list_session_events(source.id).await?;
+        if !events
+            .iter()
+            .any(|event| event.meta.seq_global == at_event_seq)
+        {
+            return Err(AppError::Internal(format!(
+                "event seq not found for session {}: {}",
+                source.id, at_event_seq
+            )));
+        }
+
+        let items = events
+            .into_iter()
+            .filter(|event| event.meta.seq_global <= at_event_seq && event.kind.is_persistent())
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+
+        let child = self
+            .create_session(title, Some(source.id), cache_policy)
+            .await?;
+        self.append_history_items(child, items, cache_policy).await
+    }
+
     pub(crate) async fn rewind_to_message(
         &self,
         session_id: i64,

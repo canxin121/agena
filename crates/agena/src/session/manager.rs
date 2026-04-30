@@ -126,6 +126,13 @@ pub struct SessionContinueRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionForkRequest {
+    pub session_id: i64,
+    pub at_event_seq: i64,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct SessionRewindRequest {
     pub session_id: i64,
     pub message_id: i64,
@@ -491,6 +498,20 @@ impl SessionManager {
             .unregister_if_matches(session_id, &control)
             .await;
         result
+    }
+
+    pub async fn fork_session(&self, request: SessionForkRequest) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        let source = self
+            .store
+            .load_session(request.session_id, state.cache_policy())
+            .await?;
+        let title = request
+            .title
+            .unwrap_or_else(|| format!("Fork of {}", source.title));
+        self.store
+            .fork_session(source, request.at_event_seq, title, state.cache_policy())
+            .await
     }
 
     /// External entry: cancel the in-flight turn for `session_id`. Returns
@@ -3248,6 +3269,80 @@ mod tests {
             .expect("list paged session summaries");
         assert_eq!(paged.len(), 1);
         assert_eq!(paged[0].id, sibling.id);
+    }
+
+    #[tokio::test]
+    async fn fork_session_copies_event_prefix_without_mutating_source() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let source = service
+            .create_session(SessionCreateRequest {
+                title: "source".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create source session");
+        service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: source.id,
+                options: run_options(),
+                parts: vec![PartContent::text("first")],
+            })
+            .await
+            .expect("submit first turn");
+        let prefix_seq = service
+            .list_session_events(source.id)
+            .await
+            .expect("list source events")
+            .last()
+            .expect("source should have events")
+            .meta
+            .seq_global;
+        service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: source.id,
+                options: run_options(),
+                parts: vec![PartContent::text("second")],
+            })
+            .await
+            .expect("submit second turn");
+
+        let forked = service
+            .fork_session(SessionForkRequest {
+                session_id: source.id,
+                at_event_seq: prefix_seq,
+                title: Some("forked".to_string()),
+            })
+            .await
+            .expect("fork session");
+        let reloaded_source = service
+            .get_session(source.id)
+            .await
+            .expect("reload source session");
+
+        assert_eq!(forked.parent_id, Some(source.id));
+        assert_eq!(forked.title, "forked");
+        assert!(
+            forked.messages.iter().any(|message| {
+                message.role == Role::User && message.as_text_lossy() == "first"
+            })
+        );
+        assert!(
+            !forked.messages.iter().any(|message| {
+                message.role == Role::User && message.as_text_lossy() == "second"
+            })
+        );
+        assert!(
+            reloaded_source.messages.iter().any(|message| {
+                message.role == Role::User && message.as_text_lossy() == "second"
+            })
+        );
     }
 
     #[test]

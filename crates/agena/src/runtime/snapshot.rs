@@ -246,6 +246,7 @@ impl RuntimeSnapshot {
             }
         }
         let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
+        let reusing_session_manager = existing_session_manager.is_some();
         let session_manager = if let Some(db) = database.as_ref() {
             Some(build_or_reconfigure_session_manager(
                 existing_session_manager,
@@ -258,6 +259,15 @@ impl RuntimeSnapshot {
         } else {
             None
         };
+        if !reusing_session_manager && let Some(manager) = session_manager.as_ref() {
+            manager
+                .event_publisher()
+                .resume_from_store()
+                .await
+                .map_err(|err| {
+                    AppError::Internal(format!("resume event sequence failed: {err}"))
+                })?;
+        }
         let event_bridge = session_manager.as_ref().map(|mgr| {
             let handle =
                 super::event_bridge::spawn_event_bridge(mgr.event_bus(), Arc::clone(&plugins));

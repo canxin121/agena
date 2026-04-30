@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
@@ -13,6 +14,7 @@ use crate::{
         LoadConfigRequest, ProcessEnvironment,
     },
     error::AppError,
+    model::ModelRef,
     provider::{
         ModelCapabilities, ModelMetadata, ProviderModel,
         auth::{
@@ -20,6 +22,11 @@ use crate::{
         },
     },
     runtime::{AgenaRuntime, TracingFilterReloadHandle},
+    session::{
+        Session, SessionContinueRequest, SessionForkRequest, SessionListRequest, SessionRunOptions,
+        SessionRuntimeStatus, SessionSummary,
+    },
+    storage::StorageConfig,
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -31,6 +38,10 @@ pub struct AgenaCli {
     pub mode: Option<ConfigModeName>,
     #[arg(short = 'c', long = "set", global = true)]
     pub overrides: Vec<ConfigOverride>,
+    #[arg(long, env = "AGENA_DATABASE_URL", global = true)]
+    pub database_url: Option<String>,
+    #[arg(long, env = "AGENA_DATABASE_PATH", global = true)]
+    pub database_path: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<AgenaCommand>,
 }
@@ -39,10 +50,14 @@ pub struct AgenaCli {
 pub enum AgenaCommand {
     Auth(AuthCommand),
     Config(ConfigCommand),
+    Continue(ContinueArgs),
+    Fork(ForkArgs),
     Login(LoginArgs),
     Logout(LogoutArgs),
     Provider(ProviderCommand),
+    Resume(ResumeArgs),
     Serve(ServeCommand),
+    Sessions(SessionsCommand),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -61,6 +76,12 @@ pub struct ConfigCommand {
 pub struct ProviderCommand {
     #[command(subcommand)]
     pub command: Option<ProviderSubcommand>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionsCommand {
+    #[command(subcommand)]
+    pub command: Option<SessionsSubcommand>,
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -83,6 +104,11 @@ pub enum ProviderSubcommand {
     List(ProviderListArgs),
     Models(ProviderModelsArgs),
     Capabilities(ProviderCapabilitiesArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SessionsSubcommand {
+    List(SessionListArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -113,6 +139,51 @@ pub struct LoginArgs {
 #[derive(Debug, Clone, Args)]
 pub struct LogoutArgs {
     pub provider_id: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionListArgs {
+    #[arg(long, default_value_t = 20)]
+    pub limit: u64,
+    #[arg(long, default_value_t = 0)]
+    pub offset: u64,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ResumeArgs {
+    pub session_id: Option<i64>,
+    #[arg(long)]
+    pub last: bool,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ContinueArgs {
+    pub session_id: Option<i64>,
+    #[arg(long)]
+    pub last: bool,
+    #[arg(long)]
+    pub model: Option<String>,
+    #[arg(long)]
+    pub temperature: Option<f32>,
+    #[arg(long)]
+    pub max_output_tokens: Option<u32>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ForkArgs {
+    pub session_id: i64,
+    #[arg(long)]
+    pub at: i64,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -168,6 +239,38 @@ struct AuthSummary {
 }
 
 #[derive(Debug, Serialize)]
+struct SessionListOutput {
+    sessions: Vec<SessionSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionOutput {
+    session: SessionDetail,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionForkOutput {
+    source_session_id: i64,
+    forked: SessionDetail,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionDetail {
+    id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_id: Option<i64>,
+    workspace_id: i64,
+    title: String,
+    version: i64,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    message_count: usize,
+    status: SessionRuntimeStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_event_seq: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
 struct ProviderListOutput {
     providers: Vec<ProviderSummary>,
 }
@@ -204,12 +307,16 @@ impl AgenaCli {
         match self.command.clone() {
             Some(AgenaCommand::Auth(command)) => self.run_auth(loader, command).await,
             Some(AgenaCommand::Config(command)) => self.run_config(loader, command),
+            Some(AgenaCommand::Continue(args)) => self.run_continue(args).await,
+            Some(AgenaCommand::Fork(args)) => self.run_fork(args).await,
             Some(AgenaCommand::Login(args)) => self.run_login(loader, args).await,
             Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args),
             Some(AgenaCommand::Provider(command)) => self.run_provider(loader, command).await,
+            Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
             Some(AgenaCommand::Serve(_command)) => Err(AppError::Config(
                 "the HTTP server moved to the `apps/agena-http-api-server` app; run `cargo run -p agena-http-api-server -- --help` from the repository root".to_owned(),
             )),
+            Some(AgenaCommand::Sessions(command)) => self.run_sessions(command).await,
             None => self.run_default(loader, tracing_reload_handle).await,
         }
     }
@@ -412,6 +519,30 @@ impl AgenaCli {
         Ok(())
     }
 
+    async fn run_sessions(self, command: SessionsCommand) -> Result<(), AppError> {
+        let output = self.render_sessions_command(command).await?;
+        println!("{output}");
+        Ok(())
+    }
+
+    async fn run_resume(self, args: ResumeArgs) -> Result<(), AppError> {
+        let output = self.render_resume_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
+    async fn run_continue(self, args: ContinueArgs) -> Result<(), AppError> {
+        let output = self.render_continue_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
+    async fn run_fork(self, args: ForkArgs) -> Result<(), AppError> {
+        let output = self.render_fork_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
     fn run_config(
         self,
         loader: ConfigLoader<ProcessEnvironment>,
@@ -492,6 +623,105 @@ impl AgenaCli {
                 render_serialized(args.format, &AuthListOutput { credentials })
             }
         }
+    }
+
+    async fn render_sessions_command(&self, command: SessionsCommand) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        match command
+            .command
+            .unwrap_or(SessionsSubcommand::List(SessionListArgs {
+                limit: 20,
+                offset: 0,
+                format: ConfigOutputFormat::Toml,
+            })) {
+            SessionsSubcommand::List(args) => {
+                let sessions = manager
+                    .list_session_summaries(SessionListRequest {
+                        offset: args.offset,
+                        limit: Some(args.limit),
+                    })
+                    .await?;
+                render_serialized(args.format, &SessionListOutput { sessions })
+            }
+        }
+    }
+
+    async fn render_resume_command(&self, args: ResumeArgs) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
+        let session = manager.get_session(session_id).await?;
+        let latest_event_seq = latest_event_seq(&manager, session.id).await?;
+        render_serialized(
+            args.format,
+            &SessionOutput {
+                session: session_detail(&session, latest_event_seq),
+            },
+        )
+    }
+
+    async fn render_continue_command(&self, args: ContinueArgs) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
+        let session = manager.get_session(session_id).await?;
+        let options = resolve_continue_options(&runtime, &session, &args)?;
+        let session = manager
+            .continue_session(SessionContinueRequest {
+                session_id,
+                options,
+            })
+            .await?;
+        let latest_event_seq = latest_event_seq(&manager, session.id).await?;
+        render_serialized(
+            args.format,
+            &SessionOutput {
+                session: session_detail(&session, latest_event_seq),
+            },
+        )
+    }
+
+    async fn render_fork_command(&self, args: ForkArgs) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        let forked = manager
+            .fork_session(SessionForkRequest {
+                session_id: args.session_id,
+                at_event_seq: args.at,
+                title: args.title,
+            })
+            .await?;
+        let latest_event_seq = latest_event_seq(&manager, forked.id).await?;
+        render_serialized(
+            args.format,
+            &SessionForkOutput {
+                source_session_id: args.session_id,
+                forked: session_detail(&forked, latest_event_seq),
+            },
+        )
+    }
+
+    async fn session_runtime(&self) -> Result<AgenaRuntime, AppError> {
+        let storage = StorageConfig {
+            database_url: self.database_url.clone(),
+            database_path: self.database_path.clone(),
+        };
+        let database_url = storage.resolve_url()?;
+        StorageConfig::ensure_parent(database_url.as_str())?;
+        AgenaRuntime::builder()
+            .with_load_request(self.load_request())
+            .with_database_url(database_url)
+            .build()
+            .await
     }
 
     fn auth_manager<E>(
@@ -627,6 +857,93 @@ fn normalize_login_provider(provider_id: &str) -> String {
     provider_id.trim_end_matches('/').to_owned()
 }
 
+async fn selected_session_id(
+    manager: &crate::session::SessionManager,
+    session_id: Option<i64>,
+    last: bool,
+) -> Result<i64, AppError> {
+    if session_id.is_some() && last {
+        return Err(AppError::Config(
+            "pass either a session id or --last, not both".to_owned(),
+        ));
+    }
+    if let Some(session_id) = session_id {
+        return Ok(session_id);
+    }
+    let sessions = manager
+        .list_session_summaries(SessionListRequest {
+            offset: 0,
+            limit: Some(1),
+        })
+        .await?;
+    sessions
+        .first()
+        .map(|session| session.id)
+        .ok_or_else(|| AppError::Config("no sessions found".to_owned()))
+}
+
+async fn latest_event_seq(
+    manager: &crate::session::SessionManager,
+    session_id: i64,
+) -> Result<Option<i64>, AppError> {
+    Ok(manager
+        .list_session_events(session_id)
+        .await?
+        .last()
+        .map(|event| event.meta.seq_global))
+}
+
+fn session_detail(session: &Session, latest_event_seq: Option<i64>) -> SessionDetail {
+    SessionDetail {
+        id: session.id,
+        parent_id: session.parent_id,
+        workspace_id: session.workspace_id,
+        title: session.title.clone(),
+        version: session.version,
+        created_at: session.created_at,
+        updated_at: session.updated_at,
+        message_count: session.messages.len(),
+        status: session.runtime.turn.status,
+        latest_event_seq,
+    }
+}
+
+fn resolve_continue_options(
+    runtime: &AgenaRuntime,
+    session: &Session,
+    args: &ContinueArgs,
+) -> Result<SessionRunOptions, AppError> {
+    let snapshot = runtime.current_snapshot();
+    let model = if let Some(model) = args.model.as_deref() {
+        snapshot.resolve_model_target(model, None)?
+    } else if let (Some(provider_id), Some(model_id)) = (
+        session.runtime.turn.model_provider_id.as_deref(),
+        session.runtime.turn.model_id.as_deref(),
+    ) {
+        ModelRef::try_new(provider_id, model_id)
+            .map_err(|err| AppError::Config(format!("invalid persisted model reference: {err}")))?
+    } else {
+        let registry = snapshot.provider_registry();
+        let mut providers = registry.provider_ids();
+        providers.sort();
+        let provider_id = providers
+            .first()
+            .ok_or_else(|| AppError::Config("no providers configured".to_owned()))?;
+        registry.resolve_model_target(provider_id, None)?
+    };
+
+    Ok(SessionRunOptions {
+        model,
+        system: None,
+        temperature: args.temperature,
+        max_output_tokens: args.max_output_tokens,
+    })
+}
+
+fn session_storage_error() -> AppError {
+    AppError::Config("session storage is unavailable; configure a database URL or path".to_owned())
+}
+
 async fn poll_until<T, F, Fut>(
     timeout: Duration,
     interval: Duration,
@@ -704,6 +1021,8 @@ store_path = "{}"
             config: Some(path.clone()),
             mode: None,
             overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
             command: None,
         };
 
@@ -766,6 +1085,8 @@ store_path = "{}"
             config: Some(path),
             mode: None,
             overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
             command: None,
         };
 
@@ -810,6 +1131,60 @@ store_path = "{}"
     }
 
     #[tokio::test]
+    async fn sessions_list_and_resume_last_render_session() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("agena-cli-session-{suffix}.db"));
+        let cli = AgenaCli {
+            config: None,
+            mode: None,
+            overrides: Vec::new(),
+            database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
+            database_path: None,
+            command: None,
+        };
+        let runtime = cli.session_runtime().await.expect("runtime should build");
+        let manager = runtime
+            .session_manager()
+            .expect("session manager should be available");
+        let created = manager
+            .create_session(crate::session::SessionCreateRequest {
+                title: "cli session".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let list_output = cli
+            .render_sessions_command(SessionsCommand {
+                command: Some(SessionsSubcommand::List(SessionListArgs {
+                    limit: 10,
+                    offset: 0,
+                    format: ConfigOutputFormat::Json,
+                })),
+            })
+            .await
+            .expect("sessions list should render");
+        let list: Value = serde_json::from_str(list_output.as_str()).expect("list should be json");
+        assert_eq!(list["sessions"][0]["id"], created.id);
+
+        let resume_output = cli
+            .render_resume_command(ResumeArgs {
+                session_id: None,
+                last: true,
+                format: ConfigOutputFormat::Json,
+            })
+            .await
+            .expect("resume should render");
+        let resumed: Value =
+            serde_json::from_str(resume_output.as_str()).expect("resume should be json");
+        assert_eq!(resumed["session"]["id"], created.id);
+        assert_eq!(resumed["session"]["title"], "cli session");
+    }
+
+    #[tokio::test]
     async fn provider_capabilities_command_renders_resolved_alias_capabilities() {
         let path = write_temp_config(
             r#"
@@ -837,6 +1212,8 @@ image_input = "unsupported"
             config: Some(path),
             mode: None,
             overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
             command: Some(AgenaCommand::Provider(ProviderCommand {
                 command: Some(ProviderSubcommand::Capabilities(ProviderCapabilitiesArgs {
                     target: "prod".to_owned(),
@@ -886,6 +1263,8 @@ default_model = "claude-sonnet-4-5"
             config: Some(path),
             mode: None,
             overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
             command: None,
         };
 
@@ -936,6 +1315,8 @@ default_model = "gpt-5"
             config: Some(path),
             mode: None,
             overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
             command: None,
         };
 

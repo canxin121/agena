@@ -19,9 +19,9 @@ pub use context_policy::ContextPolicy;
 pub use cost::{ModelCostBreakdown, SessionCostSummary};
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
-    SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionManager,
-    SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
-    SessionUserInputReplyRequest, SessionUserTurnRequest,
+    SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
+    SessionManager, SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest,
+    SessionRunOptions, SessionUserInputReplyRequest, SessionUserTurnRequest,
 };
 #[allow(unused_imports)]
 pub(crate) use model::{
@@ -31,7 +31,7 @@ pub(crate) use model::{
 };
 pub use model::{
     PlanState, PromptTokenRuntime, PromptTokenUsageSnapshot, PromptWindowRuntime,
-    ProviderPromptAnchor, Session, SessionListRequest, SessionRuntimeState, SessionStatus,
-    SessionSummary,
+    ProviderPromptAnchor, Session, SessionListRequest, SessionRuntimeState, SessionRuntimeStatus,
+    SessionStatus, SessionSummary,
 };
 pub use processor::SessionProcessor;

@@ -14,6 +14,7 @@ use crate::{
         LoadConfigRequest, ProcessEnvironment,
     },
     error::AppError,
+    message::PartContent,
     model::ModelRef,
     provider::{
         ModelCapabilities, ModelMetadata, ProviderModel,
@@ -21,10 +22,12 @@ use crate::{
             AuthData, AuthManager, ConfiguredAuthStore, CopilotDeployment, wait_for_oauth_callback,
         },
     },
+    role::Role,
     runtime::{AgenaRuntime, TracingFilterReloadHandle},
     session::{
-        Session, SessionContinueRequest, SessionForkRequest, SessionListRequest, SessionRunOptions,
-        SessionRuntimeStatus, SessionSummary,
+        Session, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
+        SessionListRequest, SessionRunOptions, SessionRuntimeStatus, SessionSummary,
+        SessionUserTurnRequest,
     },
     storage::StorageConfig,
 };
@@ -51,6 +54,7 @@ pub enum AgenaCommand {
     Auth(AuthCommand),
     Config(ConfigCommand),
     Continue(ContinueArgs),
+    Exec(ExecArgs),
     Fork(ForkArgs),
     Login(LoginArgs),
     Logout(LogoutArgs),
@@ -176,6 +180,21 @@ pub struct ContinueArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct ExecArgs {
+    #[arg(long = "workspace", alias = "cwd")]
+    pub workspace: Option<PathBuf>,
+    #[arg(long)]
+    pub model: Option<String>,
+    #[arg(long)]
+    pub temperature: Option<f32>,
+    #[arg(long)]
+    pub max_output_tokens: Option<u32>,
+    #[arg(long)]
+    pub json: bool,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct ForkArgs {
     pub session_id: i64,
     #[arg(long)]
@@ -255,6 +274,12 @@ struct SessionForkOutput {
 }
 
 #[derive(Debug, Serialize)]
+struct ExecOutput {
+    session: SessionDetail,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
 struct SessionDetail {
     id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -308,6 +333,7 @@ impl AgenaCli {
             Some(AgenaCommand::Auth(command)) => self.run_auth(loader, command).await,
             Some(AgenaCommand::Config(command)) => self.run_config(loader, command),
             Some(AgenaCommand::Continue(args)) => self.run_continue(args).await,
+            Some(AgenaCommand::Exec(args)) => self.run_exec(args).await,
             Some(AgenaCommand::Fork(args)) => self.run_fork(args).await,
             Some(AgenaCommand::Login(args)) => self.run_login(loader, args).await,
             Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args),
@@ -537,6 +563,12 @@ impl AgenaCli {
         Ok(())
     }
 
+    async fn run_exec(self, args: ExecArgs) -> Result<(), AppError> {
+        let output = self.render_exec_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
     async fn run_fork(self, args: ForkArgs) -> Result<(), AppError> {
         let output = self.render_fork_command(args).await?;
         println!("{output}");
@@ -688,6 +720,52 @@ impl AgenaCli {
         )
     }
 
+    async fn render_exec_command(&self, args: ExecArgs) -> Result<String, AppError> {
+        let runtime = self
+            .session_runtime_with_workspace(args.workspace.as_ref())
+            .await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        let options = resolve_run_options(
+            &runtime,
+            args.model.as_deref(),
+            args.temperature,
+            args.max_output_tokens,
+        )?;
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: title_from_prompt(args.prompt.as_str()),
+                parent_session_id: None,
+            })
+            .await?;
+        let session = manager
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options,
+                parts: vec![PartContent::text(args.prompt)],
+            })
+            .await?;
+        if session.runtime.turn.status == SessionRuntimeStatus::Blocked {
+            return Err(AppError::Config(
+                "exec is blocked awaiting permission or user input".to_owned(),
+            ));
+        }
+        let latest_event_seq = latest_event_seq(&manager, session.id).await?;
+        let text = last_assistant_text(&session).unwrap_or_default();
+        if args.json {
+            render_serialized(
+                ConfigOutputFormat::Json,
+                &ExecOutput {
+                    session: session_detail(&session, latest_event_seq),
+                    text,
+                },
+            )
+        } else {
+            Ok(text)
+        }
+    }
+
     async fn render_fork_command(&self, args: ForkArgs) -> Result<String, AppError> {
         let runtime = self.session_runtime().await?;
         let manager = runtime
@@ -711,17 +789,26 @@ impl AgenaCli {
     }
 
     async fn session_runtime(&self) -> Result<AgenaRuntime, AppError> {
+        self.session_runtime_with_workspace(None).await
+    }
+
+    async fn session_runtime_with_workspace(
+        &self,
+        workspace: Option<&PathBuf>,
+    ) -> Result<AgenaRuntime, AppError> {
         let storage = StorageConfig {
             database_url: self.database_url.clone(),
             database_path: self.database_path.clone(),
         };
         let database_url = storage.resolve_url()?;
         StorageConfig::ensure_parent(database_url.as_str())?;
-        AgenaRuntime::builder()
+        let mut builder = AgenaRuntime::builder()
             .with_load_request(self.load_request())
-            .with_database_url(database_url)
-            .build()
-            .await
+            .with_database_url(database_url);
+        if let Some(workspace) = workspace {
+            builder = builder.with_workspace_root(workspace.clone());
+        }
+        builder.build().await
     }
 
     fn auth_manager<E>(
@@ -923,13 +1010,7 @@ fn resolve_continue_options(
         ModelRef::try_new(provider_id, model_id)
             .map_err(|err| AppError::Config(format!("invalid persisted model reference: {err}")))?
     } else {
-        let registry = snapshot.provider_registry();
-        let mut providers = registry.provider_ids();
-        providers.sort();
-        let provider_id = providers
-            .first()
-            .ok_or_else(|| AppError::Config("no providers configured".to_owned()))?;
-        registry.resolve_model_target(provider_id, None)?
+        default_model(runtime)?
     };
 
     Ok(SessionRunOptions {
@@ -938,6 +1019,61 @@ fn resolve_continue_options(
         temperature: args.temperature,
         max_output_tokens: args.max_output_tokens,
     })
+}
+
+fn resolve_run_options(
+    runtime: &AgenaRuntime,
+    model: Option<&str>,
+    temperature: Option<f32>,
+    max_output_tokens: Option<u32>,
+) -> Result<SessionRunOptions, AppError> {
+    let model = if let Some(model) = model {
+        runtime
+            .current_snapshot()
+            .resolve_model_target(model, None)?
+    } else {
+        default_model(runtime)?
+    };
+
+    Ok(SessionRunOptions {
+        model,
+        system: None,
+        temperature,
+        max_output_tokens,
+    })
+}
+
+fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {
+    let snapshot = runtime.current_snapshot();
+    let registry = snapshot.provider_registry();
+    let mut providers = registry.provider_ids();
+    providers.sort();
+    let provider_id = providers
+        .first()
+        .ok_or_else(|| AppError::Config("no providers configured".to_owned()))?;
+    registry.resolve_model_target(provider_id, None)
+}
+
+fn last_assistant_text(session: &Session) -> Option<String> {
+    session
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::Assistant)
+        .map(|message| message.as_text_lossy())
+}
+
+fn title_from_prompt(prompt: &str) -> String {
+    let title = prompt.trim().replace('\n', " ");
+    let mut chars = title.chars();
+    let truncated = chars.by_ref().take(80).collect::<String>();
+    if truncated.is_empty() {
+        "exec".to_owned()
+    } else if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
 }
 
 fn session_storage_error() -> AppError {
@@ -1182,6 +1318,47 @@ store_path = "{}"
             serde_json::from_str(resume_output.as_str()).expect("resume should be json");
         assert_eq!(resumed["session"]["id"], created.id);
         assert_eq!(resumed["session"]["title"], "cli session");
+    }
+
+    #[test]
+    fn exec_command_parses_json_and_workspace_alias() {
+        let cli = AgenaCli::parse_from([
+            "agena",
+            "exec",
+            "--cwd",
+            ".",
+            "--model",
+            "openai/gpt-5",
+            "--json",
+            "summarize",
+        ]);
+
+        let Some(AgenaCommand::Exec(args)) = cli.command else {
+            panic!("expected exec command");
+        };
+        assert_eq!(args.workspace, Some(PathBuf::from(".")));
+        assert_eq!(args.model.as_deref(), Some("openai/gpt-5"));
+        assert!(args.json);
+        assert_eq!(args.prompt, "summarize");
+    }
+
+    #[test]
+    fn exec_helpers_render_last_assistant_text_and_title() {
+        let mut session = Session::new(1, 1, "test", Utc::now());
+        session
+            .messages
+            .push(crate::message::Message::prompt_text(Role::User, "hello"));
+        session.messages.push(crate::message::Message::prompt_text(
+            Role::Assistant,
+            "first",
+        ));
+        session.messages.push(crate::message::Message::prompt_text(
+            Role::Assistant,
+            "second",
+        ));
+
+        assert_eq!(last_assistant_text(&session).as_deref(), Some("second"));
+        assert_eq!(title_from_prompt("  hello\nworld  "), "hello world");
     }
 
     #[tokio::test]

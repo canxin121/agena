@@ -23,14 +23,14 @@ use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissi
 use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
 use super::control::{TurnControl, TurnControlError, TurnRegistry};
-use super::model::{
-    MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionListRequest, SessionPendingTool,
-    SessionStatus, SessionSummary,
-};
 use super::history::{
     FinishReason, MessageId as HistoryMessageId, MessageRevised, RevisionKind, ToolCallCompleted,
     ToolCallId as HistoryToolCallId, TranscriptContent, TranscriptToolOutput, TurnAbortReason,
     TurnAborted, TurnCompleted, TurnId as HistoryTurnId, TurnStarted, UserMessageAppended,
+};
+use super::model::{
+    MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionListRequest, SessionPendingTool,
+    SessionStatus, SessionSummary,
 };
 use super::processor::SessionRunRequest;
 use super::prompt_window::{self, PromptRequestOptions};
@@ -205,9 +205,8 @@ impl SessionManager {
         // (non-persistent) events so streaming deltas never land in SQLite.
         let store_inner: Arc<dyn crate::event::EventStore<crate::event::EventKind>> =
             Arc::new(crate::db::HistoryEventStore::new(Arc::clone(&db_arc)));
-        let bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>> = Arc::new(
-            crate::event::InProcessEventBus::<crate::event::EventKind>::new(4096),
-        );
+        let bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>> =
+            Arc::new(crate::event::InProcessEventBus::<crate::event::EventKind>::new(4096));
         let seq = Arc::new(crate::event::SequenceAllocator::new());
         let publisher = Arc::new(crate::event::publisher::EventPublisher::new(
             seq,
@@ -304,7 +303,11 @@ impl SessionManager {
     ) -> Result<Option<i64>, AppError> {
         for session_id in self.workspace_session_ids().await? {
             let session = self.get_session(session_id).await?;
-            if session.messages.iter().any(|message| message.id == message_id) {
+            if session
+                .messages
+                .iter()
+                .any(|message| message.id == message_id)
+            {
                 return Ok(Some(session_id));
             }
         }
@@ -312,10 +315,7 @@ impl SessionManager {
     }
 
     /// Same as `find_session_id_for_message`, but for a part id.
-    pub async fn find_session_id_for_part(
-        &self,
-        part_id: i64,
-    ) -> Result<Option<i64>, AppError> {
+    pub async fn find_session_id_for_part(&self, part_id: i64) -> Result<Option<i64>, AppError> {
         for session_id in self.workspace_session_ids().await? {
             let session = self.get_session(session_id).await?;
             if session
@@ -349,7 +349,9 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         let (control, steer_rx) = self.turn_registry.register(session_id).await;
-        let result = self.submit_user_turn_inner(request, control.clone(), steer_rx).await;
+        let result = self
+            .submit_user_turn_inner(request, control.clone(), steer_rx)
+            .await;
         self.turn_registry
             .unregister_if_matches(session_id, &control)
             .await;
@@ -429,7 +431,13 @@ impl SessionManager {
         );
         session.messages.push(user_message.clone());
         session = self
-            .persist_session_changes(session, vec![user_message.clone()], Vec::new(), None, state.clone())
+            .persist_session_changes(
+                session,
+                vec![user_message.clone()],
+                Vec::new(),
+                None,
+                state.clone(),
+            )
             .await?;
 
         // Append-only model: emit a self-contained turn carrying the user
@@ -727,10 +735,9 @@ impl SessionManager {
                 return Ok(session);
             }
 
-            if let Some(hit) = super::doom_loop::detect(
-                session.messages.as_slice(),
-                state.config.doom_loop,
-            ) {
+            if let Some(hit) =
+                super::doom_loop::detect(session.messages.as_slice(), state.config.doom_loop)
+            {
                 tracing::warn!(
                     target: "agena::session::doom_loop",
                     session_id = session.id,
@@ -935,6 +942,16 @@ impl SessionManager {
                 system_included = prepared.system.is_some(),
                 "prepared prompt for session turn"
             );
+
+            session.runtime.turn.record_model_request(
+                options.model.provider_id.to_string(),
+                options.model.model_id.to_string(),
+                prepared.prompt_cache_key.clone(),
+                prepared.prompt_window_generation,
+            );
+            session = self
+                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                .await?;
 
             let processor_ids = self.store.reserve_processor_ids().await?;
             let run = SessionRunRequest {
@@ -1340,8 +1357,7 @@ impl SessionManager {
 
         session.messages.push(summary_message.clone());
         self.invalidate_prompt_window_runtime(&mut session);
-        let summary_text = summary_message
-            .as_text_lossy();
+        let summary_text = summary_message.as_text_lossy();
         let messages_after = session.messages.len();
         let mut items: Vec<EventKind> = compacted_message_ids
             .into_iter()
@@ -1544,8 +1560,14 @@ impl SessionManager {
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
         let _ = resolved;
         let _ = reason;
-        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state.clone())
-            .await
+        self.persist_session_changes(
+            session,
+            vec![assistant_message],
+            Vec::new(),
+            None,
+            state.clone(),
+        )
+        .await
     }
 
     async fn apply_user_input_request(
@@ -1596,8 +1618,14 @@ impl SessionManager {
             .push(input_part.clone());
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
-        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state.clone())
-            .await
+        self.persist_session_changes(
+            session,
+            vec![assistant_message],
+            Vec::new(),
+            None,
+            state.clone(),
+        )
+        .await
     }
 
     async fn apply_tool_success(
@@ -1759,9 +1787,7 @@ impl SessionManager {
         let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
             call_id: tool_call_id,
             turn_id,
-            output: TranscriptToolOutput::Error {
-                message: reason,
-            },
+            output: TranscriptToolOutput::Error { message: reason },
             completed_at: now,
         })];
         self.store
@@ -1840,9 +1866,7 @@ impl SessionManager {
                 parts,
                 MessageMetadata {
                     source: MessageSource::User,
-                    parent_message_id: session
-                        .last_conversation_message()
-                        .map(|m| m.id),
+                    parent_message_id: session.last_conversation_message().map(|m| m.id),
                     generated_by_call_id: None,
                     model_provider_id: options.model.provider_id.to_string(),
                     model_id: options.model.model_id.to_string(),
@@ -2386,9 +2410,9 @@ mod tests {
     use crate::db::init_schema;
     use crate::event::EventKind;
     use crate::message::{
-        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, BuiltinToolOutput, McpToolOutput, ToolAttachment, ToolExecutionPart, ToolOutput,
-        ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
-        UserInputReplyKind,
+        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, BuiltinToolOutput, McpToolOutput,
+        ToolAttachment, ToolExecutionPart, ToolOutput, ToolResultBlock, ToolSearchToolInput,
+        UserInputOption, UserInputQuestion, UserInputReply, UserInputReplyKind,
     };
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::permission::PermissionPolicy;
@@ -3088,7 +3112,7 @@ mod tests {
                 cache_ttl: Duration::from_secs(60),
                 cache_max_bytes: usize::MAX,
                 max_turn_loops: 16,
-            doom_loop: crate::session::DoomLoopPolicy::default(),
+                doom_loop: crate::session::DoomLoopPolicy::default(),
             },
         )
         .await;
@@ -3393,7 +3417,7 @@ mod tests {
                 cache_ttl: Duration::from_secs(60),
                 cache_max_bytes: usize::MAX,
                 max_turn_loops: 16,
-            doom_loop: crate::session::DoomLoopPolicy::default(),
+                doom_loop: crate::session::DoomLoopPolicy::default(),
             },
             ContextPolicy::default(),
             RecordingProvider::new(requests.clone()),
@@ -3490,9 +3514,10 @@ mod tests {
             .await
             .expect("submit turn");
 
-        let history = service.list_session_events(created.id)
-        .await
-        .expect("history should load");
+        let history = service
+            .list_session_events(created.id)
+            .await
+            .expect("history should load");
 
         // Locate the user-message turn boundary (TurnStarted with no model
         // request_digest immediately followed by UserMessageAppended +
@@ -3565,9 +3590,10 @@ mod tests {
             .await
             .expect("submit turn");
 
-        let history = service.list_session_events(created.id)
-        .await
-        .expect("history should load");
+        let history = service
+            .list_session_events(created.id)
+            .await
+            .expect("history should load");
 
         // The legacy mutable-snapshot variant has been removed; nothing to
         // assert here beyond the seq invariant below.
@@ -3577,7 +3603,10 @@ mod tests {
         let mut prev: Option<i64> = None;
         for record in &history {
             if let Some(p) = prev {
-                assert!(record.meta.seq_global > p, "seq must be strictly increasing");
+                assert!(
+                    record.meta.seq_global > p,
+                    "seq must be strictly increasing"
+                );
             }
             prev = Some(record.meta.seq_global);
         }
@@ -3596,10 +3625,7 @@ mod tests {
         )
         .await;
 
-        async fn run_prefix_then(
-            service: &SessionManager,
-            trailing: &str,
-        ) -> blake3::Hash {
+        async fn run_prefix_then(service: &SessionManager, trailing: &str) -> blake3::Hash {
             let created = service
                 .create_session(SessionCreateRequest {
                     title: "digest".into(),
@@ -3615,9 +3641,10 @@ mod tests {
                 })
                 .await
                 .expect("first turn");
-            let records = service.list_session_events(created.id)
-            .await
-            .expect("records");
+            let records = service
+                .list_session_events(created.id)
+                .await
+                .expect("records");
             // Take only the closed prefix (everything before the trailing
             // edit) — for this single-turn test the entire prefix is closed.
             let prefix_records: Vec<_> = records.iter().cloned().collect();
@@ -3630,7 +3657,10 @@ mod tests {
 
         let a = run_prefix_then(&service, "follow-up A").await;
         let b = run_prefix_then(&service, "follow-up B").await;
-        assert_eq!(a, b, "prefix digest must be stable across different trailing messages");
+        assert_eq!(
+            a, b,
+            "prefix digest must be stable across different trailing messages"
+        );
     }
 
     #[tokio::test]
@@ -3692,9 +3722,10 @@ mod tests {
             .await
             .expect("session should reload");
 
-        let history = service.list_session_events(created.id)
-        .await
-        .expect("history");
+        let history = service
+            .list_session_events(created.id)
+            .await
+            .expect("history");
 
         let aborted = history
             .iter()
@@ -3793,10 +3824,7 @@ mod tests {
             async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
                 Ok(vec![ProviderModel::new("slow", "slow-model")])
             }
-            async fn complete(
-                &self,
-                _: CompletionRequest,
-            ) -> Result<CompletionResponse, AppError> {
+            async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, AppError> {
                 Err(AppError::Provider("streaming only".into()))
             }
             async fn complete_stream(
@@ -3882,7 +3910,10 @@ mod tests {
             .expect("submit should complete after cancel")
             .expect("join");
         // The session run reports an error because the turn was aborted.
-        assert!(result.is_err(), "expected turn to be reported as failed/cancelled");
+        assert!(
+            result.is_err(),
+            "expected turn to be reported as failed/cancelled"
+        );
     }
 
     /// `cancel_active_turn` for a session with no in-flight turn returns

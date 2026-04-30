@@ -13,9 +13,7 @@ use crate::{
         crud::{permission_rule, session, workspace},
         tx::with_transaction_and_effects,
     },
-    event::{
-        DomainEvent, EventKind, EventPublisher, MessagePartUpdatedEvent, PublishContext,
-    },
+    event::{DomainEvent, EventKind, EventPublisher, MessagePartUpdatedEvent, PublishContext},
     message::Message,
     permission::PermissionMode,
 };
@@ -158,10 +156,11 @@ impl SessionStore {
     pub(crate) async fn session_message_stats_for_ids(
         &self,
         session_ids: &[i64],
-    ) -> Result<std::collections::HashMap<i64, crate::db::crud::session::SessionMessageStats>, AppError>
-    {
-        let mut out =
-            std::collections::HashMap::with_capacity(session_ids.len());
+    ) -> Result<
+        std::collections::HashMap<i64, crate::db::crud::session::SessionMessageStats>,
+        AppError,
+    > {
+        let mut out = std::collections::HashMap::with_capacity(session_ids.len());
         for &session_id in session_ids {
             let events = self.history.list_session_events(session_id).await?;
             let view = super::history::fold_session_view(events.as_slice())
@@ -213,9 +212,7 @@ impl SessionStore {
             .iter()
             .map(|model| model.id)
             .collect::<Vec<_>>();
-        let message_stats = self
-            .session_message_stats_for_ids(&session_ids)
-            .await?;
+        let message_stats = self.session_message_stats_for_ids(&session_ids).await?;
         let child_counts =
             session::child_session_counts_by_parent_ids(&self.db, session_ids.as_slice()).await?;
 
@@ -332,12 +329,11 @@ impl SessionStore {
             self.publish_event(session_id, kind).await?;
         }
 
-        let new_runtime_base =
-            session::get_session_by_id(&self.db, session_id)
-                .await?
-                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?
-                .runtime_state
-                .unwrap_or_default();
+        let new_runtime_base = session::get_session_by_id(&self.db, session_id)
+            .await?
+            .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?
+            .runtime_state
+            .unwrap_or_default();
         let next_runtime = rewind_runtime_state(new_runtime_base);
 
         let cache = Arc::clone(&self.cache);
@@ -345,14 +341,11 @@ impl SessionStore {
             let cache = Arc::clone(&cache);
             let next_runtime = next_runtime.clone();
             Box::pin(async move {
-                let updated =
-                    session::touch_session_updated_at(txn, session_id, next_runtime)
-                        .await?
-                        .ok_or_else(|| {
-                            DbErr::Custom(format!(
-                                "session disappeared while rewinding: {session_id}"
-                            ))
-                        })?;
+                let updated = session::touch_session_updated_at(txn, session_id, next_runtime)
+                    .await?
+                    .ok_or_else(|| {
+                        DbErr::Custom(format!("session disappeared while rewinding: {session_id}"))
+                    })?;
                 let session = session_from_model_db(updated)?;
                 let session_for_cache = session.clone();
                 effects.push(async move {
@@ -387,14 +380,13 @@ impl SessionStore {
         if items.is_empty() {
             return Ok(session);
         }
+        session.sync_runtime_turn_state();
         let session_id = session.id;
         let now = Utc::now();
         let runtime_to_persist = session.runtime.clone();
 
         // Publish every item via the unified publisher.
-        self.history
-            .append_items(session_id, items, now)
-            .await?;
+        self.history.append_items(session_id, items, now).await?;
 
         // Re-project from the unified store and update session state.
         let events = self.history.list_session_events(session_id).await?;
@@ -406,9 +398,7 @@ impl SessionStore {
             Box::pin(async move {
                 let updated = session::touch_session_updated_at(txn, session_id, runtime)
                     .await?
-                    .ok_or_else(|| {
-                        DbErr::Custom(format!("session not found: {session_id}"))
-                    })?;
+                    .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
                 Ok(session_from_model_db(updated)?)
             })
         })
@@ -441,6 +431,7 @@ impl SessionStore {
             mut client_events,
             persisted_rule,
         } = commit;
+        session.sync_runtime_turn_state();
         let session_id = session.id;
         let touched_messages = ordered_unique_touched_messages(&session, touched_messages);
         let now = Utc::now();
@@ -472,9 +463,7 @@ impl SessionStore {
                 let updated_session =
                     session::touch_session_updated_at(txn, session_id, session_runtime)
                         .await?
-                        .ok_or_else(|| {
-                            DbErr::Custom(format!("session not found: {session_id}"))
-                        })?;
+                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
                 let updated_session = session_from_model_db(updated_session)?;
 
                 let updated_session_for_cache = updated_session.clone();
@@ -609,9 +598,7 @@ impl SessionStore {
         // the append-only event log (the projection synthesises them) so the
         // allocator simply restarts at 1.
         let mut max_message_id: i64 = 0;
-        for session_id in
-            crate::db::crud::session::list_all_session_ids(&self.db).await?
-        {
+        for session_id in crate::db::crud::session::list_all_session_ids(&self.db).await? {
             let events = self.history.list_session_events(session_id).await?;
             let view = super::history::fold_session_view(events.as_slice())
                 .map_err(|err| AppError::Internal(format!("session view fold failed: {err}")))?;
@@ -744,19 +731,15 @@ mod tests {
 
     use super::{SessionCachePolicy, SessionStore, ordered_unique_touched_messages};
     use crate::{
-        db::init_schema,
-        event::EventPublisher,
-        message::Message,
-        role::Role,
-        session::Session,
+        db::init_schema, event::EventPublisher, message::Message, role::Role, session::Session,
     };
 
     fn test_publisher(db: &sea_orm::DatabaseConnection) -> std::sync::Arc<EventPublisher> {
         use crate::event::{EventBus, EventStore, InProcessEventBus, SequenceAllocator};
         let store_dyn: std::sync::Arc<dyn EventStore<crate::event::EventKind>> =
-            std::sync::Arc::new(
-                crate::db::HistoryEventStore::new(std::sync::Arc::new(db.clone())),
-            );
+            std::sync::Arc::new(crate::db::HistoryEventStore::new(std::sync::Arc::new(
+                db.clone(),
+            )));
         let bus: std::sync::Arc<dyn EventBus<crate::event::EventKind>> =
             std::sync::Arc::new(InProcessEventBus::<crate::event::EventKind>::new(64));
         let seq = std::sync::Arc::new(SequenceAllocator::new());

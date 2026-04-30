@@ -156,6 +156,7 @@ pub struct ToolExecutor {
     skills_manager: Option<Arc<agena_skills::SkillsManager>>,
     worktree_registry: Option<worktree::WorktreeRegistry>,
     scheduler: Option<Arc<agena_scheduler::Scheduler>>,
+    lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     permission_mode: PermissionExecutionMode,
 }
 
@@ -188,6 +189,7 @@ impl ToolExecutor {
             skills_manager: None,
             worktree_registry: None,
             scheduler: None,
+            lsp_registry: None,
             permission_mode: PermissionExecutionMode::Enforced,
         }
     }
@@ -275,6 +277,15 @@ impl ToolExecutor {
 
     pub fn scheduler(&self) -> Option<&Arc<agena_scheduler::Scheduler>> {
         self.scheduler.as_ref()
+    }
+
+    pub fn with_lsp_registry(mut self, registry: Arc<agena_lsp::LspRegistry>) -> Self {
+        self.lsp_registry = Some(registry);
+        self
+    }
+
+    pub fn lsp_registry(&self) -> Option<&Arc<agena_lsp::LspRegistry>> {
+        self.lsp_registry.as_ref()
     }
 
     /// Refuse mutating invocations while plan mode is active for this

@@ -45,7 +45,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | Skill 系统 | ✅ | ✅ 17+ | ✅ | ✅ |
 | Memory（CLAUDE.md） | ✅ 两阶段 | ✅ MEMORY.md 索引 + AGENA/AGENTS/CLAUDE.md 链式 | ✅ AGENTS.md | ✅ store 编程 API + AGENA/AGENTS/CLAUDE.md 链式查找已完成（#5 后端） |
 | MCP（OAuth+动态注册） | ✅ | ✅ | ✅ | ⚠️ HTTP auth + token store + tools/list_changed 已完成（#9），完整 OAuth 自动流待补 |
-| LSP 集成 | ❌ | ❌ | ✅ **招牌** | ❌ **缺失** |
+| LSP 集成 | ❌ | ❌ | ✅ **招牌** | ⚠️ `agena-lsp` crate + 配置 + 注册表已完成（#10），builtin tools 待办 |
 | Worktree | ❌ | ✅ | ✅ | ⚠️ 后端 list/prune API 已完成（#11），TUI/CLI 接入待办 |
 | Resume / share | ✅ | ✅ | ✅ snapshot+share | ⚠️ 后端 ShareBundle / SessionSummary / 路径脱敏完成（#12），CLI/HTTP UI 待办 |
 | TUI | ✅ ratatui | ✅ Ink+Vim | ✅ Solid+OpenTUI | ⚠️ Phase 2 推进中 |
@@ -131,10 +131,12 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - [x] **`notifications/tools/list_changed` 动态刷新**：`McpClient::set_notification_handler` + 管理器自动绑定 weak ref 处理器，收到事件即重新 `list_tools` 并替换缓存；1 个端到端 inproc 测试
   - 待办：完整 OAuth 流（device code / authorization code 自动获取与刷新），目前 token 由用户手工放入 store
 
-- [ ] **#10 LSP 集成**（OpenCode 招牌，差异化）
-  - 新 crate `agena-lsp`：tower-lsp 客户端 + per-project server pool
-  - 工具：`lsp_definition / lsp_references / lsp_diagnostics / lsp_rename`
-  - apply_patch 后自动取诊断回喂模型
+- [ ] **#10 LSP 集成（基础完成 ✅）**（OpenCode 招牌，差异化）
+  - [x] 新 crate `agena-lsp`：手写 JSON-RPC + Content-Length 框架，stdio 子进程 transport，`LspClient` 带 oneshot pending、background reader_loop、超时；用 `lsp-types` 0.97 的 `Uri / Position / Diagnostic / Location / GotoDefinitionResponse / Hover` 做强类型 API
+  - [x] `LspRegistry`：`(file_extensions, root_markers)` 路由 + 懒生成进程；`server_for_path` / `client_for_path` / `client_for(name, hint_dir)`；`textDocument/publishDiagnostics` 自动入 per-uri 缓存
+  - [x] 配置：`[lsp.servers.<name>]` TOML 段（command/args/env/file_extensions/root_markers/initialization_options）；`runtime::snapshot::build_lsp_registry` 启动时懒注册到 `ToolExecutor::with_lsp_registry`；apps 全部链通
+  - [x] 测试：12 单测（framing / spec route / registry resolve）+ 1 inproc 端到端 initialize → definition → publishDiagnostics
+  - 待办：内置工具 `lsp_definition / lsp_references / lsp_diagnostics / lsp_hover` 接到 BuiltinToolInput；apply_patch 后自动取诊断回喂模型；`textDocument/didChange` 推送以让服务器看见编辑
 
 - [ ] **#11 Worktree 生命周期对外（后端 API 完成 ✅）**
   - [x] **API 暴露**：`worktree::list_active(&registry)`（按 session 列出活跃 worktree）+ `list_managed(workspace, &registry)`（扫 `.agena/worktrees/` 并与 git/registry 交叉验证，标记 `is_stale`）+ `prune_stale(workspace, &registry)`（删除孤儿目录）

@@ -108,6 +108,7 @@ pub struct ResolvedConfig {
     pub permission: PermissionConfig,
     pub plugins: PluginConfig,
     pub mcp: McpConfig,
+    pub lsp: LspConfig,
     pub web: WebToolsConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
     #[serde(default, skip_serializing_if = "crate::hooks::HooksConfig::is_empty")]
@@ -476,6 +477,33 @@ impl From<OpenAiApiModeConfig> for OpenAiApiMode {
 pub struct McpConfig {
     /// Map of `<server_name> -> <transport spec>`.
     pub servers: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LspConfig {
+    /// Map of `<server_name> -> <server spec>`. Each entry is spawned on
+    /// demand by [`agena_lsp::LspRegistry`] when an LSP-using tool first
+    /// touches a matching file.
+    pub servers: BTreeMap<String, LspServerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct LspServerConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// File extensions (without the leading `.`) routed to this server.
+    /// Empty matches everything.
+    #[serde(default)]
+    pub file_extensions: Vec<String>,
+    /// Marker filenames whose presence identifies the project root.
+    #[serde(default)]
+    pub root_markers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initialization_options: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]

@@ -76,12 +76,15 @@ const activeModeLabel = computed(() => {
           <RouterLink to="/chat" class="nav-link" :class="{ active: route.path.startsWith('/chat') }">
             Chat
           </RouterLink>
+          <RouterLink to="/workspace" class="nav-link" :class="{ active: route.path.startsWith('/workspace') }">
+            Workspace
+          </RouterLink>
           <RouterLink
-            to="/runtime"
+            to="/settings"
             class="nav-link"
-            :class="{ active: route.path.startsWith('/runtime') }"
+            :class="{ active: route.path.startsWith('/settings') || route.path.startsWith('/runtime') }"
           >
-            Runtime
+            Settings
           </RouterLink>
         </nav>
 

@@ -227,6 +227,44 @@ pub struct WorkspaceResolveRequest {
     pub create_if_missing: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct WorkspaceFileTreeQuery {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub depth: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceFileKind {
+    Directory,
+    File,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceFileNode {
+    pub name: String,
+    pub path: String,
+    pub kind: WorkspaceFileKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<WorkspaceFileNode>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceFileTreeResource {
+    pub workspace_id: i64,
+    pub root: String,
+    pub path: String,
+    pub entries: Vec<WorkspaceFileNode>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionResource {
     pub id: i64,

@@ -69,6 +69,33 @@ export type WorkspaceResource = {
   session_count?: number | null
 }
 
+export type PermissionMode = 'allow' | 'ask' | 'deny'
+
+export type PermissionRuleResource = {
+  id: number
+  action_key: string
+  mode: PermissionMode
+  created_at: string
+  updated_at: string
+}
+
+export type WorkspaceFileKind = 'directory' | 'file' | 'symlink' | 'other'
+
+export type WorkspaceFileNode = {
+  name: string
+  path: string
+  kind: WorkspaceFileKind
+  size?: number | null
+  children?: WorkspaceFileNode[] | null
+}
+
+export type WorkspaceFileTreeResource = {
+  workspace_id: number
+  root: string
+  path: string
+  entries: WorkspaceFileNode[]
+}
+
 export type SessionResource = {
   id: number
   parent_id?: number | null
@@ -340,6 +367,63 @@ export async function createWorkspace(path: string): Promise<WorkspaceResource> 
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path }),
   })
+}
+
+export async function listPermissionRules(search = ''): Promise<PermissionRuleResource[]> {
+  return await collectPagedItems(
+    (cursor) => {
+      const params = new URLSearchParams({ limit: '100' })
+      if (cursor) params.set('cursor', cursor)
+      if (search.trim()) params.set('search', search.trim())
+      return apiJson<PaginatedResponse<PermissionRuleResource>>(`/api/v1/permission-rules?${params.toString()}`)
+    },
+    { resourceName: 'permission rules' },
+  )
+}
+
+export async function createPermissionRule(input: {
+  actionKey: string
+  mode: PermissionMode
+}): Promise<PermissionRuleResource> {
+  return await apiJson<PermissionRuleResource>('/api/v1/permission-rules', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action_key: input.actionKey, mode: input.mode }),
+  })
+}
+
+export async function updatePermissionRule(input: {
+  id: number
+  actionKey: string
+  mode: PermissionMode
+}): Promise<PermissionRuleResource> {
+  return await apiJson<PermissionRuleResource>(`/api/v1/permission-rules/${input.id}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action_key: input.actionKey, mode: input.mode }),
+  })
+}
+
+export async function deletePermissionRule(id: number): Promise<PermissionRuleResource> {
+  return await apiJson<PermissionRuleResource>(`/api/v1/permission-rules/${id}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function listWorkspaceFileTree(input: {
+  workspaceId: number
+  path?: string
+  depth?: number
+  limit?: number
+}): Promise<WorkspaceFileTreeResource> {
+  const params = new URLSearchParams()
+  if (input.path?.trim()) params.set('path', input.path.trim())
+  if (input.depth !== undefined) params.set('depth', String(input.depth))
+  if (input.limit !== undefined) params.set('limit', String(input.limit))
+  const query = params.toString()
+  return await apiJson<WorkspaceFileTreeResource>(
+    `/api/v1/workspaces/${input.workspaceId}/files${query ? `?${query}` : ''}`,
+  )
 }
 
 export async function listSessions(workspaceId: number): Promise<SessionResource[]> {

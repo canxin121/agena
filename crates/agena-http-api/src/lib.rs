@@ -38,6 +38,7 @@ pub use dto::{
     SessionEventStreamQuery, SessionExecutionResource, SessionListQuery,
     SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionResource,
     SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
+    WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
     WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource, WorkspaceWriteRequest,
 };
 pub use error::ApiError;
@@ -151,6 +152,10 @@ pub fn router(state: ApiState) -> Router {
             get(get_workspace)
                 .put(replace_workspace)
                 .delete(delete_workspace),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/files",
+            get(list_workspace_files),
         )
         .route("/api/v1/sessions", get(list_sessions).post(create_session))
         .route(
@@ -719,6 +724,19 @@ async fn delete_workspace(
     Ok(Json(state.service().delete_workspace(workspace_id).await?))
 }
 
+async fn list_workspace_files(
+    State(state): State<ApiState>,
+    Path(workspace_id): Path<i64>,
+    Query(query): Query<WorkspaceFileTreeQuery>,
+) -> Result<Json<WorkspaceFileTreeResource>, ApiError> {
+    Ok(Json(
+        state
+            .service()
+            .list_workspace_files(workspace_id, query)
+            .await?,
+    ))
+}
+
 async fn list_sessions(
     State(state): State<ApiState>,
     Query(query): Query<dto::SessionListQuery>,
@@ -744,7 +762,10 @@ async fn get_session_state(
 ) -> Result<Json<SessionExecutionResource>, ApiError> {
     let session = state.session_manager()?.get_session(session_id).await?;
     Ok(Json(
-        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
+        state
+            .service()
+            .session_execution_resource(state.session_manager()?.as_ref(), &session)
+            .await?,
     ))
 }
 
@@ -815,12 +836,16 @@ async fn stream_session_events(
     let backfill_after = query.after_seq.unwrap_or(0);
     let backfill_limit = pagination::normalize_limit(query.limit);
     let initial = service
-        .list_session_events_after(manager.as_ref(), session_id, backfill_after, Some(backfill_limit))
+        .list_session_events_after(
+            manager.as_ref(),
+            session_id,
+            backfill_after,
+            Some(backfill_limit),
+        )
         .await?;
 
     let bus = manager.event_bus();
-    let mut subscription =
-        bus.subscribe(EventFilter::new(Scope::Session { session_id }));
+    let mut subscription = bus.subscribe(EventFilter::new(Scope::Session { session_id }));
 
     let stream = stream! {
         // Replay backfilled events first so subscribers see the full
@@ -910,7 +935,10 @@ async fn submit_session_turn(
         })
         .await?;
     Ok(Json(
-        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
+        state
+            .service()
+            .session_execution_resource(state.session_manager()?.as_ref(), &session)
+            .await?,
     ))
 }
 
@@ -936,7 +964,10 @@ async fn continue_session(
         })
         .await?;
     Ok(Json(
-        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
+        state
+            .service()
+            .session_execution_resource(state.session_manager()?.as_ref(), &session)
+            .await?,
     ))
 }
 
@@ -963,7 +994,10 @@ async fn reply_session_permission(
         })
         .await?;
     Ok(Json(
-        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
+        state
+            .service()
+            .session_execution_resource(state.session_manager()?.as_ref(), &session)
+            .await?,
     ))
 }
 
@@ -990,7 +1024,10 @@ async fn reply_session_user_input(
         })
         .await?;
     Ok(Json(
-        state.service().session_execution_resource(state.session_manager()?.as_ref(), &session).await?,
+        state
+            .service()
+            .session_execution_resource(state.session_manager()?.as_ref(), &session)
+            .await?,
     ))
 }
 
@@ -1104,9 +1141,7 @@ async fn plugin_rpc(
     Path(plugin_id): Path<String>,
     Json(req): Json<agena::plugin::sdk::rpc::Request>,
 ) -> Json<agena::plugin::sdk::rpc::Response> {
-    use agena::plugin::sdk::rpc::{
-        ErrorObject, JsonRpcVersion, Response, ResponsePayload, codes,
-    };
+    use agena::plugin::sdk::rpc::{ErrorObject, JsonRpcVersion, Response, ResponsePayload, codes};
 
     let host = state.runtime().current_snapshot().plugin_manager();
     let id = req.id.clone();
@@ -1458,7 +1493,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Method, Request, StatusCode},
     };
-    
+
     use futures_util::{Stream, stream};
     use sea_orm::{Database, DatabaseConnection};
     use serde_json::{Value, json};
@@ -1472,9 +1507,9 @@ mod tests {
         event::{EventKind, PublishContext},
         message::{
             ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolOutput, GlobToolInput,
-            GrepToolInput, Message, PartContent, ReadToolInput, TodoItem,
-            TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart,
-            ToolSearchToolInput, UserInputOption, UserInputQuestion,
+            GrepToolInput, Message, PartContent, ReadToolInput, TodoItem, TodoPriority, TodoStatus,
+            TodoWriteToolInput, ToolExecutionPart, ToolSearchToolInput, UserInputOption,
+            UserInputQuestion,
         },
         model::ModelId,
         permission::PermissionPolicy,
@@ -1489,7 +1524,6 @@ mod tests {
     };
 
     use super::*;
-    
 
     #[tokio::test]
     async fn sessions_endpoint_uses_cursor_pagination() {
@@ -1798,6 +1832,55 @@ mod tests {
 
         assert_eq!(status, StatusCode::NOT_FOUND, "unexpected body: {payload}");
         assert_eq!(payload["error"]["code"], json!("not_found"));
+    }
+
+    #[tokio::test]
+    async fn workspace_files_endpoint_lists_workspace_tree() {
+        let (app, state) = test_app().await;
+        let workspace = TempWorkspace::new();
+        let src_dir = workspace.root.join("src");
+        fs::create_dir_all(&src_dir).expect("src directory should be created");
+        fs::write(src_dir.join("main.rs"), "fn main() {}\n").expect("file should be written");
+        let workspace = state
+            .service()
+            .create_workspace(WorkspaceWriteRequest {
+                path: workspace.root.display().to_string(),
+            })
+            .await
+            .expect("workspace should be created");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/v1/workspaces/{}/files?depth=2", workspace.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let status = response.status();
+        let payload = response_json(response).await;
+
+        assert_eq!(status, StatusCode::OK, "unexpected body: {payload}");
+        assert_eq!(payload["workspace_id"], json!(workspace.id));
+        let entries = payload["entries"]
+            .as_array()
+            .expect("entries should be returned");
+        let src = entries
+            .iter()
+            .find(|entry| entry["path"] == json!("src"))
+            .expect("src directory should be listed");
+        assert_eq!(src["kind"], json!("directory"));
+        assert!(
+            src["children"]
+                .as_array()
+                .expect("src children should be expanded")
+                .iter()
+                .any(
+                    |entry| entry["path"] == json!("src/main.rs") && entry["kind"] == json!("file")
+                )
+        );
     }
 
     #[tokio::test]

@@ -11,7 +11,15 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/runtime',
+    redirect: '/settings',
+  },
+  {
+    path: '/settings',
     component: () => import('./agena/pages/RuntimePage.vue'),
+  },
+  {
+    path: '/workspace',
+    component: () => import('./agena/pages/WorkspacePage.vue'),
   },
 ]
 

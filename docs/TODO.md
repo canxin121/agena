@@ -136,7 +136,8 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 - [ ] **#11 Worktree 生命周期对外（后端 API 完成 ✅）**
   - [x] **API 暴露**：`worktree::list_active(&registry)`（按 session 列出活跃 worktree）+ `list_managed(workspace, &registry)`（扫 `.agena/worktrees/` 并与 git/registry 交叉验证，标记 `is_stale`）+ `prune_stale(workspace, &registry)`（删除孤儿目录）
   - [x] 类型对外：`ActiveWorktree { session_id, path, branch, created_here }` / `ManagedWorktree { path, session_id, branch, registered_with_git }`，5 单测覆盖
-  - 待办：TUI / CLI 暴露 `EnterWorktree / ExitWorktree` 命令；`.agena/worktrees/` 启动时自动调 `prune_stale`；tmux 集成可选
+  - [x] 启动时自动 `prune_stale`：`runtime::snapshot::build_tool_executor` 在每次构建 ToolExecutor 时调一次，孤儿目录被删并 info-log 数量
+  - 待办：TUI / CLI 暴露 `EnterWorktree / ExitWorktree` 命令；tmux 集成可选
 
 - [ ] **#12 Resume / Share / Snapshot UX（后端 share API 完成 ✅）**
   - [x] `agena-rollout::share` 模块：`SessionSummary { session_id, agena_version, started_at, last_event_at, frame_count, tool_call_count, model_id, source_path }` + `ShareBundle { schema_version, summary, meta, frames }`；`summarize_session(path)` 单文件 + `summarize_directory(root)` 按 last_event_at 倒序聚合

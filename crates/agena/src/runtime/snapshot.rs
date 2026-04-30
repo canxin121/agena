@@ -445,11 +445,26 @@ fn build_tool_executor(
     };
     let agent =
         Agent::new("build", resolution.config.permission_policy()).with_tool_policy(tool_policy);
+    let worktree_registry = crate::tool::worktree_registry_for_executor();
+
+    // Drop any orphan worktrees left over from a previously-crashed
+    // session so a clean startup does not accumulate
+    // .agena/worktrees/<slug> directories indefinitely. Stale = no live
+    // session and not registered with `git worktree list`.
+    let pruned = crate::tool::worktree_prune_stale(workspace_root, &worktree_registry);
+    if !pruned.is_empty() {
+        tracing::info!(
+            target: "agena::runtime::worktree",
+            removed = pruned.len(),
+            "pruned stale worktree directories at startup"
+        );
+    }
+
     let mut executor = ToolExecutor::new(workspace_root.to_path_buf(), agent)
     .with_plugin_manager(plugins)
     .with_web_search_backend(resolution.config.web.search.resolve())
     .with_plan_registry(crate::tool::plan_registry_for_executor())
-    .with_worktree_registry(crate::tool::worktree_registry_for_executor())
+    .with_worktree_registry(worktree_registry)
     .with_scheduler(build_scheduler());
 
     if let Ok(mgr) = agena_skills::SkillsManager::build(Some(workspace_root)) {

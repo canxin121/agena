@@ -38,10 +38,7 @@ fn truncate_entrypoint(raw: &str) -> String {
             byte_count, MAX_ENTRYPOINT_BYTES
         ),
         (false, true) => format!("{} lines (limit: {})", line_count, MAX_ENTRYPOINT_LINES),
-        _ => format!(
-            "{} lines and {} bytes",
-            line_count, byte_count
-        ),
+        _ => format!("{} lines and {} bytes", line_count, byte_count),
     };
 
     format!(

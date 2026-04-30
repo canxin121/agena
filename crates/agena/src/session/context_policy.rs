@@ -34,9 +34,7 @@ impl ContextPolicy {
             return max_prompt_chars;
         }
         let factor = 100u64.saturating_sub(self.compaction_headroom_pct as u64);
-        max_prompt_chars
-            .saturating_mul(factor as usize)
-            / 100
+        max_prompt_chars.saturating_mul(factor as usize) / 100
     }
 }
 

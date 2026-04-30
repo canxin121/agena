@@ -159,10 +159,7 @@ impl MemoryStore {
         if entrypoint.exists() {
             let raw = fs::read_to_string(&entrypoint)?;
             let needle = format!("{name}.md");
-            let kept: Vec<&str> = raw
-                .lines()
-                .filter(|line| !line.contains(&needle))
-                .collect();
+            let kept: Vec<&str> = raw.lines().filter(|line| !line.contains(&needle)).collect();
             let mut updated = kept.join("\n");
             if !updated.ends_with('\n') && !updated.is_empty() {
                 updated.push('\n');

@@ -50,10 +50,7 @@ impl MemoryDir {
         let normalized = workspace_str.replace('\\', "/");
         let key = sanitize_path(&normalized);
         Self {
-            path: memory_base_dir()
-                .join("projects")
-                .join(key)
-                .join("memory"),
+            path: memory_base_dir().join("projects").join(key).join("memory"),
         }
     }
 
@@ -76,7 +73,10 @@ mod tests {
 
     #[test]
     fn sanitize_replaces_non_alphanumeric() {
-        assert_eq!(sanitize_path("/home/user/my-project"), "-home-user-my-project");
+        assert_eq!(
+            sanitize_path("/home/user/my-project"),
+            "-home-user-my-project"
+        );
     }
 
     #[test]

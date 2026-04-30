@@ -115,7 +115,10 @@ impl TranscriptFragment {
         match self {
             Self::System { text } => hash_str(hasher, text),
             Self::User { content } => content.hash_into(hasher),
-            Self::Assistant { content, tool_calls } => {
+            Self::Assistant {
+                content,
+                tool_calls,
+            } => {
                 content.hash_into(hasher);
                 hash_len(hasher, tool_calls.len() as u64);
                 for call in tool_calls {
@@ -144,7 +147,8 @@ impl TranscriptContent {
     }
 
     pub fn push_text(&mut self, text: impl Into<String>) {
-        self.blocks.push(TranscriptBlock::Text { text: text.into() });
+        self.blocks
+            .push(TranscriptBlock::Text { text: text.into() });
     }
 
     /// Lossy projection of a `Message`'s parts into the transcript form. This
@@ -162,14 +166,18 @@ impl TranscriptContent {
             match part.content.as_ref() {
                 Some(PartContent::Text(text)) => {
                     if !text.text.is_empty() {
-                        content.blocks.push(TranscriptBlock::Text { text: text.text.clone() });
+                        content.blocks.push(TranscriptBlock::Text {
+                            text: text.text.clone(),
+                        });
                         had_any = true;
                     }
                 }
                 Some(PartContent::Reasoning(reasoning)) => {
                     let joined = reasoning.summary.join("\n");
                     if !joined.is_empty() {
-                        content.blocks.push(TranscriptBlock::Reasoning { text: joined });
+                        content
+                            .blocks
+                            .push(TranscriptBlock::Reasoning { text: joined });
                         had_any = true;
                     }
                 }
@@ -179,7 +187,9 @@ impl TranscriptContent {
         if !had_any {
             let fallback = message.as_text_lossy();
             if !fallback.is_empty() {
-                content.blocks.push(TranscriptBlock::Text { text: fallback });
+                content
+                    .blocks
+                    .push(TranscriptBlock::Text { text: fallback });
             }
         }
         content
@@ -230,7 +240,10 @@ impl TranscriptBlock {
                 hash_str(hasher, media_type);
                 hash_str(hasher, digest);
             }
-            Self::Attachment { file_id, media_type } => {
+            Self::Attachment {
+                file_id,
+                media_type,
+            } => {
                 hash_str(hasher, file_id);
                 hash_opt_str(hasher, media_type.as_deref());
             }
@@ -273,9 +286,9 @@ impl TranscriptToolOutput {
     fn hash_into(&self, hasher: &mut blake3::Hasher) {
         hasher.update(&[self.discriminant()]);
         match self {
-            Self::Text { text } | Self::Pruned { replacement: text } | Self::Error { message: text } => {
-                hash_str(hasher, text)
-            }
+            Self::Text { text }
+            | Self::Pruned { replacement: text }
+            | Self::Error { message: text } => hash_str(hasher, text),
         }
     }
 }
@@ -431,8 +444,7 @@ impl ProviderTranscriptBuilder {
         self.pending_turns.remove(&turn_id);
         self.aborted_turns.insert(turn_id);
         // Remove any messages that referenced this turn from the index.
-        self.message_index
-            .retain(|_, loc| loc.turn_id != turn_id);
+        self.message_index.retain(|_, loc| loc.turn_id != turn_id);
     }
 }
 
@@ -521,9 +533,7 @@ impl HistoryFold for ProviderTranscriptBuilder {
                 );
             }
             EventKind::SystemNoticeAppended(SystemNoticeAppended {
-                message_id,
-                text,
-                ..
+                message_id, text, ..
             }) => {
                 let synthetic = TurnId::default();
                 let idx = self.push_pending(
@@ -543,8 +553,12 @@ impl HistoryFold for ProviderTranscriptBuilder {
                 RevisionKind::Compacted => {
                     self.compacted_messages.insert(*target_message_id);
                 }
-                RevisionKind::ToolResultPruned { call_id, replacement } => {
-                    self.tool_pruned.insert(call_id.clone(), replacement.clone());
+                RevisionKind::ToolResultPruned {
+                    call_id,
+                    replacement,
+                } => {
+                    self.tool_pruned
+                        .insert(call_id.clone(), replacement.clone());
                 }
                 RevisionKind::AttachmentStripped { .. } => {
                     // Stripping is recorded for audit but doesn't directly
@@ -766,12 +780,13 @@ mod tests {
     // ── Builder tests ──────────────────────────────────────────────────────
 
     use crate::event::{DomainEvent, EventKind};
+    use crate::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
     use crate::message::MessageMetadata;
     use crate::session::history::{
-        AssistantMessageCompleted, FinishReason, ToolCallCompleted, ToolCallIssued, TurnAborted,
-        TurnAbortReason, TurnCompleted, TurnStarted, UserMessageAppended, fold_history,
+        AssistantMessageCompleted, FinishReason, ToolCallCompleted, ToolCallIssued,
+        TurnAbortReason, TurnAborted, TurnCompleted, TurnStarted, UserMessageAppended,
+        fold_history,
     };
-    use crate::event::{EventMeta, envelope::ENVELOPE_SCHEMA_VERSION};
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -828,20 +843,31 @@ mod tests {
     #[test]
     fn builder_projects_complete_turn() {
         let records = turn(TurnId::new());
-        let transcript: ProviderTranscript =
-            fold_history::<ProviderTranscriptBuilder>(&records).unwrap().unwrap();
+        let transcript: ProviderTranscript = fold_history::<ProviderTranscriptBuilder>(&records)
+            .unwrap()
+            .unwrap();
         assert_eq!(transcript.fragments.len(), 2);
-        assert!(matches!(transcript.fragments[0], TranscriptFragment::User { .. }));
-        assert!(matches!(transcript.fragments[1], TranscriptFragment::Assistant { .. }));
+        assert!(matches!(
+            transcript.fragments[0],
+            TranscriptFragment::User { .. }
+        ));
+        assert!(matches!(
+            transcript.fragments[1],
+            TranscriptFragment::Assistant { .. }
+        ));
     }
 
     #[test]
     fn builder_drops_in_flight_turn() {
         let mut records = turn(TurnId::new());
         records.pop(); // remove TurnCompleted — turn is now in flight
-        let transcript: ProviderTranscript =
-            fold_history::<ProviderTranscriptBuilder>(&records).unwrap().unwrap();
-        assert!(transcript.fragments.is_empty(), "in-flight turn must be skipped");
+        let transcript: ProviderTranscript = fold_history::<ProviderTranscriptBuilder>(&records)
+            .unwrap()
+            .unwrap();
+        assert!(
+            transcript.fragments.is_empty(),
+            "in-flight turn must be skipped"
+        );
     }
 
     #[test]
@@ -854,8 +880,9 @@ mod tests {
             reason: TurnAbortReason::ProcessRestart,
             message: None,
         })));
-        let transcript: ProviderTranscript =
-            fold_history::<ProviderTranscriptBuilder>(&records).unwrap().unwrap();
+        let transcript: ProviderTranscript = fold_history::<ProviderTranscriptBuilder>(&records)
+            .unwrap()
+            .unwrap();
         assert!(transcript.fragments.is_empty());
     }
 
@@ -914,8 +941,13 @@ mod tests {
                 finish_reason: FinishReason::ToolCalls,
             })),
         ];
-        records.iter_mut().enumerate().for_each(|(i, r)| r.meta.seq_global = i as i64);
-        let transcript = fold_history::<ProviderTranscriptBuilder>(&records).unwrap().unwrap();
+        records
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, r)| r.meta.seq_global = i as i64);
+        let transcript = fold_history::<ProviderTranscriptBuilder>(&records)
+            .unwrap()
+            .unwrap();
         assert_eq!(transcript.fragments.len(), 2);
         match &transcript.fragments[0] {
             TranscriptFragment::Assistant { tool_calls, .. } => {
@@ -938,6 +970,9 @@ mod tests {
     #[test]
     fn canonical_json_sorts_object_keys() {
         let v = serde_json::json!({"b": 2, "a": 1, "c": {"y": 2, "x": 1}});
-        assert_eq!(canonical_json_string(&v), "{\"a\":1,\"b\":2,\"c\":{\"x\":1,\"y\":2}}");
+        assert_eq!(
+            canonical_json_string(&v),
+            "{\"a\":1,\"b\":2,\"c\":{\"x\":1,\"y\":2}}"
+        );
     }
 }

@@ -48,4 +48,5 @@ pub(super) fn execute(
     Ok(BuiltinExecution::new(output, view))
 }
 
+#[allow(dead_code)]
 pub type SkillsManagerHandle = Arc<SkillsManager>;

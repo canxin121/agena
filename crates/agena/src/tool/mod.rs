@@ -1294,7 +1294,7 @@ fn parse_custom_payload(payload_json: &str) -> Result<StructuredObject, ToolErro
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1316,7 +1316,7 @@ mod tests {
     use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
-    use super::{ExecutionPolicy, ToolBehavior, ToolError, ToolExecutor, ToolSource};
+    use super::{ExecutionPolicy, ToolError, ToolExecutor, ToolSource};
 
     #[derive(Debug)]
     struct TempWorkspace {

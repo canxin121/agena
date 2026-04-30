@@ -122,7 +122,7 @@ fn signature_of(invocation: &ToolInvocation) -> (String, String) {
 mod tests {
     use super::*;
     use crate::message::{
-        ExecutionStatus, MessagePart, PartContent, StructuredField, StructuredObject,
+        ExecutionStatus, PartContent, StructuredField, StructuredObject,
         StructuredValue, TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
     };
     use crate::role::Role;

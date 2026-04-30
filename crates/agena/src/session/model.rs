@@ -697,7 +697,7 @@ mod tests {
 
     use crate::message::{
         BuiltinToolInput, ExecutionStatus, MessageMetadata, MessagePart, MessageStatus,
-        PartContent, TimeRange, TodoWriteToolInput, ToolExecutionPart, ToolInvocation,
+        PartContent, TimeRange, TodoWriteToolInput, ToolExecutionPart,
         UserInputQuestion,
     };
     use crate::permission::{PermissionAction, PermissionRequest};

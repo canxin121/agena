@@ -395,6 +395,7 @@ pub struct MessageListQuery {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessagePartWriteRequest {
     pub content: PartContent,
@@ -407,6 +408,7 @@ pub struct MessagePartWriteRequest {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessageWriteRequest {
     pub role: Role,

@@ -2,7 +2,7 @@ use crate::message::{BuiltinToolInput, BuiltinToolOutput, FileChangeEntry, FileC
 
 use super::{
     BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
-    apply_patch, ask_user, bash, cron, glob, grep, monitor_tool, plan, read, skill, task,
+    apply_patch, ask_user, bash, cron, glob, grep, lsp, monitor_tool, plan, read, skill, task,
     todo_write, tool_search, view_file, web_fetch, web_search, worktree,
 };
 
@@ -77,5 +77,9 @@ pub(super) fn execute_builtin(
         BuiltinToolInput::CronList(payload) => cron::execute_list(executor, payload),
         BuiltinToolInput::CronDelete(payload) => cron::execute_delete(executor, payload),
         BuiltinToolInput::ScheduleWakeup(payload) => cron::execute_wakeup(executor, payload),
+        BuiltinToolInput::LspDefinition(payload) => lsp::execute_definition(executor, payload),
+        BuiltinToolInput::LspReferences(payload) => lsp::execute_references(executor, payload),
+        BuiltinToolInput::LspHover(payload) => lsp::execute_hover(executor, payload),
+        BuiltinToolInput::LspDiagnostics(payload) => lsp::execute_diagnostics(executor, payload),
     }
 }

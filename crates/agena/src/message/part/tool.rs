@@ -201,9 +201,7 @@ pub enum MonitorToolInput {
         wait_ms: u64,
     },
     /// Terminate a running monitor.
-    Stop {
-        monitor_id: String,
-    },
+    Stop { monitor_id: String },
 }
 
 fn default_capture_stderr() -> bool {
@@ -332,6 +330,38 @@ pub struct ScheduleWakeupToolInput {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct LspDefinitionToolInput {
+    pub file_path: String,
+    pub line: u32,
+    pub character: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct LspReferencesToolInput {
+    pub file_path: String,
+    pub line: u32,
+    pub character: u32,
+    #[serde(default = "default_true")]
+    pub include_declaration: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct LspHoverToolInput {
+    pub file_path: String,
+    pub line: u32,
+    pub character: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct LspDiagnosticsToolInput {
+    pub file_path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -359,6 +389,10 @@ pub enum BuiltinToolInput {
     CronList(CronListToolInput),
     CronDelete(CronDeleteToolInput),
     ScheduleWakeup(ScheduleWakeupToolInput),
+    LspDefinition(LspDefinitionToolInput),
+    LspReferences(LspReferencesToolInput),
+    LspHover(LspHoverToolInput),
+    LspDiagnostics(LspDiagnosticsToolInput),
 }
 
 impl BuiltinToolInput {
@@ -387,6 +421,10 @@ impl BuiltinToolInput {
             Self::CronList(_) => "cron_list",
             Self::CronDelete(_) => "cron_delete",
             Self::ScheduleWakeup(_) => "schedule_wakeup",
+            Self::LspDefinition(_) => "lsp_definition",
+            Self::LspReferences(_) => "lsp_references",
+            Self::LspHover(_) => "lsp_hover",
+            Self::LspDiagnostics(_) => "lsp_diagnostics",
         }
     }
 
@@ -400,8 +438,8 @@ impl BuiltinToolInput {
             _ => serde_json::Map::new(),
         };
         object.remove("tool");
-        let payload = StructuredObject::try_from(serde_json::Value::Object(object))
-            .unwrap_or_default();
+        let payload =
+            StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
         ToolInvocation::Custom {
             name,
             input: payload,
@@ -418,7 +456,10 @@ impl BuiltinToolInput {
             _ => return None,
         };
         let tag = canonical_builtin_name(name)?;
-        object.insert("tool".to_string(), serde_json::Value::String(tag.to_string()));
+        object.insert(
+            "tool".to_string(),
+            serde_json::Value::String(tag.to_string()),
+        );
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
 }
@@ -449,6 +490,10 @@ pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
         "cron_list" => "cron_list",
         "cron_delete" => "cron_delete",
         "schedule_wakeup" => "schedule_wakeup",
+        "lsp_definition" => "lsp_definition",
+        "lsp_references" => "lsp_references",
+        "lsp_hover" => "lsp_hover",
+        "lsp_diagnostics" => "lsp_diagnostics",
         _ => return None,
     })
 }
@@ -634,6 +679,23 @@ pub enum BuiltinToolOutput {
         id: String,
         next_fire_at: String,
     },
+    LspDefinition {
+        /// Pretty-printed `path:line:col` locations the symbol resolves
+        /// to (1-based line/col so the LLM can paste them straight to
+        /// the user).
+        locations: Vec<String>,
+    },
+    LspReferences {
+        locations: Vec<String>,
+    },
+    LspHover {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contents: Option<String>,
+    },
+    LspDiagnostics {
+        /// Each entry: `path:line:col [severity] message`.
+        entries: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -681,6 +743,10 @@ impl BuiltinToolOutput {
             Self::CronList { .. } => "cron_list",
             Self::CronDelete { .. } => "cron_delete",
             Self::ScheduleWakeup { .. } => "schedule_wakeup",
+            Self::LspDefinition { .. } => "lsp_definition",
+            Self::LspReferences { .. } => "lsp_references",
+            Self::LspHover { .. } => "lsp_hover",
+            Self::LspDiagnostics { .. } => "lsp_diagnostics",
         }
     }
 
@@ -694,8 +760,8 @@ impl BuiltinToolOutput {
             _ => serde_json::Map::new(),
         };
         object.remove("tool");
-        let payload = StructuredObject::try_from(serde_json::Value::Object(object))
-            .unwrap_or_default();
+        let payload =
+            StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
         CustomToolOutput { name, payload }
     }
 
@@ -709,7 +775,10 @@ impl BuiltinToolOutput {
             serde_json::Value::Null => serde_json::Map::new(),
             _ => return None,
         };
-        object.insert("tool".to_string(), serde_json::Value::String(tag.to_string()));
+        object.insert(
+            "tool".to_string(),
+            serde_json::Value::String(tag.to_string()),
+        );
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
 }

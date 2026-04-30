@@ -19,12 +19,13 @@ pub use message_part::{MessagePart, MessagePartSummary, PartStateTransitionError
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput,
-    CustomToolOutput, GlobToolInput, GrepToolInput, McpToolOutput, MonitorEvent, MonitorStatus,
+    CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput, CustomToolOutput,
+    EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput,
+    GlobToolInput, GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput,
+    LspHoverToolInput, LspReferencesToolInput, McpToolOutput, MonitorEvent, MonitorStatus,
     MonitorStream, MonitorSummary, MonitorToolInput, ReadToolInput, RequestUserInputToolInput,
-    TaskSubagentType, TaskToolInput, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
-    ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput, ViewFileToolInput,
-    WebFetchToolInput, WebSearchHit, WebSearchToolInput, EnterPlanModeToolInput,
-    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, SkillRunToolInput,
-    CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput,
-    ScheduleWakeupToolInput, canonical_builtin_name,
+    ScheduleWakeupToolInput, SkillRunToolInput, TaskSubagentType, TaskToolInput,
+    TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput,
+    ToolResultBlock, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput, WebSearchHit,
+    WebSearchToolInput, canonical_builtin_name,
 };

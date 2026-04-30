@@ -2711,6 +2711,7 @@ mod tests {
                 tool_calls: Vec::new(),
                 usage: None,
                 provider_metadata: None,
+                reasoning_text: None,
             })
         }
 
@@ -2863,6 +2864,7 @@ mod tests {
                 tool_calls: Vec::new(),
                 usage: None,
                 provider_metadata: None,
+                reasoning_text: None,
             })
         }
 
@@ -2928,6 +2930,7 @@ mod tests {
                 tool_calls: Vec::new(),
                 usage: None,
                 provider_metadata: None,
+                reasoning_text: None,
             })
         }
 
@@ -3195,6 +3198,7 @@ mod tests {
                 tool_calls: Vec::new(),
                 usage: None,
                 provider_metadata: None,
+                reasoning_text: None,
             })
         }
 

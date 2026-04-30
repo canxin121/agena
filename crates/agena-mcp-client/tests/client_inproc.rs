@@ -124,3 +124,45 @@ async fn initialize_list_tools_and_call_tool() {
         .unwrap();
     assert_eq!(result.content.len(), 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn server_notifications_route_to_registered_handler() {
+    use std::sync::Mutex as StdMutex;
+    let (out_tx, out_rx) = mpsc::unbounded_channel::<Value>();
+    let (in_tx, in_rx) = mpsc::unbounded_channel::<InboundMessage>();
+    spawn_fake_server(out_rx, in_tx.clone());
+
+    let transport = Arc::new(InMemTransport {
+        outbox: out_tx,
+        inbox: Mutex::new(in_rx),
+    });
+    let client = McpClient::new(transport);
+    let _ = client.initialize("agena-test", "0.0.1").await.unwrap();
+
+    let received = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let received_for_handler = received.clone();
+    client.set_notification_handler(Arc::new(move |method, _params| {
+        received_for_handler.lock().unwrap().push(method);
+    }));
+
+    // Push a notification through the inbox.
+    in_tx
+        .send(InboundMessage::Notification(
+            agena_mcp_client::protocol::JsonRpcNotification {
+                jsonrpc: JSONRPC_VERSION.to_string(),
+                method: method::TOOLS_LIST_CHANGED.to_string(),
+                params: None,
+            },
+        ))
+        .unwrap();
+
+    // Give the reader loop a chance to dispatch.
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        if !received.lock().unwrap().is_empty() {
+            break;
+        }
+    }
+    let got = received.lock().unwrap().clone();
+    assert_eq!(got, vec![method::TOOLS_LIST_CHANGED.to_string()]);
+}

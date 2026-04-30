@@ -9,7 +9,7 @@
 - 核心 `agena` crate：agent / runtime / session / tool / provider / permission / config / memory / message / event / storage / db
 - 三层 API：HTTP REST（v1，35+ 端点）、WebSocket/SSE/Unix-IPC（v2）、Rust Client SDK
 - 插件体系：`agena-plugin-host` + `agena-plugin-sdk`（动态 / WASM 插件，ABI 稳定）
-- `procwarden` 沙盒已接入（`tool/mod.rs` 引入 `SandboxManager` / `SandboxPolicy`）
+- `procwarden` 沙盒已接入（`tool/mod.rs` 引入 `SandboxManager` / `SandboxPolicy`）— **拟移除**：实际不可用，转向 opencode / Claude Code 风格的权限审批模型（见 #15）
 
 **Provider（13 家，领先同类）**
 OpenAI / OpenAI-compatible / Codex(Responses) / Anthropic / Gemini / Bedrock / Vertex / Cloudflare AI Gateway / GitHub Copilot（device code） / GitLab OAuth / opencode 中继
@@ -36,7 +36,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 |---|---|---|---|---|
 | Agent loop | ✅ | ✅ | ✅ | ✅ |
 | 自动 compact | ✅ inline+remote | ✅ 时间/token | ✅ session compaction | ⚠️ 有痕迹，策略不完整 |
-| 沙盒 | ✅ landlock+bwrap+seatbelt | ⚠️ 规则匹配 | ⚠️ 规则匹配 | ✅ procwarden |
+| 沙盒 / 命令隔离 | ✅ landlock+bwrap+seatbelt | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 规则匹配（无系统沙盒） | ⚠️ procwarden 已接入但**计划移除**，改走规则匹配路线 |
 | Hooks 事件 | ✅ | ✅ 8 种事件 | ⚠️ plugin 钩子 | ❌ **缺失** |
 | Plan Mode | ✅ | ✅ Enter/ExitPlanMode | ✅ plan agent | ⚠️ 有 plan.rs，未与 session 接通 |
 | Subagent | ✅ SubAgentSource | ✅ Task tool | ✅ @subagent_type | ⚠️ 调度协议不完整 |
@@ -105,6 +105,19 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - 在 `manager::run_until_stable` 每轮迭代前扫描历史，若同 `(tool, args_json)` 连续 ≥ N 次则中断 turn 并发布 `RunFailed` 事件
   - 5 个单测覆盖：连续命中、输入差异不命中、关闭策略、跨消息聚合、不同工具重置计数
 
+- [ ] **#15 移除 procwarden 沙盒，改用 opencode / Claude Code 风格的权限审批系统** 🔥
+  - 背景：procwarden（landlock+bwrap）在跨发行版 / 容器 / Mac 上几乎不可用，价值不抵成本
+  - 范围：
+    - 删除 `procwarden` crate，从 workspace 与 `tool/bash.rs` / `tool/mod.rs` 解耦 `SandboxManager` / `SandboxPolicy` / `SandboxCommandRequest` 调用
+    - 删除 `apps/agena-studio-server` 等其他 procwarden 依赖
+    - 把 bash / write / edit / patch 工具的执行路径回退为 `tokio::process::Command` 直跑，由权限层兜底
+  - 权限层增强（参考 opencode `permission.{edit,bash,read,task,...}` + Claude Code `settings.json [permissions]`）：
+    - 现有 `permission/` store 已支持 allow / ask / deny + glob — 扩展到 bash 命令模式（`rg:*`、`git status`、`pnpm *`）
+    - 新增 `[permissions]` 段在 `~/.agena/settings.json` 与项目 `.agena/settings.json`
+    - 三档权限模式：`auto` / `ask` / `plan`（继承 plan 模式的只读语义）
+    - PreToolUse 钩子前置：UI/CLI 弹审批，记忆"始终允许"决策
+  - 文档：新 `docs/PERMISSIONS.md` 取代原计划的 `docs/SANDBOX.md`
+
 ### P2：横向能力（4–6 周）
 
 - [ ] **#9 MCP OAuth + 动态注册**
@@ -128,7 +141,6 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 
 - [ ] **#13 TUI Phase 2/3**：ratatui slash-command 弹层、cost 面板、并行 subagent 树视图、Vim 模式
 - [x] **#14 Provider 补充（部分）** ✅ ：内置 `ollama` / `lmstudio` 本地 preset（OpenAI 兼容、`OLLAMA_HOST` / `LMSTUDIO_HOST` 自动识别）。仍待补：xAI Grok、Mistral 专用 preset。
-- [ ] **#15 沙盒策略文档化**：`docs/SANDBOX.md` 列 landlock vs bwrap fallback、网络策略、approval-presets
 - [ ] **#16 Cost / Token 透出**：`/cost` 命令、TUI 状态栏 token 计数、按 provider 价格估算
 
 ---
@@ -138,7 +150,8 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | Sprint | 周期 | 内容 |
 |---|---|---|
 | Sprint 1 | 2 周 | #1 Hooks + #2 Slash Commands dispatcher（其他工作的载体） |
-| Sprint 2 | 2 周 | #3 Plan Mode 接通 + #4 自动 Compact 策略 |
-| Sprint 3 | 2 周 | #5 Memory 自动管理 + #8 Doom-loop |
-| Sprint 4 | 3 周 | #6 Subagent 调度 + subagent types 模板 |
-| Sprint 5+ | — | #10 LSP / #9 MCP OAuth / #11 Worktree UX / #12 Share / #13 TUI Phase 2 |
+| Sprint 2 | 2 周 | #15 移除 procwarden + 权限审批系统升级（P1，先做以解锁后续工具默认放行策略） |
+| Sprint 3 | 2 周 | #3 Plan Mode 接通 + #4 自动 Compact 策略 |
+| Sprint 4 | 2 周 | #5 Memory 自动管理 + #8 Doom-loop ✅（doom-loop 已完成） |
+| Sprint 5 | 3 周 | #6 Subagent 调度 + subagent types 模板 |
+| Sprint 6+ | — | #10 LSP / #9 MCP OAuth / #11 Worktree UX / #12 Share / #13 TUI Phase 2 |

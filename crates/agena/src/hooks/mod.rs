@@ -5,8 +5,8 @@
 //! hooks expose. Each `[[hooks]]` entry pairs an `event` name with a `command`
 //! to run; an optional `match.tool` glob narrows the scope for tool hooks.
 //!
-//! Supported events (see `HookEvent`): `user_prompt_submit`, `tool_before`,
-//! `tool_after`, `tool_failure`, `agent_stop`, `session_start`, `session_end`.
+//! Supported events (see `HookEvent`): `user_prompt_submit`, `pre_tool_use`,
+//! `post_tool_use`, `post_tool_use_failure`, `stop`, `session_start`, `session_end`.
 //!
 //! Side-effect-only by default: stdout is captured but ignored. To produce a
 //! `Patch` (e.g. block a tool call, replace a prompt), the command must print
@@ -26,10 +26,10 @@ use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Serialize};
 
 use crate::plugin::sdk::{
-    AgentStopInput, AgentStopPatch, HookSubscription, HostClient, InitContext, InitOutcome,
-    Plugin, PluginManifest, Result as SdkResult, SessionEndInput, SessionStartInput,
-    SessionStartPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolFailureInput, UserPromptSubmitInput, UserPromptSubmitPatch,
+    AgentStopInput, AgentStopPatch, HookSubscription, HostClient, InitContext, InitOutcome, Plugin,
+    PluginManifest, Result as SdkResult, SessionEndInput, SessionStartInput, SessionStartPatch,
+    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolFailureInput,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 
 const SHELL_HOOK_PLUGIN_ID: &str = "agena-shell-hooks";
@@ -39,9 +39,13 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 #[serde(rename_all = "snake_case")]
 pub enum HookEvent {
     UserPromptSubmit,
+    #[serde(rename = "pre_tool_use", alias = "tool_before")]
     ToolBefore,
+    #[serde(rename = "post_tool_use", alias = "tool_after")]
     ToolAfter,
+    #[serde(rename = "post_tool_use_failure", alias = "tool_failure")]
     ToolFailure,
+    #[serde(rename = "stop", alias = "agent_stop")]
     AgentStop,
     SessionStart,
     SessionEnd,
@@ -221,10 +225,7 @@ impl Plugin for ShellHookPlugin {
         })
     }
 
-    async fn tool_execute_after(
-        &self,
-        input: ToolAfterInput,
-    ) -> SdkResult<Option<ToolAfterPatch>> {
+    async fn tool_execute_after(&self, input: ToolAfterInput) -> SdkResult<Option<ToolAfterPatch>> {
         let mut env = base_env();
         env.insert("AGENA_HOOK_EVENT".into(), "tool_after".into());
         env.insert("AGENA_SESSION_ID".into(), input.session_id.to_string());
@@ -270,11 +271,13 @@ impl Plugin for ShellHookPlugin {
                 }
             }
         }
-        Ok(if merged.continue_with_message.is_none() && merged.reason.is_none() {
-            None
-        } else {
-            Some(merged)
-        })
+        Ok(
+            if merged.continue_with_message.is_none() && merged.reason.is_none() {
+                None
+            } else {
+                Some(merged)
+            },
+        )
     }
 
     async fn session_start(
@@ -489,7 +492,10 @@ impl CompiledHook {
         // the async runtime.
         let result = std::thread::scope(|scope| {
             let handle = scope.spawn(move || {
-                let client = match reqwest::blocking::Client::builder().timeout(timeout).build() {
+                let client = match reqwest::blocking::Client::builder()
+                    .timeout(timeout)
+                    .build()
+                {
                     Ok(client) => client,
                     Err(err) => {
                         tracing::warn!(
@@ -643,14 +649,14 @@ mod tests {
             HookEntry {
                 event: HookEvent::UserPromptSubmit,
                 command: Some("true".to_string()),
-            url: None,
+                url: None,
                 matcher: HookMatcher::default(),
                 timeout_ms: None,
             },
             HookEntry {
                 event: HookEvent::ToolBefore,
                 command: Some("true".to_string()),
-            url: None,
+                url: None,
                 matcher: HookMatcher::default(),
                 timeout_ms: None,
             },
@@ -683,7 +689,7 @@ mod tests {
             HookEntry {
                 event: HookEvent::ToolBefore,
                 command: Some("true".to_string()),
-            url: None,
+                url: None,
                 matcher: HookMatcher {
                     tool: Some("[bad".to_string()),
                 },
@@ -692,7 +698,7 @@ mod tests {
             HookEntry {
                 event: HookEvent::ToolBefore,
                 command: Some("true".to_string()),
-            url: None,
+                url: None,
                 matcher: HookMatcher::default(),
                 timeout_ms: None,
             },

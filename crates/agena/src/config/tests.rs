@@ -172,6 +172,114 @@ fn example_config_parses_successfully() {
 }
 
 #[test]
+fn hooks_parse_from_root_config() {
+    let path = write_temp_config(
+        r#"
+[[hooks]]
+event = "user_prompt_submit"
+command = "python3 .agena/hooks/enrich.py"
+timeout_ms = 3000
+
+[[hooks]]
+event = "pre_tool_use"
+command = "python3 .agena/hooks/check_tool.py"
+timeout_ms = 5000
+matcher = { tool = "bash" }
+
+[[hooks]]
+event = "post_tool_use"
+url = "http://127.0.0.1:8080/agena-hook"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("hook config should load");
+
+    let hooks = resolution.config.hooks.entries();
+    assert_eq!(hooks.len(), 3);
+    assert!(matches!(
+        hooks[0].event,
+        crate::hooks::HookEvent::UserPromptSubmit
+    ));
+    assert!(matches!(
+        hooks[1].event,
+        crate::hooks::HookEvent::ToolBefore
+    ));
+    assert_eq!(hooks[1].matcher.tool.as_deref(), Some("bash"));
+    assert!(matches!(hooks[2].event, crate::hooks::HookEvent::ToolAfter));
+    assert_eq!(
+        hooks[2].url.as_deref(),
+        Some("http://127.0.0.1:8080/agena-hook")
+    );
+}
+
+#[test]
+fn mode_hooks_override_root_hooks() {
+    let path = write_temp_config(
+        r#"
+mode = "dev"
+
+[[hooks]]
+event = "user_prompt_submit"
+command = "root-hook"
+
+[[modes.dev.hooks]]
+event = "pre_tool_use"
+command = "dev-hook"
+matcher = { tool = "read" }
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("mode hook config should load");
+
+    let hooks = resolution.config.hooks.entries();
+    assert_eq!(hooks.len(), 1);
+    assert!(matches!(
+        hooks[0].event,
+        crate::hooks::HookEvent::ToolBefore
+    ));
+    assert_eq!(hooks[0].command.as_deref(), Some("dev-hook"));
+    assert_eq!(hooks[0].matcher.tool.as_deref(), Some("read"));
+}
+
+#[test]
+fn legacy_hook_event_names_still_parse() {
+    let path = write_temp_config(
+        r#"
+[[hooks]]
+event = "tool_before"
+command = "legacy-hook"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("legacy hook event should load");
+
+    let hooks = resolution.config.hooks.entries();
+    assert_eq!(hooks.len(), 1);
+    assert!(matches!(
+        hooks[0].event,
+        crate::hooks::HookEvent::ToolBefore
+    ));
+}
+
+#[test]
 fn provider_capability_overrides_parse_and_merge_from_mode_layers() {
     let path = write_temp_config(
         r#"
@@ -450,7 +558,10 @@ pattern = "rm -rf /*"
         .config
         .tool_permission_policy()
         .expect("tool policy compiles");
-    assert_eq!(policy.execution_mode(), crate::permission::ExecutionMode::Ask);
+    assert_eq!(
+        policy.execution_mode(),
+        crate::permission::ExecutionMode::Ask
+    );
 
     // Dangerous command rejected by deny pattern even though mode=ask would
     // otherwise just prompt.

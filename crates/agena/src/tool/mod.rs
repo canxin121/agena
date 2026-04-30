@@ -529,6 +529,24 @@ impl ToolExecutor {
             .collect()
     }
 
+    pub fn is_concurrency_safe_invocation(&self, invocation: &ToolInvocation) -> bool {
+        let name = match invocation {
+            ToolInvocation::Custom { name, .. } => name.as_str(),
+            ToolInvocation::Mcp { server, tool, .. } => {
+                return self.catalogued_tools().into_iter().any(|definition| {
+                    definition.name == format!("mcp:{server}:{tool}")
+                        && definition.concurrency_safe
+                        && !definition.requires_user_interaction
+                });
+            }
+        };
+        self.catalogued_tools().into_iter().any(|definition| {
+            definition.name == name
+                && definition.concurrency_safe
+                && !definition.requires_user_interaction
+        })
+    }
+
     pub fn available_tools_for_messages(&self, messages: &[Message]) -> Vec<ToolDefinition> {
         self.available_tools_for_messages_and_loaded(messages, &[])
     }

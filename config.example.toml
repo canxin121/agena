@@ -34,6 +34,30 @@ default_read = "allow"
 default_write = "deny"
 default_external_directory = "deny"
 
+# User-configurable hooks. Each hook can run a local shell command or POST JSON
+# to an HTTP endpoint. Hook stdout may return a JSON patch for events that
+# support mutation, such as `user_prompt_submit` or `pre_tool_use`.
+#
+# Supported event names:
+#   user_prompt_submit, pre_tool_use, post_tool_use, post_tool_use_failure,
+#   stop, session_start, session_end
+#
+# [[hooks]]
+# event = "user_prompt_submit"
+# command = "python3 .agena/hooks/enrich_prompt.py"
+# timeout_ms = 3000
+#
+# [[hooks]]
+# event = "pre_tool_use"
+# command = "python3 .agena/hooks/check_tool.py"
+# timeout_ms = 5000
+# matcher = { tool = "bash" }
+#
+# [[hooks]]
+# event = "post_tool_use"
+# url = "http://127.0.0.1:8080/agena-hook"
+# timeout_ms = 2000
+
 [plugins]
 enabled = true
 # Optional global timeout overlay applied to every plugin (per-plugin

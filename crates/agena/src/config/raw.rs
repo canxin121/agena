@@ -136,6 +136,9 @@ impl RawConfig {
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_map(&mut self.providers, overlay.providers);
+        if !overlay.hooks.is_empty() {
+            self.hooks = overlay.hooks;
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -361,6 +364,8 @@ pub(crate) struct RawModeConfig {
     pub(crate) permission: Option<RawPermissionConfig>,
     pub(crate) plugins: Option<PluginConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "hooks")]
+    pub(crate) hooks: Vec<crate::hooks::HookEntry>,
 }
 
 impl RawModeConfig {
@@ -373,6 +378,9 @@ impl RawModeConfig {
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_map(&mut self.providers, overlay.providers);
+        if !overlay.hooks.is_empty() {
+            self.hooks = overlay.hooks;
+        }
     }
 }
 
@@ -420,7 +428,8 @@ impl Merge for WebToolsConfig {
         // Whole-struct replace.  WebToolsConfig is small and there's no
         // sensible per-field overlay semantics to preserve.
         *self = overlay;
-    }}
+    }
+}
 
 impl Merge for RawModeConfig {
     fn merge_from(&mut self, overlay: Self) {
@@ -722,11 +731,7 @@ impl PermissionConfig {
                     mode: r.mode,
                 })
                 .collect(),
-            bash_deny_patterns: raw
-                .bash_deny
-                .into_iter()
-                .map(|r| r.pattern)
-                .collect(),
+            bash_deny_patterns: raw.bash_deny.into_iter().map(|r| r.pattern).collect(),
         }
     }
 }

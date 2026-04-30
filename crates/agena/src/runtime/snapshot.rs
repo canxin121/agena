@@ -516,11 +516,13 @@ fn build_mcp_manager(
 }
 
 fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig {
+    let defaults = SessionManagerConfig::default();
     SessionManagerConfig {
         cache_max_sessions: resolution.config.runtime.session_cache.max_sessions,
         cache_ttl: Duration::from_secs(resolution.config.runtime.session_cache.ttl_secs),
         cache_max_bytes: resolution.config.runtime.session_cache.max_bytes,
-        max_turn_loops: SessionManagerConfig::default().max_turn_loops,
+        max_turn_loops: defaults.max_turn_loops,
+        doom_loop: defaults.doom_loop,
     }
 }
 

@@ -1551,6 +1551,7 @@ mod tests {
             .into_iter()
             .collect(),
             loaded_deferred_tools: Vec::new(),
+        plan: None,
         };
 
         let prepared = build_prepared_prompt(
@@ -1701,6 +1702,7 @@ mod tests {
             .into_iter()
             .collect(),
             loaded_deferred_tools: Vec::new(),
+        plan: None,
         };
 
         let prepared = build_prepared_prompt(
@@ -2415,6 +2417,7 @@ mod tests {
             .into_iter()
             .collect(),
             loaded_deferred_tools: Vec::new(),
+        plan: None,
         };
 
         let prepared = build_prepared_prompt(

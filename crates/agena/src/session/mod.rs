@@ -2,6 +2,7 @@ mod cache;
 mod context_governor;
 mod context_policy;
 pub(crate) mod control;
+mod doom_loop;
 pub(crate) mod history;
 pub mod ids;
 mod manager;
@@ -14,6 +15,7 @@ pub use ids::{MessageId, PartId, ToolCallId, TurnId};
 
 pub use context_governor::ContextGovernor;
 pub use context_policy::ContextPolicy;
+pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionManager,
     SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,

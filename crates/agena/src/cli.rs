@@ -6,7 +6,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use serde::Serialize;
 
 use crate::{
@@ -57,6 +57,7 @@ pub struct AgenaCli {
 pub enum AgenaCommand {
     Apply(ApplyArgs),
     Auth(AuthCommand),
+    Completion(CompletionArgs),
     Config(ConfigCommand),
     Continue(ContinueArgs),
     Debug(DebugCommand),
@@ -180,6 +181,12 @@ pub struct ResumeArgs {
     pub last: bool,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
     pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CompletionArgs {
+    #[arg(value_enum)]
+    pub shell: clap_complete::Shell,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -403,6 +410,7 @@ impl AgenaCli {
         match self.command.clone() {
             Some(AgenaCommand::Apply(args)) => self.run_apply(args),
             Some(AgenaCommand::Auth(command)) => self.run_auth(loader, command).await,
+            Some(AgenaCommand::Completion(args)) => self.run_completion(args),
             Some(AgenaCommand::Config(command)) => self.run_config(loader, command),
             Some(AgenaCommand::Continue(args)) => self.run_continue(args).await,
             Some(AgenaCommand::Debug(command)) => self.run_debug(command).await,
@@ -640,6 +648,11 @@ impl AgenaCli {
     async fn run_continue(self, args: ContinueArgs) -> Result<(), AppError> {
         let output = self.render_continue_command(args).await?;
         println!("{output}");
+        Ok(())
+    }
+
+    fn run_completion(self, args: CompletionArgs) -> Result<(), AppError> {
+        print!("{}", render_completion_command(args)?);
         Ok(())
     }
 
@@ -1085,6 +1098,14 @@ impl AgenaCli {
             overrides: self.overrides.clone(),
         }
     }
+}
+
+fn render_completion_command(args: CompletionArgs) -> Result<String, AppError> {
+    let mut command = AgenaCli::command();
+    let mut buffer = Vec::new();
+    clap_complete::generate(args.shell, &mut command, "agena", &mut buffer);
+    String::from_utf8(buffer)
+        .map_err(|err| AppError::Internal(format!("completion output was not utf-8: {err}")))
 }
 
 fn render_serialized<T>(format: ConfigOutputFormat, value: &T) -> Result<String, AppError>
@@ -1579,6 +1600,20 @@ store_path = "{}"
 
         assert_eq!(last_assistant_text(&session).as_deref(), Some("second"));
         assert_eq!(title_from_prompt("  hello\nworld  "), "hello world");
+    }
+
+    #[test]
+    fn completion_command_outputs_fish_completion() {
+        let cli = AgenaCli::parse_from(["agena", "completion", "fish"]);
+        let Some(AgenaCommand::Completion(args)) = cli.command else {
+            panic!("expected completion command");
+        };
+        assert_eq!(args.shell, clap_complete::Shell::Fish);
+
+        let output = render_completion_command(args).expect("completion should render");
+        assert!(output.contains("complete"));
+        assert!(output.contains("agena"));
+        assert!(output.contains("exec"));
     }
 
     #[test]

@@ -24,6 +24,7 @@ aws-sigv4 = { version = "1.4.2", default-features = false, features = ["sign-htt
 base64 = "0.22.1"
 bytes = "1.11.1"
 clap = { version = "4.5.51", features = ["derive", "env"] }
+clap_complete = "4.6.3"
 blake3 = "1.5"
 derive_more = { version = "2.1.1", features = ["display", "from", "into"] }
 gcp_auth = "0.12.6"

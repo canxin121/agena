@@ -14,8 +14,8 @@ use crate::{
         ToolInvocation,
     },
     provider::{
-        PRUNED_TOOL_RESULT_PLACEHOLDER, PromptCacheShape, PromptCacheShapeDiff,
-        ProjectedSessionPart, project_session_parts, project_session_text_lossy,
+        PRUNED_TOOL_RESULT_PLACEHOLDER, ProjectedSessionPart, PromptCacheShape,
+        PromptCacheShapeDiff, project_session_parts, project_session_text_lossy,
     },
     role::Role,
     tool::ToolDefinition,
@@ -677,16 +677,16 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
     transcript
 }
 
-fn attachment_to_transcript_block(
-    item: &crate::message::AttachmentItem,
-) -> TranscriptBlock {
+fn attachment_to_transcript_block(item: &crate::message::AttachmentItem) -> TranscriptBlock {
     // Encode attachment identity into a stable text block. The exact wire bytes
     // here are part of the cache-stability contract; only fields that survive
     // a round-trip through the provider participate.
     let source_marker = match &item.source {
         AttachmentSource::Url { url } => format!("url:{}", url.trim()),
         AttachmentSource::DataUrl { url } => format!("data_url:{}", url.trim()),
-        AttachmentSource::Base64 { data } => format!("base64:{}", digest_bytes(data.trim().as_bytes())),
+        AttachmentSource::Base64 { data } => {
+            format!("base64:{}", digest_bytes(data.trim().as_bytes()))
+        }
         AttachmentSource::FileId { file_id } => format!("file_id:{}", file_id.trim()),
         AttachmentSource::LocalPath { path } => format!("local_path:{}", path.trim()),
     };
@@ -1525,6 +1525,7 @@ mod tests {
         let mut session =
             Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
         session.runtime = SessionRuntimeState {
+            turn: Default::default(),
             prompt_window: PromptWindowRuntime { generation: 2 },
             prompt_tokens: Default::default(),
             provider_anchors: [(
@@ -1551,7 +1552,7 @@ mod tests {
             .into_iter()
             .collect(),
             loaded_deferred_tools: Vec::new(),
-        plan: None,
+            plan: None,
         };
 
         let prepared = build_prepared_prompt(
@@ -1673,6 +1674,7 @@ mod tests {
         let mut session =
             Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
         session.runtime = SessionRuntimeState {
+            turn: Default::default(),
             prompt_window: PromptWindowRuntime { generation: 2 },
             prompt_tokens: Default::default(),
             provider_anchors: [(
@@ -1702,7 +1704,7 @@ mod tests {
             .into_iter()
             .collect(),
             loaded_deferred_tools: Vec::new(),
-        plan: None,
+            plan: None,
         };
 
         let prepared = build_prepared_prompt(
@@ -2391,6 +2393,7 @@ mod tests {
         let mut session =
             Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
         session.runtime = SessionRuntimeState {
+            turn: Default::default(),
             prompt_window: PromptWindowRuntime { generation: 2 },
             prompt_tokens: Default::default(),
             provider_anchors: [(
@@ -2417,7 +2420,7 @@ mod tests {
             .into_iter()
             .collect(),
             loaded_deferred_tools: Vec::new(),
-        plan: None,
+            plan: None,
         };
 
         let prepared = build_prepared_prompt(

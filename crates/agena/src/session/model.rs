@@ -73,6 +73,78 @@ pub enum SessionStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+pub struct TurnRuntimeState {
+    #[serde(default)]
+    pub status: SessionRuntimeStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) pending_operations: Vec<SessionPendingOperation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) pending_tool_calls: Vec<PendingToolCallRuntime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_window_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_event_seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionRuntimeStatus {
+    #[default]
+    Idle,
+    AwaitingModel,
+    RunningTool,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingToolCallRuntime {
+    pub operation_id: String,
+    pub call_id: i64,
+    pub tool_name: String,
+    pub(crate) part: SessionPartRef,
+}
+
+impl TurnRuntimeState {
+    pub fn is_empty(&self) -> bool {
+        self.status == SessionRuntimeStatus::Idle
+            && self.pending_operations.is_empty()
+            && self.pending_tool_calls.is_empty()
+            && self.model_provider_id.is_none()
+            && self.model_id.is_none()
+            && self.prompt_cache_key.is_none()
+            && self.prompt_window_generation.is_none()
+            && self.latest_event_seq.is_none()
+    }
+
+    pub fn clear_active_request(&mut self) {
+        self.model_provider_id = None;
+        self.model_id = None;
+        self.prompt_cache_key = None;
+        self.prompt_window_generation = None;
+    }
+
+    pub fn record_model_request(
+        &mut self,
+        provider_id: String,
+        model_id: String,
+        prompt_cache_key: String,
+        prompt_window_generation: u64,
+    ) {
+        self.status = SessionRuntimeStatus::AwaitingModel;
+        self.model_provider_id = Some(provider_id);
+        self.model_id = Some(model_id);
+        self.prompt_cache_key = Some(prompt_cache_key);
+        self.prompt_window_generation = Some(prompt_window_generation);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
 pub struct PromptWindowRuntime {
     #[serde(default)]
     pub generation: u64,
@@ -204,6 +276,8 @@ pub struct ProviderPromptAnchor {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
 pub struct SessionRuntimeState {
+    #[serde(default, skip_serializing_if = "TurnRuntimeState::is_empty")]
+    pub turn: TurnRuntimeState,
     #[serde(default)]
     pub prompt_window: PromptWindowRuntime,
     #[serde(default, skip_serializing_if = "PromptTokenRuntime::is_empty")]
@@ -385,6 +459,67 @@ impl Session {
     pub(crate) fn refresh_derived(&mut self) {
         self.approx_bytes = self.compute_approx_bytes();
         self.pending_operations = self.derive_pending_operations();
+    }
+
+    pub(crate) fn sync_runtime_turn_state(&mut self) {
+        self.refresh_derived();
+        let previous = self.runtime.turn.clone();
+        self.runtime.turn = self.turn_runtime_snapshot(previous);
+    }
+
+    fn turn_runtime_snapshot(&self, previous: TurnRuntimeState) -> TurnRuntimeState {
+        let status = if self.blocked() {
+            SessionRuntimeStatus::Blocked
+        } else if self.next_pending_tool().is_some() {
+            SessionRuntimeStatus::RunningTool
+        } else if self.should_run_model() {
+            SessionRuntimeStatus::AwaitingModel
+        } else {
+            SessionRuntimeStatus::Idle
+        };
+
+        let mut snapshot = TurnRuntimeState {
+            status,
+            pending_operations: self.pending_operations.clone(),
+            pending_tool_calls: self.pending_tool_runtime_snapshots(),
+            latest_event_seq: previous.latest_event_seq,
+            ..TurnRuntimeState::default()
+        };
+
+        if status == SessionRuntimeStatus::AwaitingModel {
+            snapshot.model_provider_id = previous.model_provider_id;
+            snapshot.model_id = previous.model_id;
+            snapshot.prompt_cache_key = previous.prompt_cache_key;
+            snapshot.prompt_window_generation = previous.prompt_window_generation;
+        }
+
+        snapshot
+    }
+
+    fn pending_tool_runtime_snapshots(&self) -> Vec<PendingToolCallRuntime> {
+        self.pending_operations
+            .iter()
+            .filter_map(|pending| {
+                let tool = match pending {
+                    SessionPendingOperation::Tool { tool }
+                    | SessionPendingOperation::Permission {
+                        pending: SessionPendingPermission { tool, .. },
+                    }
+                    | SessionPendingOperation::UserInput {
+                        pending: SessionPendingUserInput { tool, .. },
+                    } => tool,
+                };
+                let (call_id, invocation, _) = self.pending_tool_execution(tool)?;
+                let part = self.part(&tool.part)?;
+                let operation_id = part.operation_id.clone()?;
+                Some(PendingToolCallRuntime {
+                    operation_id,
+                    call_id,
+                    tool_name: tool_invocation_name(invocation),
+                    part: tool.part.clone(),
+                })
+            })
+            .collect()
     }
 
     pub fn status(&self) -> SessionStatus {
@@ -675,6 +810,13 @@ impl Session {
     }
 }
 
+fn tool_invocation_name(invocation: &ToolInvocation) -> String {
+    match invocation {
+        ToolInvocation::Mcp { server, tool, .. } => format!("{server}:{tool}"),
+        ToolInvocation::Custom { name, .. } => name.clone(),
+    }
+}
+
 fn extract_call_id(part: &MessagePart) -> Option<i64> {
     part.content.as_ref().and_then(|content| match content {
         PartContent::ToolExecution(tool) => match tool {
@@ -697,8 +839,7 @@ mod tests {
 
     use crate::message::{
         BuiltinToolInput, ExecutionStatus, MessageMetadata, MessagePart, MessageStatus,
-        PartContent, TimeRange, TodoWriteToolInput, ToolExecutionPart,
-        UserInputQuestion,
+        PartContent, TimeRange, TodoWriteToolInput, ToolExecutionPart, UserInputQuestion,
     };
     use crate::permission::{PermissionAction, PermissionRequest};
     use crate::role::Role;
@@ -753,6 +894,62 @@ mod tests {
     }
 
     #[test]
+    fn sync_runtime_turn_state_records_blocked_pending_tools() {
+        let mut session =
+            Session::new(1, 1, "blocked", Utc::now()).with_messages(vec![assistant_message(
+                11,
+                vec![
+                    pending_tool_part(101, 11, "op-1", 7),
+                    pending_permission_part(102, 11, "op-1", "perm-1"),
+                ],
+            )]);
+
+        session.sync_runtime_turn_state();
+
+        assert_eq!(session.runtime.turn.status, SessionRuntimeStatus::Blocked);
+        assert_eq!(session.runtime.turn.pending_operations.len(), 1);
+        assert_eq!(session.runtime.turn.pending_tool_calls.len(), 1);
+        assert_eq!(
+            session.runtime.turn.pending_tool_calls[0].operation_id,
+            "op-1"
+        );
+        assert_eq!(session.runtime.turn.pending_tool_calls[0].call_id, 7);
+        assert_eq!(
+            session.runtime.turn.pending_tool_calls[0].tool_name,
+            "todo_write"
+        );
+    }
+
+    #[test]
+    fn sync_runtime_turn_state_preserves_active_model_request() {
+        let mut session = Session::new(1, 1, "awaiting", Utc::now())
+            .with_messages(vec![Message::prompt_text(Role::User, "hello")]);
+        session.runtime.turn.record_model_request(
+            "openai".to_owned(),
+            "gpt-5".to_owned(),
+            "cache-key".to_owned(),
+            42,
+        );
+
+        session.sync_runtime_turn_state();
+
+        assert_eq!(
+            session.runtime.turn.status,
+            SessionRuntimeStatus::AwaitingModel
+        );
+        assert_eq!(
+            session.runtime.turn.model_provider_id.as_deref(),
+            Some("openai")
+        );
+        assert_eq!(session.runtime.turn.model_id.as_deref(), Some("gpt-5"));
+        assert_eq!(
+            session.runtime.turn.prompt_cache_key.as_deref(),
+            Some("cache-key")
+        );
+        assert_eq!(session.runtime.turn.prompt_window_generation, Some(42));
+    }
+
+    #[test]
     fn pending_assistant_message_keeps_session_awaiting_model() {
         let mut assistant = assistant_message(31, vec![]);
         assistant.state = MessageStatus::Pending;
@@ -785,8 +982,8 @@ mod tests {
         operation_id: &str,
         call_id: i64,
     ) -> MessagePart {
-        let invocation = BuiltinToolInput::TodoWrite(TodoWriteToolInput { items: Vec::new() })
-            .into_invocation();
+        let invocation =
+            BuiltinToolInput::TodoWrite(TodoWriteToolInput { items: Vec::new() }).into_invocation();
         let mut part = MessagePart::with_content(
             part_id,
             message_id,

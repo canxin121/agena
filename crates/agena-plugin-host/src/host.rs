@@ -95,6 +95,17 @@ pub struct ToolInvokeStream {
     pub end: ToolStreamEnd,
 }
 
+/// Result of dispatching `session.compacting` through the plugin chain.
+/// `messages` is the (possibly transformed) message list the host should
+/// hand to its summarization step; `summary`, when set, replaces the
+/// host's auto-generated summary entirely (the LLM-based summarizer
+/// extension point).
+#[derive(Debug, Clone)]
+pub struct SessionCompactingOutcome {
+    pub messages: Vec<crate::sdk::ChatMessage>,
+    pub summary: Option<String>,
+}
+
 /// Result-bearing facade for a tool call. Wraps async dispatch in a runtime
 /// `block_on` so callers from sync code (like `ToolExecutor`) can use it.
 pub struct PluginHost {
@@ -633,9 +644,10 @@ impl PluginHost {
     pub async fn dispatch_session_compacting(
         &self,
         input: SessionCompactingInput,
-    ) -> Result<SessionCompactingInput, PluginError> {
+    ) -> Result<SessionCompactingOutcome, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
-        dispatcher::chain_patch::<SessionCompactingInput, SessionCompactingPatch, _>(
+        let mut summary: Option<String> = None;
+        let folded = dispatcher::chain_patch::<SessionCompactingInput, SessionCompactingPatch, _>(
             &self.plugins,
             method::HOOK_SESSION_COMPACTING,
             HookSubscription::SESSION_COMPACTING,
@@ -645,10 +657,17 @@ impl PluginHost {
                 if let Some(m) = patch.messages {
                     inp.messages = m;
                 }
+                if let Some(s) = patch.summary {
+                    summary = Some(s);
+                }
             },
         )
         .await
-        .map_err(transport_to_plugin_error)
+        .map_err(transport_to_plugin_error)?;
+        Ok(SessionCompactingOutcome {
+            messages: folded.messages,
+            summary,
+        })
     }
 
     // ── session.start ──────────────────────────────────────────────────────

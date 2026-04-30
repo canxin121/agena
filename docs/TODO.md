@@ -43,7 +43,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | Slash commands | ✅ 27+ | ✅ 50+ | ✅ commands/*.md | ❌ 缺中心 dispatcher |
 | 自定义命令 | ✅ | ✅ | ✅ | ⚠️ 后端加载器已完成（#2），TUI / CLI dispatcher 待接入 |
 | Skill 系统 | ✅ | ✅ 17+ | ✅ | ✅ |
-| Memory（CLAUDE.md） | ✅ 两阶段 | ✅ MEMORY.md 索引 | ✅ AGENTS.md | ⚠️ 自动写回未做 |
+| Memory（CLAUDE.md） | ✅ 两阶段 | ✅ MEMORY.md 索引 + AGENA/AGENTS/CLAUDE.md 链式 | ✅ AGENTS.md | ✅ store 编程 API + AGENA/AGENTS/CLAUDE.md 链式查找已完成（#5 后端） |
 | MCP（OAuth+动态注册） | ✅ | ✅ | ✅ | ⚠️ OAuth 待补 |
 | LSP 集成 | ❌ | ❌ | ✅ **招牌** | ❌ **缺失** |
 | Worktree | ❌ | ✅ | ✅ | ⚠️ 有但未对外 |
@@ -86,11 +86,11 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - 双策略：本地 LLM 总结（template `templates/compact.md`） + provider 原生（Anthropic prompt cache、OpenAI Responses）
   - 写入 `CompactedItem` 到 transcript，UI 显示折叠条
 
-- [ ] **#5 Memory 自动管理**（CLAUDE.md 等价）
-  - 入口：`AGENA.md` / `CLAUDE.md` / `AGENTS.md` 三文件链式查找
-  - `MEMORY.md` 索引 + 单文件 frontmatter（type=user/feedback/project/reference）
-  - `memory/writer.rs`：自动记忆 + 去重 + staleness 标记
-  - Slash：`/memory edit|list|forget`
+- [ ] **#5 Memory 自动管理（后端基本完成 ✅）**（CLAUDE.md 等价）
+  - [x] **入口链式查找**：`memory::project_instructions::discover` 从 workspace 向上 walk，按 `AGENA.md` → `AGENTS.md` → `CLAUDE.md` 优先级各目录取一份；`render_section` 拼成系统提示注入；超 50 KB 自动按行尾切并标记 truncated
+  - [x] `MEMORY.md` 索引 + 单文件 frontmatter（type=user/feedback/project/reference + Other 兜底）— `memory::store::MemoryStore` 提供 `list / get / save / forget / index_lines`，写入时同步追加 `MEMORY.md` 索引，删除时同步清理；malformed 文件 warn 并跳过
+  - [x] `MemoryPlugin::chat_system_transform` 已把 `discover` 渲染的 project-instructions 段拼到 memory 段后面注入 system prompt
+  - 待办：`/memory edit|list|forget` slash 命令接入；自动写回（PostSampling 钩子触发去重 + 写回新 memory）；staleness 标记（按 mtime / 引用文件失效时灰显）
 
 ### P1：Agent 协作（4 周）
 

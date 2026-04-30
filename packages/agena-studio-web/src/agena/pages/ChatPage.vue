@@ -46,6 +46,12 @@ const errorMessage = ref('')
 
 const userInputDrafts = reactive<Record<string, Record<string, string>>>({})
 
+type RenderBlock = {
+  body: string
+  kind: 'text' | 'diff'
+  summary?: string
+}
+
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 let refreshInFlight = false
@@ -186,10 +192,49 @@ function partBody(part: MessagePart): string {
   return part.summary || JSON.stringify(content, null, 2)
 }
 
-function messageBlocks(message: MessageResource): string[] {
+function partBlocks(part: MessagePart): RenderBlock[] {
+  const content = part.content || null
+  const applyPatch = applyPatchPayload(content)
+  if (applyPatch) {
+    const output = content ? readString(content.output_text) : null
+    const diff = readString(applyPatch.diff)
+    const blocks: RenderBlock[] = []
+    if (output) {
+      blocks.push({ body: output, kind: 'text' })
+    }
+    if (diff) {
+      blocks.push({
+        body: diff,
+        kind: 'diff',
+        summary: applyPatchDiffSummary(applyPatch),
+      })
+    }
+    if (blocks.length) return blocks
+  }
+
+  const body = partBody(part)
+  return body.trim().length > 0 ? [{ body, kind: 'text' }] : []
+}
+
+function messageBlocks(message: MessageResource): RenderBlock[] {
   const parts = Array.isArray(message.parts) ? message.parts : []
   if (!parts.length) return []
-  return parts.map((part) => partBody(part)).filter((block) => block.trim().length > 0)
+  return parts.flatMap((part) => partBlocks(part))
+}
+
+function applyPatchPayload(content: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!content || content.type !== 'tool_execution') return null
+  const details = asRecord(content.details)
+  if (!details || details.source !== 'custom') return null
+  const output = asRecord(details.output)
+  if (!output || output.name !== 'apply_patch') return null
+  return asRecord(output.payload)
+}
+
+function applyPatchDiffSummary(payload: Record<string, unknown>): string {
+  const changes = Array.isArray(payload.changes) ? payload.changes : []
+  if (!changes.length) return 'Patch diff'
+  return `Patch diff (${changes.length} file${changes.length === 1 ? '' : 's'})`
 }
 
 function messageTags(message: MessageResource): string[] {
@@ -787,12 +832,13 @@ onBeforeUnmount(() => {
                 <div v-if="message.finish" class="muted mono">finish={{ message.finish }}</div>
               </div>
               <div v-if="messageBlocks(message).length" class="stack">
-                <pre
-                  v-for="(block, index) in messageBlocks(message)"
-                  :key="`${message.id}-${index}`"
-                  class="message-block mono"
-                  >{{ block }}</pre
-                >
+                <template v-for="(block, index) in messageBlocks(message)" :key="`${message.id}-${index}`">
+                  <details v-if="block.kind === 'diff'" class="message-diff">
+                    <summary>{{ block.summary || 'Patch diff' }}</summary>
+                    <pre class="message-block mono">{{ block.body }}</pre>
+                  </details>
+                  <pre v-else class="message-block mono">{{ block.body }}</pre>
+                </template>
               </div>
               <div v-else class="muted">No renderable parts.</div>
             </article>

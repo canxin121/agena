@@ -567,6 +567,10 @@ pub enum BuiltinToolOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         after_hash: Option<String>,
         inverse_patch: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        diff: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        progress: Vec<String>,
     },
     Glob {
         #[serde(default, skip_serializing_if = "Option::is_none")]

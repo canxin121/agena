@@ -1628,6 +1628,54 @@ mod tests {
     }
 
     #[test]
+    fn apply_patch_builtin_moves_files_and_reports_diff() {
+        let workspace = TempWorkspace::new();
+        fs::write(workspace.root.join("old.txt"), "before\n").expect("failed to seed old.txt");
+        let executor = build_executor(&workspace.root);
+
+        let result = executor
+            .execute_builtin_detailed(&BuiltinToolInput::ApplyPatch(ApplyPatchToolInput {
+                patch: "\
+*** Begin Patch
+*** Update File: old.txt
+*** Move to: new.txt
+@@
+-before
++after
+*** End Patch"
+                    .to_string(),
+            }))
+            .expect("apply_patch move should succeed");
+
+        assert!(!workspace.root.join("old.txt").exists());
+        assert_eq!(
+            fs::read_to_string(workspace.root.join("new.txt")).unwrap(),
+            "after\n"
+        );
+        match result.output {
+            BuiltinToolOutput::ApplyPatch {
+                changes,
+                diff,
+                progress,
+                ..
+            } => {
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[0].path, "new.txt");
+                assert_eq!(changes[0].from_path.as_deref(), Some("old.txt"));
+                assert_eq!(changes[0].kind, FileChangeKind::Moved);
+                assert!(diff.contains("rename from old.txt"));
+                assert!(diff.contains("+after"));
+                assert!(
+                    progress
+                        .iter()
+                        .any(|line| line == "applied move old.txt -> new.txt")
+                );
+            }
+            other => panic!("expected apply_patch output, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn view_file_builtin_returns_metadata_and_attachment() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("pixel.png");

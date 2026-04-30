@@ -49,8 +49,13 @@ impl ToolOutputTruncator {
                 }
             }
             BuiltinToolOutput::ViewFile { .. } => {}
-            BuiltinToolOutput::ApplyPatch { inverse_patch, .. } => {
+            BuiltinToolOutput::ApplyPatch {
+                inverse_patch,
+                diff,
+                ..
+            } => {
                 *inverse_patch = truncate_text(inverse_patch, self.policy.max_chars);
+                *diff = truncate_text(diff, self.policy.max_chars);
             }
             BuiltinToolOutput::Glob { .. }
             | BuiltinToolOutput::Grep { .. }

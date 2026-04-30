@@ -45,15 +45,23 @@ impl Plugin for MemoryPlugin {
         &self,
         input: ChatSystemTransformInput,
     ) -> SdkResult<Option<ChatSystemTransformPatch>> {
+        let _ = input;
         let workspace_root = match self.workspace_root.get() {
             Some(p) => p.clone(),
             None => return Ok(None),
         };
 
         let memory_section = build_memory_prompt_section(&workspace_root);
+        let project_section = super::render_section(&super::discover(&workspace_root));
+
+        let mut appended = format!("\n\n{}", memory_section);
+        if let Some(project) = project_section {
+            appended.push_str("\n\n");
+            appended.push_str(&project);
+        }
 
         Ok(Some(ChatSystemTransformPatch {
-            append: Some(format!("\n\n{}", memory_section)),
+            append: Some(appended),
             ..Default::default()
         }))
     }

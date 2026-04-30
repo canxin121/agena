@@ -3,6 +3,11 @@ mode = "dev"
 [tracing]
 filter = "info"
 
+[telemetry]
+enabled = false
+service_name = "agena"
+# otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
+
 [auth]
 # auto prefers the OS keyring and falls back to store_path when keyring is unavailable.
 store_backend = "auto"

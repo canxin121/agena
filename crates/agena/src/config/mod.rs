@@ -9,6 +9,7 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+pub use agena_otel::TelemetryConfig;
 pub use error::ConfigError;
 pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvironment};
 pub use overrides::ConfigOverride;

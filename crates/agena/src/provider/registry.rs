@@ -8,6 +8,7 @@ use std::{
 use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::StreamExt;
+use tracing::Instrument;
 
 use crate::error::{AppError, ProviderErrorKind};
 use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ProviderId};
@@ -384,6 +385,7 @@ impl ProviderRegistry {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, AppError>>,
     {
+        let request_span = tracing::info_span!("provider.request", provider_id, operation,);
         let mut retry_index = 0_u32;
         loop {
             let attempt = retry_index + 1;
@@ -396,7 +398,7 @@ impl ProviderRegistry {
                 "provider operation attempt started"
             );
 
-            match op().await {
+            match op().instrument(request_span.clone()).await {
                 Ok(value) => {
                     tracing::info!(
                         provider_id,
@@ -549,12 +551,20 @@ impl ProviderRegistry {
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
         let provider_id = model.provider_id.to_string();
+        let model_id = model.model_id.to_string();
         let retry_policy = self.retry_policy;
         let replay_policy = self.stream_replay_policy;
         let provider_resume_policy = provider.stream_resume_policy();
         let replay_safe_enabled = replay_policy.enabled(provider_resume_policy);
 
         let stream = async_stream::try_stream! {
+            let request_span = tracing::info_span!(
+                "provider.request",
+                provider_id = provider_id.as_str(),
+                model_id = model_id.as_str(),
+                operation = "complete_stream",
+            );
+            request_span.in_scope(|| tracing::debug!("provider stream request started"));
             let mut retry_index = 0_u32;
             let mut replay_retry_index = 0_u32;
             let mut emitted_history: Vec<CompletionStreamEvent> = Vec::new();
@@ -1622,12 +1632,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
-                stop_sequences: Vec::new(),
-                top_p: None,
-                top_k: None,
-                seed: None,
-                thinking: None,
-                response_format: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking: None,
+                    response_format: None,
                 },
             )
             .await
@@ -1695,12 +1705,12 @@ mod tests {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
-                stop_sequences: Vec::new(),
-                top_p: None,
-                top_k: None,
-                seed: None,
-                thinking: None,
-                response_format: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking: None,
+                    response_format: None,
                 },
             )
             .await

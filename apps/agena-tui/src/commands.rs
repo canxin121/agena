@@ -34,6 +34,7 @@ pub enum CommandId {
     Fork,
     Children,
     Parent,
+    Diagnostics,
     Status,
     Btw,
     Queue,
@@ -302,6 +303,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         arguments: "",
         summary_key: "command-parent-summary",
+    },
+    CommandSpec {
+        id: CommandId::Diagnostics,
+        name: "diagnostics",
+        aliases: &["feedback"],
+        arguments: "",
+        summary_key: "command-diagnostics-summary",
     },
     CommandSpec {
         id: CommandId::Status,

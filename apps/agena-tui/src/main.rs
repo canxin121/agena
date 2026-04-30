@@ -262,20 +262,42 @@ async fn main() -> Result<(), AppError> {
         .as_ref()
         .map(|resolution| resolution.config.tracing.filter.clone())
         .unwrap_or_else(|| "info".to_owned());
+    let telemetry = resolution
+        .as_ref()
+        .map(|resolution| resolution.config.telemetry.clone())
+        .unwrap_or_default();
     let config_locale = resolution.and_then(|resolution| resolution.config.ui.locale);
     let log_writer = resolve_tui_log_writer(&cli)?;
 
     let initial_filter = EnvFilter::try_new(filter).unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(log_writer.clone())
-                .with_ansi(log_writer.ansi_enabled())
-                .with_target(false)
-                .compact(),
-        )
-        .with(initial_filter)
-        .init();
-
-    cli.run(config_locale).await
+    if let Some(telemetry) = agena_otel::build_layer(&telemetry)
+        .map_err(|error| agena::AppError::Config(error.to_string()))?
+    {
+        let telemetry_layer = telemetry.layer();
+        let _telemetry_guard = telemetry.guard;
+        tracing_subscriber::registry()
+            .with(initial_filter)
+            .with(telemetry_layer)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(log_writer.clone())
+                    .with_ansi(log_writer.ansi_enabled())
+                    .with_target(false)
+                    .compact(),
+            )
+            .init();
+        cli.run(config_locale).await
+    } else {
+        tracing_subscriber::registry()
+            .with(initial_filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(log_writer.clone())
+                    .with_ansi(log_writer.ansi_enabled())
+                    .with_target(false)
+                    .compact(),
+            )
+            .init();
+        cli.run(config_locale).await
+    }
 }

@@ -86,6 +86,7 @@ pub enum AgenaCommand {
     Config(ConfigCommand),
     Continue(ContinueArgs),
     Debug(DebugCommand),
+    Diagnostics(DiagnosticsArgs),
     Exec(ExecArgs),
     Fork(ForkArgs),
     Login(LoginArgs),
@@ -114,6 +115,12 @@ pub struct ConfigCommand {
 pub struct DebugCommand {
     #[command(subcommand)]
     pub command: DebugSubcommand,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DiagnosticsArgs {
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -403,6 +410,46 @@ struct DebugMessageOutput {
 }
 
 #[derive(Debug, Serialize)]
+struct DiagnosticsOutput {
+    version: &'static str,
+    os: String,
+    arch: String,
+    current_dir: String,
+    config: DiagnosticsConfigOutput,
+    telemetry: DiagnosticsTelemetryOutput,
+    environment: DiagnosticsEnvironmentOutput,
+}
+
+#[derive(Debug, Serialize)]
+struct DiagnosticsConfigOutput {
+    path: String,
+    found: bool,
+    active_mode: Option<String>,
+    applied_layers: Vec<String>,
+    provider_count: usize,
+    plugin_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct DiagnosticsTelemetryOutput {
+    enabled: bool,
+    service_name: String,
+    otlp_endpoint_set: bool,
+    header_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct DiagnosticsEnvironmentOutput {
+    agena_config_set: bool,
+    agena_mode_set: bool,
+    agena_database_url_set: bool,
+    agena_database_path_set: bool,
+    agena_telemetry_enabled_set: bool,
+    agena_otel_endpoint_set: bool,
+    otel_exporter_otlp_traces_endpoint_set: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct SessionDetail {
     id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -460,6 +507,7 @@ impl AgenaCli {
             Some(AgenaCommand::Config(command)) => self.run_config(loader, command),
             Some(AgenaCommand::Continue(args)) => self.run_continue(args).await,
             Some(AgenaCommand::Debug(command)) => self.run_debug(command).await,
+            Some(AgenaCommand::Diagnostics(args)) => self.run_diagnostics(loader, args),
             Some(AgenaCommand::Exec(args)) => self.run_exec(args).await,
             Some(AgenaCommand::Fork(args)) => self.run_fork(args).await,
             Some(AgenaCommand::Login(args)) => self.run_login(loader, args).await,
@@ -718,6 +766,16 @@ impl AgenaCli {
         Ok(())
     }
 
+    fn run_diagnostics(
+        self,
+        loader: ConfigLoader<ProcessEnvironment>,
+        args: DiagnosticsArgs,
+    ) -> Result<(), AppError> {
+        let output = self.render_diagnostics_command(&loader, args)?;
+        println!("{output}");
+        Ok(())
+    }
+
     async fn run_exec(self, args: ExecArgs) -> Result<(), AppError> {
         let output = self.render_exec_command(args).await?;
         println!("{output}");
@@ -954,6 +1012,66 @@ impl AgenaCli {
         } else {
             Ok(format_debug_session_output(&output))
         }
+    }
+
+    fn render_diagnostics_command<E>(
+        &self,
+        loader: &ConfigLoader<E>,
+        args: DiagnosticsArgs,
+    ) -> Result<String, AppError>
+    where
+        E: ConfigEnvironment,
+    {
+        let resolution = loader.load(&self.load_request())?;
+        let config = &resolution.config;
+        let telemetry = &config.telemetry;
+        render_serialized(
+            args.format,
+            &DiagnosticsOutput {
+                version: env!("CARGO_PKG_VERSION"),
+                os: std::env::consts::OS.to_owned(),
+                arch: std::env::consts::ARCH.to_owned(),
+                current_dir: std::env::current_dir()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| "<unavailable>".to_owned()),
+                config: DiagnosticsConfigOutput {
+                    path: resolution.meta.config_path.display().to_string(),
+                    found: resolution.meta.config_found,
+                    active_mode: resolution
+                        .meta
+                        .active_mode
+                        .as_ref()
+                        .map(ToString::to_string),
+                    applied_layers: resolution
+                        .meta
+                        .applied_layers
+                        .iter()
+                        .map(|layer| layer.description.clone())
+                        .collect(),
+                    provider_count: config.providers.len(),
+                    plugin_count: config.plugins.list.len(),
+                },
+                telemetry: DiagnosticsTelemetryOutput {
+                    enabled: telemetry.enabled,
+                    service_name: telemetry.service_name.clone(),
+                    otlp_endpoint_set: telemetry.otlp_endpoint.is_some(),
+                    header_count: telemetry.headers.len(),
+                },
+                environment: DiagnosticsEnvironmentOutput {
+                    agena_config_set: std::env::var_os("AGENA_CONFIG").is_some(),
+                    agena_mode_set: std::env::var_os("AGENA_MODE").is_some(),
+                    agena_database_url_set: std::env::var_os("AGENA_DATABASE_URL").is_some(),
+                    agena_database_path_set: std::env::var_os("AGENA_DATABASE_PATH").is_some(),
+                    agena_telemetry_enabled_set: std::env::var_os("AGENA_TELEMETRY_ENABLED")
+                        .is_some(),
+                    agena_otel_endpoint_set: std::env::var_os("AGENA_OTEL_ENDPOINT").is_some(),
+                    otel_exporter_otlp_traces_endpoint_set: std::env::var_os(
+                        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    )
+                    .is_some(),
+                },
+            },
+        )
     }
 
     async fn render_exec_command(&self, args: ExecArgs) -> Result<String, AppError> {

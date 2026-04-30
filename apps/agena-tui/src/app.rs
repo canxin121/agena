@@ -2324,11 +2324,7 @@ impl App {
         self.overlay = Some(Overlay::Picker(dialog));
     }
 
-    fn handle_timeline_loaded(
-        &mut self,
-        session_id: i64,
-        result: UiResult<Vec<DomainEvent>>,
-    ) {
+    fn handle_timeline_loaded(&mut self, session_id: i64, result: UiResult<Vec<DomainEvent>>) {
         let Some(Overlay::Timeline(mut dialog)) = self.overlay.take() else {
             return;
         };
@@ -3801,6 +3797,9 @@ impl App {
             }
             CommandId::Children => self.open_child_sessions_picker(),
             CommandId::Parent => self.open_parent_session(),
+            CommandId::Diagnostics => {
+                self.flash_success(self.current_diagnostics_summary());
+            }
             CommandId::Status => {
                 self.flash_success(self.current_runtime_status_summary());
             }
@@ -4215,6 +4214,30 @@ impl App {
         self.i18n.text_args(
             "flash-runtime-status",
             &crate::fl_args!("summary" => summary),
+        )
+    }
+
+    fn current_diagnostics_summary(&self) -> String {
+        let runtime = self
+            .run_options
+            .summary()
+            .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default"));
+        let cwd = std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "<unavailable>".to_owned());
+        let session = self
+            .transcript
+            .session_id
+            .map(|id| format!("#{id}"))
+            .unwrap_or_else(|| "<none>".to_owned());
+        self.i18n.text_args(
+            "flash-diagnostics-summary",
+            &crate::fl_args!(
+                "cwd" => cwd,
+                "session" => session,
+                "queue" => self.queue.len() as i64,
+                "runtime" => runtime,
+            ),
         )
     }
 
@@ -8169,7 +8192,10 @@ fn build_timeline_item(record: &DomainEvent) -> TimelineItem {
     let summary = if summary_suffix.is_empty() {
         format!("#{}  {}", record.meta.seq_global, event_type)
     } else {
-        format!("#{}  {}  {}", record.meta.seq_global, event_type, summary_suffix)
+        format!(
+            "#{}  {}  {}",
+            record.meta.seq_global, event_type, summary_suffix
+        )
     };
 
     let mut detail_lines = vec![
@@ -8320,7 +8346,10 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
             format!("stream: {:?}", event.stream),
             format!("seq: {}", event.seq),
             format!("bytes: {}", event.chunk.len()),
-            format!("preview: {}", detail_excerpt(event.preview_text.as_str(), 200)),
+            format!(
+                "preview: {}",
+                detail_excerpt(event.preview_text.as_str(), 200)
+            ),
         ],
         AgenaSessionEvent::CommandEnd(event) => vec![
             format!("session_id: {}", event.context.session_id),

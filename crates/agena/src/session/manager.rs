@@ -3,6 +3,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use arc_swap::ArcSwap;
 use chrono::Utc;
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::AppError;
 use crate::event::{ErrorInfo, EventKind, RunFailedEvent, RunStartedEvent};
@@ -868,6 +869,12 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
         control: Arc<TurnControl>,
     ) -> Result<Session, AppError> {
+        let turn_span = tracing::info_span!(
+            "session.turn",
+            session_id = session.id,
+            provider_id = %options.model.provider_id,
+            model_id = %options.model.model_id,
+        );
         let mut compacted_rounds = 0_u8;
 
         loop {
@@ -1013,7 +1020,7 @@ impl SessionManager {
             // boundary event before invoking the processor. The processor
             // currently mints its own TurnId internally; we use the one from
             // its result to wrap the matching TurnCompleted/TurnAborted.
-            let processor_fut = state.processor.run_turn(run);
+            let processor_fut = state.processor.run_turn(run).instrument(turn_span.clone());
             let turn_outcome = tokio::select! {
                 res = processor_fut => res,
                 _ = control.cancel.cancelled() => {

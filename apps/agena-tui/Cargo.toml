@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 agena = { path = "../../crates/agena" }
 agena-http-api = { path = "../../crates/agena-http-api" }
+agena-otel = { path = "../../crates/agena-otel" }
 agena-skills = { path = "../../crates/agena-skills" }
 arboard = "3.6.1"
 anyhow = "1.0.100"

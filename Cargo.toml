@@ -14,6 +14,7 @@ members = [
     "crates/agena-http-api",
     "crates/agena-keyring-store",
     "crates/agena-lsp",
+    "crates/agena-otel",
     "crates/agena-mcp-client",
     "crates/agena-mcp-server",
     "crates/agena-plugin-host",

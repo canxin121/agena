@@ -44,7 +44,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | 自定义命令 | ✅ | ✅ | ✅ | ⚠️ 后端加载器已完成（#2），TUI / CLI dispatcher 待接入 |
 | Skill 系统 | ✅ | ✅ 17+ | ✅ | ✅ |
 | Memory（CLAUDE.md） | ✅ 两阶段 | ✅ MEMORY.md 索引 + AGENA/AGENTS/CLAUDE.md 链式 | ✅ AGENTS.md | ✅ store 编程 API + AGENA/AGENTS/CLAUDE.md 链式查找已完成（#5 后端） |
-| MCP（OAuth+动态注册） | ✅ | ✅ | ✅ | ⚠️ OAuth 待补 |
+| MCP（OAuth+动态注册） | ✅ | ✅ | ✅ | ⚠️ HTTP auth + token store + tools/list_changed 已完成（#9），完整 OAuth 自动流待补 |
 | LSP 集成 | ❌ | ❌ | ✅ **招牌** | ❌ **缺失** |
 | Worktree | ❌ | ✅ | ✅ | ⚠️ 后端 list/prune API 已完成（#11），TUI/CLI 接入待办 |
 | Resume / share | ✅ | ✅ | ✅ snapshot+share | ⚠️ 后端 ShareBundle / SessionSummary / 路径脱敏完成（#12），CLI/HTTP UI 待办 |
@@ -124,9 +124,12 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 
 ### P2：横向能力（4–6 周）
 
-- [ ] **#9 MCP OAuth + 动态注册**
-  - `agena-mcp-client` 加 OAuth 流（device code / authorization code），keychain 存储
-  - 工具变化时通过 `notifications/tools/list_changed` 动态刷新
+- [ ] **#9 MCP OAuth + 动态注册（基础完成 ✅）**
+  - [x] **HTTP auth 头**：`HttpAuth { Bearer / BearerFromEnv / BearerFromStore / Custom }` 注入 `Authorization`，显式 headers 永远胜出；7 单测覆盖含空 token / 缺 env / store fallback
+  - [x] **`[mcp.servers.<name>.auth]` 配置段**：四种 kind 与 `HttpAuth` 一一对应；`runtime::snapshot` 自动转 `ServerSpec::Http.auth`
+  - [x] **`FileTokenStore`**：`~/.agena/mcp-tokens.json` JSON 文件持久化 bearer，put / get / delete / list_servers，Unix 0600 权限；6 单测含 round-trip / corrupt-fail / 删除持久化；运行时启动自动 open
+  - [x] **`notifications/tools/list_changed` 动态刷新**：`McpClient::set_notification_handler` + 管理器自动绑定 weak ref 处理器，收到事件即重新 `list_tools` 并替换缓存；1 个端到端 inproc 测试
+  - 待办：完整 OAuth 流（device code / authorization code 自动获取与刷新），目前 token 由用户手工放入 store
 
 - [ ] **#10 LSP 集成**（OpenCode 招牌，差异化）
   - 新 crate `agena-lsp`：tower-lsp 客户端 + per-project server pool

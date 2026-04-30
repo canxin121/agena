@@ -300,6 +300,15 @@ impl ToolExecutor {
             if allowed {
                 return Ok(());
             }
+            // Bash is allowed in plan mode if the classifier proves the
+            // command is read-only (e.g. `git status`, `ls`, `rg foo`).
+            // Anything we cannot prove read-only is refused — the model
+            // should call exit_plan_mode and re-request explicitly.
+            if let crate::message::BuiltinToolInput::Bash(bash) = &builtin
+                && bash::is_read_only_command(bash.command.as_str())
+            {
+                return Ok(());
+            }
             return Err(ToolError::PermissionDenied(format!(
                 "tool '{name}' is blocked in plan mode; call exit_plan_mode first"
             )));
@@ -2130,5 +2139,109 @@ mod tests {
             }
             other => panic!("expected bash output, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn enforce_plan_mode_allows_read_only_bash_and_blocks_mutating_bash() {
+        use crate::message::{StructuredField, StructuredObject, StructuredValue};
+        use crate::session::PlanState;
+
+        let workspace = TempWorkspace::new();
+        let registry = super::plan_registry_for_executor();
+        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::workspace_write())
+            .with_plan_registry(registry.clone());
+
+        // Activate plan mode for session 7.
+        registry.write().insert(
+            7,
+            PlanState {
+                file_path: workspace.root.join(".agena/plans/test.md"),
+                slug: "test".to_string(),
+                started_at: chrono::Utc::now(),
+            },
+        );
+
+        let bash_input = |cmd: &str| -> ToolInvocation {
+            let mut input = StructuredObject::default();
+            input.fields.push(StructuredField {
+                name: "command".to_string(),
+                value: StructuredValue::Text {
+                    value: cmd.to_string(),
+                },
+            });
+            ToolInvocation::Custom {
+                name: "bash".to_string(),
+                input,
+            }
+        };
+
+        // Read-only bash is allowed in plan mode.
+        executor
+            .enforce_plan_mode_for(&bash_input("git status"), 7)
+            .expect("git status is read-only and should be allowed");
+        executor
+            .enforce_plan_mode_for(&bash_input("ls -la"), 7)
+            .expect("ls -la is read-only and should be allowed");
+
+        // Mutating bash is blocked.
+        let err = executor
+            .enforce_plan_mode_for(&bash_input("rm -rf node_modules"), 7)
+            .unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
+
+        // Unknown / unclassified bash is blocked (safety default).
+        let err = executor
+            .enforce_plan_mode_for(&bash_input("./unknown-binary --do-it"), 7)
+            .unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
+
+        // After leaving plan mode, everything is allowed again.
+        registry.write().remove(&7);
+        executor
+            .enforce_plan_mode_for(&bash_input("rm -rf node_modules"), 7)
+            .expect("plan mode is off, mutating bash should be allowed");
+
+        // Drop guard
+        let _ = bash_input;
+    }
+
+    #[test]
+    fn enforce_plan_mode_uses_session_lookup() {
+        use crate::message::{StructuredField, StructuredObject, StructuredValue};
+        use crate::session::PlanState;
+
+        let workspace = TempWorkspace::new();
+        let registry = super::plan_registry_for_executor();
+        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::workspace_write())
+            .with_plan_registry(registry.clone());
+        registry.write().insert(
+            42,
+            PlanState {
+                file_path: workspace.root.join(".agena/plans/x.md"),
+                slug: "x".to_string(),
+                started_at: chrono::Utc::now(),
+            },
+        );
+
+        let mut input = StructuredObject::default();
+        input.fields.push(StructuredField {
+            name: "command".to_string(),
+            value: StructuredValue::Text {
+                value: "rm -rf /".to_string(),
+            },
+        });
+        let inv = ToolInvocation::Custom {
+            name: "bash".to_string(),
+            input,
+        };
+
+        // Different session id — plan mode does not apply.
+        executor
+            .enforce_plan_mode_for(&inv, 1)
+            .expect("session 1 is not in plan mode");
+
+        // Same session id — plan mode blocks.
+        let err = executor.enforce_plan_mode_for(&inv, 42).unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
     }
 }

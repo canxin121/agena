@@ -244,6 +244,16 @@ impl CommandClassification {
     }
 }
 
+/// Classify a shell command line as definitely read-only. Returns `false`
+/// for mutating commands and for anything we cannot prove is read-only —
+/// callers gating untrusted execution should treat `false` as "ask first".
+pub fn is_read_only_command(command: &str) -> bool {
+    matches!(
+        analyze_command(command).classification,
+        CommandClassification::ReadOnly
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExitInterpretation {
     Success,

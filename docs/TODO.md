@@ -38,7 +38,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | 自动 compact | ✅ inline+remote | ✅ 时间/token | ✅ session compaction | ⚠️ 有痕迹，策略不完整 |
 | 沙盒 / 命令隔离 | ✅ landlock+bwrap+seatbelt | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 规则匹配（无系统沙盒） | ⚠️ 已弃用 procwarden，#15 第一阶段完成（`tool::shell`），第二阶段权限层增强待办 |
 | Hooks 事件 | ✅ | ✅ 8 种事件 | ⚠️ plugin 钩子 | ✅ 7 事件 + shell + HTTP hook 形态（#1 第二阶段进行中） |
-| Plan Mode | ✅ | ✅ Enter/ExitPlanMode | ✅ plan agent | ⚠️ 有 plan.rs，未与 session 接通 |
+| Plan Mode | ✅ | ✅ Enter/ExitPlanMode | ✅ plan agent | ✅ 已接通会话流 + 只读 bash 放行（#3 基本完成） |
 | Subagent | ✅ SubAgentSource | ✅ Task tool | ✅ @subagent_type | ⚠️ 调度协议不完整 |
 | Slash commands | ✅ 27+ | ✅ 50+ | ✅ commands/*.md | ❌ 缺中心 dispatcher |
 | 自定义命令 | ✅ | ✅ | ✅ | ⚠️ 后端加载器已完成（#2），TUI / CLI dispatcher 待接入 |
@@ -75,10 +75,11 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - [x] **自定义命令加载器**（`crates/agena/src/commands/`）：扫 `.agena/commands/*.md`（向上 walk）+ `~/.agena/commands/*.md`，frontmatter 支持 `description / argument-hint / allowed_tools / model / aliases`，body 支持 `$1..$N` + `$ARGUMENTS` 替换；项目覆盖用户、aliases 解析为同一 command；8 个单测覆盖（含 walk-up 发现、冲突优先级、aliases 去重）
   - 待办：内置 slash 中央 dispatcher（`/help /clear /compact /plan /resume /cost /memory /init /review /worktree /tasks /config /share /doctor`），TUI / CLI 共用
 
-- [ ] **#3 Plan Mode 接通会话流**
-  - `plan.rs` 已有 `PlanRegistry`，扩展为模式：进入 plan 后强制 `tool_policy = read_only`，禁止 Edit/Write/Bash 写
-  - 新增 `EnterPlanMode` / `ExitPlanMode` 工具，写计划到 `plan.md` 草稿
-  - session 上记录 `mode: plan|build`
+- [x] **#3 Plan Mode 接通会话流（基本完成 ✅）**
+  - [x] `plan::PlanRegistry` 已存在，`tool/mod.rs::enforce_plan_mode_for` 在 session manager 工具调度路径上把关；mutating builtin / unknown 工具一律拒绝
+  - [x] `EnterPlanMode` / `ExitPlanMode` 工具写计划到 `<workspace>/.agena/plans/<slug>.md`
+  - [x] 进入 plan 后 bash 仅放行 `bash::is_read_only_command()` 判定为只读的命令（`git status` / `ls` / `rg` / `cat` …）；mutating 与 unknown 一律拒绝并提示 `exit_plan_mode`；2 个新单测覆盖
+  - 进一步：跨 session fork 的 plan-mode 继承策略 / TUI 状态指示
 
 - [ ] **#4 自动 Compact 策略落地**
   - `context_governor.rs` 基础上加触发器：剩余 token < 阈值（默认 15%）/ 用户 `/compact`

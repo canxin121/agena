@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+agena-app-server = { path = "../agena-app-server" }
+agena-app-server-protocol = { path = "../agena-app-server-protocol" }
 agena-mcp-client = { path = "../agena-mcp-client" }
 agena-mcp-server = { path = "../agena-mcp-server" }
 agena-lsp = { path = "../agena-lsp" }

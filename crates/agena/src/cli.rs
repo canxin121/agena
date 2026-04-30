@@ -9,6 +9,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use agena_app_server::AppServerError;
+use agena_app_server_protocol::{
+    CancelTurnParams, CancelTurnResult, CreateSessionParams, CreateSessionResult,
+    ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
+    MessageItem, PermissionDecision as AppPermissionDecision, PermissionRememberScope,
+    PermissionReplyParams, PermissionReplyResult, ReadMessagesParams, ReadMessagesResult,
+    SessionListItem, SubmitTurnParams, SubmitTurnResult,
+};
 use agena_mcp_client::protocol::{
     CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult,
     PromptDescriptor, PromptMessage, ReadResourceParams, ReadResourceResult, ResourceContents,
@@ -17,7 +25,7 @@ use agena_mcp_client::protocol::{
 use agena_mcp_server::{McpServerBackend, McpServerError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 use crate::{
@@ -31,7 +39,10 @@ use crate::{
         ApplyPatchToolInput, BuiltinToolInput, PartContent, StructuredObject, ToolInvocation,
     },
     model::ModelRef,
-    permission::{PermissionPolicy, ToolPermissionPolicy},
+    permission::{
+        PermissionPolicy, PermissionReply, PermissionReplyKind, PermissionScope,
+        ToolPermissionPolicy,
+    },
     provider::{
         ModelCapabilities, ModelMetadata, ProviderModel,
         auth::{
@@ -42,8 +53,8 @@ use crate::{
     runtime::{AgenaRuntime, TracingFilterReloadHandle},
     session::{
         Session, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
-        SessionListRequest, SessionManager, SessionRunOptions, SessionRuntimeStatus,
-        SessionSummary, SessionUserTurnRequest,
+        SessionListRequest, SessionManager, SessionPermissionReplyRequest, SessionRunOptions,
+        SessionRuntimeStatus, SessionSummary, SessionUserTurnRequest,
     },
     storage::StorageConfig,
     tool::{ApplyPatchExecution, ToolExecutor},
@@ -68,6 +79,7 @@ pub struct AgenaCli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgenaCommand {
+    AppServer(AppServerArgs),
     Apply(ApplyArgs),
     Auth(AuthCommand),
     Completion(CompletionArgs),
@@ -118,6 +130,19 @@ pub struct SessionsCommand {
 
 #[derive(Debug, Clone, Args, Default)]
 pub struct ServeCommand {}
+
+#[derive(Debug, Clone, Args)]
+pub struct AppServerArgs {
+    #[arg(long = "workspace", alias = "cwd")]
+    pub workspace: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = AppServerTransport::Stdio)]
+    pub transport: AppServerTransport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AppServerTransport {
+    Stdio,
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct McpServerArgs {
@@ -428,6 +453,7 @@ impl AgenaCli {
         let loader = ConfigLoader::new(ProcessEnvironment);
 
         match self.command.clone() {
+            Some(AgenaCommand::AppServer(args)) => self.run_app_server(args).await,
             Some(AgenaCommand::Apply(args)) => self.run_apply(args),
             Some(AgenaCommand::Auth(command)) => self.run_auth(loader, command).await,
             Some(AgenaCommand::Completion(args)) => self.run_completion(args),
@@ -477,6 +503,15 @@ impl AgenaCli {
             "Agena started with resolved configuration"
         );
         Ok(())
+    }
+
+    async fn run_app_server(self, args: AppServerArgs) -> Result<(), AppError> {
+        let backend = self.app_server_backend(args.clone()).await?;
+        match args.transport {
+            AppServerTransport::Stdio => agena_app_server::serve_stdio(backend)
+                .await
+                .map_err(|err| AppError::Config(err.to_string())),
+        }
     }
 
     fn run_apply(self, args: ApplyArgs) -> Result<(), AppError> {
@@ -1119,6 +1154,16 @@ impl AgenaCli {
         }
     }
 
+    async fn app_server_backend(
+        &self,
+        args: AppServerArgs,
+    ) -> Result<AgenaAppServerBackend, AppError> {
+        let runtime = self
+            .session_runtime_with_workspace(args.workspace.as_ref())
+            .await?;
+        Ok(AgenaAppServerBackend { runtime })
+    }
+
     async fn mcp_server_backend(&self, args: McpServerArgs) -> Result<AgenaMcpBackend, AppError> {
         let runtime = self
             .session_runtime_with_workspace(args.workspace.as_ref())
@@ -1148,6 +1193,193 @@ impl AgenaCli {
             mode: self.mode.clone(),
             overrides: self.overrides.clone(),
         }
+    }
+}
+
+#[derive(Clone)]
+struct AgenaAppServerBackend {
+    runtime: AgenaRuntime,
+}
+
+#[async_trait]
+impl agena_app_server::AppServerBackend for AgenaAppServerBackend {
+    async fn create_session(
+        &self,
+        params: CreateSessionParams,
+    ) -> Result<CreateSessionResult, AppServerError> {
+        let manager = app_session_manager(&self.runtime)?;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: params.title.unwrap_or_else(|| "IDE session".to_owned()),
+                parent_session_id: params.parent_session_id,
+            })
+            .await
+            .map_err(app_backend_error)?;
+        Ok(CreateSessionResult {
+            session_id: session.id,
+            title: session.title,
+        })
+    }
+
+    async fn submit_turn(
+        &self,
+        params: SubmitTurnParams,
+    ) -> Result<SubmitTurnResult, AppServerError> {
+        let manager = app_session_manager(&self.runtime)?;
+        let options = resolve_run_options(
+            &self.runtime,
+            params.model.as_deref(),
+            params.temperature,
+            params.max_output_tokens,
+        )
+        .map_err(app_backend_error)?;
+        let session = manager
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: params.session_id,
+                options,
+                parts: vec![PartContent::text(params.prompt)],
+            })
+            .await
+            .map_err(app_backend_error)?;
+        Ok(SubmitTurnResult {
+            session_id: session.id,
+            status: format!("{:?}", session.runtime.turn.status).to_ascii_lowercase(),
+            text: last_assistant_text(&session),
+        })
+    }
+
+    async fn reply_permission(
+        &self,
+        params: PermissionReplyParams,
+    ) -> Result<PermissionReplyResult, AppServerError> {
+        let manager = app_session_manager(&self.runtime)?;
+        let session = manager
+            .get_session(params.session_id)
+            .await
+            .map_err(app_backend_error)?;
+        let options = resolve_continue_options(
+            &self.runtime,
+            &session,
+            &ContinueArgs {
+                session_id: Some(params.session_id),
+                last: false,
+                model: None,
+                temperature: None,
+                max_output_tokens: None,
+                format: ConfigOutputFormat::Json,
+            },
+        )
+        .map_err(app_backend_error)?;
+        let session = manager
+            .reply_permission(SessionPermissionReplyRequest {
+                session_id: params.session_id,
+                options,
+                reply: PermissionReply {
+                    request_id: params.request_id,
+                    kind: app_permission_reply_kind(params.decision, params.remember),
+                    reason: params.reason,
+                    scope: params.remember.map(app_permission_scope),
+                },
+            })
+            .await
+            .map_err(app_backend_error)?;
+        Ok(PermissionReplyResult {
+            session_id: session.id,
+            status: format!("{:?}", session.runtime.turn.status).to_ascii_lowercase(),
+        })
+    }
+
+    async fn list_sessions(
+        &self,
+        params: AppListSessionsParams,
+    ) -> Result<AppListSessionsResult, AppServerError> {
+        let manager = app_session_manager(&self.runtime)?;
+        let sessions = manager
+            .list_session_summaries(SessionListRequest {
+                offset: params.offset,
+                limit: params.limit,
+            })
+            .await
+            .map_err(app_backend_error)?;
+        Ok(AppListSessionsResult {
+            sessions: sessions
+                .into_iter()
+                .map(|session| SessionListItem {
+                    session_id: session.id,
+                    title: session.title,
+                    status: "idle".to_owned(),
+                    updated_at: session.updated_at,
+                })
+                .collect(),
+        })
+    }
+
+    async fn read_messages(
+        &self,
+        params: ReadMessagesParams,
+    ) -> Result<ReadMessagesResult, AppServerError> {
+        let manager = app_session_manager(&self.runtime)?;
+        let session = manager
+            .get_session(params.session_id)
+            .await
+            .map_err(app_backend_error)?;
+        Ok(ReadMessagesResult {
+            messages: session
+                .messages
+                .into_iter()
+                .map(|message| MessageItem {
+                    message_id: message.id,
+                    role: message.role.to_string(),
+                    status: message.state.to_string(),
+                    text: message.as_text_lossy(),
+                    created_at: message.created_at,
+                })
+                .collect(),
+        })
+    }
+
+    async fn cancel_turn(
+        &self,
+        params: CancelTurnParams,
+    ) -> Result<CancelTurnResult, AppServerError> {
+        let manager = app_session_manager(&self.runtime)?;
+        manager
+            .cancel_active_turn(params.session_id)
+            .await
+            .map_err(app_backend_error)?;
+        Ok(CancelTurnResult {
+            session_id: params.session_id,
+            cancelled: true,
+        })
+    }
+}
+
+fn app_session_manager(runtime: &AgenaRuntime) -> Result<Arc<SessionManager>, AppServerError> {
+    runtime
+        .session_manager()
+        .ok_or_else(|| AppServerError::Backend(session_storage_error().to_string()))
+}
+
+fn app_backend_error(error: impl ToString) -> AppServerError {
+    AppServerError::Backend(error.to_string())
+}
+
+fn app_permission_reply_kind(
+    decision: AppPermissionDecision,
+    remember: Option<PermissionRememberScope>,
+) -> PermissionReplyKind {
+    match (decision, remember) {
+        (AppPermissionDecision::Allow, Some(_)) => PermissionReplyKind::AllowAlways,
+        (AppPermissionDecision::Allow, None) => PermissionReplyKind::AllowOnce,
+        (AppPermissionDecision::Deny, Some(_)) => PermissionReplyKind::DenyAlways,
+        (AppPermissionDecision::Deny, None) => PermissionReplyKind::DenyOnce,
+    }
+}
+
+fn app_permission_scope(scope: PermissionRememberScope) -> PermissionScope {
+    match scope {
+        PermissionRememberScope::Session => PermissionScope::Session,
+        PermissionRememberScope::Workspace => PermissionScope::Workspace,
     }
 }
 
@@ -1912,6 +2144,14 @@ store_path = "{}"
         let DebugSubcommand::Session(args) = command.command;
         assert_eq!(args.session_id, 42);
         assert!(args.json);
+
+        let app_server =
+            AgenaCli::parse_from(["agena", "app-server", "--cwd", ".", "--transport", "stdio"]);
+        let Some(AgenaCommand::AppServer(args)) = app_server.command else {
+            panic!("expected app-server command");
+        };
+        assert_eq!(args.workspace, Some(PathBuf::from(".")));
+        assert_eq!(args.transport, AppServerTransport::Stdio);
 
         let mcp_server = AgenaCli::parse_from(["agena", "mcp-server", "--cwd", "."]);
         let Some(AgenaCommand::McpServer(args)) = mcp_server.command else {

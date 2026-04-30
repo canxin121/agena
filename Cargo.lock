@@ -102,6 +102,7 @@ dependencies = [
  "sea-orm-migration",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2",
  "smol_str",
  "strum 0.27.2",

@@ -131,6 +131,7 @@ pub(super) fn execute_exit(
 
 /// Returns true when the executor is currently in plan mode for this
 /// session id (or when session id is unknown — be safe and refuse).
+#[allow(dead_code)]
 pub fn is_active(executor: &ToolExecutor, session_id: Option<i64>) -> bool {
     let Some(registry) = executor.plan_registry() else {
         return false;

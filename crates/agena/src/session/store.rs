@@ -108,6 +108,7 @@ impl SessionStore {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn db(&self) -> &DatabaseConnection {
         &self.db
     }
@@ -741,7 +742,7 @@ mod tests {
     use chrono::Utc;
     use sea_orm::Database;
 
-    use super::{SessionCachePolicy, SessionCommit, SessionStore, ordered_unique_touched_messages};
+    use super::{SessionCachePolicy, SessionStore, ordered_unique_touched_messages};
     use crate::{
         db::init_schema,
         event::EventPublisher,
@@ -762,6 +763,7 @@ mod tests {
         std::sync::Arc::new(EventPublisher::new(seq, store_dyn, bus))
     }
 
+    #[allow(dead_code)]
     fn test_cache_policy() -> SessionCachePolicy {
         SessionCachePolicy {
             max_sessions: 32,

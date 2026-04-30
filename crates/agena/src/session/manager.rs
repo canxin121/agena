@@ -2369,20 +2369,19 @@ mod tests {
 
     use crate::agent::Agent;
     use crate::db::init_schema;
-    use crate::event::{EventKind, RunFailedEvent, StreamErrorEvent};
+    use crate::event::EventKind;
     use crate::message::{
-        ApplyPatchToolInput, AskUserToolInput, AttachmentItem, AttachmentSource, BuiltinToolOutput,
-        FileChangeKind, McpToolOutput, ToolAttachment, ToolExecutionPart, ToolOutput,
+        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, BuiltinToolOutput, McpToolOutput, ToolAttachment, ToolExecutionPart, ToolOutput,
         ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
         UserInputReplyKind,
     };
     use crate::model::{ModelId, ModelRef, ProviderId};
-    use crate::permission::{PermissionMode, PermissionPolicy};
+    use crate::permission::PermissionPolicy;
     use crate::provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ModelProvider, ProviderModel, ProviderRegistry,
     };
-    use crate::session::{ContextGovernor, ContextPolicy, MESSAGE_TAG_PROMPT_COMPACTED};
+    use crate::session::{ContextGovernor, ContextPolicy};
 
     use super::*;
     use crate::session::cache::{SessionCache, SessionCachePolicy};
@@ -2462,11 +2461,13 @@ mod tests {
             format!("resp_{}", *guard)
         }
 
+        #[allow(dead_code)]
         fn with_metadata(mut self, metadata: crate::provider::ModelMetadata) -> Self {
             self.metadata = metadata;
             self
         }
 
+        #[allow(dead_code)]
         fn with_usage(mut self, usage: CompletionUsage) -> Self {
             self.usage = Some(usage);
             self
@@ -2801,10 +2802,12 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn interrupted_model_ref() -> ModelRef {
         ModelRef::new("interrupted", "interrupted-model")
     }
 
+    #[allow(dead_code)]
     fn interrupted_run_options() -> SessionRunOptions {
         SessionRunOptions {
             model: interrupted_model_ref(),
@@ -2814,6 +2817,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn high_recording_usage() -> CompletionUsage {
         CompletionUsage {
             input_tokens: 3_800,
@@ -2825,6 +2829,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     struct InterruptedStreamProvider;
 
     #[async_trait]

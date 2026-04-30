@@ -1442,6 +1442,7 @@ fn secret_preview(secret: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod tests {
     use std::{
         fs,
@@ -1457,7 +1458,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Method, Request, StatusCode},
     };
-    use chrono::{Duration as ChronoDuration, Utc};
+    
     use futures_util::{Stream, stream};
     use sea_orm::{Database, DatabaseConnection};
     use serde_json::{Value, json};
@@ -1468,15 +1469,15 @@ mod tests {
     use agena::{
         agent::Agent,
         db::init_schema,
-        event::{EventKind, PluginEventPayload, PublishContext},
+        event::{EventKind, PublishContext},
         message::{
             ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolOutput, GlobToolInput,
-            GrepToolInput, Message, MessageSource, PartContent, ReadToolInput, TodoItem,
-            TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolOutput,
+            GrepToolInput, Message, PartContent, ReadToolInput, TodoItem,
+            TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart,
             ToolSearchToolInput, UserInputOption, UserInputQuestion,
         },
         model::ModelId,
-        permission::{PermissionMode, PermissionPolicy},
+        permission::PermissionPolicy,
         provider::{
             CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
             ModelProvider, ProviderModel, ProviderRegistry,
@@ -1488,7 +1489,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::dto::MessageWriteRequest;
+    
 
     #[tokio::test]
     async fn sessions_endpoint_uses_cursor_pagination() {

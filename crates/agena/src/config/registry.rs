@@ -69,6 +69,39 @@ impl ResolvedConfig {
 }
 
 impl super::ConfigResolution {
+    pub async fn build_provider_registry_with_plugins(
+        &self,
+        plugins: &PluginHost,
+    ) -> Result<ProviderRegistry, ConfigError> {
+        let mut registry = self.config.build_provider_registry()?;
+        if plugins.is_empty() {
+            return Ok(registry);
+        }
+
+        let current = registry
+            .provider_ids()
+            .into_iter()
+            .map(|id| crate::plugin::ProviderDescriptor {
+                display_name: id.clone(),
+                id,
+                models: Vec::new(),
+                endpoint: None,
+                kind: crate::plugin::ProviderKind::Custom,
+            })
+            .collect();
+        let patch = plugins
+            .dispatch_provider_list(crate::plugin::ProviderListInput { current })
+            .await
+            .map_err(|err| ConfigError::Validation(format!("plugin provider.list: {err}")))?;
+        for provider_id in patch.remove {
+            registry.remove(provider_id.as_str());
+        }
+        for descriptor in patch.add {
+            registry.register_plugin_provider(descriptor)?;
+        }
+        Ok(registry)
+    }
+
     pub async fn build_plugin_host(&self) -> Result<Arc<PluginHost>, ConfigError> {
         self.build_plugin_host_with_previous(None, None).await
     }

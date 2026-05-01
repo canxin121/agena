@@ -12,6 +12,7 @@ use tracing::Instrument;
 
 use crate::error::{AppError, ProviderErrorKind};
 use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ProviderId};
+use crate::plugin::ProviderDescriptor;
 
 use super::{
     CapabilityOverrideProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
@@ -125,6 +126,13 @@ pub struct ProviderRegistry {
     stream_replay_policy: StreamReplayPolicy,
 }
 
+struct PluginRegisteredProvider {
+    id: String,
+    display_name: String,
+    default_model: ModelId,
+    models: Vec<ModelId>,
+}
+
 #[derive(Clone)]
 pub struct NamedProvider {
     provider_id: String,
@@ -215,6 +223,35 @@ impl ModelProvider for NamedProvider {
     }
 }
 
+#[async_trait]
+impl ModelProvider for PluginRegisteredProvider {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    fn default_model(&self) -> &ModelId {
+        &self.default_model
+    }
+
+    async fn list_models(&self) -> Result<Vec<Model>, AppError> {
+        Ok(self
+            .models
+            .iter()
+            .map(|model| {
+                Model::new(self.id.as_str(), model.as_str())
+                    .with_display_name(self.display_name.clone())
+            })
+            .collect())
+    }
+
+    async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        Err(AppError::Provider(format!(
+            "plugin-registered provider `{}` does not implement completions",
+            self.id
+        )))
+    }
+}
+
 impl Default for ProviderRegistry {
     fn default() -> Self {
         Self::new()
@@ -262,6 +299,39 @@ impl ProviderRegistry {
 
     pub fn register_arc(&mut self, provider: Arc<dyn ModelProvider>) {
         self.providers.insert(provider.id().to_owned(), provider);
+    }
+
+    pub fn remove(&mut self, provider_id: &str) {
+        self.providers.remove(provider_id);
+    }
+
+    pub fn register_plugin_provider(
+        &mut self,
+        descriptor: ProviderDescriptor,
+    ) -> Result<(), AppError> {
+        let id = descriptor.id.trim();
+        if id.is_empty() {
+            return Err(AppError::Config(
+                "plugin provider id cannot be empty".to_owned(),
+            ));
+        }
+        let models = descriptor
+            .models
+            .iter()
+            .map(|model| ModelId::try_new(model.as_str()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| AppError::Config(format!("invalid plugin provider model: {err}")))?;
+        let default_model = models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| ModelId::new("default"));
+        self.register(PluginRegisteredProvider {
+            id: id.to_owned(),
+            display_name: descriptor.display_name,
+            default_model,
+            models,
+        });
+        Ok(())
     }
 
     pub fn register_alias(&mut self, alias: ProviderAliasRegistration) -> Result<(), AppError> {
@@ -1369,6 +1439,29 @@ mod tests {
             .expect_err("non-retryable error should bubble up immediately");
         assert!(matches!(err, AppError::Provider(message) if message == "permanent failure"));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn register_plugin_provider_exposes_models() {
+        let mut registry = ProviderRegistry::new();
+        registry
+            .register_plugin_provider(crate::plugin::ProviderDescriptor {
+                id: "plugin-mock".to_owned(),
+                display_name: "Plugin Mock".to_owned(),
+                models: vec!["mock-model".to_owned()],
+                endpoint: None,
+                kind: crate::plugin::ProviderKind::Custom,
+            })
+            .expect("plugin provider should register");
+
+        let models = registry
+            .list_models("plugin-mock")
+            .await
+            .expect("plugin models should list");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "mock-model");
+        assert_eq!(models[0].display_name.as_deref(), Some("Plugin Mock"));
     }
 
     #[test]

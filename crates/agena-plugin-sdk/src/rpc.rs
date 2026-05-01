@@ -148,6 +148,8 @@ pub mod method {
     pub const HOOK_AGENT_STOP: &str = "hooks/agent.stop";
     pub const HOOK_COMMAND_AFTER: &str = "hooks/command.execute.after";
     pub const HOOK_CHAT_MESSAGES_TRANSFORM: &str = "hooks/chat.messages.transform";
+    pub const HOOK_PRE_TURN: &str = "hooks/pre_turn";
+    pub const HOOK_POST_TURN: &str = "hooks/post_turn";
 
     // plugin -> host
     pub const HOST_LOG: &str = "host/log";

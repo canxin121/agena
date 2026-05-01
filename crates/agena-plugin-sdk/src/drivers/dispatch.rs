@@ -6,8 +6,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::{PluginError, Result};
-use crate::host_api::HostClient;
 use crate::hooks::*;
+use crate::host_api::HostClient;
 use crate::plugin::{InitContext, Plugin, ToolStreamSink};
 use crate::rpc::method;
 
@@ -77,12 +77,10 @@ impl<P: Plugin> PluginDispatcher<P> {
                 let i: ToolInvokeInput = serde_json::from_value(params)?;
                 ok_json(&plugin.tool_invoke(i).await?)
             }
-            method::HOOK_TOOL_INVOKE_STREAM => {
-                Err(PluginError::new(
-                    "tool.invoke.stream cannot be dispatched without a stream sink; \
+            method::HOOK_TOOL_INVOKE_STREAM => Err(PluginError::new(
+                "tool.invoke.stream cannot be dispatched without a stream sink; \
                      transports should call PluginDispatcher::dispatch_stream",
-                ))
-            }
+            )),
             method::HOOK_CHAT_MESSAGE => {
                 let i: ChatMessageInput = serde_json::from_value(params)?;
                 ok_json(&plugin.chat_message(i).await?)
@@ -114,7 +112,8 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::HOOK_COMMAND_BEFORE => {
                 let i: CommandBeforeInput = serde_json::from_value(params)?;
                 ok_json(&plugin.command_execute_before(i).await?)
-            }            method::HOOK_SHELL_ENV => {
+            }
+            method::HOOK_SHELL_ENV => {
                 let i: ShellEnvInput = serde_json::from_value(params)?;
                 ok_json(&plugin.shell_env(i).await?)
             }
@@ -125,6 +124,16 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::HOOK_SESSION_COMPACTING => {
                 let i: SessionCompactingInput = serde_json::from_value(params)?;
                 ok_json(&plugin.session_compacting(i).await?)
+            }
+            method::HOOK_PRE_TURN => {
+                let i: PreTurnInput = serde_json::from_value(params)?;
+                plugin.pre_turn(i).await?;
+                Ok(Value::Object(Default::default()))
+            }
+            method::HOOK_POST_TURN => {
+                let i: PostTurnInput = serde_json::from_value(params)?;
+                plugin.post_turn(i).await?;
+                Ok(Value::Object(Default::default()))
             }
             method::HOOK_SESSION_START => {
                 let i: SessionStartInput = serde_json::from_value(params)?;
@@ -180,10 +189,7 @@ impl<P: Plugin> PluginDispatcher<P> {
     /// receiver of [`ToolStreamChunk`]s and a oneshot for the terminal
     /// [`ToolStreamEnd`] (or error). Transports translate these into the
     /// `tool.stream.chunk` / `tool.stream.end` notifications.
-    pub fn dispatch_stream(
-        self: &std::sync::Arc<Self>,
-        input: ToolInvokeInput,
-    ) -> StreamHandle {
+    pub fn dispatch_stream(self: &std::sync::Arc<Self>, input: ToolInvokeInput) -> StreamHandle {
         let stream_id = format!("stream-{}", _random_id());
         let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(64);
         let (end_tx, end_rx) = tokio::sync::oneshot::channel::<Result<ToolStreamEnd>>();

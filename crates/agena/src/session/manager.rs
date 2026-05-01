@@ -852,9 +852,53 @@ impl SessionManager {
                 SessionStatus::AwaitingModel => {}
             }
 
-            session = self
+            let session_id = session.id;
+            let model = format!("{}/{}", options.model.provider_id, options.model.model_id);
+            let message_count = session.messages.len();
+            let pre_turn_input = crate::plugin::PreTurnInput {
+                session_id,
+                model: model.clone(),
+                message_count,
+            };
+            state
+                .tool_executor
+                .plugin_manager()
+                .broadcast_pre_turn(pre_turn_input)
+                .await;
+
+            match self
                 .run_model_turn(session, options, state.clone(), control.clone())
-                .await?;
+                .await
+            {
+                Ok(next_session) => {
+                    session = next_session;
+                    let post_turn_input = crate::plugin::PostTurnInput {
+                        session_id: session.id,
+                        model,
+                        status: format!("{:?}", session.status()),
+                        message_count: session.messages.len(),
+                    };
+                    state
+                        .tool_executor
+                        .plugin_manager()
+                        .broadcast_post_turn(post_turn_input)
+                        .await;
+                }
+                Err(err) => {
+                    let post_turn_input = crate::plugin::PostTurnInput {
+                        session_id,
+                        model,
+                        status: format!("error: {err}"),
+                        message_count,
+                    };
+                    state
+                        .tool_executor
+                        .plugin_manager()
+                        .broadcast_post_turn(post_turn_input)
+                        .await;
+                    return Err(err);
+                }
+            }
         }
 
         Err(AppError::Internal(

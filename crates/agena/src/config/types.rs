@@ -315,6 +315,7 @@ pub struct ResolvedProviderConfig {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProviderDefinition {
     Alias(ProviderAliasConfig),
+    Ollama(OllamaProviderOptions),
     OpenAi(HttpProviderConfig<OpenAiProviderOptions>),
     OpenAiCompatible(HttpProviderConfig<OpenAiCompatibleProviderOptions>),
     SapAiCore(HttpProviderConfig<OpenAiCompatibleProviderOptions>),
@@ -332,6 +333,12 @@ pub enum ProviderDefinition {
 pub struct ProviderAliasConfig {
     pub target_provider_id: String,
     pub default_model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OllamaProviderOptions {
+    pub base_url: String,
+    pub default_model: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

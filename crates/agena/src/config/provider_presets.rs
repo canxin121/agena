@@ -47,6 +47,7 @@ struct ModelsDevModelRecord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PresetFamily {
+    Ollama,
     OpenAi,
     OpenAiCompatible,
     Anthropic,
@@ -75,6 +76,7 @@ pub(super) fn apply_provider_preset(
     let family = preset_family(&preset)?;
 
     match family {
+        PresetFamily::Ollama => apply_ollama_preset(provider_id, &preset, &mut raw, env)?,
         PresetFamily::OpenAi => apply_openai_preset(provider_id, &preset, &mut raw, env)?,
         PresetFamily::OpenAiCompatible => {
             apply_openai_compatible_preset(provider_id, &preset, &mut raw, env)?
@@ -138,17 +140,52 @@ fn builtin_presets() -> Vec<ProviderPresetRecord> {
     vec![
         ProviderPresetRecord {
             id: "ollama".to_string(),
-            npm: Some("@ai-sdk/openai-compatible".to_string()),
-            api: Some("http://localhost:11434/v1".to_string()),
+            npm: Some("ollama".to_string()),
+            api: Some("http://localhost:11434".to_string()),
             env: Vec::new(),
-            default_model: None,
+            default_model: Some("llama3.2".to_string()),
         },
         ProviderPresetRecord {
             id: "lmstudio".to_string(),
             npm: Some("@ai-sdk/openai-compatible".to_string()),
             api: Some("http://localhost:1234/v1".to_string()),
             env: Vec::new(),
-            default_model: None,
+            default_model: Some("local-model".to_string()),
+        },
+        ProviderPresetRecord {
+            id: "openrouter".to_string(),
+            npm: Some("@openrouter/ai-sdk-provider".to_string()),
+            api: Some("https://openrouter.ai/api/v1".to_string()),
+            env: vec!["OPENROUTER_API_KEY".to_string()],
+            default_model: Some("openai/gpt-4o-mini".to_string()),
+        },
+        ProviderPresetRecord {
+            id: "deepseek".to_string(),
+            npm: Some("@ai-sdk/openai-compatible".to_string()),
+            api: Some("https://api.deepseek.com/v1".to_string()),
+            env: vec!["DEEPSEEK_API_KEY".to_string()],
+            default_model: Some("deepseek-chat".to_string()),
+        },
+        ProviderPresetRecord {
+            id: "xai".to_string(),
+            npm: Some("@ai-sdk/openai-compatible".to_string()),
+            api: Some("https://api.x.ai/v1".to_string()),
+            env: vec!["XAI_API_KEY".to_string()],
+            default_model: Some("grok-4".to_string()),
+        },
+        ProviderPresetRecord {
+            id: "groq".to_string(),
+            npm: Some("@ai-sdk/groq".to_string()),
+            api: Some("https://api.groq.com/openai/v1".to_string()),
+            env: vec!["GROQ_API_KEY".to_string()],
+            default_model: Some("llama-3.3-70b-versatile".to_string()),
+        },
+        ProviderPresetRecord {
+            id: "mistral".to_string(),
+            npm: Some("@ai-sdk/mistral".to_string()),
+            api: Some("https://api.mistral.ai/v1".to_string()),
+            env: vec!["MISTRAL_API_KEY".to_string()],
+            default_model: Some("mistral-small-latest".to_string()),
         },
     ]
 }
@@ -278,6 +315,9 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn preset_family(preset: &ProviderPresetRecord) -> Result<PresetFamily, ConfigError> {
+    if preset.id == "ollama" {
+        return Ok(PresetFamily::Ollama);
+    }
     if preset.id == "github-copilot" {
         return Ok(PresetFamily::Copilot);
     }
@@ -317,6 +357,31 @@ fn preset_family(preset: &ProviderPresetRecord) -> Result<PresetFamily, ConfigEr
             message: "provider preset is missing npm metadata".to_owned(),
         }),
     }
+}
+
+fn apply_ollama_preset(
+    provider_id: &str,
+    preset: &ProviderPresetRecord,
+    raw: &mut RawProviderConfig,
+    env: &dyn ConfigEnvironment,
+) -> Result<(), ConfigError> {
+    raw.kind = Some(ProviderKind::Ollama);
+    set_default_model(raw, preset);
+
+    if raw.base_url.is_none() {
+        if let Some(host) = env.var("OLLAMA_HOST").and_then(normalize_text) {
+            let normalized = if host.starts_with("http://") || host.starts_with("https://") {
+                host
+            } else {
+                format!("http://{host}")
+            };
+            raw.base_url = Some(normalized.trim_end_matches('/').to_string());
+        } else {
+            set_base_url(raw, preset, provider_id)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn apply_openai_preset(

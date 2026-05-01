@@ -14,6 +14,7 @@ mod gemini;
 mod gitlab;
 mod google_vertex;
 mod model_metadata;
+mod ollama;
 mod openai;
 mod openai_compatible;
 mod opencode;
@@ -49,6 +50,7 @@ pub use gemini::GeminiProvider;
 pub use gitlab::{GitlabProvider, GitlabProviderConfig};
 pub use google_vertex::GoogleVertexProvider;
 pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
+pub use ollama::OllamaProvider;
 pub use openai::{OpenAiApiMode, OpenAiProvider, OpenAiStreamMode};
 pub use openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleStreamMode};
 pub use opencode::OpencodeProvider;
@@ -59,10 +61,8 @@ pub use runtime::{
     ProviderStreamReplayConfig,
 };
 pub(crate) use wire_message::{
-    PRUNED_TOOL_RESULT_PLACEHOLDER,
-    WirePart as ProjectedSessionPart,
-    project as project_session_parts,
-    project_text_lossy as project_session_text_lossy,
+    PRUNED_TOOL_RESULT_PLACEHOLDER, WirePart as ProjectedSessionPart,
+    project as project_session_parts, project_text_lossy as project_session_text_lossy,
 };
 pub type ProviderModel = Model;
 pub use types::{

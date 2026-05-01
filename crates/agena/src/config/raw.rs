@@ -832,6 +832,8 @@ pub(crate) enum ProviderKind {
     Preset,
     #[serde(rename = "alias")]
     Alias,
+    #[serde(rename = "ollama")]
+    Ollama,
     #[serde(rename = "openai", alias = "open_ai")]
     OpenAi,
     #[serde(rename = "openai_compatible", alias = "open_ai_compatible")]
@@ -863,6 +865,7 @@ impl std::str::FromStr for ProviderKind {
         match value.trim() {
             "preset" => Ok(Self::Preset),
             "alias" => Ok(Self::Alias),
+            "ollama" => Ok(Self::Ollama),
             "openai" => Ok(Self::OpenAi),
             "openai_compatible" => Ok(Self::OpenAiCompatible),
             "sap_ai_core" => Ok(Self::SapAiCore),
@@ -991,6 +994,16 @@ impl RawProviderConfig {
                     self.target_provider_id,
                 )?,
                 default_model: normalize_optional(self.default_model),
+            }),
+            ProviderKind::Ollama => ProviderDefinition::Ollama(super::OllamaProviderOptions {
+                base_url: self
+                    .base_url
+                    .unwrap_or_else(|| "http://localhost:11434".to_owned()),
+                default_model: required_string(
+                    provider_id.as_str(),
+                    "default_model",
+                    self.default_model,
+                )?,
             }),
             ProviderKind::OpenAi => ProviderDefinition::OpenAi(super::HttpProviderConfig {
                 base_url: required_string(provider_id.as_str(), "base_url", self.base_url)?,

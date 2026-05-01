@@ -609,6 +609,8 @@
 
 ## 阶段 16：Provider preset 与 native provider
 
+状态：已完成（新增常用 provider 内置 preset 默认值；`ollama` preset 改为 native provider；新增 Ollama `/api/tags` 模型列表、`/api/chat` 非流式与 JSONL 流式支持；OpenAI Realtime / WebSocket 能力已在现有 OpenAI/OpenAI-compatible provider 中保留验证）。
+
 ### 16.1 常用 openai-compatible preset
 
 - 目标：减少用户配置成本。

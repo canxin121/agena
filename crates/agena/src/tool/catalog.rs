@@ -3,8 +3,9 @@ use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, CronCreateToolInput,
     CronDeleteToolInput, CronListToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
     ExitPlanModeToolInput, ExitWorktreeToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
-    ReadToolInput, ScheduleWakeupToolInput, SkillRunToolInput, TaskToolInput, TodoWriteToolInput,
-    ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput, WebSearchToolInput,
+    NotebookEditToolInput, PowerShellToolInput, ReadToolInput, ScheduleWakeupToolInput,
+    SkillRunToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput,
+    WebFetchToolInput, WebSearchToolInput,
 };
 
 use super::{ToolBehavior, ToolDefinition};
@@ -285,6 +286,20 @@ impl ToolCatalog {
             )
             .with_search_terms(["lsp", "diagnostics", "errors", "warnings", "lint"])
             .with_deferred_loading(),
+            ToolDefinition::builtin::<NotebookEditToolInput>(
+                "notebook_edit",
+                "Edit a Jupyter .ipynb cell by replacing, inserting, or deleting a cell.",
+                ToolBehavior::Mutating,
+            )
+            .with_search_terms(["notebook", "jupyter", "ipynb", "cell edit"])
+            .with_deferred_loading(),
+            ToolDefinition::builtin::<PowerShellToolInput>(
+                "powershell",
+                "Execute a Windows PowerShell command inside the configured workspace.",
+                ToolBehavior::Mutating,
+            )
+            .with_search_terms(["windows", "powershell", "pwsh", "command"])
+            .with_deferred_loading(),
         ];
         definitions.retain(|definition| self.is_behavior_enabled(definition.behavior));
         definitions
@@ -316,6 +331,10 @@ impl ToolCatalog {
                         | "enter_plan_mode"
                         | "exit_plan_mode"
                         | "skill_run"
+                        | "lsp_definition"
+                        | "lsp_references"
+                        | "lsp_hover"
+                        | "lsp_diagnostics"
                 )
             }
             ModelToolProfile::NoTask => tool_name != "task",
@@ -352,12 +371,26 @@ mod tests {
         let catalog = ToolCatalog::for_model(None);
         let definitions = catalog.builtin_definitions();
 
-        for tool_name in ["bash", "apply_patch", "task"] {
+        for tool_name in ["bash", "apply_patch", "task", "notebook_edit", "powershell"] {
             let definition = definitions
                 .iter()
                 .find(|tool| tool.name == tool_name)
                 .unwrap_or_else(|| panic!("missing builtin definition for {tool_name}"));
             assert!(definition.is_deferred(), "{tool_name} should be deferred");
         }
+    }
+
+    #[test]
+    fn readonly_profile_keeps_lsp_tools_enabled() {
+        let catalog = ToolCatalog::for_model(Some("readonly-model"));
+        let definitions = catalog.builtin_definitions();
+
+        assert!(
+            definitions
+                .iter()
+                .any(|tool| tool.name == "lsp_diagnostics")
+        );
+        assert!(!definitions.iter().any(|tool| tool.name == "notebook_edit"));
+        assert!(!definitions.iter().any(|tool| tool.name == "powershell"));
     }
 }

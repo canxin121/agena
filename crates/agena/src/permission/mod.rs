@@ -254,8 +254,8 @@ impl ToolPermissionPolicy {
     }
 
     /// In `Ask` mode, promote any `Allow` decision for a sensitive builtin
-    /// (bash / apply_patch) to `Ask`. Deny stays Deny; explicit Ask stays
-    /// Ask. Other modes pass through unchanged.
+    /// to `Ask`. Deny stays Deny; explicit Ask stays Ask. Other modes pass
+    /// through unchanged.
     fn apply_execution_mode(
         &self,
         input: &BuiltinToolInput,
@@ -266,7 +266,10 @@ impl ToolPermissionPolicy {
         }
         let sensitive = matches!(
             input,
-            BuiltinToolInput::Bash(_) | BuiltinToolInput::ApplyPatch(_)
+            BuiltinToolInput::Bash(_)
+                | BuiltinToolInput::ApplyPatch(_)
+                | BuiltinToolInput::NotebookEdit(_)
+                | BuiltinToolInput::PowerShell(_)
         );
         if !sensitive {
             return decision;
@@ -311,6 +314,8 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
         BuiltinToolInput::LspReferences(_) => "lsp_references",
         BuiltinToolInput::LspHover(_) => "lsp_hover",
         BuiltinToolInput::LspDiagnostics(_) => "lsp_diagnostics",
+        BuiltinToolInput::NotebookEdit(_) => "notebook_edit",
+        BuiltinToolInput::PowerShell(_) => "powershell",
     }
 }
 

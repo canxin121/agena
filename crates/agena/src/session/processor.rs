@@ -13,9 +13,9 @@ use crate::event::{
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, ExecutionStatus,
     GlobToolInput, GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource,
-    MessageStatus, PartContent, ReadToolInput, ReasoningPart, StructuredObject, TaskToolInput,
-    TimeRange, TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolSearchToolInput,
-    ViewFileToolInput,
+    MessageStatus, NotebookEditMode, NotebookEditToolInput, PartContent, PowerShellToolInput,
+    ReadToolInput, ReasoningPart, StructuredObject, TaskToolInput, TimeRange, TodoWriteToolInput,
+    ToolExecutionPart, ToolInvocation, ToolSearchToolInput, ViewFileToolInput,
 };
 use crate::model::ModelRef;
 use crate::provider::{
@@ -1177,6 +1177,19 @@ fn placeholder_builtin_tool_input(name: &str) -> BuiltinToolInput {
                 file_path: String::new(),
             })
         }
+        "notebook_edit" => BuiltinToolInput::NotebookEdit(NotebookEditToolInput {
+            notebook_path: String::new(),
+            cell_number: Some(0),
+            new_source: String::new(),
+            edit_mode: NotebookEditMode::Replace,
+            cell_type: None,
+        }),
+        "powershell" => BuiltinToolInput::PowerShell(PowerShellToolInput {
+            command: String::new(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+        }),
         other => BuiltinToolInput::Task(TaskToolInput {
             description: String::new(),
             prompt: format!("placeholder for unsupported builtin {other}"),
@@ -1286,6 +1299,12 @@ pub(crate) fn parse_tool_invocation(
         "lsp_diagnostics" => BuiltinToolInput::LspDiagnostics(parse_input::<
             crate::message::LspDiagnosticsToolInput,
         >(arguments_json)?),
+        "notebook_edit" => {
+            BuiltinToolInput::NotebookEdit(parse_input::<NotebookEditToolInput>(arguments_json)?)
+        }
+        "powershell" => {
+            BuiltinToolInput::PowerShell(parse_input::<PowerShellToolInput>(arguments_json)?)
+        }
         other => {
             return Err(AppError::Provider(format!(
                 "unsupported builtin tool call from model: {other}"

@@ -11,8 +11,10 @@ mod lsp;
 mod mcp;
 mod monitor;
 mod monitor_tool;
+mod notebook_edit;
 mod orchestrator;
 mod plan;
+mod powershell;
 mod read;
 mod result;
 mod shell;
@@ -313,6 +315,10 @@ impl ToolExecutor {
                     | "web_search"
                     | "enter_plan_mode"
                     | "exit_plan_mode"
+                    | "lsp_definition"
+                    | "lsp_references"
+                    | "lsp_hover"
+                    | "lsp_diagnostics"
             );
             if allowed {
                 return Ok(());
@@ -737,6 +743,18 @@ impl ToolExecutor {
             BuiltinToolInput::LspDiagnostics(payload) => {
                 let target = self.resolve_target_path(&payload.file_path);
                 self.push_path_checks(&mut checks, AccessKind::Read, &target);
+            }
+            BuiltinToolInput::NotebookEdit(payload) => {
+                let target = self.resolve_target_path(&payload.notebook_path);
+                self.push_path_checks(&mut checks, AccessKind::Write, &target);
+            }
+            BuiltinToolInput::PowerShell(payload) => {
+                let cwd = payload
+                    .workdir
+                    .as_deref()
+                    .map(|workdir| self.resolve_target_path(workdir))
+                    .unwrap_or_else(|| self.workspace_root().to_path_buf());
+                self.push_path_checks(&mut checks, AccessKind::Read, &cwd);
             }
         }
 
@@ -1297,6 +1315,24 @@ fn parse_builtin_input(tool_name: &str, input_json: &str) -> Result<BuiltinToolI
         "tool_search" => Ok(BuiltinToolInput::ToolSearch(parse(input_json)?)),
         "todo_write" => Ok(BuiltinToolInput::TodoWrite(parse(input_json)?)),
         "ask_user" | "request_user_input" => Ok(BuiltinToolInput::AskUser(parse(input_json)?)),
+        "monitor" => Ok(BuiltinToolInput::Monitor(parse(input_json)?)),
+        "web_fetch" => Ok(BuiltinToolInput::WebFetch(parse(input_json)?)),
+        "web_search" => Ok(BuiltinToolInput::WebSearch(parse(input_json)?)),
+        "enter_plan_mode" => Ok(BuiltinToolInput::EnterPlanMode(parse(input_json)?)),
+        "exit_plan_mode" => Ok(BuiltinToolInput::ExitPlanMode(parse(input_json)?)),
+        "skill_run" => Ok(BuiltinToolInput::SkillRun(parse(input_json)?)),
+        "enter_worktree" => Ok(BuiltinToolInput::EnterWorktree(parse(input_json)?)),
+        "exit_worktree" => Ok(BuiltinToolInput::ExitWorktree(parse(input_json)?)),
+        "cron_create" => Ok(BuiltinToolInput::CronCreate(parse(input_json)?)),
+        "cron_list" => Ok(BuiltinToolInput::CronList(parse(input_json)?)),
+        "cron_delete" => Ok(BuiltinToolInput::CronDelete(parse(input_json)?)),
+        "schedule_wakeup" => Ok(BuiltinToolInput::ScheduleWakeup(parse(input_json)?)),
+        "lsp_definition" => Ok(BuiltinToolInput::LspDefinition(parse(input_json)?)),
+        "lsp_references" => Ok(BuiltinToolInput::LspReferences(parse(input_json)?)),
+        "lsp_hover" => Ok(BuiltinToolInput::LspHover(parse(input_json)?)),
+        "lsp_diagnostics" => Ok(BuiltinToolInput::LspDiagnostics(parse(input_json)?)),
+        "notebook_edit" => Ok(BuiltinToolInput::NotebookEdit(parse(input_json)?)),
+        "powershell" => Ok(BuiltinToolInput::PowerShell(parse(input_json)?)),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
 }

@@ -2,8 +2,9 @@ use crate::message::{BuiltinToolInput, BuiltinToolOutput, FileChangeEntry, FileC
 
 use super::{
     BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
-    apply_patch, ask_user, bash, cron, glob, grep, lsp, monitor_tool, plan, read, skill, task,
-    todo_write, tool_search, view_file, web_fetch, web_search, worktree,
+    apply_patch, ask_user, bash, cron, glob, grep, lsp, monitor_tool, notebook_edit, plan,
+    powershell, read, skill, task, todo_write, tool_search, view_file, web_fetch, web_search,
+    worktree,
 };
 
 fn apply_patch_output_text(result: &apply_patch::ApplyPatchExecution) -> String {
@@ -92,5 +93,7 @@ pub(super) fn execute_builtin(
         BuiltinToolInput::LspReferences(payload) => lsp::execute_references(executor, payload),
         BuiltinToolInput::LspHover(payload) => lsp::execute_hover(executor, payload),
         BuiltinToolInput::LspDiagnostics(payload) => lsp::execute_diagnostics(executor, payload),
+        BuiltinToolInput::NotebookEdit(payload) => notebook_edit::execute(executor, payload),
+        BuiltinToolInput::PowerShell(payload) => powershell::execute(executor, payload, context),
     }
 }

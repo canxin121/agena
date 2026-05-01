@@ -7900,6 +7900,10 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
             BuiltinToolInput::LspDiagnostics(input) => {
                 format!("lsp_diagnostics {}", input.file_path)
             }
+            BuiltinToolInput::NotebookEdit(input) => {
+                format!("notebook_edit {}", input.notebook_path)
+            }
+            BuiltinToolInput::PowerShell(input) => format!("powershell {}", input.command),
         };
     }
     match invocation {

@@ -486,7 +486,7 @@ kind = "preset"
 }
 
 #[test]
-fn preset_ollama_resolves_to_localhost_with_local_token() {
+fn preset_ollama_resolves_to_native_localhost_provider() {
     let presets = write_temp_presets("[]");
     let path = write_temp_config(
         r#"
@@ -517,13 +517,11 @@ default_model = "qwen2.5-coder:7b"
         .expect("ollama provider should exist");
 
     match &provider.definition {
-        ProviderDefinition::OpenAiCompatible(config) => {
-            assert_eq!(config.base_url, "http://localhost:11434/v1");
+        ProviderDefinition::Ollama(config) => {
+            assert_eq!(config.base_url, "http://localhost:11434");
             assert_eq!(config.default_model, "qwen2.5-coder:7b");
-            assert_eq!(config.api_key.as_deref(), Some("local"));
-            assert!(config.api_key_env.is_none());
         }
-        other => panic!("expected openai-compatible preset, got {other:?}"),
+        other => panic!("expected native ollama preset, got {other:?}"),
     }
 }
 
@@ -562,10 +560,63 @@ default_model = "llama3"
         .expect("ollama provider should exist");
 
     match &provider.definition {
-        ProviderDefinition::OpenAiCompatible(config) => {
-            assert_eq!(config.base_url, "http://192.168.1.10:11434/v1");
+        ProviderDefinition::Ollama(config) => {
+            assert_eq!(config.base_url, "http://192.168.1.10:11434");
         }
-        other => panic!("expected openai-compatible preset, got {other:?}"),
+        other => panic!("expected native ollama preset, got {other:?}"),
+    }
+}
+
+#[test]
+fn builtin_common_presets_resolve_without_models_dev_payload() {
+    let presets = write_temp_presets("[]");
+    let path = write_temp_config(
+        r#"
+[providers.lmstudio]
+kind = "preset"
+
+[providers.deepseek]
+kind = "preset"
+
+[providers.xai]
+kind = "preset"
+
+[providers.groq]
+kind = "preset"
+
+[providers.mistral]
+kind = "preset"
+"#,
+    );
+
+    let env = TestEnvironment {
+        vars: BTreeMap::from([(
+            "AGENA_PROVIDER_PRESETS_PATH".to_owned(),
+            presets.display().to_string(),
+        )]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("builtin presets should load");
+
+    for provider_id in ["lmstudio", "deepseek", "xai", "groq", "mistral"] {
+        match &resolution
+            .config
+            .providers
+            .get(provider_id)
+            .unwrap_or_else(|| panic!("{provider_id} provider should exist"))
+            .definition
+        {
+            ProviderDefinition::OpenAiCompatible(config) => {
+                assert!(!config.base_url.is_empty());
+                assert!(!config.default_model.is_empty());
+            }
+            other => panic!("expected openai-compatible preset for {provider_id}, got {other:?}"),
+        }
     }
 }
 

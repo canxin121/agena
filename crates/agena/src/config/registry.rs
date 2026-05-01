@@ -10,7 +10,7 @@ use crate::{
         CapabilityOverrideProvider, CloudflareAiGatewayProvider, CodexProvider, CopilotProvider,
         CopilotProviderOptions as RuntimeCopilotProviderOptions, GeminiProvider, GitlabProvider,
         GitlabProviderConfig, GoogleVertexProvider, ManagedCredential, ModelProvider,
-        NamedProvider, OpenAiCompatibleProvider, OpenAiProvider, OpencodeProvider,
+        NamedProvider, OllamaProvider, OpenAiCompatibleProvider, OpenAiProvider, OpencodeProvider,
         ProviderAliasRegistration, ProviderRegistry,
         auth::{AuthData, AuthStore},
         parse_sap_ai_core_service_key,
@@ -125,6 +125,15 @@ fn build_provider(
         ProviderDefinition::Alias(_) => Err(ConfigError::Validation(format!(
             "provider `{provider_id}` alias should be registered in alias phase"
         ))),
+        ProviderDefinition::Ollama(config) => Ok(register_provider(
+            provider_id,
+            OllamaProvider::new(
+                provider_id,
+                client,
+                config.base_url.clone(),
+                config.default_model.clone(),
+            ),
+        )),
         ProviderDefinition::OpenAi(config) => Ok(register_provider(
             provider_id,
             OpenAiProvider::new_managed(

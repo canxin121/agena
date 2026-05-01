@@ -148,9 +148,29 @@ stream_mode = "sse"
 # standard = 10000
 # deep     = 30000
 
-# models.dev preset examples:
+# Built-in / models.dev preset examples:
+#
+# [providers.ollama]
+# kind = "preset"
+# default_model = "qwen3:14b"
+#
+# [providers.lmstudio]
+# kind = "preset"
+# default_model = "local-model"
 #
 # [providers.openrouter]
+# kind = "preset"
+#
+# [providers.deepseek]
+# kind = "preset"
+#
+# [providers.xai]
+# kind = "preset"
+#
+# [providers.groq]
+# kind = "preset"
+#
+# [providers.mistral]
 # kind = "preset"
 #
 # [providers."github-copilot"]
@@ -168,13 +188,10 @@ auth_provider_id = "openai"
 kind = "copilot"
 auth_provider_id = "github-copilot"
 
-[providers."local-openai"]
-kind = "openai_compatible"
-base_url = "http://localhost:11434/v1"
+[providers.ollama]
+kind = "ollama"
+base_url = "http://localhost:11434"
 default_model = "qwen3:14b"
-api_key = "dummy"
-auth_header = "authorization"
-auth_scheme = "Bearer"
 
 [providers."prod-openai"]
 kind = "alias"
@@ -211,5 +228,5 @@ default_write = "ask"
 default_model = "gpt-5"
 api_mode = "responses"
 
-[modes.prod.providers."local-openai"]
+[modes.prod.providers.ollama]
 enabled = false

@@ -215,7 +215,10 @@ impl MonitorService for MonitorRegistry {
                 "monitor command must not be empty".into(),
             ));
         }
-        let timeout_ms = params.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS).min(MAX_TIMEOUT_MS);
+        let timeout_ms = params
+            .timeout_ms
+            .unwrap_or(DEFAULT_TIMEOUT_MS)
+            .min(MAX_TIMEOUT_MS);
         if !params.persistent && timeout_ms == 0 {
             return Err(MonitorError::Invalid(
                 "non-persistent monitors must have timeout_ms > 0".into(),
@@ -307,9 +310,8 @@ impl MonitorService for MonitorRegistry {
 
         if wait_ms == 0 {
             // No events and no wait requested: still return a valid (possibly empty) snapshot.
-            return Ok(collect_events(&state, params.since_seq, limit).unwrap_or_else(|| {
-                empty_read(&state, params.since_seq)
-            }));
+            return Ok(collect_events(&state, params.since_seq, limit)
+                .unwrap_or_else(|| empty_read(&state, params.since_seq)));
         }
 
         let handle = self.require_handle()?;
@@ -391,11 +393,7 @@ fn empty_read(state: &MonitorState, since_seq: u64) -> MonitorRead {
     }
 }
 
-fn collect_events(
-    state: &MonitorState,
-    since_seq: u64,
-    limit: usize,
-) -> Option<MonitorRead> {
+fn collect_events(state: &MonitorState, since_seq: u64, limit: usize) -> Option<MonitorRead> {
     let inner = state.inner.lock().unwrap();
     let status = inner.status;
     let exit_code = inner.exit_code;
@@ -457,7 +455,11 @@ async fn run_monitor(
     };
 
     let stdout = child.stdout.take();
-    let stderr = if capture_stderr { child.stderr.take() } else { None };
+    let stderr = if capture_stderr {
+        child.stderr.take()
+    } else {
+        None
+    };
 
     let stdout_state = Arc::clone(&state);
     let stdout_include = include.clone();
@@ -750,7 +752,10 @@ mod tests {
         .expect("read should succeed");
 
         assert_eq!(
-            read.events.iter().map(|e| e.line.as_str()).collect::<Vec<_>>(),
+            read.events
+                .iter()
+                .map(|e| e.line.as_str())
+                .collect::<Vec<_>>(),
             vec!["hello"],
         );
         assert_eq!(read.last_seq, 1);

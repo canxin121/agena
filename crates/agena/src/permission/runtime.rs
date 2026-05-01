@@ -11,8 +11,8 @@ use super::request::{
 use super::store::{PermissionRuleStore, PermissionStoreError};
 use super::{PermissionDecision, PermissionMode};
 use crate::plugin::{
-    PermissionAskInput as PluginPermissionAskInput,
-    PermissionDecision as PluginPermissionDecision, PluginHost,
+    PermissionAskInput as PluginPermissionAskInput, PermissionDecision as PluginPermissionDecision,
+    PluginHost,
 };
 
 #[derive(Debug, Error)]
@@ -201,13 +201,29 @@ mod tests {
     }
 
     impl PermissionRuleStore for TestPermissionStore {
-        fn lookup(&self, action: &PermissionAction) -> Result<Option<PermissionMode>, PermissionStoreError> {
-            let guard = self.inner.read().map_err(|_| PermissionStoreError::LockPoisoned)?;
-            Ok(guard.iter().rev().find_map(|(a, m)| (a == action).then_some(*m)))
+        fn lookup(
+            &self,
+            action: &PermissionAction,
+        ) -> Result<Option<PermissionMode>, PermissionStoreError> {
+            let guard = self
+                .inner
+                .read()
+                .map_err(|_| PermissionStoreError::LockPoisoned)?;
+            Ok(guard
+                .iter()
+                .rev()
+                .find_map(|(a, m)| (a == action).then_some(*m)))
         }
 
-        fn save(&self, action: PermissionAction, mode: PermissionMode) -> Result<(), PermissionStoreError> {
-            self.inner.write().map_err(|_| PermissionStoreError::LockPoisoned)?.push((action, mode));
+        fn save(
+            &self,
+            action: PermissionAction,
+            mode: PermissionMode,
+        ) -> Result<(), PermissionStoreError> {
+            self.inner
+                .write()
+                .map_err(|_| PermissionStoreError::LockPoisoned)?
+                .push((action, mode));
             Ok(())
         }
     }

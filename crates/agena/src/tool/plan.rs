@@ -24,9 +24,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{
-    BuiltinToolOutput, EnterPlanModeToolInput, ExitPlanModeToolInput,
-};
+use crate::message::{BuiltinToolOutput, EnterPlanModeToolInput, ExitPlanModeToolInput};
 use crate::session::PlanState;
 
 use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
@@ -147,8 +145,8 @@ fn generate_slug(session_id: i64) -> String {
     // word so paths are easy to read.
     let now = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let words = [
-        "alpaca", "blossom", "comet", "dahlia", "ember", "frost", "glade",
-        "harbor", "indigo", "juniper",
+        "alpaca", "blossom", "comet", "dahlia", "ember", "frost", "glade", "harbor", "indigo",
+        "juniper",
     ];
     let pick = words[(session_id.unsigned_abs() as usize) % words.len()];
     format!("{now}-{pick}")

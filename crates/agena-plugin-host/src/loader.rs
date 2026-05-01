@@ -13,8 +13,7 @@ use crate::transport::{
 };
 
 pub struct StaticRegistration {
-    pub builder:
-        Box<dyn FnOnce() -> Arc<dyn PluginTransport> + Send + Sync>,
+    pub builder: Box<dyn FnOnce() -> Arc<dyn PluginTransport> + Send + Sync>,
 }
 
 pub async fn load_entry(
@@ -29,12 +28,13 @@ pub async fn load_entry(
 ) -> Result<LoadedPlugin, HostError> {
     let transport: Arc<dyn PluginTransport> = match entry {
         PluginEntry::Static { .. } => {
-            let registration = static_registry.remove(plugin_id).ok_or_else(|| {
-                HostError::Load {
-                    plugin: plugin_id.to_string(),
-                    message: format!("no static plugin registered with id `{plugin_id}`"),
-                }
-            })?;
+            let registration =
+                static_registry
+                    .remove(plugin_id)
+                    .ok_or_else(|| HostError::Load {
+                        plugin: plugin_id.to_string(),
+                        message: format!("no static plugin registered with id `{plugin_id}`"),
+                    })?;
             (registration.builder)()
         }
         PluginEntry::Cdylib {
@@ -57,9 +57,11 @@ pub async fn load_entry(
                     })?;
                 }
                 if let Some(sig) = signature {
-                    verify_signature(&resolved, sig, trusted_keys).map_err(|e| HostError::Load {
-                        plugin: plugin_id.to_string(),
-                        message: e,
+                    verify_signature(&resolved, sig, trusted_keys).map_err(|e| {
+                        HostError::Load {
+                            plugin: plugin_id.to_string(),
+                            message: e,
+                        }
                     })?;
                 }
             }
@@ -68,7 +70,9 @@ pub async fn load_entry(
                 if sha256.is_some() || signature.is_some() {
                     return Err(HostError::Load {
                         plugin: plugin_id.to_string(),
-                        message: "plugin signing fields are set but the `signing` feature is disabled".into(),
+                        message:
+                            "plugin signing fields are set but the `signing` feature is disabled"
+                                .into(),
                     });
                 }
                 let _ = (sha256, signature, trusted_keys);
@@ -192,17 +196,26 @@ pub async fn load_entry(
             message: format!("{e}"),
         })?;
 
-    let outcome: InitOutcome = serde_json::from_value(outcome_value).map_err(|e| HostError::Init {
-        plugin: plugin_id.to_string(),
-        message: e.to_string(),
-    })?;
+    let outcome: InitOutcome =
+        serde_json::from_value(outcome_value).map_err(|e| HostError::Init {
+            plugin: plugin_id.to_string(),
+            message: e.to_string(),
+        })?;
 
-    Ok(LoadedPlugin::new(plugin_id.to_string(), entry.kind_str(), transport, outcome.manifest))
+    Ok(LoadedPlugin::new(
+        plugin_id.to_string(),
+        entry.kind_str(),
+        transport,
+        outcome.manifest,
+    ))
 }
 
 pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(), TransportError> {
     let _ = transport
-        .dispatch(method::META_SHUTDOWN, serde_json::Value::Object(Default::default()))
+        .dispatch(
+            method::META_SHUTDOWN,
+            serde_json::Value::Object(Default::default()),
+        )
         .await;
     transport.close().await
 }
@@ -250,14 +263,17 @@ pub fn verify_signature(
         .map_err(|_| format!("trusted key `{}` must be 32 bytes", sig.key_id))?;
     let verifier = VerifyingKey::from_bytes(&key_array)
         .map_err(|e| format!("invalid ed25519 public key `{}`: {e}", sig.key_id))?;
-    let sig_bytes = hex::decode(&sig.signature)
-        .map_err(|e| format!("signature is not valid hex: {e}"))?;
+    let sig_bytes =
+        hex::decode(&sig.signature).map_err(|e| format!("signature is not valid hex: {e}"))?;
     let sig_array: [u8; 64] = sig_bytes
         .try_into()
         .map_err(|_| "signature must be 64 bytes".to_string())?;
     let signature = Signature::from_bytes(&sig_array);
     let bytes = std::fs::read(path).map_err(|e| format!("read `{}`: {e}", path.display()))?;
-    verifier
-        .verify(&bytes, &signature)
-        .map_err(|e| format!("signature verification failed for `{}`: {e}", path.display()))
+    verifier.verify(&bytes, &signature).map_err(|e| {
+        format!(
+            "signature verification failed for `{}`: {e}",
+            path.display()
+        )
+    })
 }

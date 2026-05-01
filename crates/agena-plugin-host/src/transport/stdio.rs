@@ -29,11 +29,7 @@ pub type HostHandler = Arc<
             String,
             serde_json::Value,
         ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<serde_json::Value, PluginError>,
-                    > + Send,
-            >,
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, PluginError>> + Send>,
         > + Send
         + Sync,
 >;
@@ -126,9 +122,8 @@ impl Inner {
     fn spawn_child(
         self: &Arc<Self>,
         is_restart: bool,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send + '_>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send + '_>>
+    {
         let this = Arc::clone(self);
         Box::pin(async move { this.spawn_child_inner(is_restart).await })
     }
@@ -227,11 +222,7 @@ impl Inner {
         }
         // Drop current handles + fail every in-flight request.
         *self.handles.lock().await = None;
-        let pending: Vec<_> = self
-            .pending
-            .iter()
-            .map(|e| e.key().clone())
-            .collect();
+        let pending: Vec<_> = self.pending.iter().map(|e| e.key().clone()).collect();
         for id in pending {
             if let Some((_, slot)) = self.pending.remove(&id) {
                 let _ = slot.send(Response {
@@ -331,7 +322,9 @@ impl Inner {
 }
 
 fn exp_backoff(min: Duration, max: Duration, attempt: u32) -> Duration {
-    let factor = 1u64.checked_shl(attempt.saturating_sub(1).min(10)).unwrap_or(1);
+    let factor = 1u64
+        .checked_shl(attempt.saturating_sub(1).min(10))
+        .unwrap_or(1);
     let scaled = min.checked_mul(factor as u32).unwrap_or(max);
     scaled.min(max)
 }
@@ -407,11 +400,7 @@ impl PluginTransport for StdioTransport {
         }
     }
 
-    async fn notify(
-        &self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> Result<(), TransportError> {
+    async fn notify(&self, method: &str, params: serde_json::Value) -> Result<(), TransportError> {
         let n = Notification {
             jsonrpc: JsonRpcVersion,
             method: method.to_string(),

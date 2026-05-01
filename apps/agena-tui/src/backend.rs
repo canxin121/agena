@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
 use agena::{
     event::{DomainEvent, EventKind},
     message::{AttachmentItem, AttachmentKind, AttachmentSource, PartContent, UserInputReply},
@@ -17,7 +18,6 @@ use agena::{
         SessionUserInputReplyRequest, SessionUserTurnRequest,
     },
 };
-use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
 use agena_http_api::{
     ApiError, ApiService, MessageListQuery, MessageResource, PaginatedResponse, PartLoadMode,
     ProviderSummaryResource, SessionCreateRequest, SessionEventListQuery, SessionExecutionResource,
@@ -238,9 +238,10 @@ impl Backend {
         let mut cursor = None;
         let mut messages = Vec::new();
 
-        let manager = self.runtime.session_manager().ok_or_else(|| {
-            anyhow::anyhow!("session runtime is not available")
-        })?;
+        let manager = self
+            .runtime
+            .session_manager()
+            .ok_or_else(|| anyhow::anyhow!("session runtime is not available"))?;
         loop {
             let page = self
                 .api
@@ -290,9 +291,10 @@ impl Backend {
         cursor: Option<String>,
         limit: u64,
     ) -> Result<PaginatedResponse<MessageResource>> {
-        let manager = self.runtime.session_manager().ok_or_else(|| {
-            anyhow::anyhow!("session runtime is not available")
-        })?;
+        let manager = self
+            .runtime
+            .session_manager()
+            .ok_or_else(|| anyhow::anyhow!("session runtime is not available"))?;
         self.api
             .list_messages(
                 manager.as_ref(),
@@ -396,9 +398,7 @@ impl Backend {
                         | EventKind::MessageRevised(_)
                         | EventKind::RunFailed(_)
                 );
-                let live = LiveEvent {
-                    triggers_refresh,
-                };
+                let live = LiveEvent { triggers_refresh };
                 if tx.send(live).is_err() {
                     break;
                 }
@@ -663,9 +663,10 @@ impl Backend {
         request: SessionRunOptionsRequest,
     ) -> Result<agena::session::SessionRunOptions> {
         let snapshot = self.runtime.current_snapshot();
-        let manager = self.runtime.session_manager().ok_or_else(|| {
-            anyhow::anyhow!("session runtime is not available")
-        })?;
+        let manager = self
+            .runtime
+            .session_manager()
+            .ok_or_else(|| anyhow::anyhow!("session runtime is not available"))?;
         self.api
             .resolve_run_options(
                 snapshot.provider_registry().as_ref(),

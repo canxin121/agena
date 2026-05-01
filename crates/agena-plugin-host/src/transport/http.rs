@@ -110,8 +110,7 @@ impl PluginTransport for HttpTransport {
 
 // minimal base64 (RFC 4648) to avoid pulling another dep
 fn base64_encode(data: &[u8]) -> String {
-    const ALPH: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPH: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     let mut i = 0;
     while i + 3 <= data.len() {

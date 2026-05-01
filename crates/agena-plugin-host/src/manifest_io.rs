@@ -7,9 +7,8 @@ use crate::error::HostError;
 use crate::sdk::PluginManifest;
 
 pub fn read_manifest_toml(path: &Path) -> Result<PluginManifest, HostError> {
-    let raw = std::fs::read_to_string(path).map_err(|e| {
-        HostError::Config(format!("read manifest `{}`: {e}", path.display()))
-    })?;
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| HostError::Config(format!("read manifest `{}`: {e}", path.display())))?;
     let manifest: PluginManifest = toml::from_str(&raw)
         .map_err(|e| HostError::Config(format!("parse manifest `{}`: {e}", path.display())))?;
     Ok(manifest)

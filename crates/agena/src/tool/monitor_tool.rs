@@ -4,13 +4,11 @@
 use std::collections::HashMap;
 
 use crate::message::{
-    BuiltinToolOutput, MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary,
-    MonitorToolInput,
+    BuiltinToolOutput, MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput,
 };
 
 use super::monitor::{
-    MonitorError, MonitorRead, MonitorStart, MonitorStopOutcome, ReadParams,
-    StartParams,
+    MonitorError, MonitorRead, MonitorStart, MonitorStopOutcome, ReadParams, StartParams,
 };
 use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
 
@@ -73,7 +71,9 @@ pub(super) fn execute(
             Ok(render_read(read))
         }
         MonitorToolInput::Stop { monitor_id } => {
-            let stopped = registry.stop(monitor_id.as_str()).map_err(into_tool_error)?;
+            let stopped = registry
+                .stop(monitor_id.as_str())
+                .map_err(into_tool_error)?;
             Ok(render_stop(stopped))
         }
     }

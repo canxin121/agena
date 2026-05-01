@@ -116,7 +116,11 @@ impl ComposerQueue {
     }
 
     pub fn first_preview(&self, max_chars: usize) -> Option<String> {
-        let head = self.now.front().or_else(|| self.next.front()).or_else(|| self.later.front())?;
+        let head = self
+            .now
+            .front()
+            .or_else(|| self.next.front())
+            .or_else(|| self.later.front())?;
         let preview = head.draft.text.lines().next().unwrap_or("").trim();
         let truncated: String = preview.chars().take(max_chars).collect();
         if preview.chars().count() > max_chars {
@@ -154,9 +158,21 @@ mod tests {
     #[test]
     fn priority_ordering() {
         let mut q = ComposerQueue::new();
-        q.push(QueuedMessage { draft: draft("later"), priority: QueuePriority::Later, editable: false });
-        q.push(QueuedMessage { draft: draft("next"), priority: QueuePriority::Next, editable: true });
-        q.push(QueuedMessage { draft: draft("now"), priority: QueuePriority::Now, editable: true });
+        q.push(QueuedMessage {
+            draft: draft("later"),
+            priority: QueuePriority::Later,
+            editable: false,
+        });
+        q.push(QueuedMessage {
+            draft: draft("next"),
+            priority: QueuePriority::Next,
+            editable: true,
+        });
+        q.push(QueuedMessage {
+            draft: draft("now"),
+            priority: QueuePriority::Now,
+            editable: true,
+        });
         assert_eq!(q.pop_next().unwrap().draft.text, "now");
         assert_eq!(q.pop_next().unwrap().draft.text, "next");
         assert_eq!(q.pop_next().unwrap().draft.text, "later");
@@ -166,7 +182,11 @@ mod tests {
     fn pop_all_editable_skips_non_editable() {
         let mut q = ComposerQueue::new();
         q.enqueue(draft("hello"));
-        q.push(QueuedMessage { draft: draft("system"), priority: QueuePriority::Later, editable: false });
+        q.push(QueuedMessage {
+            draft: draft("system"),
+            priority: QueuePriority::Later,
+            editable: false,
+        });
         q.enqueue(draft("world"));
         let combined = q.pop_all_editable().unwrap();
         assert_eq!(combined.text, "hello\n\nworld");

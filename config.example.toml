@@ -54,7 +54,7 @@ include_global = true
 #
 # Supported event names:
 #   user_prompt_submit, pre_tool_use, post_tool_use, post_tool_use_failure,
-#   stop, session_start, session_end
+#   stop, session_start, session_end, notification
 #
 # [[hooks]]
 # event = "user_prompt_submit"
@@ -70,6 +70,11 @@ include_global = true
 # [[hooks]]
 # event = "post_tool_use"
 # url = "http://127.0.0.1:8080/agena-hook"
+# timeout_ms = 2000
+#
+# [[hooks]]
+# event = "notification"
+# command = "notify-send \"$AGENA_NOTIFICATION_TITLE\" \"$AGENA_NOTIFICATION_MESSAGE\""
 # timeout_ms = 2000
 
 [plugins]

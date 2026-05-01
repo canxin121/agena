@@ -4,6 +4,7 @@ use std::{
     env, fs,
     ops::Range,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -56,7 +57,7 @@ use crate::external_pager::page_text;
 use crate::i18n::I18n;
 use crate::keybindings::{ComposerAction, ComposerKeyBindings};
 use crate::terminal;
-use crate::tui_config::TuiConfig;
+use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::ui_text;
 
 const MESSAGE_PAGE_SIZE: u64 = 40;
@@ -106,6 +107,28 @@ struct DraftStore {
     drafts: BTreeMap<DraftSlot, ComposerDraft>,
 }
 
+#[derive(Debug, Clone)]
+struct StatusLineState {
+    command: String,
+    refresh_interval: Duration,
+    next_refresh_at: Instant,
+    text: Option<String>,
+    running: bool,
+}
+
+impl StatusLineState {
+    fn new(config: &TuiStatusLineConfig) -> Option<Self> {
+        let command = config.command.as_ref()?.clone();
+        Some(Self {
+            command,
+            refresh_interval: Duration::from_millis(config.refresh_interval_ms),
+            next_refresh_at: Instant::now(),
+            text: None,
+            running: false,
+        })
+    }
+}
+
 pub struct App {
     backend: Backend,
     i18n: I18n,
@@ -140,6 +163,7 @@ pub struct App {
     /// Pending messages typed by the user while the AI was working. Drained
     /// FIFO once the active turn finishes. See `composer_queue.rs`.
     queue: ComposerQueue,
+    status_line: Option<StatusLineState>,
     keybindings: ComposerKeyBindings,
     user_commands: Vec<Skill>,
     /// Last time the user pressed Esc inside the composer; used to detect
@@ -165,6 +189,16 @@ enum Focus {
     Sessions,
     Transcript,
     Composer,
+}
+
+impl Focus {
+    fn label(self) -> &'static str {
+        match self {
+            Focus::Sessions => "sessions",
+            Focus::Transcript => "transcript",
+            Focus::Composer => "composer",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -274,6 +308,9 @@ enum AppMessage {
     TurnCancelled {
         session_id: i64,
         result: UiResult<()>,
+    },
+    StatusLineUpdated {
+        output: Option<String>,
     },
 }
 
@@ -693,6 +730,7 @@ impl App {
             ),
         };
         let keybindings = launch.tui_config.keybindings.clone();
+        let status_line = StatusLineState::new(&launch.tui_config.status_line);
         let user_commands = agena_skills::SkillsManager::build(launch.workspace_root.as_deref())
             .map(|manager| manager.list_commands())
             .unwrap_or_default();
@@ -733,6 +771,7 @@ impl App {
             current_lineage: None,
             active_subscription: None,
             queue: ComposerQueue::new(),
+            status_line,
             keybindings,
             user_commands,
             last_esc_at: None,
@@ -812,7 +851,9 @@ impl App {
     }
 
     fn on_tick(&mut self) {
-        self.flush_input_buffers_if_due(Instant::now());
+        let now = Instant::now();
+        self.flush_input_buffers_if_due(now);
+        self.refresh_status_line_if_due(now);
 
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);
@@ -1715,6 +1756,14 @@ impl App {
             AppMessage::TurnCancelled { session_id, result } => {
                 self.handle_turn_cancelled(session_id, result)
             }
+            AppMessage::StatusLineUpdated { output } => self.handle_status_line_updated(output),
+        }
+    }
+
+    fn handle_status_line_updated(&mut self, output: Option<String>) {
+        if let Some(status_line) = self.status_line.as_mut() {
+            status_line.running = false;
+            status_line.text = output;
         }
     }
 
@@ -2823,6 +2872,26 @@ impl App {
         if triggers_refresh {
             self.request_refresh(session_id, false);
         }
+    }
+
+    fn refresh_status_line_if_due(&mut self, now: Instant) {
+        let Some(status_line) = self.status_line.as_mut() else {
+            return;
+        };
+        if status_line.running || now < status_line.next_refresh_at {
+            return;
+        }
+
+        status_line.running = true;
+        status_line.next_refresh_at = now + status_line.refresh_interval;
+        let command = status_line.command.clone();
+        let tx = self.tx.clone();
+        let session_id = self.transcript.session_id.map(|id| id.to_string());
+        let focus = self.focus.label().to_string();
+        tokio::task::spawn_blocking(move || {
+            let output = run_status_line_command(command, session_id, focus);
+            let _ = tx.send(AppMessage::StatusLineUpdated { output });
+        });
     }
 
     fn create_session(&mut self, submit_draft: Option<ComposerDraft>) {
@@ -5331,6 +5400,12 @@ impl App {
                     FlashLevel::Info => Style::default().fg(Color::Cyan),
                 },
             )
+        } else if let Some(text) = self
+            .status_line
+            .as_ref()
+            .and_then(|status_line| status_line.text.clone())
+        {
+            (text, Style::default().fg(Color::DarkGray))
         } else {
             let default_hint = match self.focus {
                 Focus::Sessions => ui_text::t(&self.i18n, "status-sessions"),
@@ -8942,6 +9017,34 @@ fn find_query_match_from(text: &str, query: &str, start_at: usize) -> Option<(us
             .map(|offset| start_at + offset)
             .map(|start| (start, start + query.len()))
     }
+}
+
+fn run_status_line_command(
+    command: String,
+    session_id: Option<String>,
+    focus: String,
+) -> Option<String> {
+    let mut cmd = if cfg!(windows) {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/d", "/s", "/c", command.as_str()]);
+        cmd
+    } else {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-lc", command.as_str()]);
+        cmd
+    };
+    cmd.stdin(Stdio::null()).stderr(Stdio::null());
+    cmd.env("AGENA_TUI_FOCUS", focus);
+    if let Some(session_id) = session_id {
+        cmd.env("AGENA_SESSION_ID", session_id);
+    }
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().next().unwrap_or_default().trim();
+    (!line.is_empty()).then(|| line.to_string())
 }
 
 fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {

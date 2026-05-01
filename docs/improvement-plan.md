@@ -654,6 +654,8 @@
 
 ## 阶段 17：Status line 与通知
 
+状态：已完成（新增 TUI 本地 `[status_line]` 命令配置与周期刷新；新增 `notification` shell hook，可在回合完成与权限请求时触发桌面通知命令）。
+
 ### 17.1 TUI status line 配置
 
 - 目标：允许用户自定义底栏显示。

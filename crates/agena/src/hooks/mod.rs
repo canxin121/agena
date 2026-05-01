@@ -6,7 +6,8 @@
 //! to run; an optional `match.tool` glob narrows the scope for tool hooks.
 //!
 //! Supported events (see `HookEvent`): `user_prompt_submit`, `pre_tool_use`,
-//! `post_tool_use`, `post_tool_use_failure`, `stop`, `session_start`, `session_end`.
+//! `post_tool_use`, `post_tool_use_failure`, `stop`, `session_start`,
+//! `session_end`, `notification`.
 //!
 //! Side-effect-only by default: stdout is captured but ignored. To produce a
 //! `Patch` (e.g. block a tool call, replace a prompt), the command must print
@@ -26,10 +27,11 @@ use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Serialize};
 
 use crate::plugin::sdk::{
-    AgentStopInput, AgentStopPatch, HookSubscription, HostClient, InitContext, InitOutcome, Plugin,
-    PluginManifest, Result as SdkResult, SessionEndInput, SessionStartInput, SessionStartPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolFailureInput,
-    UserPromptSubmitInput, UserPromptSubmitPatch,
+    AgentStopInput, AgentStopPatch, HookSubscription, HostClient, InitContext, InitOutcome,
+    PermissionAskDecision, PermissionAskInput, Plugin, PluginManifest, Result as SdkResult,
+    SessionEndInput, SessionStartInput, SessionStartPatch, ToolAfterInput, ToolAfterPatch,
+    ToolBeforeInput, ToolBeforePatch, ToolFailureInput, UserPromptSubmitInput,
+    UserPromptSubmitPatch,
 };
 
 const SHELL_HOOK_PLUGIN_ID: &str = "agena-shell-hooks";
@@ -49,6 +51,7 @@ pub enum HookEvent {
     AgentStop,
     SessionStart,
     SessionEnd,
+    Notification,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -145,6 +148,9 @@ impl ShellHookPlugin {
                 HookEvent::AgentStop => HookSubscription::AGENT_STOP,
                 HookEvent::SessionStart => HookSubscription::SESSION_START,
                 HookEvent::SessionEnd => HookSubscription::SESSION_END,
+                HookEvent::Notification => {
+                    HookSubscription::AGENT_STOP | HookSubscription::PERMISSION_ASK
+                }
             };
         }
         subs
@@ -160,6 +166,30 @@ impl ShellHookPlugin {
                 (None, _) => true,
             })
             .collect()
+    }
+
+    fn run_notification_hooks(
+        &self,
+        kind: &str,
+        session_id: i64,
+        title: &str,
+        message: &str,
+        payload: &serde_json::Value,
+    ) {
+        let hooks = self.matches(HookEvent::Notification, None);
+        if hooks.is_empty() {
+            return;
+        }
+
+        let mut env = base_env();
+        env.insert("AGENA_HOOK_EVENT".into(), "notification".into());
+        env.insert("AGENA_NOTIFICATION_KIND".into(), kind.to_string());
+        env.insert("AGENA_NOTIFICATION_TITLE".into(), title.to_string());
+        env.insert("AGENA_NOTIFICATION_MESSAGE".into(), message.to_string());
+        env.insert("AGENA_SESSION_ID".into(), session_id.to_string());
+        for hook in hooks {
+            let _ = hook.run::<serde_json::Value>(&env, payload);
+        }
     }
 }
 
@@ -271,6 +301,18 @@ impl Plugin for ShellHookPlugin {
                 }
             }
         }
+        if merged.continue_with_message.is_none() {
+            self.run_notification_hooks(
+                "agent_stop",
+                input.session_id,
+                "Agena turn completed",
+                input
+                    .last_assistant_message
+                    .as_deref()
+                    .unwrap_or("turn completed"),
+                &payload,
+            );
+        }
         Ok(
             if merged.continue_with_message.is_none() && merged.reason.is_none() {
                 None
@@ -278,6 +320,21 @@ impl Plugin for ShellHookPlugin {
                 Some(merged)
             },
         )
+    }
+
+    async fn permission_ask(
+        &self,
+        input: PermissionAskInput,
+    ) -> SdkResult<Option<PermissionAskDecision>> {
+        let payload = serde_json::to_value(&input).unwrap_or(serde_json::Value::Null);
+        self.run_notification_hooks(
+            "permission_request",
+            input.session_id,
+            "Agena needs permission",
+            input.action.as_str(),
+            &payload,
+        );
+        Ok(None)
     }
 
     async fn session_start(
@@ -665,6 +722,22 @@ mod tests {
         assert!(subs.contains(HookSubscription::USER_PROMPT_SUBMIT));
         assert!(subs.contains(HookSubscription::TOOL_BEFORE));
         assert!(!subs.contains(HookSubscription::TOOL_AFTER));
+    }
+
+    #[test]
+    fn notification_hook_subscribes_to_agent_stop_and_permission_ask() {
+        let plugin = ShellHookPlugin::new(HooksConfig::new(vec![HookEntry {
+            event: HookEvent::Notification,
+            command: Some("true".to_string()),
+            url: None,
+            matcher: HookMatcher::default(),
+            timeout_ms: None,
+        }]));
+
+        let subs = plugin.subscriptions();
+
+        assert!(subs.contains(HookSubscription::AGENT_STOP));
+        assert!(subs.contains(HookSubscription::PERMISSION_ASK));
     }
 
     #[test]

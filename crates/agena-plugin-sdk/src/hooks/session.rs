@@ -2,6 +2,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::hooks::ChatMessage;
 
+// ── turn lifecycle ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreTurnInput {
+    pub session_id: i64,
+    pub model: String,
+    pub message_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostTurnInput {
+    pub session_id: i64,
+    pub model: String,
+    pub status: String,
+    pub message_count: usize,
+}
+
 // ── session.compacting ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

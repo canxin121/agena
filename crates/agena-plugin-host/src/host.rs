@@ -25,11 +25,12 @@ use crate::sdk::{
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
     PermissionAskDecision, PermissionAskInput, PermissionDecision, PluginError, PluginManifest,
-    ProviderListInput, ProviderListPatch, SessionCompactedInput, SessionCompactingInput,
-    SessionCompactingPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDecl,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
+    PostTurnInput, PreTurnInput, ProviderListInput, ProviderListPatch, SessionCompactedInput,
+    SessionCompactingInput, SessionCompactingPatch, SessionEndInput, SessionStartInput,
+    SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
+    ToolBeforeInput, ToolBeforePatch, ToolDecl, ToolDefinitionInput, ToolDefinitionPatch,
+    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolStreamChunk, ToolStreamEnd,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
@@ -266,15 +267,13 @@ impl PluginHost {
             .plugins_by_id
             .get(&handle.plugin_id)
             .cloned()
-            .ok_or_else(|| {
-                PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id))
-            })?;
+            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id)))?;
         let timeout = self.timeouts.tool_invoke_or(Duration::from_secs(300));
         let mut input = input;
         // ensure tool name is the plugin-original name (in case caller passed exposed)
         input.tool_name = handle.original_name.clone();
-        let params = serde_json::to_value(&input)
-            .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+        let params =
+            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let result = self.block_on(async move {
             call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout).await
         });
@@ -301,9 +300,7 @@ impl PluginHost {
             .plugins_by_id
             .get(&handle.plugin_id)
             .cloned()
-            .ok_or_else(|| {
-                PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id))
-            })?;
+            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id)))?;
         let mut input = input;
         input.tool_name = handle.original_name.clone();
 
@@ -311,12 +308,11 @@ impl PluginHost {
         // know it (or the SDK's default impl) emulate a single-chunk stream
         // from the regular tool_invoke result.
         let timeout = self.timeouts.tool_invoke_or(Duration::from_secs(300));
-        let params = serde_json::to_value(&input)
-            .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let invoke_result =
-            call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout)
-                .await
-                .map_err(transport_to_plugin_error)?;
+        let params =
+            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+        let invoke_result = call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout)
+            .await
+            .map_err(transport_to_plugin_error)?;
         let result: ToolInvokeOutput = serde_json::from_value(invoke_result)
             .map_err(|e| PluginError::invalid_params(e.to_string()))?;
 
@@ -344,10 +340,7 @@ impl PluginHost {
         })
     }
 
-    pub fn dispatch_shell_env(
-        &self,
-        input: ShellEnvInput,
-    ) -> Result<ShellEnvPatch, PluginError> {
+    pub fn dispatch_shell_env(&self, input: ShellEnvInput) -> Result<ShellEnvPatch, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let plugins = self.plugins.clone();
         let res: Result<ShellEnvPatch, TransportError> = self.block_on(async move {
@@ -357,7 +350,8 @@ impl PluginHost {
                     continue;
                 }
                 let params = serde_json::to_value(&input)?;
-                let result = call_with_timeout(plugin, method::HOOK_SHELL_ENV, params, timeout).await?;
+                let result =
+                    call_with_timeout(plugin, method::HOOK_SHELL_ENV, params, timeout).await?;
                 if matches!(&result, serde_json::Value::Null) {
                     continue;
                 }
@@ -488,9 +482,7 @@ impl PluginHost {
         &self,
         input: PermissionAskInput,
     ) -> Result<Option<PermissionDecision>, PluginError> {
-        let timeout = self
-            .timeouts
-            .permission_ask_or(Duration::from_secs(60));
+        let timeout = self.timeouts.permission_ask_or(Duration::from_secs(60));
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::PERMISSION_ASK) {
                 continue;
@@ -546,11 +538,19 @@ impl PluginHost {
                     return Ok(CommandBeforeOutcome::Abort(reason));
                 }
                 Some(CommandBeforeResponse::Patch(p)) => {
-                    if let Some(c) = p.command { current.command = c; }
-                    if let Some(a) = p.args { current.args = a; }
-                    if let Some(c) = p.cwd { current.cwd = c; }
+                    if let Some(c) = p.command {
+                        current.command = c;
+                    }
+                    if let Some(a) = p.args {
+                        current.args = a;
+                    }
+                    if let Some(c) = p.cwd {
+                        current.cwd = c;
+                    }
                     if let Some(env) = p.env {
-                        for (k, v) in env { current.env.insert(k, v); }
+                        for (k, v) in env {
+                            current.env.insert(k, v);
+                        }
                     }
                 }
                 None => {}
@@ -566,10 +566,7 @@ impl PluginHost {
         self.block_on(self.dispatch_command_before(input))
     }
 
-    pub async fn dispatch_auth(
-        &self,
-        input: AuthInput,
-    ) -> Result<Option<AuthOutput>, PluginError> {
+    pub async fn dispatch_auth(&self, input: AuthInput) -> Result<Option<AuthOutput>, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::AUTH) {
@@ -620,10 +617,7 @@ impl PluginHost {
         Ok(acc)
     }
 
-    pub async fn dispatch_config(
-        &self,
-        input: ConfigInput,
-    ) -> Result<ConfigInput, PluginError> {
+    pub async fn dispatch_config(&self, input: ConfigInput) -> Result<ConfigInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         dispatcher::chain_patch::<ConfigInput, ConfigPatch, _>(
             &self.plugins,
@@ -668,6 +662,44 @@ impl PluginHost {
             messages: folded.messages,
             summary,
         })
+    }
+
+    // ── turn lifecycle ─────────────────────────────────────────────────────
+
+    pub async fn broadcast_pre_turn(&self, input: PreTurnInput) {
+        self.broadcast_lifecycle(method::HOOK_PRE_TURN, HookSubscription::PRE_TURN, input)
+            .await;
+    }
+
+    pub async fn broadcast_post_turn(&self, input: PostTurnInput) {
+        self.broadcast_lifecycle(method::HOOK_POST_TURN, HookSubscription::POST_TURN, input)
+            .await;
+    }
+
+    async fn broadcast_lifecycle<T>(
+        &self,
+        method: &'static str,
+        subscription: HookSubscription,
+        input: T,
+    ) where
+        T: serde::Serialize + Clone + Send + 'static,
+    {
+        let timeout = Duration::from_secs(5);
+        for plugin in &self.plugins {
+            if !plugin.subscribes(subscription) {
+                continue;
+            }
+            let input = input.clone();
+            let plugin = plugin.clone();
+            tokio::spawn(async move {
+                let params = match serde_json::to_value(&input) {
+                    Ok(v) => v,
+                    Err(_) => return,
+                };
+                let _ =
+                    tokio::time::timeout(timeout, plugin.transport.notify(method, params)).await;
+            });
+        }
     }
 
     // ── session.start ──────────────────────────────────────────────────────
@@ -749,7 +781,9 @@ impl PluginHost {
                 };
                 let _ = tokio::time::timeout(
                     timeout,
-                    plugin.transport.notify(method::HOOK_SESSION_COMPACTED, params),
+                    plugin
+                        .transport
+                        .notify(method::HOOK_SESSION_COMPACTED, params),
                 )
                 .await;
             });
@@ -1087,7 +1121,11 @@ impl PluginHostBuilder {
     /// entry `kind = "static"` with the same key. If no such entry exists in
     /// the current config, one is added automatically with default options
     /// and timeouts so the plugin participates in the load loop.
-    pub fn register_static<P: crate::sdk::Plugin>(mut self, id: impl Into<String>, plugin: P) -> Self {
+    pub fn register_static<P: crate::sdk::Plugin>(
+        mut self,
+        id: impl Into<String>,
+        plugin: P,
+    ) -> Self {
         let id = id.into();
         let inproc = InProcessTransport::new(plugin);
         self.static_plugins.insert(
@@ -1096,10 +1134,13 @@ impl PluginHostBuilder {
                 builder: Box::new(move || Arc::new(inproc) as Arc<dyn PluginTransport>),
             },
         );
-        self.config.list.entry(id).or_insert_with(|| PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-        });
+        self.config
+            .list
+            .entry(id)
+            .or_insert_with(|| PluginEntry::Static {
+                options: serde_json::Value::Null,
+                timeouts: Default::default(),
+            });
         self
     }
 

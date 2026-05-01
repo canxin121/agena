@@ -119,6 +119,8 @@ bitflags::bitflags! {
         const TOOL_DEFINITION           = 1 << 24;
         const COMMAND_AFTER             = 1 << 25;
         const CHAT_MESSAGES_TRANSFORM   = 1 << 26;
+        const PRE_TURN                  = 1 << 27;
+        const POST_TURN                 = 1 << 28;
     }
 }
 
@@ -145,8 +147,8 @@ impl<'de> Deserialize<'de> for HookSubscription {
         let names = Vec::<String>::deserialize(de)?;
         let mut out = HookSubscription::empty();
         for n in &names {
-            if let Some((_, flag)) = HOOK_NAMES.iter().find(|(name, _)| *name == n.as_str()) {
-                out |= *flag;
+            if let Some(flag) = hook_subscription_for_name(n.as_str()) {
+                out |= flag;
             }
         }
         Ok(out)
@@ -164,7 +166,10 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("tool.definition", HookSubscription::TOOL_DEFINITION),
     ("event", HookSubscription::EVENT),
     ("chat.message", HookSubscription::CHAT_MESSAGE),
-    ("chat.messages.transform", HookSubscription::CHAT_MESSAGES_TRANSFORM),
+    (
+        "chat.messages.transform",
+        HookSubscription::CHAT_MESSAGES_TRANSFORM,
+    ),
     ("chat.params", HookSubscription::CHAT_PARAMS),
     ("chat.headers", HookSubscription::CHAT_HEADERS),
     (
@@ -184,7 +189,21 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("session.compacted", HookSubscription::SESSION_COMPACTED),
     ("user.prompt.submit", HookSubscription::USER_PROMPT_SUBMIT),
     ("agent.stop", HookSubscription::AGENT_STOP),
+    ("pre_turn", HookSubscription::PRE_TURN),
+    ("post_turn", HookSubscription::POST_TURN),
 ];
+
+fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {
+    HOOK_NAMES
+        .iter()
+        .find_map(|(hook_name, flag)| (*hook_name == name).then_some(*flag))
+        .or(match name {
+            "permission_request" => Some(HookSubscription::PERMISSION_ASK),
+            "pre_compaction" => Some(HookSubscription::SESSION_COMPACTING),
+            "post_compaction" => Some(HookSubscription::SESSION_COMPACTED),
+            _ => None,
+        })
+}
 
 /// Builder for ergonomic manifest construction inside `Plugin::manifest`.
 pub struct PluginManifestBuilder {

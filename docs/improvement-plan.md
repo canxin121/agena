@@ -680,6 +680,8 @@
 
 ## 阶段 18：Plugin lifecycle 扩展
 
+状态：已完成（新增 `pre_turn` / `post_turn` 生命周期 hook，兼容 `permission_request`、`pre_compaction`、`post_compaction` manifest 别名；运行时 turn loop 接入 pre/post turn 广播；`provider.list` patch 已接入 provider registry，example echo plugin 覆盖新 lifecycle hook 并注册 `echo-mock` provider）。
+
 ### 18.1 扩展 plugin hook surface
 
 - 目标：让插件可参与 turn、permission、compaction 生命周期。

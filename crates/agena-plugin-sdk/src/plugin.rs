@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::hooks::*;
 use crate::host_api::HostClient;
 use crate::manifest::PluginManifest;
-use crate::hooks::*;
 use crate::rpc::method;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,11 +49,7 @@ impl InitOutcome {
 pub trait Plugin: Send + Sync + 'static {
     fn manifest(&self) -> PluginManifest;
 
-    async fn init(
-        &self,
-        _ctx: InitContext,
-        _host: Arc<dyn HostClient>,
-    ) -> Result<InitOutcome> {
+    async fn init(&self, _ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
         Ok(InitOutcome::ack(self.manifest()))
     }
 
@@ -69,10 +65,7 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
-    async fn tool_execute_after(
-        &self,
-        _input: ToolAfterInput,
-    ) -> Result<Option<ToolAfterPatch>> {
+    async fn tool_execute_after(&self, _input: ToolAfterInput) -> Result<Option<ToolAfterPatch>> {
         Ok(None)
     }
 
@@ -130,24 +123,15 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     // -------- chat --------
-    async fn chat_message(
-        &self,
-        _input: ChatMessageInput,
-    ) -> Result<Option<ChatMessagePatch>> {
+    async fn chat_message(&self, _input: ChatMessageInput) -> Result<Option<ChatMessagePatch>> {
         Ok(None)
     }
 
-    async fn chat_params(
-        &self,
-        _input: ChatParamsInput,
-    ) -> Result<Option<ChatParamsPatch>> {
+    async fn chat_params(&self, _input: ChatParamsInput) -> Result<Option<ChatParamsPatch>> {
         Ok(None)
     }
 
-    async fn chat_headers(
-        &self,
-        _input: ChatHeadersInput,
-    ) -> Result<Option<ChatHeadersPatch>> {
+    async fn chat_headers(&self, _input: ChatHeadersInput) -> Result<Option<ChatHeadersPatch>> {
         Ok(None)
     }
 
@@ -168,10 +152,7 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
-    async fn provider_list(
-        &self,
-        _input: ProviderListInput,
-    ) -> Result<Option<ProviderListPatch>> {
+    async fn provider_list(&self, _input: ProviderListInput) -> Result<Option<ProviderListPatch>> {
         Ok(None)
     }
 
@@ -191,18 +172,20 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
-    async fn shell_env(
-        &self,
-        _input: ShellEnvInput,
-    ) -> Result<Option<ShellEnvPatch>> {
+    async fn shell_env(&self, _input: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
         Ok(None)
     }
 
     // -------- session lifecycle --------
-    async fn session_start(
-        &self,
-        _input: SessionStartInput,
-    ) -> Result<Option<SessionStartPatch>> {
+    async fn pre_turn(&self, _input: PreTurnInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn post_turn(&self, _input: PostTurnInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn session_start(&self, _input: SessionStartInput) -> Result<Option<SessionStartPatch>> {
         Ok(None)
     }
 
@@ -219,10 +202,7 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     // -------- agent stop --------
-    async fn agent_stop(
-        &self,
-        _input: AgentStopInput,
-    ) -> Result<Option<AgentStopPatch>> {
+    async fn agent_stop(&self, _input: AgentStopInput) -> Result<Option<AgentStopPatch>> {
         Ok(None)
     }
 
@@ -261,10 +241,7 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     // -------- config & session --------
-    async fn config_resolved(
-        &self,
-        _input: ConfigInput,
-    ) -> Result<Option<ConfigPatch>> {
+    async fn config_resolved(&self, _input: ConfigInput) -> Result<Option<ConfigPatch>> {
         Ok(None)
     }
 

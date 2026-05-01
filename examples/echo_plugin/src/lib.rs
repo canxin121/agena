@@ -26,7 +26,13 @@ impl Plugin for EchoPlugin {
                     | HookSubscription::TOOL_BEFORE
                     | HookSubscription::TOOL_AFTER
                     | HookSubscription::SHELL_ENV
-                    | HookSubscription::EVENT,
+                    | HookSubscription::EVENT
+                    | HookSubscription::PRE_TURN
+                    | HookSubscription::POST_TURN
+                    | HookSubscription::PERMISSION_ASK
+                    | HookSubscription::SESSION_COMPACTING
+                    | HookSubscription::SESSION_COMPACTED
+                    | HookSubscription::PROVIDER_LIST,
             )
             .tool(
                 ToolDecl::new(
@@ -45,11 +51,7 @@ impl Plugin for EchoPlugin {
             .build()
     }
 
-    async fn init(
-        &self,
-        ctx: InitContext,
-        _host: Arc<dyn HostClient>,
-    ) -> Result<InitOutcome> {
+    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
         if let Some(b) = ctx.options.get("uppercase").and_then(|v| v.as_bool()) {
             self.uppercase.store(b, Ordering::Relaxed);
         }
@@ -75,13 +77,11 @@ impl Plugin for EchoPlugin {
             output_text: rendered.clone(),
             payload: Some(json!({ "rendered": rendered })),
             metadata: BTreeMap::from([("plugin".to_string(), "echo".to_string())]),
+            attachments: Vec::new(),
         })
     }
 
-    async fn tool_execute_before(
-        &self,
-        input: ToolBeforeInput,
-    ) -> Result<Option<ToolBeforePatch>> {
+    async fn tool_execute_before(&self, input: ToolBeforeInput) -> Result<Option<ToolBeforePatch>> {
         if input.tool_name != "echo" {
             return Ok(None);
         }
@@ -98,27 +98,20 @@ impl Plugin for EchoPlugin {
         }))
     }
 
-    async fn tool_execute_after(
-        &self,
-        input: ToolAfterInput,
-    ) -> Result<Option<ToolAfterPatch>> {
+    async fn tool_execute_after(&self, input: ToolAfterInput) -> Result<Option<ToolAfterPatch>> {
         if input.tool_name != "echo" {
             return Ok(None);
         }
         Ok(Some(ToolAfterPatch {
             output_text: Some(format!("{}\n[echo after-hook]", input.output_text)),
-            metadata: BTreeMap::from([(
-                "after_hook".to_string(),
-                "applied".to_string(),
-            )]),
+            metadata: BTreeMap::from([("after_hook".to_string(), "applied".to_string())]),
             ..Default::default()
         }))
     }
 
     async fn shell_env(&self, input: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
         let mut p = ShellEnvPatch::default();
-        p.set
-            .insert("AGENA_ECHO".into(), "1".into());
+        p.set.insert("AGENA_ECHO".into(), "1".into());
         p.set.insert(
             "AGENA_ECHO_CWD".into(),
             input.cwd.to_string_lossy().to_string(),
@@ -129,6 +122,56 @@ impl Plugin for EchoPlugin {
     async fn event(&self, _ev: EventEnvelope) -> Result<()> {
         // We could log to host via `host.log(...)`. Skipped for brevity.
         Ok(())
+    }
+
+    async fn pre_turn(&self, _input: PreTurnInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn post_turn(&self, _input: PostTurnInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn permission_ask(
+        &self,
+        _input: PermissionAskInput,
+    ) -> Result<Option<PermissionAskDecision>> {
+        Ok(None)
+    }
+
+    async fn session_compacting(
+        &self,
+        input: SessionCompactingInput,
+    ) -> Result<Option<SessionCompactingPatch>> {
+        Ok(Some(SessionCompactingPatch {
+            messages: Some(input.messages),
+            summary: None,
+        }))
+    }
+
+    async fn session_compacted(&self, _input: SessionCompactedInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn provider_list(&self, input: ProviderListInput) -> Result<Option<ProviderListPatch>> {
+        let already_registered = input
+            .current
+            .iter()
+            .any(|provider| provider.id == "echo-mock");
+        if already_registered {
+            return Ok(None);
+        }
+
+        Ok(Some(ProviderListPatch {
+            add: vec![ProviderDescriptor {
+                id: "echo-mock".to_string(),
+                display_name: "Echo Mock".to_string(),
+                models: vec!["echo-mock-model".to_string()],
+                endpoint: None,
+                kind: ProviderKind::Custom,
+            }],
+            remove: Vec::new(),
+        }))
     }
 }
 

@@ -223,7 +223,6 @@ impl RuntimeSnapshot {
         previous: Option<Arc<RuntimeSnapshot>>,
     ) -> Result<Self, AppError> {
         let resolution = loader.load(load_request)?;
-        let providers = Arc::new(resolution.config.build_provider_registry()?);
         let plugins = if let Some(prev) = previous.as_ref() {
             let prev_host = prev.plugin_manager();
             let prev_cfg = prev.config_resolution().config.plugins.clone();
@@ -232,11 +231,19 @@ impl RuntimeSnapshot {
                 .await
                 .map_err(AppError::from)?
         } else {
-            resolution.build_plugin_host().await.map_err(AppError::from)?
+            resolution
+                .build_plugin_host()
+                .await
+                .map_err(AppError::from)?
         };
         // Make the active host visible to provider request builders for the
         // `chat.headers` hook (no constructor threading required).
         super::plugin_slot::install(Arc::clone(&plugins));
+        let providers = Arc::new(
+            resolution
+                .build_provider_registry_with_plugins(plugins.as_ref())
+                .await?,
+        );
         // Notify plugins of the resolved config (best-effort).
         if !plugins.is_empty() {
             if let Ok(value) = serde_json::to_value(&resolution) {
@@ -471,11 +478,11 @@ fn build_tool_executor(
     }
 
     let mut executor = ToolExecutor::new(workspace_root.to_path_buf(), agent)
-    .with_plugin_manager(plugins)
-    .with_web_search_backend(resolution.config.web.search.resolve())
-    .with_plan_registry(crate::tool::plan_registry_for_executor())
-    .with_worktree_registry(worktree_registry)
-    .with_scheduler(build_scheduler());
+        .with_plugin_manager(plugins)
+        .with_web_search_backend(resolution.config.web.search.resolve())
+        .with_plan_registry(crate::tool::plan_registry_for_executor())
+        .with_worktree_registry(worktree_registry)
+        .with_scheduler(build_scheduler());
 
     if let Ok(mgr) = agena_skills::SkillsManager::build(Some(workspace_root)) {
         executor = executor.with_skills_manager(Arc::new(mgr));
@@ -547,10 +554,7 @@ fn build_mcp_manager(
         FileTokenStore, HttpTransportMode, McpConnectionManager, ServerSpec, TokenStore,
     };
 
-    let mut manager = McpConnectionManager::new(
-        env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_VERSION"),
-    );
+    let mut manager = McpConnectionManager::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
     // Best-effort: open the on-disk token store so HttpAuth::BearerFromStore
     // can resolve. A missing file is fine; a corrupt one is logged and the
@@ -574,15 +578,23 @@ fn build_mcp_manager(
         let manager = manager.clone();
         let name = name.clone();
         let spec = match entry {
-            crate::config::McpServerConfig::Stdio { command, args, env, cwd } => {
-                ServerSpec::Stdio {
-                    command: command.clone(),
-                    args: args.clone(),
-                    env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                    cwd: cwd.clone(),
-                }
-            }
-            crate::config::McpServerConfig::Http { url, mode, headers, auth } => {
+            crate::config::McpServerConfig::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => ServerSpec::Stdio {
+                command: command.clone(),
+                args: args.clone(),
+                env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                cwd: cwd.clone(),
+            },
+            crate::config::McpServerConfig::Http {
+                url,
+                mode,
+                headers,
+                auth,
+            } => {
                 let parsed = match url::Url::parse(url) {
                     Ok(u) => u,
                     Err(e) => {
@@ -595,9 +607,7 @@ fn build_mcp_manager(
                 };
                 let mode = match mode {
                     crate::config::McpHttpMode::Sse => HttpTransportMode::Sse,
-                    crate::config::McpHttpMode::StreamableHttp => {
-                        HttpTransportMode::StreamableHttp
-                    }
+                    crate::config::McpHttpMode::StreamableHttp => HttpTransportMode::StreamableHttp,
                 };
                 let auth = auth.as_ref().map(|cfg| match cfg {
                     crate::config::McpHttpAuthConfig::Bearer { token } => {
@@ -611,14 +621,20 @@ fn build_mcp_manager(
                     }
                     crate::config::McpHttpAuthConfig::Custom { headers } => {
                         agena_mcp_client::HttpAuth::Custom(
-                            headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                            headers
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
                         )
                     }
                 });
                 ServerSpec::Http {
                     url: parsed,
                     mode,
-                    headers: headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                    headers: headers
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     auth,
                 }
             }
@@ -696,10 +712,8 @@ fn build_scheduler() -> Arc<agena_scheduler::Scheduler> {
             );
         }
     }
-    let sched = agena_scheduler::scheduler::build_in_memory(
-        Arc::new(LogSink),
-        Duration::from_secs(10),
-    );
+    let sched =
+        agena_scheduler::scheduler::build_in_memory(Arc::new(LogSink), Duration::from_secs(10));
     sched.start();
     sched
 }

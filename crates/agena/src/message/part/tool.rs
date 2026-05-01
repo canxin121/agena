@@ -362,6 +362,63 @@ pub struct LspDiagnosticsToolInput {
     pub file_path: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotebookEditMode {
+    Replace,
+    Insert,
+    Delete,
+}
+
+impl NotebookEditMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Replace => "replace",
+            Self::Insert => "insert",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotebookCellType {
+    Code,
+    Markdown,
+}
+
+impl NotebookCellType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Markdown => "markdown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct NotebookEditToolInput {
+    pub notebook_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_number: Option<u32>,
+    #[serde(default)]
+    pub new_source: String,
+    pub edit_mode: NotebookEditMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_type: Option<NotebookCellType>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct PowerShellToolInput {
+    pub command: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -393,6 +450,8 @@ pub enum BuiltinToolInput {
     LspReferences(LspReferencesToolInput),
     LspHover(LspHoverToolInput),
     LspDiagnostics(LspDiagnosticsToolInput),
+    NotebookEdit(NotebookEditToolInput),
+    PowerShell(PowerShellToolInput),
 }
 
 impl BuiltinToolInput {
@@ -425,6 +484,8 @@ impl BuiltinToolInput {
             Self::LspReferences(_) => "lsp_references",
             Self::LspHover(_) => "lsp_hover",
             Self::LspDiagnostics(_) => "lsp_diagnostics",
+            Self::NotebookEdit(_) => "notebook_edit",
+            Self::PowerShell(_) => "powershell",
         }
     }
 
@@ -494,6 +555,8 @@ pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
         "lsp_references" => "lsp_references",
         "lsp_hover" => "lsp_hover",
         "lsp_diagnostics" => "lsp_diagnostics",
+        "notebook_edit" => "notebook_edit",
+        "powershell" => "powershell",
         _ => return None,
     })
 }
@@ -700,6 +763,18 @@ pub enum BuiltinToolOutput {
         /// Each entry: `path:line:col [severity] message`.
         entries: Vec<String>,
     },
+    NotebookEdit {
+        path: String,
+        edit_mode: String,
+        cell_index: u32,
+        cell_count: u32,
+    },
+    PowerShell {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -751,6 +826,8 @@ impl BuiltinToolOutput {
             Self::LspReferences { .. } => "lsp_references",
             Self::LspHover { .. } => "lsp_hover",
             Self::LspDiagnostics { .. } => "lsp_diagnostics",
+            Self::NotebookEdit { .. } => "notebook_edit",
+            Self::PowerShell { .. } => "powershell",
         }
     }
 

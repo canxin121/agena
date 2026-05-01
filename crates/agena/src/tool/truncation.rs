@@ -38,7 +38,8 @@ impl ToolOutputTruncator {
             truncate_text(&execution.view.output_text, self.policy.max_chars);
 
         match &mut execution.output {
-            BuiltinToolOutput::Bash { output, .. } => {
+            BuiltinToolOutput::Bash { output, .. }
+            | BuiltinToolOutput::PowerShell { output, .. } => {
                 if let Some(text) = output.as_mut() {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
@@ -78,7 +79,8 @@ impl ToolOutputTruncator {
             | BuiltinToolOutput::LspDefinition { .. }
             | BuiltinToolOutput::LspReferences { .. }
             | BuiltinToolOutput::LspHover { .. }
-            | BuiltinToolOutput::LspDiagnostics { .. } => {}
+            | BuiltinToolOutput::LspDiagnostics { .. }
+            | BuiltinToolOutput::NotebookEdit { .. } => {}
         }
 
         execution

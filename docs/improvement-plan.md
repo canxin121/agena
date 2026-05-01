@@ -574,6 +574,8 @@
 
 ## 阶段 15：工具补齐
 
+状态：已完成（新增 NotebookEdit 的 replace / insert / delete 单元格编辑；复查并保持 LSP diagnostics / definition / references 工具可用；新增 Windows PowerShell 专用工具并提供非 Windows 显式不可用反馈）。
+
 ### 15.1 NotebookEdit
 
 - 目标：支持 `.ipynb` 单元格编辑。

@@ -33,8 +33,10 @@ impl KeyChord {
         // We only care about the modifiers we've explicitly listed; ignore
         // KEYPAD/REPEAT bits and similar so that terminals that pass extra
         // flags still match.
-        let want = self.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
-        let got = event.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let want =
+            self.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let got =
+            event.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
         event.code == self.code && want == got
     }
 }
@@ -190,8 +192,14 @@ mod tests {
             parse_chord("ctrl+enter").unwrap(),
             KeyChord::new(KeyCode::Enter, KeyModifiers::CONTROL)
         );
-        assert_eq!(parse_chord("up").unwrap(), KeyChord::new(KeyCode::Up, KeyModifiers::empty()));
-        assert_eq!(parse_chord("F3").unwrap(), KeyChord::new(KeyCode::F(3), KeyModifiers::empty()));
+        assert_eq!(
+            parse_chord("up").unwrap(),
+            KeyChord::new(KeyCode::Up, KeyModifiers::empty())
+        );
+        assert_eq!(
+            parse_chord("F3").unwrap(),
+            KeyChord::new(KeyCode::F(3), KeyModifiers::empty())
+        );
         assert_eq!(
             parse_chord("Alt+I").unwrap(),
             KeyChord::new(KeyCode::Char('i'), KeyModifiers::ALT)

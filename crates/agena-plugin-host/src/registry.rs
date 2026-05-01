@@ -47,10 +47,8 @@ impl ToolRegistry {
                 // Collision: re-namespace this incoming AND the existing colliding entry.
                 let new_name = format!("{plugin_name}__{original}");
                 if let Some(existing) = self.by_exposed.remove(&original) {
-                    let renamed_existing = format!(
-                        "{}__{}",
-                        existing.plugin_name, existing.original_name
-                    );
+                    let renamed_existing =
+                        format!("{}__{}", existing.plugin_name, existing.original_name);
                     let mut e2 = existing;
                     e2.exposed_name = renamed_existing.clone();
                     self.by_exposed.insert(renamed_existing, e2);

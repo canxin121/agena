@@ -41,9 +41,8 @@ struct WasmInner {
 
 impl WasmTransport {
     pub fn load(path: &Path) -> Result<Self, TransportError> {
-        let bytes = std::fs::read(path).map_err(|e| {
-            TransportError::Io(format!("read wasm `{}`: {e}", path.display()))
-        })?;
+        let bytes = std::fs::read(path)
+            .map_err(|e| TransportError::Io(format!("read wasm `{}`: {e}", path.display())))?;
         Self::from_bytes(&bytes)
     }
 
@@ -58,9 +57,9 @@ impl WasmTransport {
             .map_err(|e| TransportError::Io(format!("instantiate wasm: {e}")))?;
         let alloc: TypedFunc<i32, i32> = instance
             .get_typed_func(&mut store, "agena_alloc")
-            .map_err(|_| TransportError::Io(
-                "wasm module is missing `agena_alloc(i32) -> i32`".into(),
-            ))?;
+            .map_err(|_| {
+                TransportError::Io("wasm module is missing `agena_alloc(i32) -> i32`".into())
+            })?;
         let dispatch: TypedFunc<(i32, i32, i32, i32), i64> = instance
             .get_typed_func(&mut store, "agena_dispatch")
             .map_err(|_| {

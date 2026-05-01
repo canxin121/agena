@@ -21,11 +21,7 @@ pub trait PluginTransport: Send + Sync + 'static {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, TransportError>;
 
-    async fn notify(
-        &self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> Result<(), TransportError> {
+    async fn notify(&self, method: &str, params: serde_json::Value) -> Result<(), TransportError> {
         let _ = self.dispatch(method, params).await?;
         Ok(())
     }

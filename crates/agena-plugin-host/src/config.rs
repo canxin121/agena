@@ -221,7 +221,12 @@ impl<'de> Deserialize<'de> for DurationSpec {
         if trimmed.is_empty() {
             return Err(serde::de::Error::custom("empty duration"));
         }
-        let (num_part, unit) = match trimmed.chars().rev().take_while(|c| c.is_alphabetic()).count() {
+        let (num_part, unit) = match trimmed
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphabetic())
+            .count()
+        {
             0 => (trimmed, "s"),
             n => trimmed.split_at(trimmed.len() - n),
         };

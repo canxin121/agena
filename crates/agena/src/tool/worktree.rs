@@ -15,9 +15,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{
-    BuiltinToolOutput, EnterWorktreeToolInput, ExitWorktreeToolInput,
-};
+use crate::message::{BuiltinToolOutput, EnterWorktreeToolInput, ExitWorktreeToolInput};
 
 use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
 
@@ -118,13 +116,19 @@ pub(super) fn execute_exit(
             }
         }
         // remove the worktree, then delete the branch.
-        let _ = git(&session.original_workspace, &[
-            "worktree",
-            "remove",
-            "--force",
-            session.path.to_string_lossy().as_ref(),
-        ])?;
-        let _ = git(&session.original_workspace, &["branch", "-D", &session.branch]);
+        let _ = git(
+            &session.original_workspace,
+            &[
+                "worktree",
+                "remove",
+                "--force",
+                session.path.to_string_lossy().as_ref(),
+            ],
+        )?;
+        let _ = git(
+            &session.original_workspace,
+            &["branch", "-D", &session.branch],
+        );
     }
 
     let view = ToolExecutionView::simple(
@@ -150,9 +154,8 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<WorktreeSession, T
         .filter(|s| !s.is_empty())
         .unwrap_or_else(generate_slug);
     let base = workspace.join(".agena").join("worktrees");
-    std::fs::create_dir_all(&base).map_err(|e| {
-        ToolError::Plugin(format!("enter_worktree: mkdir {base:?}: {e}"))
-    })?;
+    std::fs::create_dir_all(&base)
+        .map_err(|e| ToolError::Plugin(format!("enter_worktree: mkdir {base:?}: {e}")))?;
     let target = base.join(&slug);
     if target.exists() {
         return Err(ToolError::Plugin(format!(
@@ -160,13 +163,16 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<WorktreeSession, T
         )));
     }
     let branch = format!("agena/{slug}");
-    git(workspace, &[
-        "worktree",
-        "add",
-        "-b",
-        &branch,
-        target.to_string_lossy().as_ref(),
-    ])?;
+    git(
+        workspace,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            target.to_string_lossy().as_ref(),
+        ],
+    )?;
 
     Ok(WorktreeSession {
         path: target,
@@ -203,8 +209,7 @@ fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolE
                     .to_string_lossy()
                     .to_string();
                 if cp_canonical == canonical || cp == path {
-                    found_branch =
-                        Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+                    found_branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
                 }
             }
         }

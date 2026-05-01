@@ -82,7 +82,10 @@ pub enum ShellError {
 
 /// Run a command synchronously, scrubbing dangerous loader env vars and
 /// enforcing `timeout_ms` via a watchdog thread.
-pub fn execute(request: &ShellRequest, policy: &ExecutionPolicy) -> Result<ShellOutput, ShellError> {
+pub fn execute(
+    request: &ShellRequest,
+    policy: &ExecutionPolicy,
+) -> Result<ShellOutput, ShellError> {
     validate(request)?;
 
     let env = sanitize_env(&request.env, policy);
@@ -316,7 +319,11 @@ mod tests {
     fn timeout_is_enforced() {
         let cwd = std::env::current_dir().unwrap();
         let req = ShellRequest {
-            command: vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 5".to_string()],
+            command: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "sleep 5".to_string(),
+            ],
             cwd,
             env: HashMap::new(),
             timeout_ms: Some(150),
@@ -331,7 +338,10 @@ mod tests {
         let mut env = HashMap::new();
         env.insert("PATH".to_string(), "/usr/bin".to_string());
         env.insert("LD_PRELOAD".to_string(), "evil.so".to_string());
-        env.insert("DYLD_INSERT_LIBRARIES".to_string(), "evil.dylib".to_string());
+        env.insert(
+            "DYLD_INSERT_LIBRARIES".to_string(),
+            "evil.dylib".to_string(),
+        );
         env.insert("BASH_FUNC_x".to_string(), "() { :; }".to_string());
 
         let scrubbed = sanitize_env(&env, &ExecutionPolicy::WorkspaceWrite);

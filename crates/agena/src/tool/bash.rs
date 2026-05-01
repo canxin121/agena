@@ -63,10 +63,7 @@ pub(super) fn execute(
         {
             Ok(CommandBeforeOutcome::Continue(updated)) => {
                 env = updated.env.into_iter().collect();
-                if updated.args.len() >= 2
-                    && updated.args[0] == "-c"
-                    && updated.command == "sh"
-                {
+                if updated.args.len() >= 2 && updated.args[0] == "-c" && updated.command == "sh" {
                     Some((updated.args[1].clone(), updated.cwd))
                 } else {
                     Some((input.command.clone(), updated.cwd))

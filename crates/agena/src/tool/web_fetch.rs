@@ -11,13 +11,9 @@ use std::time::{Duration, Instant};
 
 use lru::LruCache;
 
-use crate::message::{
-    BuiltinToolOutput, ToolAttachment, WebFetchToolInput,
-};
+use crate::message::{BuiltinToolOutput, ToolAttachment, WebFetchToolInput};
 
-use super::{
-    BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor,
-};
+use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -56,9 +52,8 @@ pub(super) fn execute(
         raw_url.to_string()
     };
 
-    let url = url::Url::parse(&url_string).map_err(|e| {
-        ToolError::Plugin(format!("web_fetch: invalid url '{raw_url}': {e}"))
-    })?;
+    let url = url::Url::parse(&url_string)
+        .map_err(|e| ToolError::Plugin(format!("web_fetch: invalid url '{raw_url}': {e}")))?;
     if !matches!(url.scheme(), "https" | "http") {
         return Err(ToolError::Plugin(format!(
             "web_fetch: scheme '{}' not allowed",
@@ -196,10 +191,8 @@ fn make_execution(
     let summary = None;
 
     let preview = preview_text(&markdown, 4000);
-    let view = ToolExecutionView::simple(
-        format!("WebFetch {url}"),
-        format!("[{status}] {preview}"),
-    );
+    let view =
+        ToolExecutionView::simple(format!("WebFetch {url}"), format!("[{status}] {preview}"));
     let output = BuiltinToolOutput::WebFetch {
         url,
         markdown: Some(markdown),

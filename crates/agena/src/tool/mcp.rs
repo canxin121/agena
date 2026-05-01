@@ -82,7 +82,10 @@ pub(super) fn invoke(
     let view = ToolExecutionView {
         title: format!("MCP {server}/{tool}"),
         output_text: if summary_text.is_empty() {
-            format!("(mcp:{server}:{tool} returned {} content block(s))", blocks.len())
+            format!(
+                "(mcp:{server}:{tool} returned {} content block(s))",
+                blocks.len()
+            )
         } else {
             summary_text
         },

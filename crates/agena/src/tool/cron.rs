@@ -5,8 +5,8 @@ use std::sync::Arc;
 use agena_scheduler::{JobKind, ScheduledJob, Scheduler};
 
 use crate::message::{
-    BuiltinToolOutput, CronCreateToolInput, CronDeleteToolInput, CronJobSummary,
-    CronListToolInput, ScheduleWakeupToolInput,
+    BuiltinToolOutput, CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput,
+    ScheduleWakeupToolInput,
 };
 
 use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
@@ -16,9 +16,12 @@ pub(super) fn execute_create(
     input: &CronCreateToolInput,
 ) -> Result<BuiltinExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
-    let job =
-        ScheduledJob::new_cron(input.expression.trim(), input.prompt.trim(), input.max_age_days)
-            .map_err(|e| ToolError::Plugin(format!("cron_create: {e}")))?;
+    let job = ScheduledJob::new_cron(
+        input.expression.trim(),
+        input.prompt.trim(),
+        input.max_age_days,
+    )
+    .map_err(|e| ToolError::Plugin(format!("cron_create: {e}")))?;
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339());
     super::mcp::block_on(async move { scheduler.add(job).await });
@@ -78,10 +81,8 @@ pub(super) fn execute_delete(
         .map_err(|e| ToolError::Plugin(format!("cron_delete: invalid id: {e}")))?;
     let scheduler_for_remove = scheduler.clone();
     let removed = super::mcp::block_on(async move { scheduler_for_remove.remove(id).await });
-    let view = ToolExecutionView::simple(
-        format!("cron_delete {id}"),
-        format!("removed: {removed}"),
-    );
+    let view =
+        ToolExecutionView::simple(format!("cron_delete {id}"), format!("removed: {removed}"));
     Ok(BuiltinExecution::new(
         BuiltinToolOutput::CronDelete {
             id: id.to_string(),

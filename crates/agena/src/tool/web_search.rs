@@ -33,7 +33,10 @@ pub(super) fn execute(
     }
 
     let backend = executor.web_search_backend();
-    let max = input.max_results.unwrap_or(DEFAULT_MAX_RESULTS).clamp(1, 20);
+    let max = input
+        .max_results
+        .unwrap_or(DEFAULT_MAX_RESULTS)
+        .clamp(1, 20);
     let allow = input.allowed_domains.clone();
     let block = input.blocked_domains.clone();
 
@@ -97,7 +100,11 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 
 // ─── Backends ──────────────────────────────────────────────────────────
 
-async fn tavily_search(query: &str, max: u32, api_key: &str) -> Result<Vec<WebSearchHit>, ToolError> {
+async fn tavily_search(
+    query: &str,
+    max: u32,
+    api_key: &str,
+) -> Result<Vec<WebSearchHit>, ToolError> {
     if api_key.is_empty() {
         return Err(ToolError::Plugin(
             "web_search[tavily]: TAVILY_API_KEY missing".to_string(),
@@ -133,7 +140,10 @@ async fn tavily_search(query: &str, max: u32, api_key: &str) -> Result<Vec<WebSe
         url: String,
         content: Option<String>,
     }
-    let parsed: R = resp.json().await.map_err(|e| ToolError::Plugin(e.to_string()))?;
+    let parsed: R = resp
+        .json()
+        .await
+        .map_err(|e| ToolError::Plugin(e.to_string()))?;
     Ok(parsed
         .results
         .into_iter()
@@ -176,7 +186,10 @@ async fn exa_search(query: &str, max: u32, api_key: &str) -> Result<Vec<WebSearc
         url: String,
         text: Option<String>,
     }
-    let parsed: R = resp.json().await.map_err(|e| ToolError::Plugin(e.to_string()))?;
+    let parsed: R = resp
+        .json()
+        .await
+        .map_err(|e| ToolError::Plugin(e.to_string()))?;
     Ok(parsed
         .results
         .into_iter()
@@ -188,7 +201,11 @@ async fn exa_search(query: &str, max: u32, api_key: &str) -> Result<Vec<WebSearc
         .collect())
 }
 
-async fn brave_search(query: &str, max: u32, api_key: &str) -> Result<Vec<WebSearchHit>, ToolError> {
+async fn brave_search(
+    query: &str,
+    max: u32,
+    api_key: &str,
+) -> Result<Vec<WebSearchHit>, ToolError> {
     if api_key.is_empty() {
         return Err(ToolError::Plugin(
             "web_search[brave]: BRAVE_API_KEY missing".to_string(),
@@ -227,7 +244,10 @@ async fn brave_search(query: &str, max: u32, api_key: &str) -> Result<Vec<WebSea
         url: String,
         description: Option<String>,
     }
-    let parsed: R = resp.json().await.map_err(|e| ToolError::Plugin(e.to_string()))?;
+    let parsed: R = resp
+        .json()
+        .await
+        .map_err(|e| ToolError::Plugin(e.to_string()))?;
     Ok(parsed
         .web
         .map(|w| w.results)
@@ -256,10 +276,7 @@ async fn duckduckgo_html_search(query: &str, max: u32) -> Result<Vec<WebSearchHi
         .await
         .map_err(|e| ToolError::Plugin(format!("duckduckgo request failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(ToolError::Plugin(format!(
-            "duckduckgo {}",
-            resp.status()
-        )));
+        return Err(ToolError::Plugin(format!("duckduckgo {}", resp.status())));
     }
     let body = resp
         .text()

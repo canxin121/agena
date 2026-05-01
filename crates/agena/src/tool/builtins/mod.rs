@@ -19,12 +19,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
+use crate::plugin::PluginError;
+use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, Plugin, PluginManifest, Result as SdkResult,
     ToolBehavior as SdkToolBehavior, ToolDecl, ToolInvokeInput, ToolInvokeOutput,
 };
-use crate::plugin::PluginError;
-use crate::plugin::sdk::host_api::HostClient;
 
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput,
@@ -139,11 +139,7 @@ impl Plugin for BuiltinPlugin {
             .build()
     }
 
-    async fn init(
-        &self,
-        _ctx: InitContext,
-        _host: Arc<dyn HostClient>,
-    ) -> SdkResult<InitOutcome> {
+    async fn init(&self, _ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         Ok(InitOutcome::ack(self.manifest()))
     }
 
@@ -174,12 +170,9 @@ fn decl<T: schemars::JsonSchema>(
     description: &str,
     behavior: SdkToolBehavior,
 ) -> ToolDecl {
-    ToolDecl::new(
-        name,
-        crate::tool::definition::json_schema_for::<T>(),
-    )
-    .description(description)
-    .behavior(behavior)
+    ToolDecl::new(name, crate::tool::definition::json_schema_for::<T>())
+        .description(description)
+        .behavior(behavior)
 }
 
 fn parse_builtin(tool: &str, input: JsonValue) -> Result<BuiltinToolInput, serde_json::Error> {

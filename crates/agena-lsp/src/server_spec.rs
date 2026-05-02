@@ -35,14 +35,20 @@ impl LspServerSpec {
             return true;
         }
         let normalized = ext.trim_start_matches('.').to_ascii_lowercase();
-        self.file_extensions
-            .iter()
-            .any(|candidate| candidate.trim_start_matches('.').eq_ignore_ascii_case(&normalized))
+        self.file_extensions.iter().any(|candidate| {
+            candidate
+                .trim_start_matches('.')
+                .eq_ignore_ascii_case(&normalized)
+        })
     }
 
     /// Walk `start_dir` upward looking for any of `root_markers`. Falls
     /// back to `workspace_root` when nothing matches.
-    pub fn resolve_root(&self, start_dir: &std::path::Path, workspace_root: &std::path::Path) -> PathBuf {
+    pub fn resolve_root(
+        &self,
+        start_dir: &std::path::Path,
+        workspace_root: &std::path::Path,
+    ) -> PathBuf {
         if self.root_markers.is_empty() {
             return workspace_root.to_path_buf();
         }

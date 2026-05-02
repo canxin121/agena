@@ -103,7 +103,8 @@ impl super::ConfigResolution {
     }
 
     pub async fn build_plugin_host(&self) -> Result<Arc<PluginHost>, ConfigError> {
-        self.build_plugin_host_with_previous(None, None).await
+        self.build_plugin_host_with_previous_and_mcp(None, None, None)
+            .await
     }
 
     /// Hot-reload-aware build: when a previous plugin host (and its config)
@@ -115,6 +116,16 @@ impl super::ConfigResolution {
         previous_host: Option<Arc<PluginHost>>,
         previous_config: Option<&agena_plugin_host::PluginsConfig>,
     ) -> Result<Arc<PluginHost>, ConfigError> {
+        self.build_plugin_host_with_previous_and_mcp(previous_host, previous_config, None)
+            .await
+    }
+
+    pub async fn build_plugin_host_with_previous_and_mcp(
+        &self,
+        previous_host: Option<Arc<PluginHost>>,
+        previous_config: Option<&agena_plugin_host::PluginsConfig>,
+        mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
+    ) -> Result<Arc<PluginHost>, ConfigError> {
         let workspace_root = self
             .meta
             .config_path
@@ -122,8 +133,19 @@ impl super::ConfigResolution {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
         let agena_version = env!("CARGO_PKG_VERSION").to_string();
+        let mut plugin_config = self.config.plugins.clone();
+        if mcp_manager.is_some() {
+            plugin_config.list.insert(
+                crate::tool::mcp_plugin_id().to_string(),
+                crate::plugin::PluginEntry::Static {
+                    options: serde_json::to_value(&self.config.mcp)
+                        .unwrap_or(serde_json::Value::Null),
+                    timeouts: Default::default(),
+                },
+            );
+        }
         let mut builder = PluginHostBuilder::new(workspace_root, agena_version)
-            .with_config(self.config.plugins.clone())
+            .with_config(plugin_config)
             .register_static(
                 crate::tool::builtins_plugin_id(),
                 crate::tool::new_builtins_plugin(),
@@ -136,6 +158,12 @@ impl super::ConfigResolution {
                 crate::hooks::ShellHookPlugin::id(),
                 crate::hooks::ShellHookPlugin::new(self.config.hooks.clone()),
             );
+        if let Some(manager) = mcp_manager {
+            builder = builder.register_static(
+                crate::tool::mcp_plugin_id(),
+                crate::tool::new_mcp_plugin(manager),
+            );
+        }
         if let (Some(prev_host), Some(prev_cfg)) = (previous_host, previous_config) {
             builder = builder.with_previous(prev_host, prev_cfg);
         }

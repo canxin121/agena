@@ -1,8 +1,12 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use arc_swap::ArcSwap;
 use chrono::Utc;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::Instrument;
 
 use crate::AppError;
@@ -19,7 +23,9 @@ use crate::permission::{
     PermissionRequest, decide_from_mode,
 };
 use crate::role::Role;
-use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissionCheck};
+use crate::tool::{
+    StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissionCheck,
+};
 
 use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
@@ -89,7 +95,7 @@ impl SessionRunOptions {
         &self,
         system: Option<String>,
         messages: Vec<Message>,
-        tools: Vec<crate::tool::ToolDefinition>,
+        tools: Vec<crate::tool::EntryDefinition>,
         prompt_cache_key: Option<String>,
         previous_response_id: Option<String>,
         prompt_window_generation: Option<u64>,
@@ -170,6 +176,10 @@ struct ResolvedPendingTool {
     lifecycle: TimeRange,
 }
 
+struct PendingHostUserInput {
+    response: oneshot::Sender<crate::plugin::sdk::host_api::AskUserResponse>,
+}
+
 #[derive(Clone)]
 struct SessionManagerState {
     processor: SessionProcessor,
@@ -203,6 +213,7 @@ pub struct SessionManager {
     bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>>,
     execution: ArcSwap<SessionManagerState>,
     turn_registry: Arc<TurnRegistry>,
+    host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
 }
 
 impl SessionManager {
@@ -237,6 +248,7 @@ impl SessionManager {
             bus,
             execution: ArcSwap::from_pointee(state),
             turn_registry: Arc::new(TurnRegistry::new()),
+            host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -250,6 +262,65 @@ impl SessionManager {
     /// Returns the in-process bus subscribers can attach to.
     pub fn event_bus(&self) -> Arc<dyn crate::event::EventBus<crate::event::EventKind>> {
         Arc::clone(&self.bus)
+    }
+
+    pub fn tool_executor(&self) -> ToolExecutor {
+        self.execution_state().tool_executor.clone()
+    }
+
+    pub async fn request_host_user_input(
+        &self,
+        session_id: i64,
+        call_id: i64,
+        request: crate::message::AskUserToolInput,
+    ) -> Result<crate::plugin::sdk::host_api::AskUserResponse, AppError> {
+        let state = self.execution_state();
+        let session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let pending_tool = session
+            .pending_tools()
+            .into_iter()
+            .find(|tool| {
+                session
+                    .pending_tool_execution(tool)
+                    .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
+            })
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool not found for host user input: session={session_id}, call={call_id}"
+                ))
+            })?;
+        let request_id = format!("host-input:{call_id}:{}", uuid::Uuid::new_v4().simple());
+        let (response_tx, response_rx) = oneshot::channel();
+        self.host_user_input_waiters.lock().await.insert(
+            request_id.clone(),
+            PendingHostUserInput {
+                response: response_tx,
+            },
+        );
+        if let Err(err) = self
+            .apply_user_input_request_with_id(
+                session,
+                &pending_tool,
+                request,
+                request_id.clone(),
+                state.clone(),
+            )
+            .await
+        {
+            self.host_user_input_waiters
+                .lock()
+                .await
+                .remove(&request_id);
+            return Err(err);
+        }
+        response_rx.await.map_err(|_| {
+            AppError::Internal(format!(
+                "host user input waiter closed before reply: {request_id}"
+            ))
+        })
     }
 
     pub fn with_config(self, config: SessionManagerConfig) -> Self {
@@ -283,12 +354,88 @@ impl SessionManager {
 
     pub async fn create_session(&self, request: SessionCreateRequest) -> Result<Session, AppError> {
         let state = self.execution_state();
-        self.store
+        let mut session = self
+            .store
             .create_session(
                 request.title,
                 request.parent_session_id,
                 state.cache_policy(),
             )
+            .await?;
+
+        let patch = match state
+            .tool_executor
+            .plugin_manager()
+            .dispatch_session_start(crate::plugin::SessionStartInput {
+                session_id: session.id,
+                source: crate::plugin::SessionStartSource::Startup,
+                workspace_root: state.tool_executor.workspace_root().display().to_string(),
+                model: None,
+            })
+            .await
+        {
+            Ok(patch) => patch,
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::session_start",
+                    session_id = session.id,
+                    "session.start hook failed during session creation: {err}"
+                );
+                return Ok(session);
+            }
+        };
+
+        let mut injected_messages = Vec::new();
+        if let Some(additional_context) = patch.additional_context {
+            let ids = self.store.reserve_message_ids(1).await?;
+            let system_message = build_message(
+                ids,
+                Role::System,
+                MessageStatus::Completed,
+                vec![PartContent::text(additional_context)],
+                MessageMetadata {
+                    source: MessageSource::System,
+                    parent_message_id: session
+                        .last_conversation_message()
+                        .map(|message| message.id),
+                    generated_by_call_id: None,
+                    model_provider_id: String::new(),
+                    model_id: String::new(),
+                    provider_metadata: None,
+                    tags: Vec::new(),
+                },
+            );
+            session.messages.push(system_message.clone());
+            injected_messages.push(system_message);
+        }
+        if let Some(initial_user_message) = patch.initial_user_message {
+            let ids = self.store.reserve_message_ids(1).await?;
+            let user_message = build_message(
+                ids,
+                Role::User,
+                MessageStatus::Completed,
+                vec![PartContent::text(initial_user_message)],
+                MessageMetadata {
+                    source: MessageSource::System,
+                    parent_message_id: session
+                        .last_conversation_message()
+                        .map(|message| message.id),
+                    generated_by_call_id: None,
+                    model_provider_id: String::new(),
+                    model_id: String::new(),
+                    provider_metadata: None,
+                    tags: Vec::new(),
+                },
+            );
+            session.messages.push(user_message.clone());
+            injected_messages.push(user_message);
+        }
+
+        if injected_messages.is_empty() {
+            return Ok(session);
+        }
+
+        self.persist_session_changes(session, injected_messages, Vec::new(), None, state)
             .await
     }
 
@@ -301,6 +448,25 @@ impl SessionManager {
 
     pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
         self.store.list_workspace_session_ids().await
+    }
+
+    pub async fn broadcast_session_end(
+        &self,
+        session_id: i64,
+        reason: crate::plugin::SessionEndReason,
+    ) {
+        self.execution_state()
+            .tool_executor
+            .plugin_manager()
+            .broadcast_session_end(crate::plugin::SessionEndInput { session_id, reason })
+            .await;
+    }
+
+    pub async fn broadcast_active_session_end(&self, reason: crate::plugin::SessionEndReason) {
+        let session_ids = self.turn_registry.active_session_ids().await;
+        for session_id in session_ids {
+            self.broadcast_session_end(session_id, reason).await;
+        }
     }
 
     /// Locate the session that contains a given message id by projecting each
@@ -675,6 +841,44 @@ impl SessionManager {
                     .with_reply(request.reply.clone()),
             ));
             input_part.status = ExecutionStatus::Completed;
+        }
+
+        let is_host_request = self
+            .host_user_input_waiters
+            .lock()
+            .await
+            .contains_key(request.reply.request_id.as_str());
+        if is_host_request {
+            let response = host_user_input_response(&user_input_request, &request.reply)?;
+            let assistant_message = session.messages[pending.tool.part.message_index].clone();
+            session = self
+                .persist_session_changes(
+                    session,
+                    vec![assistant_message],
+                    Vec::new(),
+                    None,
+                    state.clone(),
+                )
+                .await?;
+            if let Some(waiter) = self
+                .host_user_input_waiters
+                .lock()
+                .await
+                .remove(request.reply.request_id.as_str())
+            {
+                let _ = waiter.response.send(response);
+                return Ok(session);
+            }
+            return Err(AppError::Internal(format!(
+                "host user input waiter disappeared before reply delivery: {}",
+                request.reply.request_id
+            )));
+        }
+        if request.reply.request_id.starts_with("host-input:") {
+            return Err(AppError::Internal(format!(
+                "host user input waiter missing: {}",
+                request.reply.request_id
+            )));
         }
 
         match request.reply.kind {
@@ -1234,7 +1438,7 @@ impl SessionManager {
         &self,
         session: &Session,
         options: &SessionRunOptions,
-        tools: &[crate::tool::ToolDefinition],
+        tools: &[crate::tool::EntryDefinition],
         state: &SessionManagerState,
     ) -> PromptTurnBudget {
         let fallback_budget = state.processor.max_prompt_chars();
@@ -1649,6 +1853,7 @@ impl SessionManager {
             .tool_executor
             .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
             .map_err(tool_error_to_app_error)?;
+        let mut session_changed = false;
         if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
             let current_title = match session
                 .part(&resolved.pending.part)
@@ -1673,6 +1878,7 @@ impl SessionManager {
                 title: prepared.title_override.unwrap_or(current_title),
                 lifecycle: resolved.lifecycle.clone(),
             }));
+            session_changed = true;
         }
 
         // Plan-mode guardrail: refuse mutating tools while the session
@@ -1709,12 +1915,44 @@ impl SessionManager {
             }
         }
 
+        if session_changed {
+            let assistant_message = session.messages[resolved.pending.part.message_index].clone();
+            session = self
+                .persist_session_changes(
+                    session,
+                    vec![assistant_message],
+                    Vec::new(),
+                    None,
+                    state.clone(),
+                )
+                .await?;
+        }
+
+        if let Some(stream) = state
+            .tool_executor
+            .execute_invocation_streaming(&resolved.invocation, session.id, resolved.call_id)
+            .await
+            .map_err(tool_error_to_app_error)?
+        {
+            return self
+                .apply_streaming_tool_execution(session, &resolved.pending, stream, state)
+                .await;
+        }
+
         match self.execute_pending_tool(state.as_ref(), session.id, &resolved) {
             Ok(execution) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
                 self.apply_tool_success(session, &resolved.pending, execution, None, None, state)
                     .await
             }
             Err(ToolError::UserInputRequired(input)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
                 self.apply_user_input_request(session, &resolved.pending, input, state)
                     .await
             }
@@ -1803,14 +2041,27 @@ impl SessionManager {
 
     async fn apply_user_input_request(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         input: crate::message::AskUserToolInput,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
+        let request_id = resolve_pending_tool(&session, pending_tool)?.operation_id;
+        self.apply_user_input_request_with_id(session, pending_tool, input, request_id, state)
+            .await
+    }
+
+    async fn apply_user_input_request_with_id(
+        &self,
+        mut session: Session,
+        pending_tool: &SessionPendingTool,
+        input: crate::message::AskUserToolInput,
+        request_id: String,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let request = UserInputRequest {
-            request_id: resolved.operation_id.clone(),
+            request_id,
             session_id: Some(session.id),
             questions: input.questions,
             created_at: Utc::now(),
@@ -1849,14 +2100,96 @@ impl SessionManager {
             .push(input_part.clone());
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
-        self.persist_session_changes(
-            session,
-            vec![assistant_message],
-            Vec::new(),
-            None,
-            state.clone(),
-        )
-        .await
+        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state)
+            .await
+    }
+
+    async fn apply_streaming_tool_execution(
+        &self,
+        mut session: Session,
+        pending_tool: &SessionPendingTool,
+        mut stream: StreamingToolExecution,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let stream_id = stream.stream_id.clone();
+        while let Some(chunk) = stream.chunks.recv().await {
+            let Some(delta) = chunk.text_delta.as_deref() else {
+                continue;
+            };
+            if delta.is_empty() {
+                continue;
+            }
+
+            session = self
+                .store
+                .load_session(session.id, state.cache_policy())
+                .await?;
+            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "streaming tool part not found: message={}, part={}",
+                    pending_tool.part.message_id, pending_tool.part.part_id
+                ))
+            })?;
+            if !tool_part.append_tool_output_delta(delta) {
+                return Err(AppError::Internal(format!(
+                    "streaming tool part refused output delta: message={}, part={}",
+                    pending_tool.part.message_id, pending_tool.part.part_id
+                )));
+            }
+            if matches!(
+                tool_part.status,
+                ExecutionStatus::Pending | ExecutionStatus::InProgress
+            ) {
+                tool_part.status = ExecutionStatus::InProgress;
+            }
+
+            let assistant_message = session.messages[pending_tool.part.message_index].clone();
+            session = self
+                .persist_session_changes(
+                    session,
+                    vec![assistant_message],
+                    Vec::new(),
+                    None,
+                    state.clone(),
+                )
+                .await?;
+        }
+
+        let execution = match stream.end.await {
+            Ok(Ok(execution)) => execution,
+            Ok(Err(err)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_failure(session, pending_tool, err.to_string(), None, None, state)
+                    .await;
+            }
+            Err(_) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_failure(
+                        session,
+                        pending_tool,
+                        format!("tool stream ended without terminal result: {stream_id}"),
+                        None,
+                        None,
+                        state,
+                    )
+                    .await;
+            }
+        };
+
+        let session = self
+            .store
+            .load_session(session.id, state.cache_policy())
+            .await?;
+        self.apply_tool_success(session, pending_tool, execution, None, None, state)
+            .await
     }
 
     async fn apply_tool_success(
@@ -2456,10 +2789,8 @@ fn completed_lifecycle(lifecycle: &TimeRange) -> TimeRange {
 }
 
 fn tool_name(invocation: &ToolInvocation) -> String {
-    match invocation {
-        ToolInvocation::Mcp { server, tool, .. } => format!("{server}:{tool}"),
-        ToolInvocation::Custom { name, .. } => name.clone(),
-    }
+    let ToolInvocation::Custom { name, .. } = invocation;
+    name.clone()
 }
 
 fn text_result_blocks(output_text: &str) -> Vec<ToolResultBlock> {
@@ -2545,6 +2876,40 @@ fn user_input_execution(
         },
         view,
     ))
+}
+
+fn host_user_input_response(
+    request: &UserInputRequest,
+    reply: &UserInputReply,
+) -> Result<crate::plugin::sdk::host_api::AskUserResponse, AppError> {
+    match reply.kind {
+        UserInputReplyKind::Cancel => Ok(crate::plugin::sdk::host_api::AskUserResponse {
+            reply: reply.reason.clone().unwrap_or_default(),
+            cancelled: true,
+            answers: Default::default(),
+        }),
+        UserInputReplyKind::Submit => {
+            let answers = validate_user_input_reply(request, reply)?;
+            let question = request.questions.first().ok_or_else(|| {
+                AppError::Internal("host user input request is missing its question".to_string())
+            })?;
+            let answer = answers
+                .get(question.id.as_str())
+                .and_then(|values| values.first())
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "host user input reply missing answer for question {}",
+                        question.id
+                    ))
+                })?;
+            Ok(crate::plugin::sdk::host_api::AskUserResponse {
+                reply: answer,
+                cancelled: false,
+                answers,
+            })
+        }
+    }
 }
 
 fn validate_user_input_reply(
@@ -2674,6 +3039,106 @@ mod tests {
     impl Drop for TempWorkspace {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    struct SessionStartFixturePlugin;
+
+    #[async_trait]
+    impl crate::plugin::sdk::Plugin for SessionStartFixturePlugin {
+        fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
+            crate::plugin::sdk::PluginManifest::builder("session-start-fixture", "0.1.0")
+                .hooks(crate::plugin::sdk::HookSubscription::SESSION_START)
+                .build()
+        }
+
+        async fn init(
+            &self,
+            _ctx: crate::plugin::sdk::InitContext,
+            _host: Arc<dyn crate::plugin::sdk::host_api::HostClient>,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::InitOutcome> {
+            Ok(crate::plugin::sdk::InitOutcome::ack(self.manifest()))
+        }
+
+        async fn session_start(
+            &self,
+            _input: crate::plugin::sdk::SessionStartInput,
+        ) -> crate::plugin::sdk::Result<Option<crate::plugin::sdk::SessionStartPatch>> {
+            Ok(Some(crate::plugin::sdk::SessionStartPatch {
+                additional_context: Some("fixture context".to_string()),
+                initial_user_message: Some("fixture user prompt".to_string()),
+            }))
+        }
+    }
+
+    struct SessionEndFixturePlugin {
+        tx: tokio::sync::mpsc::UnboundedSender<crate::plugin::sdk::SessionEndInput>,
+    }
+
+    #[async_trait]
+    impl crate::plugin::sdk::Plugin for SessionEndFixturePlugin {
+        fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
+            crate::plugin::sdk::PluginManifest::builder("session-end-fixture", "0.1.0")
+                .hooks(crate::plugin::sdk::HookSubscription::SESSION_END)
+                .build()
+        }
+
+        async fn session_end(
+            &self,
+            input: crate::plugin::sdk::SessionEndInput,
+        ) -> crate::plugin::sdk::Result<()> {
+            let _ = self.tx.send(input);
+            Ok(())
+        }
+    }
+
+    struct StreamingFixturePlugin {
+        chunk_sent: Arc<tokio::sync::Notify>,
+        finish: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl crate::plugin::sdk::Plugin for StreamingFixturePlugin {
+        fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
+            crate::plugin::sdk::PluginManifest::builder("streaming-fixture", "0.1.0")
+                .hooks(crate::plugin::sdk::HookSubscription::TOOL_INVOKE_STREAM)
+                .entry(
+                    crate::plugin::sdk::PluginEntryDecl::new(
+                        "stream_fixture_count",
+                        serde_json::json!({
+                            "type": "object",
+                            "properties": { "n": { "type": "integer" } }
+                        }),
+                    )
+                    .description("Stream fixture count.")
+                    .streaming(crate::plugin::sdk::EntryStreamingMode::Streaming),
+                )
+                .build()
+        }
+
+        async fn tool_invoke_stream(
+            &self,
+            _input: crate::plugin::sdk::ToolInvokeInput,
+            sink: crate::plugin::sdk::ToolStreamSink,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolStreamEnd> {
+            let stream_id = sink.stream_id().to_string();
+            sink.chunk(crate::plugin::sdk::ToolStreamChunk {
+                stream_id: stream_id.clone(),
+                text_delta: Some("partial ".to_string()),
+                payload_delta: None,
+                metadata: Default::default(),
+            })
+            .await;
+            self.chunk_sent.notify_waiters();
+            self.finish.notified().await;
+            Ok(crate::plugin::sdk::ToolStreamEnd {
+                stream_id,
+                title: "Stream fixture".to_string(),
+                output_text: "partial done".to_string(),
+                payload: None,
+                metadata: Default::default(),
+                attachments: Vec::new(),
+            })
         }
     }
 
@@ -2875,6 +3340,27 @@ mod tests {
                     }
                 })
             });
+            let stream_tool_result = request.messages.iter().find_map(|message| {
+                if message.role != Role::Tool {
+                    return None;
+                }
+                message.parts.iter().find_map(|part| {
+                    if part.operation_id.as_deref() != Some("call_stream_tool_1") {
+                        return None;
+                    }
+                    match part.content.as_ref() {
+                        Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                            output_text,
+                            ..
+                        })) => Some(Ok(output_text.clone())),
+                        Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
+                            error_message,
+                            ..
+                        })) => Some(Err(error_message.clone())),
+                        _ => None,
+                    }
+                })
+            });
             let apply_patch_tool_loaded = request.messages.iter().any(|message| {
                 message.parts.iter().any(|part| {
                     let details = match part.content.as_ref() {
@@ -2921,6 +3407,43 @@ mod tests {
                 let delta = match todo_result {
                     Ok(()) => "permission todo done".to_string(),
                     Err(_) => "permission todo failed".to_string(),
+                };
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
+                        delta,
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if last_user_text.contains("stream plugin") && stream_tool_result.is_none() {
+                vec![
+                    Ok(CompletionStreamEvent::ToolCallDelta {
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
+                        stream_key: "call_stream_tool_1".to_string(),
+                        id: Some("call_stream_tool_1".to_string()),
+                        name: Some("stream_fixture_count".to_string()),
+                        arguments_delta: serde_json::json!({ "n": 5 }).to_string(),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id: scripted_provider_id(),
+                        model: scripted_model_id(),
+                        finish_reason: Some(CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                    }),
+                ]
+            } else if let Some(stream_tool_result) = stream_tool_result {
+                let delta = match stream_tool_result {
+                    Ok(output) => format!("stream tool done: {output}"),
+                    Err(_) => "stream tool failed".to_string(),
                 };
                 vec![
                     Ok(CompletionStreamEvent::TextDelta {
@@ -3133,6 +3656,99 @@ mod tests {
         db
     }
 
+    async fn build_session_start_plugin_host(
+        workspace_root: &std::path::Path,
+    ) -> Arc<crate::plugin::PluginHost> {
+        let mut list = BTreeMap::new();
+        list.insert(
+            "fixture".to_string(),
+            crate::plugin::PluginEntry::Static {
+                options: serde_json::Value::Null,
+                timeouts: Default::default(),
+            },
+        );
+        let config = crate::plugin::PluginsConfig {
+            enabled: true,
+            timeouts: Default::default(),
+            list,
+            trusted_keys: Default::default(),
+        };
+        crate::plugin::PluginHostBuilder::new(workspace_root, "test")
+            .with_config(config)
+            .register_static("fixture", SessionStartFixturePlugin)
+            .build()
+            .await
+            .expect("plugin host should build")
+    }
+
+    async fn build_session_end_plugin_host(
+        workspace_root: &std::path::Path,
+    ) -> (
+        Arc<crate::plugin::PluginHost>,
+        tokio::sync::mpsc::UnboundedReceiver<crate::plugin::sdk::SessionEndInput>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut list = BTreeMap::new();
+        list.insert(
+            "fixture".to_string(),
+            crate::plugin::PluginEntry::Static {
+                options: serde_json::Value::Null,
+                timeouts: Default::default(),
+            },
+        );
+        let config = crate::plugin::PluginsConfig {
+            enabled: true,
+            timeouts: Default::default(),
+            list,
+            trusted_keys: Default::default(),
+        };
+        let host = crate::plugin::PluginHostBuilder::new(workspace_root, "test")
+            .with_config(config)
+            .register_static("fixture", SessionEndFixturePlugin { tx })
+            .build()
+            .await
+            .expect("plugin host should build");
+        (host, rx)
+    }
+
+    async fn build_streaming_plugin_host(
+        workspace_root: &std::path::Path,
+    ) -> (
+        Arc<crate::plugin::PluginHost>,
+        Arc<tokio::sync::Notify>,
+        Arc<tokio::sync::Notify>,
+    ) {
+        let chunk_sent = Arc::new(tokio::sync::Notify::new());
+        let finish = Arc::new(tokio::sync::Notify::new());
+        let mut list = BTreeMap::new();
+        list.insert(
+            "fixture".to_string(),
+            crate::plugin::PluginEntry::Static {
+                options: serde_json::Value::Null,
+                timeouts: Default::default(),
+            },
+        );
+        let config = crate::plugin::PluginsConfig {
+            enabled: true,
+            timeouts: Default::default(),
+            list,
+            trusted_keys: Default::default(),
+        };
+        let host = crate::plugin::PluginHostBuilder::new(workspace_root, "test")
+            .with_config(config)
+            .register_static(
+                "fixture",
+                StreamingFixturePlugin {
+                    chunk_sent: Arc::clone(&chunk_sent),
+                    finish: Arc::clone(&finish),
+                },
+            )
+            .build()
+            .await
+            .expect("plugin host should build");
+        (host, chunk_sent, finish)
+    }
+
     async fn build_manager_with_provider_on_db<P>(
         root: &std::path::Path,
         db: DatabaseConnection,
@@ -3145,14 +3761,42 @@ mod tests {
     where
         P: ModelProvider + 'static,
     {
+        build_manager_with_provider_and_plugins_on_db(
+            root,
+            db,
+            permission_policy,
+            tool_policy,
+            config,
+            context_policy,
+            provider,
+            crate::tool::builtins_plugin_host(root).expect("builtins plugin host"),
+        )
+        .await
+    }
+
+    async fn build_manager_with_provider_and_plugins_on_db<P>(
+        root: &std::path::Path,
+        db: DatabaseConnection,
+        permission_policy: PermissionPolicy,
+        tool_policy: ToolPermissionPolicy,
+        config: SessionManagerConfig,
+        context_policy: ContextPolicy,
+        provider: P,
+        plugins: Arc<crate::plugin::PluginHost>,
+    ) -> SessionManager
+    where
+        P: ModelProvider + 'static,
+    {
         let mut registry = ProviderRegistry::new();
         registry.register(provider);
         let processor =
-            SessionProcessor::new(Arc::new(registry), ContextGovernor::new(context_policy));
+            SessionProcessor::new(Arc::new(registry), ContextGovernor::new(context_policy))
+                .with_plugin_host(Arc::clone(&plugins));
         let executor = ToolExecutor::new(
             root,
             Agent::new("build", permission_policy).with_tool_policy(tool_policy),
-        );
+        )
+        .with_plugin_manager(plugins);
 
         SessionManager::new(db, processor, executor).with_config(config)
     }
@@ -3222,6 +3866,181 @@ mod tests {
             cache_read_tokens: 0,
             total_cost: 0.0,
         }
+    }
+
+    #[tokio::test]
+    async fn create_session_applies_session_start_patch_messages() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "session_start_patch.db").await;
+        let plugins = build_session_start_plugin_host(&workspace.root).await;
+        let manager = build_manager_with_provider_and_plugins_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+            plugins,
+        )
+        .await;
+
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "Session start fixture".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session creation should succeed");
+        let session_id = created.id;
+        let loaded = manager
+            .get_session(session_id)
+            .await
+            .expect("session should reload");
+
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].role, crate::role::Role::System);
+        assert_eq!(loaded.messages[0].as_text_lossy(), "fixture context");
+        assert_eq!(
+            loaded.messages[0].metadata.source,
+            crate::message::MessageSource::System
+        );
+        assert_eq!(loaded.messages[1].role, crate::role::Role::User);
+        assert_eq!(loaded.messages[1].as_text_lossy(), "fixture user prompt");
+        assert_eq!(
+            loaded.messages[1].metadata.source,
+            crate::message::MessageSource::System
+        );
+    }
+
+    #[tokio::test]
+    async fn broadcast_active_session_end_notifies_plugins() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "session_end_broadcast.db").await;
+        let (plugins, mut rx) = build_session_end_plugin_host(&workspace.root).await;
+        let manager = build_manager_with_provider_and_plugins_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+            plugins,
+        )
+        .await;
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "Session end fixture".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session creation should succeed");
+        let session_id = created.id;
+        let (_control, _steer_rx) = manager.turn_registry.register(session_id).await;
+
+        manager
+            .broadcast_active_session_end(crate::plugin::SessionEndReason::Other)
+            .await;
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("session.end hook should arrive")
+            .expect("session.end payload should be sent");
+        assert_eq!(received.session_id, session_id);
+        assert_eq!(received.reason, crate::plugin::SessionEndReason::Other);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn streaming_tool_execution_persists_in_progress_output() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "streaming_tool_execution.db").await;
+        let (plugins, chunk_sent, finish) = build_streaming_plugin_host(&workspace.root).await;
+        let manager = Arc::new(
+            build_manager_with_provider_and_plugins_on_db(
+                &workspace.root,
+                db,
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+                SessionManagerConfig::default(),
+                ContextPolicy::default(),
+                ScriptedProvider,
+                plugins,
+            )
+            .await,
+        );
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "Streaming tool fixture".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session creation should succeed");
+        let session_id = created.id;
+
+        let chunk_ready = chunk_sent.notified();
+        let manager_task = Arc::clone(&manager);
+        let submit = tokio::spawn(async move {
+            manager_task
+                .submit_user_turn(SessionUserTurnRequest {
+                    session_id,
+                    options: run_options(),
+                    parts: vec![crate::message::PartContent::text("stream plugin")],
+                })
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), chunk_ready)
+            .await
+            .expect("streaming chunk should be emitted");
+
+        let partial_output = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let session = manager
+                    .get_session(session_id)
+                    .await
+                    .expect("session should reload while streaming");
+                if let Some(output_text) = session
+                    .messages
+                    .iter()
+                    .flat_map(|message| message.parts.iter())
+                    .find_map(|part| match part.content.as_ref() {
+                        Some(crate::message::PartContent::ToolExecution(
+                            ToolExecutionPart::InProgress { output_text, .. },
+                        )) if part.operation_id.as_deref() == Some("call_stream_tool_1") => {
+                            Some(output_text.clone())
+                        }
+                        _ => None,
+                    })
+                {
+                    break output_text;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("streaming output should persist as in-progress");
+        assert_eq!(partial_output, "partial ");
+
+        finish.notify_waiters();
+        let completed = submit
+            .await
+            .expect("submit task should join")
+            .expect("streaming submit should complete");
+        let final_output = completed
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find_map(|part| match part.content.as_ref() {
+                Some(crate::message::PartContent::ToolExecution(
+                    ToolExecutionPart::Completed { output_text, .. },
+                )) if part.operation_id.as_deref() == Some("call_stream_tool_1") => {
+                    Some(output_text.clone())
+                }
+                _ => None,
+            })
+            .expect("completed streamed tool output should exist");
+        assert_eq!(final_output, "partial done");
     }
 
     #[allow(dead_code)]

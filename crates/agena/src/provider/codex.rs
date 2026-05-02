@@ -219,7 +219,7 @@ impl CodexProvider {
         input
     }
 
-    fn responses_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<OpenAiResponsesTool> {
+    fn responses_tools(tools: &[crate::tool::EntryDefinition]) -> Vec<OpenAiResponsesTool> {
         tools
             .iter()
             .map(|tool| OpenAiResponsesTool {
@@ -409,7 +409,8 @@ impl CodexProvider {
                     Self::push_responses_text_message(input, "user", message.as_text_lossy());
                 } else {
                     let tool_results = wire_message::tool_results(projected_parts.as_slice());
-                    let extra_parts = wire_message::non_tool_result_parts(projected_parts.as_slice());
+                    let extra_parts =
+                        wire_message::non_tool_result_parts(projected_parts.as_slice());
 
                     if tool_results.len() > 1 {
                         let mut buffered_parts = Vec::new();
@@ -921,7 +922,7 @@ impl OpenAiResponsesRequest {
     fn new(
         model: String,
         input: Vec<OpenAiResponsesInputItem>,
-        tools: &[crate::tool::ToolDefinition],
+        tools: &[crate::tool::EntryDefinition],
         max_output_tokens: Option<u32>,
         temperature: Option<f32>,
         prompt_cache_key: Option<String>,
@@ -1102,7 +1103,7 @@ mod tests {
         AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, StructuredObject,
         TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
     };
-    use crate::tool::{ToolBehavior, ToolDefinition};
+    use crate::tool::{EntryBehavior, EntryDefinition};
 
     #[derive(Default)]
     struct MemoryAuthStore {
@@ -1151,8 +1152,8 @@ mod tests {
         }
     }
 
-    fn sample_tool_definition() -> ToolDefinition {
-        ToolDefinition::plugin(
+    fn sample_tool_definition() -> EntryDefinition {
+        EntryDefinition::plugin(
             "project_search",
             "Search project files.",
             serde_json::json!({
@@ -1162,7 +1163,7 @@ mod tests {
                 },
                 "required": ["query"]
             }),
-            ToolBehavior::ReadOnly,
+            EntryBehavior::ReadOnly,
             "fixture",
         )
     }

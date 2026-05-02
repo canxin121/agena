@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::event::{EventFilter, EventKind, EventStore, EventStoreError, StoreRange};
-use crate::event::envelope::DomainEvent;
 use crate::db::SeaEventStore;
+use crate::event::envelope::DomainEvent;
+use crate::event::{EventFilter, EventKind, EventStore, EventStoreError, StoreRange};
 
 /// Wraps `SeaEventStore<EventKind>` and silently skips UI-only events (those
 /// where `EventKind::is_persistent()` returns `false`). History events are

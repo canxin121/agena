@@ -1,18 +1,18 @@
 //! Strongly-typed hook input / output structures. Plugin authors write against
 //! these; the host serializes them as JSON-RPC params.
 
-pub mod tool;
-pub mod chat;
-pub mod event;
-pub mod auth;
-pub mod provider;
-pub mod permission;
-pub mod command;
-pub mod shell;
-pub mod config;
-pub mod session;
-pub mod prompt;
 pub mod agent;
+pub mod auth;
+pub mod chat;
+pub mod command;
+pub mod config;
+pub mod event;
+pub mod permission;
+pub mod prompt;
+pub mod provider;
+pub mod session;
+pub mod shell;
+pub mod tool;
 
 pub use agent::*;
 pub use auth::*;

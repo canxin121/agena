@@ -141,12 +141,7 @@ impl LspClient {
     /// `didOpen` on first sight, `didChange` if we've already opened it
     /// and the content hash differs, and is a no-op otherwise. Safe to
     /// call before every LSP request.
-    pub async fn sync_document(
-        &self,
-        uri: Uri,
-        text: String,
-        language_id: &str,
-    ) -> LspResult<()> {
+    pub async fn sync_document(&self, uri: Uri, text: String, language_id: &str) -> LspResult<()> {
         let hash = hash_str(&text);
         let entry = self.inner.open_docs.get(&uri).map(|r| r.value().clone());
         match entry {
@@ -257,7 +252,9 @@ impl LspClient {
         P: serde::Serialize,
         R: DeserializeOwned,
     {
-        let value = self.request_value(method, serde_json::to_value(params)?).await?;
+        let value = self
+            .request_value(method, serde_json::to_value(params)?)
+            .await?;
         Ok(serde_json::from_value(value)?)
     }
 
@@ -266,7 +263,9 @@ impl LspClient {
         P: serde::Serialize,
         R: DeserializeOwned,
     {
-        let value = self.request_value(method, serde_json::to_value(params)?).await?;
+        let value = self
+            .request_value(method, serde_json::to_value(params)?)
+            .await?;
         if value.is_null() {
             return Ok(None);
         }
@@ -293,9 +292,7 @@ impl LspClient {
             Ok(Err(_)) => return Err(LspError::TransportClosed),
             Err(_) => {
                 self.inner.pending.remove(&id);
-                return Err(LspError::Timeout(
-                    DEFAULT_REQUEST_TIMEOUT.as_millis() as u64,
-                ));
+                return Err(LspError::Timeout(DEFAULT_REQUEST_TIMEOUT.as_millis() as u64));
             }
         };
         if let Some(err) = resp.error {
@@ -335,9 +332,7 @@ async fn reader_loop(inner: Arc<Inner>) {
         };
         match frame {
             InboundMessage::Response(resp) => {
-                let id = match resp.id {
-                    RequestId::Number(n) => n,
-                };
+                let RequestId::Number(id) = resp.id;
                 if let Some((_, tx)) = inner.pending.remove(&id) {
                     let _ = tx.send(resp);
                 } else {
@@ -379,10 +374,10 @@ async fn reader_loop(inner: Arc<Inner>) {
 
 async fn handle_notification(inner: &Inner, n: JsonRpcNotification) {
     let params = n.params.unwrap_or(Value::Null);
-    if n.method == "textDocument/publishDiagnostics" {
-        if let Ok(p) = serde_json::from_value::<PublishDiagnosticsParams>(params.clone()) {
-            inner.diagnostics.insert(p.uri.clone(), p.diagnostics);
-        }
+    if n.method == "textDocument/publishDiagnostics"
+        && let Ok(p) = serde_json::from_value::<PublishDiagnosticsParams>(params.clone())
+    {
+        inner.diagnostics.insert(p.uri.clone(), p.diagnostics);
     }
     let guard = inner.notifications.lock().await;
     if let Some(tx) = guard.as_ref() {

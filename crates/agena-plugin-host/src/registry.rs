@@ -1,28 +1,28 @@
-//! Tool name → plugin index. Auto-prefixes on collision.
+//! Plugin entry name → plugin index. Auto-prefixes on collision.
 
 use std::collections::BTreeMap;
 
-use crate::sdk::{ToolBehavior, ToolDecl};
+use crate::sdk::{EntryBehavior, PluginEntryDecl};
 
 #[derive(Debug, Clone)]
-pub struct ToolRegistry {
+pub struct PluginEntryRegistry {
     /// `exposed_name → (plugin_index, decl)`. `exposed_name` is the name shown
-    /// to the model: bare `tool` if unique, else `plugin__tool`.
-    by_exposed: BTreeMap<String, ToolEntry>,
+    /// to the model: bare `entry` if unique, else `plugin__entry`.
+    by_exposed: BTreeMap<String, PluginEntry>,
     /// All builtins occupy unique reserved keys.
     builtins: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ToolEntry {
+pub struct PluginEntry {
     pub plugin_index: usize,
     pub plugin_name: String,
     pub original_name: String,
     pub exposed_name: String,
-    pub decl: ToolDecl,
+    pub decl: PluginEntryDecl,
 }
 
-impl ToolRegistry {
+impl PluginEntryRegistry {
     pub fn new(builtins: impl IntoIterator<Item = String>) -> Self {
         Self {
             by_exposed: BTreeMap::new(),
@@ -34,7 +34,7 @@ impl ToolRegistry {
         &mut self,
         plugin_index: usize,
         plugin_name: &str,
-        decls: &[ToolDecl],
+        decls: &[PluginEntryDecl],
     ) {
         for decl in decls {
             let original = decl.name.clone();
@@ -59,7 +59,7 @@ impl ToolRegistry {
             };
             self.by_exposed.insert(
                 exposed.clone(),
-                ToolEntry {
+                PluginEntry {
                     plugin_index,
                     plugin_name: plugin_name.to_string(),
                     original_name: original,
@@ -70,11 +70,11 @@ impl ToolRegistry {
         }
     }
 
-    pub fn lookup(&self, exposed_name: &str) -> Option<&ToolEntry> {
+    pub fn lookup(&self, exposed_name: &str) -> Option<&PluginEntry> {
         self.by_exposed.get(exposed_name)
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = &ToolEntry> {
+    pub fn entries(&self) -> impl Iterator<Item = &PluginEntry> {
         self.by_exposed.values()
     }
 
@@ -83,13 +83,13 @@ impl ToolRegistry {
     }
 }
 
-/// A behavior helper for plugin-shipped tools the host has to filter against
+/// A behavior helper for plugin-shipped entries the host has to filter against
 /// the catalog/agent.
-pub fn behavior_label(b: ToolBehavior) -> &'static str {
+pub fn behavior_label(b: EntryBehavior) -> &'static str {
     match b {
-        ToolBehavior::ReadOnly => "read-only",
-        ToolBehavior::WriteSandboxed => "write-sandboxed",
-        ToolBehavior::WriteUnsandboxed => "write-unsandboxed",
-        ToolBehavior::Task => "task",
+        EntryBehavior::ReadOnly => "read-only",
+        EntryBehavior::WriteSandboxed => "write-sandboxed",
+        EntryBehavior::WriteUnsandboxed => "write-unsandboxed",
+        EntryBehavior::Task => "task",
     }
 }

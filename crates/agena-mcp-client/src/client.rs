@@ -42,8 +42,7 @@ pub type ServerRequestHandler = Arc<
 
 /// Handler invoked when the server sends a notification (no response is
 /// expected). Receives `(method, params)`.
-pub type ServerNotificationHandler =
-    Arc<dyn Fn(String, Value) + Send + Sync>;
+pub type ServerNotificationHandler = Arc<dyn Fn(String, Value) + Send + Sync>;
 
 pub struct McpClient {
     inner: Arc<Inner>,
@@ -87,7 +86,9 @@ impl McpClient {
     /// (e.g. `notifications/tools/list_changed`). Replaces any prior
     /// handler.
     pub fn set_notification_handler(&self, handler: ServerNotificationHandler) {
-        self.inner.notification_handler.store(Some(Arc::new(handler)));
+        self.inner
+            .notification_handler
+            .store(Some(Arc::new(handler)));
     }
 
     pub fn server_capabilities(&self) -> Option<Arc<ServerCapabilities>> {
@@ -127,7 +128,8 @@ impl McpClient {
     }
 
     pub async fn list_tools(&self) -> McpResult<ListToolsResult> {
-        self.request_typed(method::TOOLS_LIST, Some(json!({}))).await
+        self.request_typed(method::TOOLS_LIST, Some(json!({})))
+            .await
     }
 
     pub async fn call_tool(
@@ -149,13 +151,16 @@ impl McpClient {
     }
 
     pub async fn read_resource(&self, uri: &str) -> McpResult<ReadResourceResult> {
-        let params = ReadResourceParams { uri: uri.to_string() };
+        let params = ReadResourceParams {
+            uri: uri.to_string(),
+        };
         self.request_typed(method::RESOURCES_READ, Some(serde_json::to_value(&params)?))
             .await
     }
 
     pub async fn list_prompts(&self) -> McpResult<ListPromptsResult> {
-        self.request_typed(method::PROMPTS_LIST, Some(json!({}))).await
+        self.request_typed(method::PROMPTS_LIST, Some(json!({})))
+            .await
     }
 
     pub async fn get_prompt(
@@ -163,7 +168,10 @@ impl McpClient {
         name: &str,
         arguments: Option<BTreeMap<String, String>>,
     ) -> McpResult<GetPromptResult> {
-        let params = GetPromptParams { name: name.to_string(), arguments };
+        let params = GetPromptParams {
+            name: name.to_string(),
+            arguments,
+        };
         self.request_typed(method::PROMPTS_GET, Some(serde_json::to_value(&params)?))
             .await
     }
@@ -212,7 +220,10 @@ impl McpClient {
             }
         };
         if let Some(err) = resp.error {
-            return Err(McpError::Rpc { code: err.code, message: err.message });
+            return Err(McpError::Rpc {
+                code: err.code,
+                message: err.message,
+            });
         }
         Ok(resp.result.unwrap_or(Value::Null))
     }
@@ -234,7 +245,8 @@ async fn reader_loop(inner: Arc<Inner>) {
             Err(e) => {
                 tracing::debug!(target: "agena_mcp_client::reader", "transport ended: {e}");
                 // Cancel all pending requests.
-                let mut keys: Vec<RequestId> = inner.pending.iter().map(|kv| kv.key().clone()).collect();
+                let mut keys: Vec<RequestId> =
+                    inner.pending.iter().map(|kv| kv.key().clone()).collect();
                 for k in keys.drain(..) {
                     if let Some((_, tx)) = inner.pending.remove(&k) {
                         // Drop the sender — the awaiter will see a recv error.
@@ -317,7 +329,9 @@ async fn inner_for_resp_send(
 }
 
 /// Convenience: deserialize a `sampling/createMessage` params payload.
-pub fn parse_create_message_params(value: &Value) -> Result<CreateMessageParams, serde_json::Error> {
+pub fn parse_create_message_params(
+    value: &Value,
+) -> Result<CreateMessageParams, serde_json::Error> {
     serde_json::from_value(value.clone())
 }
 

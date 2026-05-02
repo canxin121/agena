@@ -18,7 +18,7 @@ use crate::{
         PromptCacheShapeDiff, project_session_parts, project_session_text_lossy,
     },
     role::Role,
-    tool::ToolDefinition,
+    tool::EntryDefinition,
 };
 
 use super::Session;
@@ -100,7 +100,7 @@ pub(crate) struct PromptRequestOptions<'a> {
     pub system: Option<&'a str>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
-    pub tools: &'a [ToolDefinition],
+    pub tools: &'a [EntryDefinition],
     pub provider_request_shape: Option<&'a PromptCacheShape>,
     pub continuation_supported: bool,
 }
@@ -712,7 +712,7 @@ fn attachment_to_transcript_block(item: &crate::message::AttachmentItem) -> Tran
 
 pub(crate) fn approximate_request_overhead_chars(
     system: Option<&str>,
-    tools: &[ToolDefinition],
+    tools: &[EntryDefinition],
 ) -> usize {
     let system_chars = system
         .map(str::trim)
@@ -732,7 +732,7 @@ pub(crate) fn prompt_char_budget(
     max_output_tokens: Option<u32>,
     fallback_max_prompt_chars: usize,
     system: Option<&str>,
-    tools: &[ToolDefinition],
+    tools: &[EntryDefinition],
 ) -> usize {
     let overhead_chars = approximate_request_overhead_chars(system, tools);
     let fallback_budget = fallback_max_prompt_chars
@@ -1395,18 +1395,13 @@ fn tool_execution_invocation(exec: &ToolExecutionPart) -> &ToolInvocation {
 }
 
 fn tool_invocation_name(invocation: &ToolInvocation) -> String {
-    match invocation {
-        ToolInvocation::Mcp { server, tool, .. } => format!("{server}:{tool}"),
-        ToolInvocation::Custom { name, .. } => name.clone(),
-    }
+    let ToolInvocation::Custom { name, .. } = invocation;
+    name.clone()
 }
 
 fn tool_invocation_arguments_json(invocation: &ToolInvocation) -> String {
-    match invocation {
-        ToolInvocation::Mcp { input, .. } | ToolInvocation::Custom { input, .. } => {
-            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
-        }
-    }
+    let ToolInvocation::Custom { input, .. } = invocation;
+    serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn attachment_payload_bytes(message: &Message) -> usize {
@@ -1447,7 +1442,7 @@ fn fingerprint_request_options(
     model_id: &str,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
-    tools: &[ToolDefinition],
+    tools: &[EntryDefinition],
     provider_request_shape: Option<&PromptCacheShape>,
 ) -> String {
     #[derive(Serialize)]
@@ -1457,7 +1452,7 @@ fn fingerprint_request_options(
         model_id: &'a str,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
-        tools: &'a [ToolDefinition],
+        tools: &'a [EntryDefinition],
         provider_request_shape_fingerprint: Option<String>,
     }
 
@@ -1495,7 +1490,7 @@ mod tests {
 
     use crate::{
         role::Role,
-        tool::{ToolBehavior, ToolDefinition},
+        tool::{EntryBehavior, EntryDefinition},
     };
 
     use super::*;
@@ -2357,10 +2352,10 @@ mod tests {
 
     #[test]
     fn fingerprint_request_options_changes_when_tools_change() {
-        let tool = ToolDefinition::builtin::<serde_json::Value>(
+        let tool = EntryDefinition::builtin::<serde_json::Value>(
             "grep",
             "Search files.",
-            ToolBehavior::ReadOnly,
+            EntryBehavior::ReadOnly,
         );
 
         let baseline = build_prepared_prompt(
@@ -2514,10 +2509,10 @@ mod tests {
 
     #[test]
     fn prompt_char_budget_uses_model_limits_and_request_overhead() {
-        let tool = ToolDefinition::builtin::<serde_json::Value>(
+        let tool = EntryDefinition::builtin::<serde_json::Value>(
             "grep",
             "Search files.",
-            ToolBehavior::ReadOnly,
+            EntryBehavior::ReadOnly,
         );
 
         let budget = prompt_char_budget(

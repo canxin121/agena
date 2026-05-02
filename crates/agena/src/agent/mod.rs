@@ -60,12 +60,16 @@ impl Agent {
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
+        self.authorize_tool_call(tool_name, false)
+    }
+
+    pub fn authorize_tool_call(&self, tool_name: &str, sensitive: bool) -> PermissionDecision {
         if self.disable {
             return PermissionDecision::Deny {
                 reason: format!("agent '{}' is disabled", self.name),
             };
         }
-        self.tool_policy.check_tool_name(tool_name)
+        self.tool_policy.check_tool(tool_name, None, sensitive)
     }
 
     pub fn authorize_path_access(

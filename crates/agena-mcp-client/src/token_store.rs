@@ -82,7 +82,10 @@ impl FileTokenStore {
 
     pub fn put_bearer(&self, server: &str, token: &str) -> Result<(), TokenStoreError> {
         {
-            let mut guard = self.inner.lock().map_err(|_| TokenStoreError::LockPoisoned)?;
+            let mut guard = self
+                .inner
+                .lock()
+                .map_err(|_| TokenStoreError::LockPoisoned)?;
             let entry = guard
                 .servers
                 .entry(server.to_string())
@@ -94,7 +97,10 @@ impl FileTokenStore {
 
     pub fn delete(&self, server: &str) -> Result<bool, TokenStoreError> {
         let removed = {
-            let mut guard = self.inner.lock().map_err(|_| TokenStoreError::LockPoisoned)?;
+            let mut guard = self
+                .inner
+                .lock()
+                .map_err(|_| TokenStoreError::LockPoisoned)?;
             guard.servers.remove(server).is_some()
         };
         if removed {
@@ -104,13 +110,19 @@ impl FileTokenStore {
     }
 
     pub fn list_servers(&self) -> Result<Vec<String>, TokenStoreError> {
-        let guard = self.inner.lock().map_err(|_| TokenStoreError::LockPoisoned)?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| TokenStoreError::LockPoisoned)?;
         Ok(guard.servers.keys().cloned().collect())
     }
 
     fn persist(&self) -> Result<(), TokenStoreError> {
         let snapshot = {
-            let guard = self.inner.lock().map_err(|_| TokenStoreError::LockPoisoned)?;
+            let guard = self
+                .inner
+                .lock()
+                .map_err(|_| TokenStoreError::LockPoisoned)?;
             guard.clone()
         };
         if let Some(parent) = self.path.parent() {

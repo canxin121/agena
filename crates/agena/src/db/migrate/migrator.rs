@@ -1,7 +1,7 @@
 use sea_orm_migration::prelude::*;
 
-use super::m20260427_000001_initial;
 use super::event_migration::EventsMigration;
+use super::m20260427_000001_initial;
 
 pub struct Migrator;
 

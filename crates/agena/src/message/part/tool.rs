@@ -561,15 +561,25 @@ pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginInvocation {
+    pub entry_name: String,
+    pub input: StructuredObject,
+}
+
+impl PluginInvocation {
+    pub fn from_tool_invocation(invocation: &ToolInvocation) -> Self {
+        let ToolInvocation::Custom { name, input } = invocation;
+        Self {
+            entry_name: name.clone(),
+            input: input.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum ToolInvocation {
-    Mcp {
-        server: String,
-        tool: String,
-        #[serde(default)]
-        input: StructuredObject,
-    },
     Custom {
         name: String,
         #[serde(default)]
@@ -581,10 +591,8 @@ impl ToolInvocation {
     /// If this invocation names a built-in tool, decode its input into a
     /// strongly-typed [`BuiltinToolInput`].
     pub fn as_builtin(&self) -> Option<BuiltinToolInput> {
-        match self {
-            Self::Custom { name, input } => BuiltinToolInput::from_custom(name, input),
-            Self::Mcp { .. } => None,
-        }
+        let Self::Custom { name, input } = self;
+        BuiltinToolInput::from_custom(name, input)
     }
 }
 

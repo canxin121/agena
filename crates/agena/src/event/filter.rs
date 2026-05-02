@@ -25,8 +25,12 @@ pub trait KindMatcher {
 pub enum Scope {
     #[default]
     Global,
-    Workspace { workspace_id: i64 },
-    Session { session_id: i64 },
+    Workspace {
+        workspace_id: i64,
+    },
+    Session {
+        session_id: i64,
+    },
 }
 
 impl Scope {

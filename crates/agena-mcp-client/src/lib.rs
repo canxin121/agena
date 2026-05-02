@@ -17,10 +17,10 @@ pub mod transport;
 pub use client::{McpClient, ServerRequestHandler};
 pub use error::{McpError, McpResult};
 pub use manager::{ConnectedServer, HttpAuth, McpConnectionManager, ServerSpec, TokenStore};
-pub use token_store::{FileTokenStore, TokenStoreError};
 pub use protocol::{
     CallToolResult, ContentBlock, CreateMessageParams, CreateMessageResult, GetPromptResult,
     InitializeResult, JsonRpcError, ListPromptsResult, ListResourcesResult, ListToolsResult,
     ReadResourceResult, ResourceContents, ResourceDescriptor, ServerCapabilities, ToolDescriptor,
 };
+pub use token_store::{FileTokenStore, TokenStoreError};
 pub use transport::{HttpTransport, HttpTransportMode, McpTransport, StdioTransport};

@@ -385,10 +385,8 @@ const fn file_change_kind_label(kind: FileChangeKind) -> &'static str {
 }
 
 fn tool_name(invocation: &ToolInvocation) -> String {
-    match invocation {
-        ToolInvocation::Mcp { server, tool, .. } => format!("{server}:{tool}"),
-        ToolInvocation::Custom { name, .. } => name.clone(),
-    }
+    let ToolInvocation::Custom { name, .. } = invocation;
+    name.clone()
 }
 
 fn truncate_summary(value: &str) -> Option<String> {

@@ -6,8 +6,8 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use agena::event::EventKind;
-use agena_api::notifications::Notification;
 use agena::event::{EventBus, bus::SubscriptionItem};
+use agena_api::notifications::Notification;
 use axum::{
     extract::{Query, State},
     response::sse::{Event, KeepAlive, Sse},
@@ -83,9 +83,7 @@ impl StreamQuery {
             None | Some("global") => agena::event::Scope::Global,
             Some("workspace") => {
                 let workspace_id = self.workspace_id.ok_or_else(|| {
-                    ServerError::BadRequest(
-                        "scope_kind=workspace requires workspace_id".into(),
-                    )
+                    ServerError::BadRequest("scope_kind=workspace requires workspace_id".into())
                 })?;
                 agena::event::Scope::Workspace { workspace_id }
             }
@@ -118,6 +116,8 @@ impl StreamQuery {
 // Suppress unused-import warning when EventBus<EventKind> is only used via
 // trait-object dispatch.
 #[allow(dead_code)]
-fn _bus_assertion(b: std::sync::Arc<dyn EventBus<EventKind>>) -> std::sync::Arc<dyn EventBus<EventKind>> {
+fn _bus_assertion(
+    b: std::sync::Arc<dyn EventBus<EventKind>>,
+) -> std::sync::Arc<dyn EventBus<EventKind>> {
     b
 }

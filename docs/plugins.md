@@ -40,8 +40,8 @@ impl Plugin for MyPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("my-plugin", "0.1.0")
             .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::SHELL_ENV)
-            .tool(
-                ToolDecl::new("greet", json!({
+            .entry(
+                PluginEntryDecl::new("greet", json!({
                     "type": "object",
                     "properties": { "name": { "type": "string" } },
                     "required": ["name"]
@@ -201,7 +201,7 @@ Timeout strings accept `ms`, `s`, `m`, `h` units. Restart policies:
 When two plugins (or a plugin + a built-in) declare the same tool name,
 the host auto-prefixes both as `<plugin_id>__<tool>`. Built-ins always win
 the un-prefixed name. Plugins can opt into a permanent prefix via
-`ToolDecl::expose_as("…")`.
+`PluginEntryDecl::expose_as("…")`.
 
 ## Failure isolation
 

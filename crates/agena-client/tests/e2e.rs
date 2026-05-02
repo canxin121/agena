@@ -5,9 +5,12 @@
 use std::sync::Arc;
 
 use agena::{
-    agent::Agent, event::{EventKind, PublishContext}, permission::PermissionPolicy,
-    provider::ProviderRegistry, session::{ContextGovernor, ContextPolicy, SessionManager,
-    SessionProcessor}, tool::ToolExecutor,
+    agent::Agent,
+    event::{EventKind, PublishContext},
+    permission::PermissionPolicy,
+    provider::ProviderRegistry,
+    session::{ContextGovernor, ContextPolicy, SessionManager, SessionProcessor},
+    tool::ToolExecutor,
 };
 use agena_api::{Scope, queries::ListEventsParams, subscribe::SubscribeRequest};
 use agena_api_server::{AppState, router};
@@ -19,8 +22,10 @@ async fn spawn_server() -> (String, String, Arc<SessionManager>) {
     agena::db::init_schema(&db).await.unwrap();
 
     let registry = ProviderRegistry::new();
-    let processor =
-        SessionProcessor::new(Arc::new(registry), ContextGovernor::new(ContextPolicy::default()));
+    let processor = SessionProcessor::new(
+        Arc::new(registry),
+        ContextGovernor::new(ContextPolicy::default()),
+    );
     let executor = ToolExecutor::new(
         std::env::temp_dir(),
         Agent::new("client-e2e", PermissionPolicy::allow_all()),
@@ -29,9 +34,7 @@ async fn spawn_server() -> (String, String, Arc<SessionManager>) {
 
     let runtime = agena::runtime::AgenaRuntime::builder()
         .with_workspace_root(std::env::temp_dir())
-        .with_database_connection(
-            sea_orm::Database::connect("sqlite::memory:").await.unwrap(),
-        )
+        .with_database_connection(sea_orm::Database::connect("sqlite::memory:").await.unwrap())
         .build()
         .await
         .expect("runtime build");

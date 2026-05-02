@@ -37,8 +37,6 @@ where
     async fn high_watermark(&self) -> Result<Option<i64>, EventStoreError>;
 
     /// Highest `seq_session` for a given session, or `None`.
-    async fn session_high_watermark(
-        &self,
-        session_id: i64,
-    ) -> Result<Option<i64>, EventStoreError>;
+    async fn session_high_watermark(&self, session_id: i64)
+    -> Result<Option<i64>, EventStoreError>;
 }

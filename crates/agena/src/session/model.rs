@@ -769,14 +769,20 @@ impl Session {
         pending: &SessionPendingTool,
     ) -> Option<(i64, &ToolInvocation, &TimeRange)> {
         let part = self.part(&pending.part)?;
-        let PartContent::ToolExecution(ToolExecutionPart::Pending {
-            call_id,
-            invocation,
-            lifecycle,
-            ..
-        }) = part.content.as_ref()?
-        else {
-            return None;
+        let (call_id, invocation, lifecycle) = match part.content.as_ref()? {
+            PartContent::ToolExecution(ToolExecutionPart::Pending {
+                call_id,
+                invocation,
+                lifecycle,
+                ..
+            })
+            | PartContent::ToolExecution(ToolExecutionPart::InProgress {
+                call_id,
+                invocation,
+                lifecycle,
+                ..
+            }) => (call_id, invocation, lifecycle),
+            _ => return None,
         };
 
         Some((*call_id, invocation, lifecycle))
@@ -821,10 +827,8 @@ impl Session {
 }
 
 fn tool_invocation_name(invocation: &ToolInvocation) -> String {
-    match invocation {
-        ToolInvocation::Mcp { server, tool, .. } => format!("{server}:{tool}"),
-        ToolInvocation::Custom { name, .. } => name.clone(),
-    }
+    let ToolInvocation::Custom { name, .. } = invocation;
+    name.clone()
 }
 
 fn extract_call_id(part: &MessagePart) -> Option<i64> {

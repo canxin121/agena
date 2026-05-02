@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::message::{BashToolInput, BuiltinToolInput};
+use crate::message::BuiltinToolInput;
 
 pub use request::{
     PendingPermission, PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
@@ -175,19 +175,46 @@ impl ToolPermissionPolicy {
     }
 
     pub fn check_builtin(&self, input: &BuiltinToolInput) -> PermissionDecision {
-        if let BuiltinToolInput::Bash(bash) = input {
-            if let Some(decision) = self.evaluate_bash_deny(bash) {
-                return decision;
-            }
-            if let Some(decision) = self.evaluate_bash_pattern(bash) {
-                return self.apply_execution_mode(input, decision);
-            }
-        }
-        let base = self.check_tool_name(builtin_name(input));
-        self.apply_execution_mode(input, base)
+        let tool_name = builtin_name(input);
+        let command = match input {
+            BuiltinToolInput::Bash(bash) => Some(bash.command.as_str()),
+            _ => None,
+        };
+        let sensitive = matches!(
+            input,
+            BuiltinToolInput::Bash(_)
+                | BuiltinToolInput::ApplyPatch(_)
+                | BuiltinToolInput::NotebookEdit(_)
+                | BuiltinToolInput::PowerShell(_)
+        );
+        self.check_tool(tool_name, command, sensitive)
     }
 
     pub fn check_tool_name(&self, name: &str) -> PermissionDecision {
+        self.check_tool(name, None, false)
+    }
+
+    pub fn check_tool(
+        &self,
+        name: &str,
+        command: Option<&str>,
+        sensitive: bool,
+    ) -> PermissionDecision {
+        if name == "bash" {
+            if let Some(command) = command {
+                if let Some(decision) = self.evaluate_bash_deny(command) {
+                    return decision;
+                }
+                if let Some(decision) = self.evaluate_bash_pattern(command) {
+                    return self.apply_execution_mode(name, sensitive, decision);
+                }
+            }
+        }
+        let base = self.check_tool_mode(name);
+        self.apply_execution_mode(name, sensitive, base)
+    }
+
+    fn check_tool_mode(&self, name: &str) -> PermissionDecision {
         let mode = self
             .tool_modes
             .get(name)
@@ -207,8 +234,8 @@ impl ToolPermissionPolicy {
         }
     }
 
-    fn evaluate_bash_pattern(&self, bash: &BashToolInput) -> Option<PermissionDecision> {
-        let normalized = bash.command.trim();
+    fn evaluate_bash_pattern(&self, command: &str) -> Option<PermissionDecision> {
+        let normalized = command.trim();
         if normalized.is_empty() {
             return None;
         }
@@ -235,8 +262,8 @@ impl ToolPermissionPolicy {
         None
     }
 
-    fn evaluate_bash_deny(&self, bash: &BashToolInput) -> Option<PermissionDecision> {
-        let normalized = bash.command.trim();
+    fn evaluate_bash_deny(&self, command: &str) -> Option<PermissionDecision> {
+        let normalized = command.trim();
         if normalized.is_empty() {
             return None;
         }
@@ -253,33 +280,21 @@ impl ToolPermissionPolicy {
         None
     }
 
-    /// In `Ask` mode, promote any `Allow` decision for a sensitive builtin
-    /// to `Ask`. Deny stays Deny; explicit Ask stays Ask. Other modes pass
+    /// In `Ask` mode, promote any `Allow` decision for a sensitive tool to
+    /// `Ask`. Deny stays Deny; explicit Ask stays Ask. Other modes pass
     /// through unchanged.
     fn apply_execution_mode(
         &self,
-        input: &BuiltinToolInput,
+        tool_name: &str,
+        sensitive: bool,
         decision: PermissionDecision,
     ) -> PermissionDecision {
-        if !matches!(self.execution_mode, ExecutionMode::Ask) {
-            return decision;
-        }
-        let sensitive = matches!(
-            input,
-            BuiltinToolInput::Bash(_)
-                | BuiltinToolInput::ApplyPatch(_)
-                | BuiltinToolInput::NotebookEdit(_)
-                | BuiltinToolInput::PowerShell(_)
-        );
-        if !sensitive {
+        if !matches!(self.execution_mode, ExecutionMode::Ask) || !sensitive {
             return decision;
         }
         match decision {
             PermissionDecision::Allow => PermissionDecision::Ask {
-                reason: format!(
-                    "execution mode `ask` requires confirmation for `{}`",
-                    builtin_name(input)
-                ),
+                reason: format!("execution mode `ask` requires confirmation for `{tool_name}`"),
             },
             other => other,
         }
@@ -900,6 +915,24 @@ mod tests {
             PermissionDecision::Deny { reason } => assert!(reason.contains("bash")),
             other => panic!("expected deny decision, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn execution_mode_ask_promotes_allow_for_sensitive_custom_tool() {
+        let policy = ToolPermissionPolicy::allow_all().with_execution_mode(ExecutionMode::Ask);
+
+        match policy.check_tool("plugin_paths", None, true) {
+            PermissionDecision::Ask { reason } => {
+                assert!(reason.contains("ask"));
+                assert!(reason.contains("plugin_paths"));
+            }
+            other => panic!("expected Ask for sensitive custom tool, got {other:?}"),
+        }
+
+        assert_eq!(
+            policy.check_tool("plugin_paths", None, false),
+            PermissionDecision::Allow
+        );
     }
 
     #[test]

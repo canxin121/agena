@@ -16,14 +16,18 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::drivers::dispatch::PluginDispatcher;
 use crate::error::{PluginError, PluginErrorCode};
-use crate::host_api::{EventSubscription, HostClient, LogLevel};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
+use crate::host_api::{
+    AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostClient, LogLevel,
+    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+};
 use crate::plugin::Plugin;
 use crate::rpc::{
-    codes, method, ErrorObject, Frame, JsonRpcVersion, Notification, Request, RequestId,
-    Response, ResponsePayload,
+    ErrorObject, Frame, JsonRpcVersion, Notification, Request, RequestId, Response,
+    ResponsePayload, codes, method,
 };
 
 /// Run a plugin to completion as a stdio JSON-RPC server. Returns when stdin
@@ -72,7 +76,7 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                 let _ = writer.await;
                 return Ok(());
             }
-            let trimmed = line.trim_end_matches(|c| c == '\r' || c == '\n');
+            let trimmed = line.trim_end_matches(['\r', '\n']);
             if trimmed.is_empty() {
                 break;
             }
@@ -123,7 +127,10 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                 let dispatcher = Arc::clone(&dispatcher);
                 tokio::spawn(async move {
                     let _ = dispatcher
-                        .dispatch(&notif.method, notif.params.unwrap_or(serde_json::Value::Null))
+                        .dispatch(
+                            &notif.method,
+                            notif.params.unwrap_or(serde_json::Value::Null),
+                        )
                         .await;
                 });
             }
@@ -175,7 +182,8 @@ impl StdioHostClient {
             method: method.to_string(),
             params: Some(params),
         };
-        let body = serde_json::to_vec(&req).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+        let body =
+            serde_json::to_vec(&req).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let (slot_tx, slot_rx) = oneshot::channel();
         self.pending.lock().await.insert(req_id, slot_tx);
         self.tx.send(body).map_err(|_| PluginError {
@@ -263,12 +271,12 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn read_config(
-        &self,
-        path: Option<String>,
-    ) -> crate::error::Result<serde_json::Value> {
-        self.call(method::HOST_CONFIG_READ, serde_json::json!({ "path": path }))
-            .await
+    async fn read_config(&self, path: Option<String>) -> crate::error::Result<serde_json::Value> {
+        self.call(
+            method::HOST_CONFIG_READ,
+            serde_json::json!({ "path": path }),
+        )
+        .await
     }
 
     async fn invoke_tool(
@@ -278,7 +286,106 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<ToolInvokeOutput> {
         self.call(
             method::HOST_TOOL_INVOKE,
-            serde_json::json!({ "tool": tool, "input": input }),
+            serde_json::json!({
+                "tool": tool,
+                "input": input,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn ask_user(&self, req: AskUserRequest) -> crate::error::Result<AskUserResponse> {
+        self.call(
+            method::HOST_ASK_USER,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn spawn_subtask(
+        &self,
+        req: SpawnSubtaskRequest,
+    ) -> crate::error::Result<SpawnSubtaskResponse> {
+        self.call(
+            method::HOST_SUBTASK_SPAWN,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn list_tools(&self) -> crate::error::Result<Vec<ToolDescriptor>> {
+        self.call(
+            method::HOST_TOOL_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn execute_builtin_tool(
+        &self,
+        req: BuiltinToolRequest,
+    ) -> crate::error::Result<ToolInvokeOutput> {
+        self.call(
+            method::HOST_BUILTIN_EXECUTE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn monitor_start(&self, req: MonitorStartRequest) -> crate::error::Result<MonitorHandle> {
+        self.call(
+            method::HOST_MONITOR_START,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn monitor_list(&self) -> crate::error::Result<Vec<MonitorHandle>> {
+        self.call(
+            method::HOST_MONITOR_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn monitor_read(
+        &self,
+        req: MonitorReadRequest,
+    ) -> crate::error::Result<MonitorReadResponse> {
+        self.call(
+            method::HOST_MONITOR_READ,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn monitor_stop(&self, req: MonitorStopRequest) -> crate::error::Result<MonitorHandle> {
+        self.call(
+            method::HOST_MONITOR_STOP,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
         )
         .await
     }

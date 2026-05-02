@@ -100,11 +100,21 @@ impl McpConnectionManager {
     /// Spawn a new server, perform `initialize`, and pre-load its tool list.
     pub async fn add_server(&self, name: &str, spec: ServerSpec) -> McpResult<()> {
         let client = match spec {
-            ServerSpec::Stdio { command, args, env, cwd } => {
+            ServerSpec::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => {
                 let t = StdioTransport::spawn(&command, &args, &env, cwd.as_ref()).await?;
                 McpClient::new(Arc::new(t))
             }
-            ServerSpec::Http { url, mode, mut headers, auth } => {
+            ServerSpec::Http {
+                url,
+                mode,
+                mut headers,
+                auth,
+            } => {
                 if let Some(auth) = auth {
                     apply_http_auth(name, auth, &mut headers, self.token_store.as_deref());
                 }
@@ -238,7 +248,11 @@ impl McpConnectionManager {
         tool: &str,
         arguments: Option<Value>,
     ) -> McpResult<CallToolResult> {
-        self.get(server).await?.client.call_tool(tool, arguments).await
+        self.get(server)
+            .await?
+            .client
+            .call_tool(tool, arguments)
+            .await
     }
 
     pub async fn list_resources(&self, server: &str) -> McpResult<ListResourcesResult> {
@@ -259,7 +273,11 @@ impl McpConnectionManager {
         name: &str,
         arguments: Option<std::collections::BTreeMap<String, String>>,
     ) -> McpResult<GetPromptResult> {
-        self.get(server).await?.client.get_prompt(name, arguments).await
+        self.get(server)
+            .await?
+            .client
+            .get_prompt(name, arguments)
+            .await
     }
 
     pub async fn shutdown_all(&self) {
@@ -325,9 +343,7 @@ fn apply_http_auth(
 }
 
 fn has_auth_header(headers: &HashMap<String, String>) -> bool {
-    headers
-        .keys()
-        .any(|k| k.eq_ignore_ascii_case(AUTH_HEADER))
+    headers.keys().any(|k| k.eq_ignore_ascii_case(AUTH_HEADER))
 }
 
 fn set_bearer(headers: &mut HashMap<String, String>, token: &str, server: &str) {

@@ -86,6 +86,12 @@ async fn cliproxyapi_multi_provider_real_smoke() {
                     prompt_cache_key: None,
                     previous_response_id: None,
                     prompt_window_generation: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking: None,
+                    response_format: None,
                 },
             )
             .await
@@ -1775,6 +1781,12 @@ fn completion_request(
         prompt_cache_key,
         previous_response_id: None,
         prompt_window_generation: None,
+        stop_sequences: Vec::new(),
+        top_p: None,
+        top_k: None,
+        seed: None,
+        thinking: None,
+        response_format: None,
     }
 }
 
@@ -1807,6 +1819,7 @@ async fn collect_stream_observation(
                 observation.text_delta_count += 1;
                 observation.text.push_str(delta.as_str());
             }
+            CompletionStreamEvent::ThinkingDelta { .. } => {}
             CompletionStreamEvent::ToolCallDelta { .. } => {}
             CompletionStreamEvent::Completed {
                 usage,

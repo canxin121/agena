@@ -23,9 +23,13 @@ pub enum RolloutKind {
     /// User-authored input.  Parts are encoded as opaque JSON to remain
     /// agena-agnostic — the importer is expected to know how to parse
     /// them.
-    UserMessage { parts: Value },
+    UserMessage {
+        parts: Value,
+    },
     /// LLM completion (one or more parts: text, tool calls, reasoning).
-    AssistantMessage { parts: Value },
+    AssistantMessage {
+        parts: Value,
+    },
     /// A tool call request landed and started executing.
     ToolCall {
         call_id: String,
@@ -40,12 +44,24 @@ pub enum RolloutKind {
         error: Option<String>,
     },
     /// Permission decision relevant to the conversation history.
-    Permission { request: Value, decision: Value },
+    Permission {
+        request: Value,
+        decision: Value,
+    },
     /// Plan-mode markers.
-    PlanEntered { slug: String, file_path: String },
-    PlanExited { slug: String, approved: bool },
+    PlanEntered {
+        slug: String,
+        file_path: String,
+    },
+    PlanExited {
+        slug: String,
+        approved: bool,
+    },
     /// A plugin event surfaced into the session timeline.
-    PluginEvent { plugin: String, payload: Value },
+    PluginEvent {
+        plugin: String,
+        payload: Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

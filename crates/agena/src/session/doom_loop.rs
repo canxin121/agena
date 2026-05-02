@@ -106,20 +106,11 @@ pub fn detect(messages: &[Message], policy: DoomLoopPolicy) -> Option<DoomLoopHi
 }
 
 fn signature_of(invocation: &ToolInvocation) -> (String, String) {
-    match invocation {
-        ToolInvocation::Custom { name, input } => (
-            name.clone(),
-            serde_json::to_string(input).unwrap_or_default(),
-        ),
-        ToolInvocation::Mcp {
-            server,
-            tool,
-            input,
-        } => (
-            format!("{server}::{tool}"),
-            serde_json::to_string(input).unwrap_or_default(),
-        ),
-    }
+    let ToolInvocation::Custom { name, input } = invocation;
+    (
+        name.clone(),
+        serde_json::to_string(input).unwrap_or_default(),
+    )
 }
 
 #[cfg(test)]

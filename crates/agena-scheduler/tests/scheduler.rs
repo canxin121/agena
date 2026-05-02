@@ -22,20 +22,20 @@ impl JobSink for CountingSink {
 async fn one_shot_fires_once_then_disappears() {
     let sink = Arc::new(CountingSink::default());
     let store = Arc::new(InMemoryJobStore::new());
-    let scheduler =
-        Scheduler::new(store.clone(), sink.clone(), Duration::from_millis(20));
+    let scheduler = Scheduler::new(store.clone(), sink.clone(), Duration::from_millis(20));
     scheduler.start();
 
     // Schedule for ~50ms in the future.
     let when = chrono::Utc::now() + chrono::Duration::milliseconds(50);
-    scheduler
-        .add(ScheduledJob::new_once(when, "ping"))
-        .await;
+    scheduler.add(ScheduledJob::new_once(when, "ping")).await;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     let fires = sink.fires.lock().clone();
     assert_eq!(fires, vec!["ping".to_string()]);
-    assert!(scheduler.list().await.is_empty(), "one-shot must be removed");
+    assert!(
+        scheduler.list().await.is_empty(),
+        "one-shot must be removed"
+    );
     scheduler.stop();
 }
 

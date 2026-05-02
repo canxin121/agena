@@ -215,10 +215,10 @@ impl AnthropicProvider {
         Self::is_first_party_base_url(self.base_url.as_str())
     }
 
-    fn tools(&self, tools: &[crate::tool::ToolDefinition]) -> Vec<AnthropicToolDefinition> {
+    fn tools(&self, tools: &[crate::tool::EntryDefinition]) -> Vec<AnthropicEntryDefinition> {
         tools
             .iter()
-            .map(|tool| AnthropicToolDefinition {
+            .map(|tool| AnthropicEntryDefinition {
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input_schema: tool.input_schema.clone(),
@@ -230,7 +230,7 @@ impl AnthropicProvider {
 
     fn apply_prompt_cache_hints(
         system: &mut [AnthropicTextBlock],
-        tools: &mut [AnthropicToolDefinition],
+        tools: &mut [AnthropicEntryDefinition],
         messages: &mut [AnthropicMessage],
     ) {
         // Keep Anthropic cache markers within the documented four-breakpoint
@@ -282,7 +282,6 @@ impl AnthropicProvider {
         let req = req.header(self.auth_header.as_str(), auth_value);
         utils::apply_request_headers(PROVIDER_ID, req, &self.extra_headers)
     }
-
 }
 
 #[async_trait]
@@ -425,7 +424,11 @@ impl ModelProvider for AnthropicProvider {
                 .filter_map(|c| c.text.clone())
                 .collect::<Vec<_>>()
                 .join("");
-            if thinking.is_empty() { None } else { Some(thinking) }
+            if thinking.is_empty() {
+                None
+            } else {
+                Some(thinking)
+            }
         } else {
             None
         };
@@ -523,13 +526,17 @@ impl ModelProvider for AnthropicProvider {
             tools,
             temperature: request.temperature,
             stream: Some(true),
-            thinking: request.thinking.as_ref().or(self.default_thinking.as_ref()).and_then(|t| match t {
-                ThinkingRequest::Enabled { budget_tokens } => Some(serde_json::json!({
-                    "type": "enabled",
-                    "budget_tokens": budget_tokens
-                })),
-                ThinkingRequest::Disabled => None,
-            }),
+            thinking: request
+                .thinking
+                .as_ref()
+                .or(self.default_thinking.as_ref())
+                .and_then(|t| match t {
+                    ThinkingRequest::Enabled { budget_tokens } => Some(serde_json::json!({
+                        "type": "enabled",
+                        "budget_tokens": budget_tokens
+                    })),
+                    ThinkingRequest::Disabled => None,
+                }),
             stop_sequences: request.stop_sequences,
             top_p: request.top_p,
             top_k: request.top_k,
@@ -749,7 +756,7 @@ struct AnthropicMessagesRequest {
     system: Option<Vec<AnthropicTextBlock>>,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<AnthropicToolDefinition>>,
+    tools: Option<Vec<AnthropicEntryDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -765,7 +772,7 @@ struct AnthropicMessagesRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct AnthropicToolDefinition {
+struct AnthropicEntryDefinition {
     name: String,
     description: String,
     input_schema: Value,
@@ -1116,10 +1123,10 @@ mod tests {
     use super::*;
     use crate::message::Message;
     use crate::provider::CompletionRequest;
-    use crate::tool::{ToolBehavior, ToolDefinition};
+    use crate::tool::{EntryBehavior, EntryDefinition};
 
-    fn sample_tool_definition() -> ToolDefinition {
-        ToolDefinition::plugin(
+    fn sample_tool_definition() -> EntryDefinition {
+        EntryDefinition::plugin(
             "project_search",
             "Search project files.",
             serde_json::json!({
@@ -1129,7 +1136,7 @@ mod tests {
                 },
                 "required": ["query"]
             }),
-            ToolBehavior::ReadOnly,
+            EntryBehavior::ReadOnly,
             "fixture",
         )
     }
@@ -1142,14 +1149,14 @@ mod tests {
             AnthropicTextBlock::text("system-3"),
         ];
         let mut tools = vec![
-            AnthropicToolDefinition {
+            AnthropicEntryDefinition {
                 name: "tool_a".to_owned(),
                 description: "first".to_owned(),
                 input_schema: serde_json::json!({ "type": "object" }),
                 cache_control: None,
                 eager_input_streaming: None,
             },
-            AnthropicToolDefinition {
+            AnthropicEntryDefinition {
                 name: "tool_b".to_owned(),
                 description: "second".to_owned(),
                 input_schema: serde_json::json!({ "type": "object" }),

@@ -34,8 +34,8 @@ impl Plugin for EchoPlugin {
                     | HookSubscription::SESSION_COMPACTED
                     | HookSubscription::PROVIDER_LIST,
             )
-            .tool(
-                ToolDecl::new(
+            .entry(
+                PluginEntryDecl::new(
                     "echo",
                     json!({
                         "type": "object",
@@ -46,7 +46,7 @@ impl Plugin for EchoPlugin {
                     }),
                 )
                 .description("Echo the supplied text.")
-                .behavior(ToolBehavior::ReadOnly),
+                .behavior(EntryBehavior::ReadOnly),
             )
             .build()
     }

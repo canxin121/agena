@@ -75,7 +75,19 @@ impl<P: Plugin> PluginDispatcher<P> {
             }
             method::HOOK_TOOL_INVOKE => {
                 let i: ToolInvokeInput = serde_json::from_value(params)?;
-                ok_json(&plugin.tool_invoke(i).await?)
+                let ctx = crate::host_api::HostCallbackContext {
+                    session_id: Some(i.session_id),
+                    call_id: Some(i.call_id),
+                    workspace_root: Some(i.workspace_root.clone()),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                let output =
+                    crate::host_api::with_host_callback_context(ctx, plugin.tool_invoke(i)).await?;
+                ok_json(&output)
+            }
+            method::HOOK_TOOL_PERMISSION_PATHS => {
+                let i: ToolPermissionPathsInput = serde_json::from_value(params)?;
+                ok_json(&plugin.permission_paths(&i.tool_name, &i.input).await?)
             }
             method::HOOK_TOOL_INVOKE_STREAM => Err(PluginError::new(
                 "tool.invoke.stream cannot be dispatched without a stream sink; \
@@ -159,7 +171,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                 Ok(Value::Object(Default::default()))
             }
             method::HOOK_TOOL_DEFINITION => {
-                let i: ToolDefinitionInput = serde_json::from_value(params)?;
+                let i: EntryDefinitionInput = serde_json::from_value(params)?;
                 ok_json(&plugin.tool_definition(i).await?)
             }
             method::HOOK_AGENT_STOP => {
@@ -196,7 +208,17 @@ impl<P: Plugin> PluginDispatcher<P> {
         let sink = ToolStreamSink::new(stream_id.clone(), tx);
         let plugin = std::sync::Arc::clone(&self.plugin);
         tokio::spawn(async move {
-            let result = plugin.tool_invoke_stream(input, sink).await;
+            let ctx = crate::host_api::HostCallbackContext {
+                session_id: Some(input.session_id),
+                call_id: Some(input.call_id),
+                workspace_root: Some(input.workspace_root.clone()),
+                ..crate::host_api::HostCallbackContext::default()
+            };
+            let result = crate::host_api::with_host_callback_context(
+                ctx,
+                plugin.tool_invoke_stream(input, sink),
+            )
+            .await;
             let _ = end_tx.send(result);
         });
         StreamHandle {

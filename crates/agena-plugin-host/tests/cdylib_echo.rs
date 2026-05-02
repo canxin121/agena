@@ -63,7 +63,7 @@ async fn cdylib_echo_plugin_loads_and_invokes() {
 
     assert_eq!(host.plugins().len(), 1, "one plugin should be loaded");
 
-    let resolved = host.lookup_tool("echo").expect("echo tool exposed");
+    let resolved = host.lookup_entry("echo").expect("echo tool exposed");
     let out = host
         .invoke_tool(
             &resolved.handle,

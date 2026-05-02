@@ -277,7 +277,7 @@ struct OllamaChatRequest {
     model: String,
     messages: Vec<OllamaChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<OllamaToolDefinition>>,
+    tools: Option<Vec<OllamaEntryDefinition>>,
     stream: bool,
     #[serde(skip_serializing_if = "OllamaOptions::is_empty")]
     options: OllamaOptions,
@@ -317,7 +317,7 @@ impl OllamaOptions {
 }
 
 #[derive(Debug, Serialize)]
-struct OllamaToolDefinition {
+struct OllamaEntryDefinition {
     #[serde(rename = "type")]
     kind: &'static str,
     function: OllamaFunctionDefinition,
@@ -412,10 +412,12 @@ fn role_name(role: Role) -> &'static str {
     }
 }
 
-fn tools_to_ollama_definitions(tools: &[crate::tool::ToolDefinition]) -> Vec<OllamaToolDefinition> {
+fn tools_to_ollama_definitions(
+    tools: &[crate::tool::EntryDefinition],
+) -> Vec<OllamaEntryDefinition> {
     tools
         .iter()
-        .map(|tool| OllamaToolDefinition {
+        .map(|tool| OllamaEntryDefinition {
             kind: "function",
             function: OllamaFunctionDefinition {
                 name: tool.name.clone(),

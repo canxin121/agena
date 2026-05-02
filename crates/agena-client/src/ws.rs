@@ -89,14 +89,16 @@ impl WsClient {
                 let Ok(server_msg) = parsed else { continue };
                 if let ServerMessage::Notification(notification) = server_msg {
                     let (id, item) = match notification {
-                        Notification::Event { subscription, event } => {
-                            (subscription, SubscriptionEvent::Event(*event))
-                        }
-                        Notification::Lagged { subscription, skipped } => {
-                            (subscription, SubscriptionEvent::Lagged(skipped))
-                        }
+                        Notification::Event {
+                            subscription,
+                            event,
+                        } => (subscription, SubscriptionEvent::Event(*event)),
+                        Notification::Lagged {
+                            subscription,
+                            skipped,
+                        } => (subscription, SubscriptionEvent::Lagged(skipped)),
                         Notification::Resumed { .. } | Notification::SubscriptionClosed { .. } => {
-                            continue
+                            continue;
                         }
                     };
                     let guard = subs_for_reader.lock().await;
@@ -107,13 +109,13 @@ impl WsClient {
             }
         });
 
-        Ok(Self { out_tx, subscribers })
+        Ok(Self {
+            out_tx,
+            subscribers,
+        })
     }
 
-    pub async fn subscribe(
-        &self,
-        request: SubscribeRequest,
-    ) -> Result<Subscription, ClientError> {
+    pub async fn subscribe(&self, request: SubscribeRequest) -> Result<Subscription, ClientError> {
         let id: SubscriptionId = uuid::Uuid::new_v4().simple().to_string().into();
         let (tx, rx) = mpsc::channel(256);
         {

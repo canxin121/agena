@@ -20,8 +20,8 @@ impl Plugin for TestPlugin {
                     | HookSubscription::SHELL_ENV
                     | HookSubscription::CHAT_PARAMS,
             )
-            .tool(
-                ToolDecl::new(
+            .entry(
+                PluginEntryDecl::new(
                     "ping",
                     json!({"type":"object","properties":{"text":{"type":"string"}}}),
                 )
@@ -40,10 +40,7 @@ impl Plugin for TestPlugin {
         Ok(ToolInvokeOutput::text(format!("pong: {text}")))
     }
 
-    async fn tool_execute_before(
-        &self,
-        _: ToolBeforeInput,
-    ) -> Result<Option<ToolBeforePatch>> {
+    async fn tool_execute_before(&self, _: ToolBeforeInput) -> Result<Option<ToolBeforePatch>> {
         let mut meta = BTreeMap::new();
         meta.insert("touched".into(), "yes".into());
         Ok(Some(ToolBeforePatch {
@@ -56,10 +53,7 @@ impl Plugin for TestPlugin {
         Ok(Some(ShellEnvPatch::set("AGENA_TEST", "1")))
     }
 
-    async fn chat_params(
-        &self,
-        _: ChatParamsInput,
-    ) -> Result<Option<ChatParamsPatch>> {
+    async fn chat_params(&self, _: ChatParamsInput) -> Result<Option<ChatParamsPatch>> {
         Ok(Some(ChatParamsPatch {
             params: Some(json!({ "temperature": 0.5 })),
         }))
@@ -89,7 +83,7 @@ async fn static_plugin_round_trips_every_hook() {
         .expect("plugin host should build");
 
     assert_eq!(host.plugins().len(), 1);
-    let resolved = host.lookup_tool("ping").expect("ping exposed");
+    let resolved = host.lookup_entry("ping").expect("ping exposed");
     assert_eq!(resolved.handle.original_name, "ping");
 
     // tool_invoke

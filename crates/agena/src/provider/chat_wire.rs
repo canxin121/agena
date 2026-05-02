@@ -25,7 +25,7 @@ pub(crate) struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<ChatToolDefinition>>,
+    pub tools: Option<Vec<ChatEntryDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,7 +133,7 @@ pub(crate) struct ChatFunctionCallRequest {
 // ─── Tool definition ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-pub(crate) struct ChatToolDefinition {
+pub(crate) struct ChatEntryDefinition {
     #[serde(rename = "type")]
     pub kind: String,
     pub function: ChatFunctionDefinition,
@@ -149,11 +149,11 @@ pub(crate) struct ChatFunctionDefinition {
 }
 
 pub(crate) fn tools_to_chat_definitions(
-    tools: &[crate::tool::ToolDefinition],
-) -> Vec<ChatToolDefinition> {
+    tools: &[crate::tool::EntryDefinition],
+) -> Vec<ChatEntryDefinition> {
     tools
         .iter()
-        .map(|tool| ChatToolDefinition {
+        .map(|tool| ChatEntryDefinition {
             kind: "function".to_owned(),
             function: ChatFunctionDefinition {
                 name: tool.name.clone(),
@@ -173,7 +173,9 @@ pub(crate) enum ChatResponseFormat {
     Text,
     JsonObject,
     #[serde(rename = "json_schema")]
-    JsonSchema { json_schema: ChatJsonSchemaSpec },
+    JsonSchema {
+        json_schema: ChatJsonSchemaSpec,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -188,15 +190,17 @@ pub(crate) fn map_response_format(fmt: Option<&ResponseFormat>) -> Option<ChatRe
     match fmt? {
         ResponseFormat::Text => Some(ChatResponseFormat::Text),
         ResponseFormat::JsonObject => Some(ChatResponseFormat::JsonObject),
-        ResponseFormat::JsonSchema { name, schema, strict } => {
-            Some(ChatResponseFormat::JsonSchema {
-                json_schema: ChatJsonSchemaSpec {
-                    name: name.clone(),
-                    schema: schema.clone(),
-                    strict: *strict,
-                },
-            })
-        }
+        ResponseFormat::JsonSchema {
+            name,
+            schema,
+            strict,
+        } => Some(ChatResponseFormat::JsonSchema {
+            json_schema: ChatJsonSchemaSpec {
+                name: name.clone(),
+                schema: schema.clone(),
+                strict: *strict,
+            },
+        }),
     }
 }
 
@@ -206,9 +210,7 @@ pub(crate) fn map_response_format(fmt: Option<&ResponseFormat>) -> Option<ChatRe
 /// o-series models.  Returns `None` for non-o-series models or when thinking
 /// is disabled / absent.
 pub(crate) fn reasoning_effort(thinking: Option<&ThinkingRequest>, model: &str) -> Option<String> {
-    let is_o_series = model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4");
+    let is_o_series = model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4");
     if !is_o_series {
         return None;
     }
@@ -485,10 +487,7 @@ fn session_text_lossy(message: &Message, parts: &[wire_message::WirePart]) -> St
     }
 }
 
-fn message_content_value(
-    message: &Message,
-    parts: &[wire_message::WirePart],
-) -> Value {
+fn message_content_value(message: &Message, parts: &[wire_message::WirePart]) -> Value {
     if parts.is_empty() {
         return Value::String(message.as_text_lossy());
     }
@@ -539,9 +538,7 @@ fn assistant_content_and_tool_calls(
 ///
 /// Returns an empty `Vec` when no tool-result parts with a valid ID are found
 /// (the caller falls back to sending the message as a plain user message).
-fn ordered_tool_and_user_messages(
-    parts: &[wire_message::WirePart],
-) -> Vec<ChatMessage> {
+fn ordered_tool_and_user_messages(parts: &[wire_message::WirePart]) -> Vec<ChatMessage> {
     let has_identified_result = parts.iter().any(|part| {
         matches!(
             part,
@@ -563,9 +560,9 @@ fn ordered_tool_and_user_messages(
                 output_json,
             } if !tool_call_id.trim().is_empty() => {
                 if !buffered.is_empty() {
-                    messages.push(ChatMessage::user(wire_message::parts_to_openai_content_array(
-                        buffered.as_slice(),
-                    )));
+                    messages.push(ChatMessage::user(
+                        wire_message::parts_to_openai_content_array(buffered.as_slice()),
+                    ));
                     buffered.clear();
                 }
                 messages.push(ChatMessage::tool_result(
@@ -583,9 +580,9 @@ fn ordered_tool_and_user_messages(
     }
 
     if !buffered.is_empty() {
-        messages.push(ChatMessage::user(wire_message::parts_to_openai_content_array(
-            buffered.as_slice(),
-        )));
+        messages.push(ChatMessage::user(
+            wire_message::parts_to_openai_content_array(buffered.as_slice()),
+        ));
     }
 
     messages

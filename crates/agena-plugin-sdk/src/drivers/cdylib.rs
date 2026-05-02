@@ -21,7 +21,9 @@ pub fn runtime() -> &'static Runtime {
 }
 
 #[doc(hidden)]
-pub fn into_abi_result(value: crate::error::Result<serde_json::Value>) -> RResult<RString, RString> {
+pub fn into_abi_result(
+    value: crate::error::Result<serde_json::Value>,
+) -> RResult<RString, RString> {
     match value {
         Ok(v) => match serde_json::to_string(&v) {
             Ok(s) => RResult::ROk(RString::from(s)),
@@ -46,15 +48,17 @@ fn encode_error(err: PluginError) -> RString {
 macro_rules! export_cdylib {
     ($plugin_ty:ty) => {
         const _: () = {
+            use ::std::sync::OnceLock;
             use $crate::abi_stable_reexport as abi_stable;
-            use $crate::cdylib_abi::{AgenaPluginCdylib, AgenaPluginCdylib_Ref, ABI_VERSION};
+            use $crate::cdylib_abi::{ABI_VERSION, AgenaPluginCdylib, AgenaPluginCdylib_Ref};
             use $crate::drivers::cdylib::{into_abi_result, runtime};
             use $crate::drivers::dispatch::PluginDispatcher;
-            use ::std::sync::OnceLock;
 
             fn dispatcher() -> &'static PluginDispatcher<$plugin_ty> {
                 static D: OnceLock<PluginDispatcher<$plugin_ty>> = OnceLock::new();
-                D.get_or_init(|| PluginDispatcher::new(<$plugin_ty as ::core::default::Default>::default()))
+                D.get_or_init(|| {
+                    PluginDispatcher::new(<$plugin_ty as ::core::default::Default>::default())
+                })
             }
 
             extern "C" fn dispatch(
@@ -85,15 +89,15 @@ macro_rules! export_cdylib {
                 });
                 match result {
                     Ok(value) => into_abi_result(value),
-                    Err(_) => into_abi_result(::std::result::Result::Err(
-                        $crate::error::PluginError {
+                    Err(_) => {
+                        into_abi_result(::std::result::Result::Err($crate::error::PluginError {
                             code: $crate::error::PluginErrorCode::Panicked,
                             message: "plugin panicked".into(),
                             hook: None,
                             plugin: None,
                             data: None,
-                        },
-                    )),
+                        }))
+                    }
                 }
             }
 
@@ -110,13 +114,11 @@ macro_rules! export_cdylib {
 
             #[::abi_stable::export_root_module]
             pub fn agena_plugin_root_module() -> AgenaPluginCdylib_Ref {
-                ::abi_stable::prefix_type::PrefixTypeTrait::leak_into_prefix(
-                    AgenaPluginCdylib {
-                        abi_version: ABI_VERSION,
-                        dispatch,
-                        shutdown,
-                    },
-                )
+                ::abi_stable::prefix_type::PrefixTypeTrait::leak_into_prefix(AgenaPluginCdylib {
+                    abi_version: ABI_VERSION,
+                    dispatch,
+                    shutdown,
+                })
             }
         };
     };

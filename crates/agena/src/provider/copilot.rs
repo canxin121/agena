@@ -901,10 +901,10 @@ fn build_chat_messages(request: &CompletionRequest) -> Vec<ChatMessage> {
     messages
 }
 
-fn chat_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<ChatToolDefinition> {
+fn chat_tools(tools: &[crate::tool::EntryDefinition]) -> Vec<ChatEntryDefinition> {
     tools
         .iter()
-        .map(|tool| ChatToolDefinition {
+        .map(|tool| ChatEntryDefinition {
             kind: "function".to_owned(),
             function: ChatFunctionDefinition {
                 name: tool.name.clone(),
@@ -1031,7 +1031,7 @@ fn build_responses_input(request: &CompletionRequest) -> Vec<OpenAiResponsesInpu
     input
 }
 
-fn responses_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<OpenAiResponsesTool> {
+fn responses_tools(tools: &[crate::tool::EntryDefinition]) -> Vec<OpenAiResponsesTool> {
     tools
         .iter()
         .map(|tool| OpenAiResponsesTool {
@@ -1240,9 +1240,8 @@ fn append_responses_items_for_message(
                                 }
 
                                 if tool_call_id.trim().is_empty() {
-                                    buffered_parts.push(wire_message::WirePart::Text {
-                                        text: output_json,
-                                    });
+                                    buffered_parts
+                                        .push(wire_message::WirePart::Text { text: output_json });
                                 } else {
                                     input.push(OpenAiResponsesInputItem::FunctionCallOutput(
                                         OpenAiFunctionCallOutputItem {
@@ -1297,17 +1296,13 @@ fn responses_input_contents_from_parts(
             wire_message::WirePart::Text { text } => {
                 OpenAiInputContent::Text { text: text.clone() }
             }
-            wire_message::WirePart::Attachment { item } => {
-                responses_content_from_attachment(item)
-            }
+            wire_message::WirePart::Attachment { item } => responses_content_from_attachment(item),
             wire_message::WirePart::ToolCall { name, .. } => OpenAiInputContent::Text {
                 text: format!("[tool_call:{name}]"),
             },
-            wire_message::WirePart::ToolResult { tool_call_id, .. } => {
-                OpenAiInputContent::Text {
-                    text: format!("[tool_result:{tool_call_id}]"),
-                }
-            }
+            wire_message::WirePart::ToolResult { tool_call_id, .. } => OpenAiInputContent::Text {
+                text: format!("[tool_result:{tool_call_id}]"),
+            },
         })
         .collect()
 }
@@ -1370,7 +1365,7 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<ChatToolDefinition>>,
+    tools: Option<Vec<ChatEntryDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1438,7 +1433,7 @@ struct ChatFunctionCallRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct ChatToolDefinition {
+struct ChatEntryDefinition {
     #[serde(rename = "type")]
     kind: String,
     function: ChatFunctionDefinition,

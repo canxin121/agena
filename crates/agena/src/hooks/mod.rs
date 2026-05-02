@@ -819,7 +819,7 @@ mod tests {
         let patch = rt
             .block_on(plugin.tool_execute_before(ToolBeforeInput {
                 tool_name: "bash".to_string(),
-                source: crate::plugin::sdk::ToolSource::Builtin,
+                source: crate::plugin::sdk::EntrySource::Builtin,
                 session_id: 1,
                 call_id: 2,
                 workspace_root: "/tmp".to_string(),
@@ -835,7 +835,7 @@ mod tests {
         let none = rt
             .block_on(plugin.tool_execute_before(ToolBeforeInput {
                 tool_name: "read".to_string(),
-                source: crate::plugin::sdk::ToolSource::Builtin,
+                source: crate::plugin::sdk::EntrySource::Builtin,
                 session_id: 1,
                 call_id: 3,
                 workspace_root: "/tmp".to_string(),

@@ -44,7 +44,10 @@ pub enum McpError {
 
 impl From<JsonRpcError> for McpError {
     fn from(e: JsonRpcError) -> Self {
-        Self::Rpc { code: e.code, message: e.message }
+        Self::Rpc {
+            code: e.code,
+            message: e.message,
+        }
     }
 }
 

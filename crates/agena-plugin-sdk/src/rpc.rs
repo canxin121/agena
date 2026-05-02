@@ -123,6 +123,7 @@ pub mod method {
     pub const HOOK_TOOL_BEFORE: &str = "hooks/tool.execute.before";
     pub const HOOK_TOOL_AFTER: &str = "hooks/tool.execute.after";
     pub const HOOK_TOOL_INVOKE: &str = "hooks/tool.invoke";
+    pub const HOOK_TOOL_PERMISSION_PATHS: &str = "hooks/tool.permission_paths";
     pub const HOOK_TOOL_INVOKE_STREAM: &str = "hooks/tool.invoke.stream";
     /// Notification: plugin → host, one chunk in an open stream.
     pub const TOOL_STREAM_CHUNK: &str = "tool.stream.chunk";
@@ -159,4 +160,12 @@ pub mod method {
     pub const HOST_PERMISSION_ASK: &str = "host/permission.ask";
     pub const HOST_CONFIG_READ: &str = "host/config.read";
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";
+    pub const HOST_ASK_USER: &str = "host/ask_user";
+    pub const HOST_SUBTASK_SPAWN: &str = "host/subtask.spawn";
+    pub const HOST_TOOL_LIST: &str = "host/tool.list";
+    pub const HOST_BUILTIN_EXECUTE: &str = "host/builtin.execute";
+    pub const HOST_MONITOR_START: &str = "host/monitor.start";
+    pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
+    pub const HOST_MONITOR_READ: &str = "host/monitor.read";
+    pub const HOST_MONITOR_STOP: &str = "host/monitor.stop";
 }

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use agena::event::EventKind;
+use agena::event::{EventBus, EventFilter, bus::SubscriptionItem};
 use agena_api::{
     PROTOCOL_VERSION,
     error::ApiError,
@@ -16,7 +17,6 @@ use agena_api::{
     subscribe::SubscriptionId,
     ws::{ClientMessage, ServerMessage},
 };
-use agena::event::{EventBus, EventFilter, bus::SubscriptionItem};
 use axum::{
     extract::{State, WebSocketUpgrade, ws::Message, ws::WebSocket},
     response::Response,
@@ -120,19 +120,21 @@ async fn handle_client_message(
     registry: Arc<Mutex<SubscriptionRegistry>>,
 ) {
     match msg {
-        ClientMessage::Command { id, command } => match dispatch::dispatch_command(&state, command).await {
-            Ok(result) => {
-                let _ = tx.send(ServerMessage::CommandResult { id, result }).await;
+        ClientMessage::Command { id, command } => {
+            match dispatch::dispatch_command(&state, command).await {
+                Ok(result) => {
+                    let _ = tx.send(ServerMessage::CommandResult { id, result }).await;
+                }
+                Err(err) => {
+                    let _ = tx
+                        .send(ServerMessage::Error {
+                            id: Some(id),
+                            error: err.into_api(),
+                        })
+                        .await;
+                }
             }
-            Err(err) => {
-                let _ = tx
-                    .send(ServerMessage::Error {
-                        id: Some(id),
-                        error: err.into_api(),
-                    })
-                    .await;
-            }
-        },
+        }
         ClientMessage::Query { id, query } => match dispatch::dispatch_query(&state, query).await {
             Ok(result) => {
                 let _ = tx.send(ServerMessage::QueryResult { id, result }).await;

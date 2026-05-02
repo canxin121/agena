@@ -23,14 +23,14 @@ pub use error::{PluginError, PluginErrorCode, Result};
 pub use hooks::*;
 pub use host_api::{HostClient, NoopHostClient};
 pub use manifest::{
-    HookSubscription, InputPathSpec, PathKind, PluginManifest, ToolBehavior, ToolDecl,
-    TransportKind,
+    EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,
+    InputPathSpec, PathKind, PlanModePolicy, PluginEntryDecl, PluginManifest, TransportKind,
 };
-pub use plugin::{InitContext, InitOutcome, Plugin};
+pub use plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
 
 // Re-exports used by macros so plugin authors don't have to add deps directly.
 #[doc(hidden)]
-pub use serde_json;
-#[doc(hidden)]
 #[cfg(feature = "cdylib")]
 pub use abi_stable as abi_stable_reexport;
+#[doc(hidden)]
+pub use serde_json;

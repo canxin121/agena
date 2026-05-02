@@ -211,6 +211,23 @@ impl AgenaRuntime {
     }
 
     pub fn shutdown(&self) {
+        if let Some(session_manager) = self.session_manager() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    handle.spawn(async move {
+                        session_manager
+                            .broadcast_active_session_end(crate::plugin::SessionEndReason::Other)
+                            .await;
+                    });
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        target: "agena_plugin_host::session_end",
+                        "no tokio runtime available during shutdown; skipping session.end broadcast"
+                    );
+                }
+            }
+        }
         self.inner.task_control.shutdown();
     }
 

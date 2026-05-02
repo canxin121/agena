@@ -18,11 +18,7 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(
-        store: Arc<dyn JobStore>,
-        sink: Arc<dyn JobSink>,
-        tick: Duration,
-    ) -> Arc<Self> {
+    pub fn new(store: Arc<dyn JobStore>, sink: Arc<dyn JobSink>, tick: Duration) -> Arc<Self> {
         Arc::new(Self {
             store,
             sink,
@@ -100,10 +96,7 @@ impl Scheduler {
 }
 
 /// Convenience constructor: scheduler + in-memory store + custom sink.
-pub fn build_in_memory(
-    sink: Arc<dyn JobSink>,
-    tick: Duration,
-) -> Arc<Scheduler> {
+pub fn build_in_memory(sink: Arc<dyn JobSink>, tick: Duration) -> Arc<Scheduler> {
     let store = Arc::new(crate::store::InMemoryJobStore::new()) as Arc<dyn JobStore>;
     Scheduler::new(store, sink, tick)
 }

@@ -6,8 +6,8 @@ use agena::{
     runtime::AgenaRuntime,
     storage::StorageConfig,
 };
-use agena_http_api::{ApiState, router as v1_router};
 use agena_api_server::{AppState as V2State, router as v2_router};
+use agena_http_api::{ApiState, router as v1_router};
 use axum::Router;
 use clap::{Args, Parser, Subcommand};
 use sea_orm::Database;

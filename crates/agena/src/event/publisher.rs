@@ -100,7 +100,9 @@ where
         &self,
         event: DomainEvent<K>,
     ) -> Result<DomainEvent<K>, PublishError> {
-        self.store.append_batch(std::slice::from_ref(&event)).await?;
+        self.store
+            .append_batch(std::slice::from_ref(&event))
+            .await?;
         self.bus.publish(event.clone()).await?;
         Ok(event)
     }

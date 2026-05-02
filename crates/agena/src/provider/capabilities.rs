@@ -26,9 +26,7 @@ impl Default for CapabilityRegistry {
                     openai_default_capabilities(),
                     vec![
                         ModelCapabilityRule::new(
-                            ModelMatcher::any_prefix([
-                                "gpt-4o", "gpt-4.1", "gpt-5",
-                            ]),
+                            ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
                             openai_multimodal_capabilities(),
                         )
                         .or(ModelMatcher::contains("codex")),
@@ -43,9 +41,7 @@ impl Default for CapabilityRegistry {
                     openai_default_capabilities(),
                     vec![
                         ModelCapabilityRule::new(
-                            ModelMatcher::any_prefix([
-                                "gpt-4o", "gpt-4.1", "gpt-5",
-                            ]),
+                            ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
                             openai_multimodal_capabilities(),
                         )
                         .or(ModelMatcher::contains("codex")),
@@ -88,9 +84,7 @@ impl Default for CapabilityRegistry {
                             anthropic_claude_capabilities(),
                         ),
                         ModelCapabilityRule::new(
-                            ModelMatcher::any_prefix([
-                                "gpt-4o", "gpt-4.1", "gpt-5",
-                            ]),
+                            ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
                             openai_multimodal_capabilities(),
                         )
                         .or(ModelMatcher::contains("gpt")),
@@ -310,7 +304,10 @@ mod tests {
         assert_eq!(capabilities.file_input, CapabilitySupport::Supported);
         assert_eq!(capabilities.structured_output, CapabilitySupport::Supported);
         assert_eq!(capabilities.reasoning, CapabilitySupport::Unsupported);
-        assert_eq!(capabilities.temperature_supported, CapabilitySupport::Supported);
+        assert_eq!(
+            capabilities.temperature_supported,
+            CapabilitySupport::Supported
+        );
     }
 
     #[test]
@@ -341,7 +338,10 @@ mod tests {
         assert_eq!(capabilities.document_input, CapabilitySupport::Supported);
         assert_eq!(capabilities.file_input, CapabilitySupport::Unsupported);
         assert_eq!(capabilities.reasoning, CapabilitySupport::Supported);
-        assert_eq!(capabilities.structured_output, CapabilitySupport::Unsupported);
+        assert_eq!(
+            capabilities.structured_output,
+            CapabilitySupport::Unsupported
+        );
     }
 
     #[test]

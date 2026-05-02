@@ -5,8 +5,50 @@ use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
 const DEFAULT_LIMIT: usize = 8;
 const MAX_LIMIT: usize = 25;
 
+#[derive(Debug, Clone)]
+pub(super) struct SearchableTool {
+    pub name: String,
+    pub description: String,
+    pub search_terms: Vec<String>,
+    pub behavior_label: String,
+    pub read_only: bool,
+    pub deferred: bool,
+}
+
+impl SearchableTool {
+    pub(super) fn from_definition(definition: super::EntryDefinition) -> Self {
+        let behavior_label = match definition.behavior {
+            super::EntryBehavior::Mutating => "mutating",
+            super::EntryBehavior::ReadOnly => "read_only",
+            super::EntryBehavior::Task => "task",
+        }
+        .to_string();
+        let deferred = definition.is_deferred();
+        Self {
+            name: definition.name,
+            description: definition.description,
+            search_terms: definition.search_terms,
+            behavior_label,
+            read_only: definition.read_only,
+            deferred,
+        }
+    }
+}
+
 pub(super) fn execute(
     executor: &ToolExecutor,
+    input: &ToolSearchToolInput,
+) -> Result<BuiltinExecution, ToolError> {
+    let catalog = executor
+        .searchable_tools()
+        .into_iter()
+        .map(SearchableTool::from_definition)
+        .collect::<Vec<_>>();
+    execute_with_tools(&catalog, input)
+}
+
+pub(super) fn execute_with_tools(
+    catalog: &[SearchableTool],
     input: &ToolSearchToolInput,
 ) -> Result<BuiltinExecution, ToolError> {
     if input.query.trim().is_empty() && input.load.is_empty() {
@@ -15,9 +57,8 @@ pub(super) fn execute(
         ));
     }
 
-    let catalog = executor.searchable_tools();
-    let results = search_catalog(&catalog, input.query.as_str(), input.limit);
-    let loaded_tools = resolve_requested_loads(&catalog, input.load.as_slice())?;
+    let results = search_catalog(catalog, input.query.as_str(), input.limit);
+    let loaded_tools = resolve_requested_loads(catalog, input.load.as_slice())?;
 
     let mut lines = Vec::new();
     if !input.query.trim().is_empty() {
@@ -31,7 +72,7 @@ pub(super) fn execute(
                 "- {} [{}{}]: {}",
                 definition.name,
                 behavior_label(definition),
-                if definition.is_deferred() {
+                if definition.deferred {
                     ", deferred"
                 } else {
                     ""
@@ -46,7 +87,7 @@ pub(super) fn execute(
             "Loaded deferred tools for later turns: {}.",
             loaded_tools.join(", ")
         ));
-    } else if !results.is_empty() && results.iter().any(|tool| tool.is_deferred()) {
+    } else if !results.is_empty() && results.iter().any(|tool| tool.deferred) {
         lines.push(
             "Call tool_search again with the exact tool names in `load` to expose deferred tools."
                 .to_string(),
@@ -71,10 +112,10 @@ pub(super) fn execute(
 }
 
 fn search_catalog(
-    catalog: &[super::ToolDefinition],
+    catalog: &[SearchableTool],
     query: &str,
     limit: Option<u32>,
-) -> Vec<super::ToolDefinition> {
+) -> Vec<SearchableTool> {
     let trimmed_query = query.trim();
     if trimmed_query.is_empty() {
         return Vec::new();
@@ -107,7 +148,7 @@ fn search_catalog(
 }
 
 fn resolve_requested_loads(
-    catalog: &[super::ToolDefinition],
+    catalog: &[SearchableTool],
     requested: &[String],
 ) -> Result<Vec<String>, ToolError> {
     let mut loaded = Vec::new();
@@ -129,11 +170,7 @@ fn resolve_requested_loads(
     Ok(loaded)
 }
 
-fn score_tool(
-    definition: &super::ToolDefinition,
-    normalized_query: &str,
-    tokens: &[String],
-) -> i32 {
+fn score_tool(definition: &SearchableTool, normalized_query: &str, tokens: &[String]) -> i32 {
     let normalized_name = normalize(definition.name.as_str());
     let normalized_description = normalize(definition.description.as_str());
     let normalized_terms = definition
@@ -173,7 +210,7 @@ fn score_tool(
         }
     }
 
-    if definition.is_deferred() {
+    if definition.deferred {
         score += 1;
     }
 
@@ -196,14 +233,10 @@ fn normalized_tokens(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn behavior_label(definition: &super::ToolDefinition) -> &'static str {
+fn behavior_label(definition: &SearchableTool) -> &str {
     if definition.read_only {
         "read_only"
     } else {
-        match definition.behavior {
-            super::ToolBehavior::Mutating => "mutating",
-            super::ToolBehavior::Task => "task",
-            super::ToolBehavior::ReadOnly => "read_only",
-        }
+        definition.behavior_label.as_str()
     }
 }

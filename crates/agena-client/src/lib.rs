@@ -28,8 +28,8 @@ pub mod error;
 pub mod http;
 pub mod ws;
 
-pub use agena_api;
 pub use agena::event as agena_event;
+pub use agena_api;
 pub use error::ClientError;
 pub use http::AgenaClient;
 pub use ws::{Subscription, WsClient};

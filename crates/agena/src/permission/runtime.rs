@@ -86,7 +86,7 @@ where
             let req = PluginPermissionAskInput {
                 session_id: session_id.unwrap_or(-1),
                 action: format!("{:?}", action),
-                subject: serde_json::Value::Null,
+                subject: permission_subject(&action),
                 default_decision,
             };
             match host.dispatch_permission_ask_blocking(req) {
@@ -188,6 +188,27 @@ impl From<PermissionMode> for PermissionDecision {
     }
 }
 
+fn permission_subject(action: &PermissionAction) -> serde_json::Value {
+    match action {
+        PermissionAction::BuiltinTool { tool_name } => {
+            serde_json::json!({
+                "kind": "tool",
+                "tool_name": tool_name,
+            })
+        }
+        PermissionAction::PathAccess {
+            access_kind,
+            workspace_root,
+            target_path,
+        } => serde_json::json!({
+            "kind": "path_access",
+            "access_kind": access_kind,
+            "workspace_root": workspace_root,
+            "target_path": target_path,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, RwLock};
@@ -226,6 +247,28 @@ mod tests {
                 .push((action, mode));
             Ok(())
         }
+    }
+
+    #[test]
+    fn permission_subject_includes_tool_context() {
+        let subject = super::permission_subject(&PermissionAction::BuiltinTool {
+            tool_name: "bash".to_string(),
+        });
+        assert_eq!(subject["kind"], "tool");
+        assert_eq!(subject["tool_name"], "bash");
+    }
+
+    #[test]
+    fn permission_subject_includes_path_context() {
+        let subject = super::permission_subject(&PermissionAction::PathAccess {
+            access_kind: "write".to_string(),
+            workspace_root: "/workspace".to_string(),
+            target_path: "/workspace/file.txt".to_string(),
+        });
+        assert_eq!(subject["kind"], "path_access");
+        assert_eq!(subject["access_kind"], "write");
+        assert_eq!(subject["workspace_root"], "/workspace");
+        assert_eq!(subject["target_path"], "/workspace/file.txt");
     }
 
     #[test]

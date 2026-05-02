@@ -122,16 +122,12 @@ pub trait JobSink: Send + Sync {
     async fn deliver(&self, job: &ScheduledJob);
 }
 
-fn compute_next_fire(
-    expression: &str,
-    after: DateTime<Utc>,
-) -> SchedulerResult<DateTime<Utc>> {
-    let schedule = cron::Schedule::from_str(expression).map_err(|e| {
-        SchedulerError::InvalidCron {
+fn compute_next_fire(expression: &str, after: DateTime<Utc>) -> SchedulerResult<DateTime<Utc>> {
+    let schedule =
+        cron::Schedule::from_str(expression).map_err(|e| SchedulerError::InvalidCron {
             expr: expression.to_string(),
             source: e,
-        }
-    })?;
+        })?;
     schedule
         .after(&after)
         .next()

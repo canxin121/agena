@@ -28,16 +28,18 @@ pub trait ModelProvider: Send + Sync {
 
     fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
         match self.capability_family() {
-            Some(family) => super::default_capability_registry()
-                .capabilities_for_family(family, model.as_str()),
+            Some(family) => {
+                super::default_capability_registry().capabilities_for_family(family, model.as_str())
+            }
             None => ModelCapabilities::default(),
         }
     }
 
     fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
         match self.capability_family() {
-            Some(family) => super::default_model_metadata_registry()
-                .metadata_for_family(family, model.as_str()),
+            Some(family) => {
+                super::default_model_metadata_registry().metadata_for_family(family, model.as_str())
+            }
             None => ModelMetadata::default(),
         }
     }

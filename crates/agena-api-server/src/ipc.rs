@@ -18,6 +18,7 @@ mod unix {
     use std::sync::Arc;
 
     use agena::event::EventKind;
+    use agena::event::{EventBus, EventFilter, bus::SubscriptionItem};
     use agena_api::{
         PROTOCOL_VERSION,
         error::ApiError,
@@ -25,7 +26,6 @@ mod unix {
         subscribe::SubscriptionId,
         ws::{ClientMessage, ServerMessage},
     };
-    use agena::event::{EventBus, EventFilter, bus::SubscriptionItem};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{Mutex, mpsc};
@@ -86,13 +86,8 @@ mod unix {
             let parsed: Result<ClientMessage, _> = serde_json::from_str(&line);
             match parsed {
                 Ok(msg) => {
-                    handle_client_message(
-                        msg,
-                        state.clone(),
-                        tx.clone(),
-                        Arc::clone(&registry),
-                    )
-                    .await;
+                    handle_client_message(msg, state.clone(), tx.clone(), Arc::clone(&registry))
+                        .await;
                 }
                 Err(err) => {
                     let _ = tx

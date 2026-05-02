@@ -11,18 +11,15 @@ use crate::event::{
     PartDeltaField, PublishContext, StreamErrorEvent,
 };
 use crate::message::{
-    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, ExecutionStatus,
-    GlobToolInput, GrepToolInput, Message, MessageMetadata, MessagePart, MessageSource,
-    MessageStatus, NotebookEditMode, NotebookEditToolInput, PartContent, PowerShellToolInput,
-    ReadToolInput, ReasoningPart, StructuredObject, TaskToolInput, TimeRange, TodoWriteToolInput,
-    ToolExecutionPart, ToolInvocation, ToolSearchToolInput, ViewFileToolInput,
+    ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus,
+    PartContent, ReasoningPart, StructuredObject, TimeRange, ToolExecutionPart, ToolInvocation,
 };
 use crate::model::ModelRef;
 use crate::provider::{
     CompletionFinishReason, CompletionRequest, CompletionStreamEvent, ProviderRegistry,
 };
 use crate::role::Role;
-use crate::tool::{ToolDefinition, ToolSource};
+use crate::tool::EntryDefinition;
 
 use super::history::{
     FinishReason, MessageId as HistoryMessageId, MessageIdAllocator, ToolCallId, TurnBuffer, TurnId,
@@ -1038,7 +1035,7 @@ fn tool_execution_title(name: Option<&str>) -> String {
 
 fn placeholder_tool_invocation(
     name: Option<&str>,
-    available_tools: &[ToolDefinition],
+    available_tools: &[EntryDefinition],
 ) -> ToolInvocation {
     let requested_name = name
         .map(str::trim)
@@ -1056,154 +1053,13 @@ fn placeholder_tool_invocation(
         };
     };
 
-    match &tool.source {
-        ToolSource::Builtin => placeholder_builtin_tool_input(tool.name.as_str()).into_invocation(),
-        ToolSource::Plugin { .. } => ToolInvocation::Custom {
-            name: tool.name.clone(),
-            input: StructuredObject::default(),
-        },
-    }
-}
-
-fn placeholder_builtin_tool_input(name: &str) -> BuiltinToolInput {
-    match canonical_builtin_tool_name(name) {
-        "bash" => BuiltinToolInput::Bash(BashToolInput {
-            command: String::new(),
-            description: String::new(),
-            timeout_ms: None,
-            workdir: None,
-        }),
-        "read" => BuiltinToolInput::Read(ReadToolInput {
-            file_path: String::new(),
-            offset: None,
-            limit: None,
-        }),
-        "view_file" => BuiltinToolInput::ViewFile(ViewFileToolInput {
-            path: String::new(),
-        }),
-        "apply_patch" => BuiltinToolInput::ApplyPatch(ApplyPatchToolInput {
-            patch: String::new(),
-        }),
-        "glob" => BuiltinToolInput::Glob(GlobToolInput {
-            pattern: String::new(),
-            path: None,
-        }),
-        "grep" => BuiltinToolInput::Grep(GrepToolInput {
-            pattern: String::new(),
-            path: None,
-            include: None,
-        }),
-        "task" => BuiltinToolInput::Task(TaskToolInput {
-            description: String::new(),
-            prompt: String::new(),
-            subagent_type: crate::message::TaskSubagentType::Explore,
-            task_id: None,
-            command: None,
-        }),
-        "tool_search" => BuiltinToolInput::ToolSearch(ToolSearchToolInput {
-            query: String::new(),
-            load: Vec::new(),
-            limit: None,
-        }),
-        "todo_write" => BuiltinToolInput::TodoWrite(TodoWriteToolInput { items: Vec::new() }),
-        "ask_user" => BuiltinToolInput::AskUser(AskUserToolInput {
-            questions: Vec::new(),
-        }),
-        "web_fetch" => BuiltinToolInput::WebFetch(crate::message::WebFetchToolInput {
-            url: String::new(),
-            prompt: None,
-        }),
-        "web_search" => BuiltinToolInput::WebSearch(crate::message::WebSearchToolInput {
-            query: String::new(),
-            allowed_domains: Vec::new(),
-            blocked_domains: Vec::new(),
-            max_results: None,
-        }),
-        "enter_plan_mode" => {
-            BuiltinToolInput::EnterPlanMode(crate::message::EnterPlanModeToolInput::default())
-        }
-        "exit_plan_mode" => {
-            BuiltinToolInput::ExitPlanMode(crate::message::ExitPlanModeToolInput::default())
-        }
-        "skill_run" => BuiltinToolInput::SkillRun(crate::message::SkillRunToolInput {
-            name: String::new(),
-            args: None,
-        }),
-        "enter_worktree" => {
-            BuiltinToolInput::EnterWorktree(crate::message::EnterWorktreeToolInput::default())
-        }
-        "exit_worktree" => BuiltinToolInput::ExitWorktree(crate::message::ExitWorktreeToolInput {
-            action: "keep".to_string(),
-            discard_changes: false,
-        }),
-        "cron_create" => BuiltinToolInput::CronCreate(crate::message::CronCreateToolInput {
-            expression: String::new(),
-            prompt: String::new(),
-            max_age_days: 7,
-        }),
-        "cron_list" => BuiltinToolInput::CronList(crate::message::CronListToolInput::default()),
-        "cron_delete" => {
-            BuiltinToolInput::CronDelete(crate::message::CronDeleteToolInput { id: String::new() })
-        }
-        "schedule_wakeup" => {
-            BuiltinToolInput::ScheduleWakeup(crate::message::ScheduleWakeupToolInput {
-                delay_seconds: 0,
-                prompt: String::new(),
-                reason: None,
-            })
-        }
-        "lsp_definition" => {
-            BuiltinToolInput::LspDefinition(crate::message::LspDefinitionToolInput {
-                file_path: String::new(),
-                line: 0,
-                character: 0,
-            })
-        }
-        "lsp_references" => {
-            BuiltinToolInput::LspReferences(crate::message::LspReferencesToolInput {
-                file_path: String::new(),
-                line: 0,
-                character: 0,
-                include_declaration: true,
-            })
-        }
-        "lsp_hover" => BuiltinToolInput::LspHover(crate::message::LspHoverToolInput {
-            file_path: String::new(),
-            line: 0,
-            character: 0,
-        }),
-        "lsp_diagnostics" => {
-            BuiltinToolInput::LspDiagnostics(crate::message::LspDiagnosticsToolInput {
-                file_path: String::new(),
-            })
-        }
-        "notebook_edit" => BuiltinToolInput::NotebookEdit(NotebookEditToolInput {
-            notebook_path: String::new(),
-            cell_number: Some(0),
-            new_source: String::new(),
-            edit_mode: NotebookEditMode::Replace,
-            cell_type: None,
-        }),
-        "powershell" => BuiltinToolInput::PowerShell(PowerShellToolInput {
-            command: String::new(),
-            description: String::new(),
-            timeout_ms: None,
-            workdir: None,
-        }),
-        other => BuiltinToolInput::Task(TaskToolInput {
-            description: String::new(),
-            prompt: format!("placeholder for unsupported builtin {other}"),
-            subagent_type: crate::message::TaskSubagentType::Explore,
-            task_id: None,
-            command: None,
-        }),
-    }
+    tool_invocation_for_definition(tool, StructuredObject::default())
 }
 
 pub(crate) fn parse_tool_invocation(
     name: &str,
     arguments_json: &str,
-    available_tools: &[ToolDefinition],
+    available_tools: &[EntryDefinition],
 ) -> Result<ToolInvocation, AppError> {
     let trimmed_name = name.trim();
     let canonical_name = canonical_builtin_tool_name(trimmed_name);
@@ -1214,105 +1070,8 @@ pub(crate) fn parse_tool_invocation(
             AppError::Provider(format!("unsupported tool call from model: {trimmed_name}"))
         })?;
 
-    if !matches!(tool.source, ToolSource::Builtin) {
-        let parsed = parse_custom_input(arguments_json)?;
-        // MCP tools are advertised as `mcp:<server>:<tool>` (see
-        // `ToolExecutor::catalogued_tools`).  Decode that name back into
-        // a structured `Mcp` invocation so the executor can dispatch
-        // through the MCP connection manager.
-        if let Some(rest) = tool.name.strip_prefix("mcp:") {
-            if let Some((server, mcp_tool)) = rest.split_once(':') {
-                return Ok(ToolInvocation::Mcp {
-                    server: server.to_string(),
-                    tool: mcp_tool.to_string(),
-                    input: parsed,
-                });
-            }
-        }
-        return Ok(ToolInvocation::Custom {
-            name: tool.name.clone(),
-            input: parsed,
-        });
-    }
-
-    let input = match canonical_name {
-        "bash" => BuiltinToolInput::Bash(parse_input::<BashToolInput>(arguments_json)?),
-        "read" => BuiltinToolInput::Read(parse_input::<ReadToolInput>(arguments_json)?),
-        "view_file" => {
-            BuiltinToolInput::ViewFile(parse_input::<ViewFileToolInput>(arguments_json)?)
-        }
-        "apply_patch" => {
-            BuiltinToolInput::ApplyPatch(parse_input::<ApplyPatchToolInput>(arguments_json)?)
-        }
-        "glob" => BuiltinToolInput::Glob(parse_input::<GlobToolInput>(arguments_json)?),
-        "grep" => BuiltinToolInput::Grep(parse_input::<GrepToolInput>(arguments_json)?),
-        "task" => BuiltinToolInput::Task(parse_input::<TaskToolInput>(arguments_json)?),
-        "tool_search" => {
-            BuiltinToolInput::ToolSearch(parse_input::<ToolSearchToolInput>(arguments_json)?)
-        }
-        "todo_write" => {
-            BuiltinToolInput::TodoWrite(parse_input::<TodoWriteToolInput>(arguments_json)?)
-        }
-        "ask_user" => BuiltinToolInput::AskUser(parse_input::<AskUserToolInput>(arguments_json)?),
-        "web_fetch" => BuiltinToolInput::WebFetch(
-            parse_input::<crate::message::WebFetchToolInput>(arguments_json)?,
-        ),
-        "web_search" => BuiltinToolInput::WebSearch(parse_input::<
-            crate::message::WebSearchToolInput,
-        >(arguments_json)?),
-        "enter_plan_mode" => BuiltinToolInput::EnterPlanMode(parse_input::<
-            crate::message::EnterPlanModeToolInput,
-        >(arguments_json)?),
-        "exit_plan_mode" => BuiltinToolInput::ExitPlanMode(parse_input::<
-            crate::message::ExitPlanModeToolInput,
-        >(arguments_json)?),
-        "skill_run" => BuiltinToolInput::SkillRun(
-            parse_input::<crate::message::SkillRunToolInput>(arguments_json)?,
-        ),
-        "enter_worktree" => BuiltinToolInput::EnterWorktree(parse_input::<
-            crate::message::EnterWorktreeToolInput,
-        >(arguments_json)?),
-        "exit_worktree" => BuiltinToolInput::ExitWorktree(parse_input::<
-            crate::message::ExitWorktreeToolInput,
-        >(arguments_json)?),
-        "cron_create" => BuiltinToolInput::CronCreate(parse_input::<
-            crate::message::CronCreateToolInput,
-        >(arguments_json)?),
-        "cron_list" => BuiltinToolInput::CronList(
-            parse_input::<crate::message::CronListToolInput>(arguments_json)?,
-        ),
-        "cron_delete" => BuiltinToolInput::CronDelete(parse_input::<
-            crate::message::CronDeleteToolInput,
-        >(arguments_json)?),
-        "schedule_wakeup" => BuiltinToolInput::ScheduleWakeup(parse_input::<
-            crate::message::ScheduleWakeupToolInput,
-        >(arguments_json)?),
-        "lsp_definition" => BuiltinToolInput::LspDefinition(parse_input::<
-            crate::message::LspDefinitionToolInput,
-        >(arguments_json)?),
-        "lsp_references" => BuiltinToolInput::LspReferences(parse_input::<
-            crate::message::LspReferencesToolInput,
-        >(arguments_json)?),
-        "lsp_hover" => BuiltinToolInput::LspHover(
-            parse_input::<crate::message::LspHoverToolInput>(arguments_json)?,
-        ),
-        "lsp_diagnostics" => BuiltinToolInput::LspDiagnostics(parse_input::<
-            crate::message::LspDiagnosticsToolInput,
-        >(arguments_json)?),
-        "notebook_edit" => {
-            BuiltinToolInput::NotebookEdit(parse_input::<NotebookEditToolInput>(arguments_json)?)
-        }
-        "powershell" => {
-            BuiltinToolInput::PowerShell(parse_input::<PowerShellToolInput>(arguments_json)?)
-        }
-        other => {
-            return Err(AppError::Provider(format!(
-                "unsupported builtin tool call from model: {other}"
-            )));
-        }
-    };
-
-    Ok(input.into_invocation())
+    let parsed = parse_custom_input(arguments_json)?;
+    Ok(tool_invocation_for_definition(tool, parsed))
 }
 
 fn canonical_builtin_tool_name(name: &str) -> &str {
@@ -1322,12 +1081,23 @@ fn canonical_builtin_tool_name(name: &str) -> &str {
     }
 }
 
+fn tool_invocation_for_definition(
+    tool: &EntryDefinition,
+    input: StructuredObject,
+) -> ToolInvocation {
+    ToolInvocation::Custom {
+        name: tool.name.clone(),
+        input,
+    }
+}
+
 fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {
     let value = parse_json_body::<serde_json::Value>(arguments_json)?;
     StructuredObject::try_from(value)
         .map_err(|err| AppError::Internal(format!("invalid custom tool input: {err}")))
 }
 
+#[cfg(test)]
 pub(crate) fn parse_input<T>(arguments_json: &str) -> Result<T, AppError>
 where
     T: serde::de::DeserializeOwned,
@@ -1374,11 +1144,12 @@ mod tests {
 
     use super::*;
     use crate::event::DomainEvent;
+    use crate::message::{BuiltinToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::provider::{
         CompletionFinishReason, CompletionResponse, ModelProvider, ProviderModel,
     };
-    use crate::tool::{ToolBehavior, ToolDefinition};
+    use crate::tool::{EntryBehavior, EntryDefinition};
 
     /// Construct an in-memory `EventPublisher` backed by a tiny test store
     /// that just keeps events in a Vec. The store side of the publisher is
@@ -1456,7 +1227,7 @@ mod tests {
 
     #[test]
     fn parse_tool_invocation_recognizes_plugin_tools() {
-        let tools = vec![ToolDefinition::plugin(
+        let tools = vec![EntryDefinition::plugin(
             "plugin_echo",
             "Echo a message from a plugin.",
             json!({
@@ -1466,7 +1237,7 @@ mod tests {
                 },
                 "required": ["message"]
             }),
-            ToolBehavior::ReadOnly,
+            EntryBehavior::ReadOnly,
             "fixture",
         )];
 
@@ -1474,22 +1245,18 @@ mod tests {
             parse_tool_invocation("plugin_echo", "{\"message\":\"hello\"}", tools.as_slice())
                 .expect("custom tool call should parse");
 
-        match invocation {
-            ToolInvocation::Custom { name, input } => {
-                assert_eq!(name, "plugin_echo");
-                let payload = serde_json::Value::from(input);
-                assert_eq!(payload["message"], "hello");
-            }
-            other => panic!("expected custom tool invocation, got {other:?}"),
-        }
+        let ToolInvocation::Custom { name, input } = invocation;
+        assert_eq!(name, "plugin_echo");
+        let payload = serde_json::Value::from(input);
+        assert_eq!(payload["message"], "hello");
     }
 
     #[test]
     fn parse_tool_invocation_rejects_unloaded_builtin_tools() {
-        let tools = vec![ToolDefinition::builtin::<ReadToolInput>(
+        let tools = vec![EntryDefinition::builtin::<ReadToolInput>(
             "read",
             "Read a file.",
-            crate::tool::ToolBehavior::ReadOnly,
+            crate::tool::EntryBehavior::ReadOnly,
         )];
 
         let err = parse_tool_invocation("bash", "{\"command\":\"pwd\"}", tools.as_slice())
@@ -1510,10 +1277,10 @@ mod tests {
 
     #[test]
     fn parse_tool_invocation_accepts_builtin_arguments_with_trailing_text() {
-        let tools = vec![ToolDefinition::builtin::<GrepToolInput>(
+        let tools = vec![EntryDefinition::builtin::<GrepToolInput>(
             "grep",
             "Search files for a pattern.",
-            ToolBehavior::ReadOnly,
+            EntryBehavior::ReadOnly,
         )];
 
         let invocation = parse_tool_invocation(
@@ -1637,7 +1404,7 @@ mod tests {
                     model: ModelId::new("ordered-model"),
                     system: None,
                     messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: vec![ToolDefinition::plugin(
+                    tools: vec![EntryDefinition::plugin(
                         "search",
                         "Search the workspace.",
                         json!({
@@ -1647,7 +1414,7 @@ mod tests {
                             },
                             "required": ["q"]
                         }),
-                        ToolBehavior::ReadOnly,
+                        EntryBehavior::ReadOnly,
                         "fixture",
                     )],
                     temperature: None,
@@ -1692,14 +1459,10 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(*call_id, 300);
-                match invocation {
-                    ToolInvocation::Custom { name, input } => {
-                        assert_eq!(name, "search");
-                        let payload = serde_json::Value::from(input.clone());
-                        assert_eq!(payload["q"], "rust");
-                    }
-                    other => panic!("expected custom tool invocation, got {other:?}"),
-                }
+                let ToolInvocation::Custom { name, input } = invocation;
+                assert_eq!(name, "search");
+                let payload = serde_json::Value::from(input.clone());
+                assert_eq!(payload["q"], "rust");
             }
             other => panic!("expected tool execution part, got {other:?}"),
         }
@@ -1849,7 +1612,7 @@ mod tests {
                     model: ModelId::new("ordered-model"),
                     system: None,
                     messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: vec![ToolDefinition::plugin(
+                    tools: vec![EntryDefinition::plugin(
                         "search",
                         "Search the workspace.",
                         json!({
@@ -1859,7 +1622,7 @@ mod tests {
                             },
                             "required": ["q"]
                         }),
-                        ToolBehavior::ReadOnly,
+                        EntryBehavior::ReadOnly,
                         "fixture",
                     )],
                     temperature: None,
@@ -1953,7 +1716,7 @@ mod tests {
                     model: ModelId::new("ordered-model"),
                     system: None,
                     messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: vec![ToolDefinition::plugin(
+                    tools: vec![EntryDefinition::plugin(
                         "search",
                         "Search the workspace.",
                         json!({
@@ -1963,7 +1726,7 @@ mod tests {
                             },
                             "required": ["q"]
                         }),
-                        ToolBehavior::ReadOnly,
+                        EntryBehavior::ReadOnly,
                         "fixture",
                     )],
                     temperature: None,

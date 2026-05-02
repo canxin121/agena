@@ -495,24 +495,20 @@ async fn run_monitor(
     };
     tokio::pin!(timeout_sleep);
 
-    let outcome = loop {
-        // We re-poll `child.wait()` each iteration. `wait` is documented as
-        // safe to call repeatedly; once it resolves the child is reaped.
-        tokio::select! {
-            biased;
-            _ = &mut abort_rx => break TerminationCause::Stopped,
-            _ = async {
-                if let Some(sleep) = timeout_sleep.as_mut().as_pin_mut() {
-                    sleep.await
-                } else {
-                    std::future::pending::<()>().await
-                }
-            } => break TerminationCause::TimedOut,
-            result = child.wait() => match result {
-                Ok(status) => break TerminationCause::Exited(status.code()),
-                Err(err) => break TerminationCause::WaitError(err.to_string()),
-            },
-        }
+    let outcome = tokio::select! {
+        biased;
+        _ = &mut abort_rx => TerminationCause::Stopped,
+        _ = async {
+            if let Some(sleep) = timeout_sleep.as_mut().as_pin_mut() {
+                sleep.await
+            } else {
+                std::future::pending::<()>().await
+            }
+        } => TerminationCause::TimedOut,
+        result = child.wait() => match result {
+            Ok(status) => TerminationCause::Exited(status.code()),
+            Err(err) => TerminationCause::WaitError(err.to_string()),
+        },
     };
 
     match outcome {

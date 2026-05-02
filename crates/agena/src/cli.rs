@@ -864,11 +864,14 @@ impl AgenaCli {
             .clone()
             .map(Ok)
             .unwrap_or_else(std::env::current_dir)?;
+        let plugins =
+            crate::tool::builtins_plugin_host(workspace.clone()).map_err(AppError::Config)?;
         let executor = ToolExecutor::new(
             workspace,
             Agent::new("cli", PermissionPolicy::allow_all())
                 .with_tool_policy(ToolPermissionPolicy::allow_all()),
-        );
+        )
+        .with_plugin_manager(plugins);
         let execution = executor
             .execute_builtin_detailed(&BuiltinToolInput::ApplyPatch(ApplyPatchToolInput { patch }))
             .map_err(|err| AppError::Config(err.to_string()))?;
@@ -1693,27 +1696,10 @@ fn mcp_tool_invocation(
     if let Some(builtin) = BuiltinToolInput::from_custom(name, &input) {
         return Ok(builtin.into_invocation());
     }
-    if let Some((server, tool)) = parse_external_mcp_tool_name(name) {
-        return Ok(ToolInvocation::Mcp {
-            server,
-            tool,
-            input,
-        });
-    }
     Ok(ToolInvocation::Custom {
         name: name.to_owned(),
         input,
     })
-}
-
-fn parse_external_mcp_tool_name(name: &str) -> Option<(String, String)> {
-    let mut parts = name.splitn(3, ':');
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some("mcp"), Some(server), Some(tool)) if !server.is_empty() && !tool.is_empty() => {
-            Some((server.to_owned(), tool.to_owned()))
-        }
-        _ => None,
-    }
 }
 
 fn render_completion_command(args: CompletionArgs) -> Result<String, AppError> {
@@ -2276,15 +2262,6 @@ store_path = "{}"
             panic!("expected mcp-server command");
         };
         assert_eq!(args.workspace, Some(PathBuf::from(".")));
-    }
-
-    #[test]
-    fn mcp_tool_name_parser_handles_external_tools() {
-        assert_eq!(
-            parse_external_mcp_tool_name("mcp:github:create_issue"),
-            Some(("github".to_owned(), "create_issue".to_owned()))
-        );
-        assert_eq!(parse_external_mcp_tool_name("read"), None);
     }
 
     #[test]

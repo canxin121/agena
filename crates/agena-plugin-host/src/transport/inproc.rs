@@ -6,10 +6,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::error::TransportError;
-use crate::sdk::HostClient;
-use crate::sdk::Plugin;
 use crate::sdk::drivers::dispatch::PluginDispatcher;
-use crate::transport::PluginTransport;
+use crate::sdk::{HostClient, Plugin, ToolInvokeInput};
+use crate::transport::{PluginTransport, ToolStreamHandle};
 
 pub struct InProcessTransport<P: Plugin> {
     dispatcher: Arc<PluginDispatcher<P>>,
@@ -48,5 +47,22 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
                 }
             }
         }
+    }
+
+    async fn attach_host(&self, host: Arc<dyn HostClient>) -> Result<(), TransportError> {
+        self.dispatcher.set_host(host).await;
+        Ok(())
+    }
+
+    async fn invoke_stream(
+        &self,
+        input: ToolInvokeInput,
+    ) -> Result<Option<ToolStreamHandle>, TransportError> {
+        let handle = self.dispatcher.dispatch_stream(input);
+        Ok(Some(ToolStreamHandle {
+            stream_id: handle.stream_id,
+            chunks: handle.chunks,
+            end: handle.end,
+        }))
     }
 }

@@ -16,21 +16,23 @@ pub use config::{
 };
 pub use error::{HostError, TransportError};
 pub use host::{
-    LoadedPlugin, PluginHost, PluginHostBuilder, PluginToolHandle, ToolInvokeStream, ToolResolution,
+    LoadedPlugin, PluginEntryHandle, PluginEntryResolution, PluginHost, PluginHostBuilder,
+    ToolInvokeStream,
 };
-pub use registry::ToolRegistry;
+pub use registry::PluginEntryRegistry;
 pub use sdk::{
     AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatDirection, ChatHeadersInput,
     ChatHeadersPatch, ChatMessage, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,
     ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
     CommandBeforeOutcome, CommandBeforePatch, CommandBeforeResponse, ConfigInput, ConfigPatch,
-    EventEnvelope, EventFilter, HookSubscription, PermissionAskDecision, PermissionAskInput,
-    PermissionDecision, PluginError, PluginManifest, PostTurnInput, PreTurnInput,
-    ProviderDescriptor, ProviderKind, ProviderListInput, ProviderListPatch, SessionCompactedInput,
+    EntryBehavior, EntryDefinitionInput, EntryDefinitionPatch, EntrySource, EventEnvelope,
+    EventFilter, HookSubscription, PermissionAskDecision, PermissionAskInput, PermissionDecision,
+    PluginEntryDecl, PluginError, PluginManifest, PostTurnInput, PreTurnInput, ProviderDescriptor,
+    ProviderKind, ProviderListInput, ProviderListPatch, SessionCompactedInput,
     SessionCompactingInput, SessionCompactingPatch, SessionEndInput, SessionEndReason,
     SessionStartInput, SessionStartPatch, SessionStartSource, ShellEnvInput, ShellEnvPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolBehavior, ToolDecl,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolSource, UserPromptSubmitInput, UserPromptSubmitPatch,
+    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolFailureInput,
+    ToolInvokeInput, ToolInvokeOutput, ToolPermissionPathsInput, UserPromptSubmitInput,
+    UserPromptSubmitPatch,
 };

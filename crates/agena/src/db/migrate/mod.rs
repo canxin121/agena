@@ -1,6 +1,6 @@
+pub mod event_migration;
 mod m20260427_000001_initial;
 mod migrator;
-pub mod event_migration;
 
 use sea_orm::{DatabaseConnection, DbErr};
 use sea_orm_migration::MigratorTrait;

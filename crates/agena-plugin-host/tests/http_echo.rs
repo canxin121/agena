@@ -18,8 +18,8 @@ impl Plugin for EchoHttpPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("echo-http", "0.0.1")
             .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::SHELL_ENV)
-            .tool(
-                ToolDecl::new(
+            .entry(
+                PluginEntryDecl::new(
                     "echo",
                     json!({"type":"object","properties":{"text":{"type":"string"}}}),
                 )
@@ -95,7 +95,10 @@ async fn http_transport_round_trip_via_low_level_dispatch() {
         )
         .await
         .expect("invoke ok");
-    assert_eq!(out.get("output_text").and_then(|v| v.as_str()), Some("http-echo: hi"));
+    assert_eq!(
+        out.get("output_text").and_then(|v| v.as_str()),
+        Some("http-echo: hi")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -124,7 +127,7 @@ async fn http_transport_round_trip_via_plugin_host() {
         .expect("plugin host should build");
 
     assert_eq!(host.plugins().len(), 1);
-    let resolved = host.lookup_tool("echo").expect("tool exposed");
+    let resolved = host.lookup_entry("echo").expect("tool exposed");
     let out = host
         .invoke_tool(
             &resolved.handle,

@@ -8,10 +8,8 @@ use sea_orm::{
     QuerySelect, TransactionTrait,
 };
 
-use crate::event::{
-    EventFilter, EventStore, EventStoreError, KindMatcher, Scope, StoreRange,
-};
 use crate::event::envelope::DomainEvent;
+use crate::event::{EventFilter, EventStore, EventStoreError, KindMatcher, Scope, StoreRange};
 
 use crate::db::event_entity as entity;
 

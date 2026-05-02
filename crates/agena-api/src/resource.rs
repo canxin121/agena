@@ -239,7 +239,7 @@ pub struct ProviderModelsResponse {
 
 // Re-export the common payload types so clients don't need an explicit
 // `agena = …` dep just to construct them.
-pub use agena::message::{PartContent as MessagePartContent};
+pub use agena::message::PartContent as MessagePartContent;
 pub use agena::message::{UserInputReply, UserInputRequest};
 pub use agena::permission::{PermissionMode, PermissionReply, PermissionRequest};
 pub use agena::provider::ProviderModel;

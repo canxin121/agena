@@ -31,7 +31,8 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider,
-        OpenAiCompatibleProvider, ProviderModel, StreamResumePolicy, prompt_cache, sse, utils, wire_message,
+        OpenAiCompatibleProvider, ProviderModel, StreamResumePolicy, prompt_cache, sse, utils,
+        wire_message,
     },
     role::Role,
 };
@@ -542,11 +543,11 @@ impl AmazonBedrockProvider {
     }
 
     fn anthropic_tools(
-        tools: &[crate::tool::ToolDefinition],
-    ) -> Vec<BedrockAnthropicToolDefinition> {
+        tools: &[crate::tool::EntryDefinition],
+    ) -> Vec<BedrockAnthropicEntryDefinition> {
         tools
             .iter()
-            .map(|tool| BedrockAnthropicToolDefinition {
+            .map(|tool| BedrockAnthropicEntryDefinition {
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input_schema: tool.input_schema.clone(),
@@ -627,9 +628,9 @@ impl AmazonBedrockProvider {
                 AttachmentKind::Image | AttachmentKind::Pdf
                     if Self::anthropic_binary_source(item).is_none() =>
                 {
-                    Some(BedrockAnthropicTextBlock::text(
-                        wire_message::hint_text(item),
-                    ))
+                    Some(BedrockAnthropicTextBlock::text(wire_message::hint_text(
+                        item,
+                    )))
                 }
                 AttachmentKind::File if wire_message::attachment_text(item).is_none() => Some(
                     BedrockAnthropicTextBlock::text(wire_message::hint_text(item)),
@@ -648,7 +649,7 @@ impl AmazonBedrockProvider {
 
     fn apply_anthropic_prompt_cache_hints(
         system: &mut [BedrockAnthropicTextBlock],
-        tools: &mut [BedrockAnthropicToolDefinition],
+        tools: &mut [BedrockAnthropicEntryDefinition],
         messages: &mut [BedrockAnthropicMessage],
     ) {
         for block in system.iter_mut().take(2) {
@@ -1442,10 +1443,7 @@ fn convert_messages(system: Option<String>, messages: Vec<Message>) -> Vec<ChatM
     result
 }
 
-fn provider_message_to_openai_value(
-    message: &Message,
-    parts: &[wire_message::WirePart],
-) -> Value {
+fn provider_message_to_openai_value(message: &Message, parts: &[wire_message::WirePart]) -> Value {
     if parts.is_empty() {
         return Value::String(message.as_text_lossy());
     }
@@ -1574,9 +1572,7 @@ fn assistant_content_and_tool_calls(
     (content, tool_calls)
 }
 
-fn ordered_tool_and_user_messages_from_parts(
-    parts: &[wire_message::WirePart],
-) -> Vec<ChatMessage> {
+fn ordered_tool_and_user_messages_from_parts(parts: &[wire_message::WirePart]) -> Vec<ChatMessage> {
     let has_tool_message = parts.iter().any(|part| {
         matches!(
             part,
@@ -1635,10 +1631,7 @@ fn ordered_tool_and_user_messages_from_parts(
     messages
 }
 
-fn session_text_lossy(
-    message: &Message,
-    projected_parts: &[wire_message::WirePart],
-) -> String {
+fn session_text_lossy(message: &Message, projected_parts: &[wire_message::WirePart]) -> String {
     if projected_parts.is_empty() {
         message.as_text_lossy()
     } else {
@@ -2018,13 +2011,13 @@ struct BedrockAnthropicMessagesRequest {
     system: Option<Vec<BedrockAnthropicTextBlock>>,
     messages: Vec<BedrockAnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<BedrockAnthropicToolDefinition>>,
+    tools: Option<Vec<BedrockAnthropicEntryDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
 }
 
 #[derive(Debug, Serialize)]
-struct BedrockAnthropicToolDefinition {
+struct BedrockAnthropicEntryDefinition {
     name: String,
     description: String,
     input_schema: Value,
@@ -2412,10 +2405,10 @@ mod tests {
     use mockito::Matcher;
 
     use super::*;
-    use crate::tool::{ToolBehavior, ToolDefinition};
+    use crate::tool::{EntryBehavior, EntryDefinition};
 
-    fn sample_tool_definition() -> ToolDefinition {
-        ToolDefinition::plugin(
+    fn sample_tool_definition() -> EntryDefinition {
+        EntryDefinition::plugin(
             "project_search",
             "Search project files.",
             serde_json::json!({
@@ -2425,7 +2418,7 @@ mod tests {
                 },
                 "required": ["query"]
             }),
-            ToolBehavior::ReadOnly,
+            EntryBehavior::ReadOnly,
             "fixture",
         )
     }

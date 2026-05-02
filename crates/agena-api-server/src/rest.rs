@@ -6,9 +6,7 @@ use agena_api::{
         CancelTurnParams, Command, ContinueRunParams, CreateSessionParams, ReplyPermissionParams,
         ReplyUserInputParams, SubmitTurnParams,
     },
-    queries::{
-        GetSessionParams, ListEventsParams, ListMessagesParams, ListSessionsParams, Query,
-    },
+    queries::{GetSessionParams, ListEventsParams, ListMessagesParams, ListSessionsParams, Query},
     resource::RunOptions,
 };
 use axum::{

@@ -7981,10 +7981,8 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
             BuiltinToolInput::PowerShell(input) => format!("powershell {}", input.command),
         };
     }
-    match invocation {
-        ToolInvocation::Mcp { server, tool, .. } => format!("{server}/{tool}"),
-        ToolInvocation::Custom { name, .. } => name.clone(),
-    }
+    let ToolInvocation::Custom { name, .. } = invocation;
+    name.clone()
 }
 
 fn permission_overlay_kind(selected: usize) -> PermissionReplyKind {

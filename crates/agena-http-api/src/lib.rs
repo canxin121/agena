@@ -3428,6 +3428,7 @@ filter = "info"
 
 [auth]
 store_path = {}
+store_backend = "file"
 
 [providers.openai]
 kind = "openai"

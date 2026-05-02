@@ -101,6 +101,10 @@ impl TurnRegistry {
     pub async fn is_active(&self, session_id: i64) -> bool {
         self.inner.lock().await.contains_key(&session_id)
     }
+
+    pub async fn active_session_ids(&self) -> Vec<i64> {
+        self.inner.lock().await.keys().copied().collect()
+    }
 }
 
 #[cfg(test)]

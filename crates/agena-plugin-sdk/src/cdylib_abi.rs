@@ -20,8 +20,7 @@ pub const ABI_VERSION: u32 = 1;
 #[sabi(missing_field(panic))]
 pub struct AgenaPluginCdylib {
     pub abi_version: u32,
-    pub dispatch:
-        extern "C" fn(method: RString, params: RString) -> RResult<RString, RString>,
+    pub dispatch: extern "C" fn(method: RString, params: RString) -> RResult<RString, RString>,
     #[sabi(last_prefix_field)]
     pub shutdown: extern "C" fn(),
 }

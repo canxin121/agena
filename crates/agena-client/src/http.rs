@@ -2,8 +2,10 @@
 //! into the v2 endpoints.
 
 use agena_api::{
-    commands::{Command, CommandResult, ContinueRunParams, ReplyPermissionParams,
-        ReplyUserInputParams, SubmitTurnParams},
+    commands::{
+        Command, CommandResult, ContinueRunParams, ReplyPermissionParams, ReplyUserInputParams,
+        SubmitTurnParams,
+    },
     queries::{ListEventsParams, PaginatedEvents, Query, QueryResult},
     resource::{HealthResponse, RunOptions, SessionResource},
 };
@@ -64,7 +66,11 @@ impl AgenaClient {
     // ─── high-level conveniences ───
 
     pub async fn health(&self) -> Result<HealthResponse, ClientError> {
-        let response = self.http.get(self.endpoint("/api/v1/health")).send().await?;
+        let response = self
+            .http
+            .get(self.endpoint("/api/v1/health"))
+            .send()
+            .await?;
         match self.parse_query(response).await? {
             QueryResult::Health(h) => Ok(h),
             other => Err(ClientError::Protocol(format!(
@@ -114,7 +120,9 @@ impl AgenaClient {
             .await?;
         match self.parse_command(response).await? {
             CommandResult::Session(s) => Ok(s),
-            other => Err(ClientError::Protocol(format!("expected Session, got {other:?}"))),
+            other => Err(ClientError::Protocol(format!(
+                "expected Session, got {other:?}"
+            ))),
         }
     }
 
@@ -130,10 +138,15 @@ impl AgenaClient {
             .json(&body)
             .send()
             .await?;
-        let _ = ContinueRunParams { session_id, options };
+        let _ = ContinueRunParams {
+            session_id,
+            options,
+        };
         match self.parse_command(response).await? {
             CommandResult::Session(s) => Ok(s),
-            other => Err(ClientError::Protocol(format!("expected Session, got {other:?}"))),
+            other => Err(ClientError::Protocol(format!(
+                "expected Session, got {other:?}"
+            ))),
         }
     }
 
@@ -166,7 +179,9 @@ impl AgenaClient {
             .await?;
         match self.parse_command(response).await? {
             CommandResult::Session(s) => Ok(s),
-            other => Err(ClientError::Protocol(format!("expected Session, got {other:?}"))),
+            other => Err(ClientError::Protocol(format!(
+                "expected Session, got {other:?}"
+            ))),
         }
     }
 
@@ -189,7 +204,9 @@ impl AgenaClient {
             .await?;
         match self.parse_command(response).await? {
             CommandResult::Session(s) => Ok(s),
-            other => Err(ClientError::Protocol(format!("expected Session, got {other:?}"))),
+            other => Err(ClientError::Protocol(format!(
+                "expected Session, got {other:?}"
+            ))),
         }
     }
 
@@ -231,7 +248,9 @@ impl AgenaClient {
         let response = self.http.get(url).send().await?;
         match self.parse_query(response).await? {
             QueryResult::Events(p) => Ok(p),
-            other => Err(ClientError::Protocol(format!("expected Events, got {other:?}"))),
+            other => Err(ClientError::Protocol(format!(
+                "expected Events, got {other:?}"
+            ))),
         }
     }
 
@@ -254,7 +273,8 @@ impl AgenaClient {
             Query::Health => Ok(QueryResult::Health(self.health().await?)),
             Query::ListEvents(p) => Ok(QueryResult::Events(self.list_events(p).await?)),
             _ => Err(ClientError::Protocol(
-                "generic query dispatch over REST is not implemented; use typed helpers or WS".into(),
+                "generic query dispatch over REST is not implemented; use typed helpers or WS"
+                    .into(),
             )),
         }
     }

@@ -115,9 +115,7 @@ pub fn project(message: &Message) -> Vec<WirePart> {
                         match exec {
                             ToolExecutionPart::Pending { .. }
                             | ToolExecutionPart::InProgress { .. } => String::new(),
-                            ToolExecutionPart::Completed { output_text, .. } => {
-                                output_text.clone()
-                            }
+                            ToolExecutionPart::Completed { output_text, .. } => output_text.clone(),
                             ToolExecutionPart::Failed {
                                 output_text,
                                 error_message,
@@ -321,14 +319,12 @@ pub fn attachment_to_openai_content_value(item: &AttachmentItem) -> serde_json::
     match item.kind {
         AttachmentKind::Image => media_url(item)
             .map(|url| serde_json::json!({ "type": "image_url", "image_url": { "url": url } }))
-            .unwrap_or_else(|| {
-                serde_json::json!({ "type": "text", "text": hint_text(item) })
-            }),
-        AttachmentKind::Audio | AttachmentKind::Video | AttachmentKind::Pdf | AttachmentKind::File => {
-            attachment_file_content_value(item).unwrap_or_else(|| {
-                serde_json::json!({ "type": "text", "text": hint_text(item) })
-            })
-        }
+            .unwrap_or_else(|| serde_json::json!({ "type": "text", "text": hint_text(item) })),
+        AttachmentKind::Audio
+        | AttachmentKind::Video
+        | AttachmentKind::Pdf
+        | AttachmentKind::File => attachment_file_content_value(item)
+            .unwrap_or_else(|| serde_json::json!({ "type": "text", "text": hint_text(item) })),
     }
 }
 
@@ -365,16 +361,11 @@ fn project_tool_invocation(exec: &ToolExecutionPart, _message: &Message) -> (Str
 }
 
 fn invocation_name_and_args(invocation: &ToolInvocation) -> (String, String) {
-    match invocation {
-        ToolInvocation::Mcp { server, tool, input } => (
-            format!("{server}:{tool}"),
-            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
-        ),
-        ToolInvocation::Custom { name, input } => (
-            name.clone(),
-            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
-        ),
-    }
+    let ToolInvocation::Custom { name, input } = invocation;
+    (
+        name.clone(),
+        serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
+    )
 }
 
 fn attachment_file_content_value(item: &AttachmentItem) -> Option<serde_json::Value> {

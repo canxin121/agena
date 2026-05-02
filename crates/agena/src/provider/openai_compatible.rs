@@ -12,12 +12,13 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        StreamResumePolicy, ThinkingRequest, prompt_cache, sse, utils, wire_message,
+        CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, StreamResumePolicy,
+        ThinkingRequest,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
         },
+        prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -311,10 +312,10 @@ impl OpenAiCompatibleProvider {
             .collect())
     }
 
-    fn realtime_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<RealtimeToolDefinition> {
+    fn realtime_tools(tools: &[crate::tool::EntryDefinition]) -> Vec<RealtimeEntryDefinition> {
         tools
             .iter()
-            .map(|tool| RealtimeToolDefinition {
+            .map(|tool| RealtimeEntryDefinition {
                 kind: "function".to_owned(),
                 name: tool.name.clone(),
                 description: tool.description.clone(),
@@ -621,7 +622,6 @@ impl OpenAiCompatibleProvider {
 
         Ok(Box::pin(stream))
     }
-
 }
 
 fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
@@ -757,11 +757,18 @@ impl ModelProvider for OpenAiCompatibleProvider {
             .or_else(|| payload.choices.first().and_then(|c| c.text.clone()))
             .unwrap_or_default();
         let finish_reason = CompletionFinishReason::from_provider(
-            payload.choices.first().and_then(|c| c.finish_reason.as_deref()),
+            payload
+                .choices
+                .first()
+                .and_then(|c| c.finish_reason.as_deref()),
         );
         let tool_calls = chat_wire::parse_chat_tool_calls(
             self.id.as_str(),
-            payload.choices.first().and_then(|c| c.message.as_ref()).and_then(|m| m.tool_calls.as_ref()),
+            payload
+                .choices
+                .first()
+                .and_then(|c| c.message.as_ref())
+                .and_then(|m| m.tool_calls.as_ref()),
         )?;
 
         if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
@@ -773,7 +780,11 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
         Ok(CompletionResponse {
             provider_id: ProviderId::new(self.id.clone()),
-            model: ModelId::new(payload.model.unwrap_or_else(|| self.default_model.to_string())),
+            model: ModelId::new(
+                payload
+                    .model
+                    .unwrap_or_else(|| self.default_model.to_string()),
+            ),
             text,
             reasoning_text: None,
             finish_reason,
@@ -813,7 +824,9 @@ impl ModelProvider for OpenAiCompatibleProvider {
             prompt_cache_key: prompt_cache_key.clone(),
             prompt_cache_key_camel_case: prompt_cache_key.clone(),
             stream: true,
-            stream_options: Some(ChatStreamOptions { include_usage: true }),
+            stream_options: Some(ChatStreamOptions {
+                include_usage: true,
+            }),
             stop: request.stop_sequences,
             top_p: request.top_p,
             seed: request.seed,
@@ -976,7 +989,7 @@ struct OpenAiCompatibleModel {
 }
 
 #[derive(Debug, serde::Serialize)]
-struct RealtimeToolDefinition {
+struct RealtimeEntryDefinition {
     #[serde(rename = "type")]
     kind: String,
     name: String,
@@ -995,11 +1008,11 @@ mod tests {
     };
     use crate::model::ModelId;
     use crate::provider::{CompletionRequest, CompletionToolCall};
-    use crate::tool::{ToolBehavior, ToolDefinition};
+    use crate::tool::{EntryBehavior, EntryDefinition};
     use tokio::net::TcpListener;
 
-    fn sample_tool_definition() -> ToolDefinition {
-        ToolDefinition::plugin(
+    fn sample_tool_definition() -> EntryDefinition {
+        EntryDefinition::plugin(
             "project_search",
             "Search project files.",
             serde_json::json!({
@@ -1009,7 +1022,7 @@ mod tests {
                 },
                 "required": ["query"]
             }),
-            ToolBehavior::ReadOnly,
+            EntryBehavior::ReadOnly,
             "fixture",
         )
     }

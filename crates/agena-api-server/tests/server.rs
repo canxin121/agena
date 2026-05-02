@@ -13,12 +13,11 @@ use agena::{
     tool::ToolExecutor,
 };
 use agena_api::{
-    PROTOCOL_VERSION,
+    PROTOCOL_VERSION, Scope,
     notifications::Notification,
     queries::PaginatedEvents,
     subscribe::SubscribeRequest,
     ws::{ClientMessage, ServerMessage},
-    Scope,
 };
 use agena_api_server::{AppState, router};
 use axum::body::Body;
@@ -32,8 +31,10 @@ async fn build_state() -> (AppState, Arc<SessionManager>) {
     agena::db::init_schema(&db).await.unwrap();
 
     let registry = ProviderRegistry::new();
-    let processor =
-        SessionProcessor::new(Arc::new(registry), ContextGovernor::new(ContextPolicy::default()));
+    let processor = SessionProcessor::new(
+        Arc::new(registry),
+        ContextGovernor::new(ContextPolicy::default()),
+    );
     let executor = ToolExecutor::new(
         std::env::temp_dir(),
         Agent::new("api-server-test", PermissionPolicy::allow_all()),
@@ -43,11 +44,7 @@ async fn build_state() -> (AppState, Arc<SessionManager>) {
 
     let runtime = agena::runtime::AgenaRuntime::builder()
         .with_workspace_root(std::env::temp_dir())
-        .with_database_connection(
-            sea_orm::Database::connect("sqlite::memory:")
-                .await
-                .unwrap(),
-        )
+        .with_database_connection(sea_orm::Database::connect("sqlite::memory:").await.unwrap())
         .build()
         .await
         .expect("runtime build");
@@ -113,7 +110,9 @@ async fn list_events_returns_published_events() {
         .and_then(|i| i.as_array())
         .expect("items array");
     assert!(
-        items.iter().any(|e| e.get("kind").and_then(|k| k.as_str()) == Some("plugin_event")),
+        items
+            .iter()
+            .any(|e| e.get("kind").and_then(|k| k.as_str()) == Some("plugin_event")),
         "expected plugin_event event in {value:?}"
     );
 }

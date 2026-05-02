@@ -223,16 +223,25 @@ impl RuntimeSnapshot {
         previous: Option<Arc<RuntimeSnapshot>>,
     ) -> Result<Self, AppError> {
         let resolution = loader.load(load_request)?;
+        let mcp_manager = if resolution.config.mcp.servers.is_empty() {
+            None
+        } else {
+            Some(build_mcp_manager(&resolution.config.mcp).await)
+        };
         let plugins = if let Some(prev) = previous.as_ref() {
             let prev_host = prev.plugin_manager();
             let prev_cfg = prev.config_resolution().config.plugins.clone();
             resolution
-                .build_plugin_host_with_previous(Some(prev_host), Some(&prev_cfg))
+                .build_plugin_host_with_previous_and_mcp(
+                    Some(prev_host),
+                    Some(&prev_cfg),
+                    mcp_manager.clone(),
+                )
                 .await
                 .map_err(AppError::from)?
         } else {
             resolution
-                .build_plugin_host()
+                .build_plugin_host_with_previous_and_mcp(None, None, mcp_manager)
                 .await
                 .map_err(AppError::from)?
         };
@@ -488,11 +497,6 @@ fn build_tool_executor(
         executor = executor.with_skills_manager(Arc::new(mgr));
     }
 
-    if !resolution.config.mcp.servers.is_empty() {
-        let manager = build_mcp_manager(&resolution.config.mcp);
-        executor = executor.with_mcp_manager(manager);
-    }
-
     if !resolution.config.lsp.servers.is_empty() {
         let registry = build_lsp_registry(workspace_root, &resolution.config.lsp);
         executor = executor.with_lsp_registry(registry);
@@ -547,7 +551,7 @@ fn build_lsp_registry(
     registry
 }
 
-fn build_mcp_manager(
+async fn build_mcp_manager(
     config: &crate::config::McpConfig,
 ) -> Arc<agena_mcp_client::McpConnectionManager> {
     use agena_mcp_client::{
@@ -572,8 +576,7 @@ fn build_mcp_manager(
     }
 
     let manager = Arc::new(manager);
-    // Connect each configured server in the background.  Failures only
-    // disable that one server — the rest of the runtime keeps booting.
+    // Failures only disable that one server — the rest of the runtime keeps booting.
     for (name, entry) in &config.servers {
         let manager = manager.clone();
         let name = name.clone();
@@ -639,16 +642,14 @@ fn build_mcp_manager(
                 }
             }
         };
-        tokio::spawn(async move {
-            if let Err(e) = manager.add_server(&name, spec).await {
-                tracing::warn!(
-                    target: "agena::mcp",
-                    "failed to connect MCP server '{name}': {e}"
-                );
-            } else {
-                tracing::info!(target: "agena::mcp", "connected MCP server '{name}'");
-            }
-        });
+        if let Err(e) = manager.add_server(&name, spec).await {
+            tracing::warn!(
+                target: "agena::mcp",
+                "failed to connect MCP server '{name}': {e}"
+            );
+        } else {
+            tracing::info!(target: "agena::mcp", "connected MCP server '{name}'");
+        }
     }
     manager
 }

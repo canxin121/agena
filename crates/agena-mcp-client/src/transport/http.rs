@@ -121,11 +121,10 @@ impl HttpTransport {
                                 match inner_for_task.base_url.join(raw) {
                                     Ok(u) => u,
                                     Err(e) => {
-                                        let _ = inner_for_task.inbox_tx.send(Err(
-                                            McpError::Malformed(format!(
-                                                "invalid endpoint URL '{raw}': {e}"
-                                            )),
-                                        ));
+                                        let _ =
+                                            inner_for_task.inbox_tx.send(Err(McpError::Malformed(
+                                                format!("invalid endpoint URL '{raw}': {e}"),
+                                            )));
                                         continue;
                                     }
                                 }
@@ -180,10 +179,7 @@ impl HttpTransport {
         ))
     }
 
-    async fn handle_streamable_response(
-        &self,
-        resp: reqwest::Response,
-    ) -> McpResult<()> {
+    async fn handle_streamable_response(&self, resp: reqwest::Response) -> McpResult<()> {
         let ct = resp
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -214,10 +210,7 @@ impl HttpTransport {
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        let _ = self
-                            .inner
-                            .inbox_tx
-                            .send(Err(McpError::Http(e.to_string())));
+                        let _ = self.inner.inbox_tx.send(Err(McpError::Http(e.to_string())));
                         return Ok(());
                     }
                 }
@@ -229,8 +222,8 @@ impl HttpTransport {
                 return Ok(());
             }
             let value: Value = serde_json::from_slice(&bytes)?;
-            let frame = InboundMessage::from_value(value)
-                .map_err(|e| McpError::Malformed(e.to_string()));
+            let frame =
+                InboundMessage::from_value(value).map_err(|e| McpError::Malformed(e.to_string()));
             let _ = self.inner.inbox_tx.send(frame);
         }
         Ok(())

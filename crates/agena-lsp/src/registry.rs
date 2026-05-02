@@ -61,23 +61,25 @@ impl LspRegistry {
             .unwrap_or_default()
             .to_string();
         let g = self.servers.read().await;
-        g.values()
-            .find(|s| s.handles_extension(&ext))
-            .cloned()
+        g.values().find(|s| s.handles_extension(&ext)).cloned()
     }
 
     /// Get an already-spawned client by name, or spawn one and initialize
     /// it. Panics-free: any spawn / initialize failure surfaces as
     /// [`LspError`].
-    pub async fn client_for(&self, server_name: &str, hint_dir: &Path) -> LspResult<Arc<LspClient>> {
+    pub async fn client_for(
+        &self,
+        server_name: &str,
+        hint_dir: &Path,
+    ) -> LspResult<Arc<LspClient>> {
         if let Some(client) = self.spawned.read().await.get(server_name).cloned() {
             return Ok(client);
         }
         let spec = {
             let g = self.servers.read().await;
-            g.get(server_name).cloned().ok_or_else(|| {
-                LspError::UnknownServer(server_name.to_string())
-            })?
+            g.get(server_name)
+                .cloned()
+                .ok_or_else(|| LspError::UnknownServer(server_name.to_string()))?
         };
         let env: HashMap<String, String> = spec
             .env
@@ -85,14 +87,9 @@ impl LspRegistry {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let root_dir = spec.resolve_root(hint_dir, &self.workspace_root);
-        let transport = StdioTransport::spawn(
-            &spec.name,
-            &spec.command,
-            &spec.args,
-            &env,
-            Some(&root_dir),
-        )
-        .await?;
+        let transport =
+            StdioTransport::spawn(&spec.name, &spec.command, &spec.args, &env, Some(&root_dir))
+                .await?;
         let client = LspClient::new(transport);
         let root_uri = url::Url::from_directory_path(&root_dir)
             .ok()

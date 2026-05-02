@@ -20,7 +20,7 @@ pub struct PluginManifest {
     #[serde(default)]
     pub hooks: HookSubscription,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<ToolDecl>,
+    pub entries: Vec<PluginEntryDecl>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options_schema: Option<serde_json::Value>,
 }
@@ -35,31 +35,49 @@ pub enum TransportKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ToolDecl {
+pub struct PluginEntryDecl {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default = "default_tool_behavior")]
-    pub behavior: ToolBehavior,
+    #[serde(default = "default_entry_behavior")]
+    pub behavior: EntryBehavior,
     #[serde(default)]
     pub input_schema: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expose_as: Option<String>,
     /// Declarative path-permission specs. The host extracts paths from the
-    /// tool input via JSONPath before invocation and audits them as
+    /// entry input via JSONPath before invocation and audits them as
     /// [`PathKind`]. Use [`Plugin::permission_paths`] for paths that can only
     /// be derived dynamically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_paths: Vec<InputPathSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search_terms: Vec<String>,
+    #[serde(default)]
+    pub load_priority: EntryLoadPriority,
+    /// When omitted, hosts should derive the default from behavior
+    /// (`read_only => true`, everything else => false) for backwards
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency_safe: Option<bool>,
+    #[serde(default)]
+    pub requires_user_interaction: bool,
+    #[serde(default)]
+    pub strict: bool,
+    #[serde(default)]
+    pub plan_mode_policy: PlanModePolicy,
+    #[serde(default)]
+    pub streaming: EntryStreamingMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_capabilities: Vec<HostCapability>,
 }
 
-fn default_tool_behavior() -> ToolBehavior {
-    ToolBehavior::ReadOnly
+fn default_entry_behavior() -> EntryBehavior {
+    EntryBehavior::ReadOnly
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolBehavior {
+pub enum EntryBehavior {
     ReadOnly,
     WriteSandboxed,
     WriteUnsandboxed,
@@ -73,9 +91,54 @@ pub enum PathKind {
     Write,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryLoadPriority {
+    Always,
+    #[default]
+    Standard,
+    Deferred,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanModePolicy {
+    #[default]
+    Derived,
+    Allowed,
+    Blocked,
+    ConditionalShellReadOnly,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryStreamingMode {
+    #[default]
+    Buffered,
+    Streaming,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostCapability {
+    AskUser,
+    SpawnSubtask,
+    ListTools,
+    MonitorRegistry,
+    ReadConfig,
+    InvokeTool,
+    PublishEvent,
+    SubscribeEvents,
+    Scheduler,
+    PlanRegistry,
+    WorktreeRegistry,
+    SkillsManager,
+    LspRegistry,
+}
+
 /// Single declarative path extraction rule. `jsonpath` is a subset:
 /// dot-paths (`$.path`, `$.files[*].path`). The host extracts each match
-/// from the tool input JSON, classifies it under [`PathKind`], and runs it
+/// from the entry input JSON, classifies it under [`PathKind`], and runs it
 /// through the permission auditor before the tool body executes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InputPathSpec {
@@ -221,7 +284,7 @@ impl PluginManifest {
                 authors: Vec::new(),
                 transports: Vec::new(),
                 hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
-                tools: Vec::new(),
+                entries: Vec::new(),
                 options_schema: None,
             },
         }
@@ -249,8 +312,13 @@ impl PluginManifestBuilder {
         self
     }
 
-    pub fn tool(mut self, t: ToolDecl) -> Self {
-        self.inner.tools.push(t);
+    pub fn entry(mut self, entry: PluginEntryDecl) -> Self {
+        self.inner.entries.push(entry);
+        self
+    }
+
+    pub fn entries(mut self, entries: impl IntoIterator<Item = PluginEntryDecl>) -> Self {
+        self.inner.entries.extend(entries);
         self
     }
 
@@ -264,15 +332,23 @@ impl PluginManifestBuilder {
     }
 }
 
-impl ToolDecl {
+impl PluginEntryDecl {
     pub fn new(name: impl Into<String>, schema: serde_json::Value) -> Self {
         Self {
             name: name.into(),
             description: None,
-            behavior: ToolBehavior::ReadOnly,
+            behavior: EntryBehavior::ReadOnly,
             input_schema: schema,
             expose_as: None,
             input_paths: Vec::new(),
+            search_terms: Vec::new(),
+            load_priority: EntryLoadPriority::Standard,
+            concurrency_safe: None,
+            requires_user_interaction: false,
+            strict: false,
+            plan_mode_policy: PlanModePolicy::Derived,
+            streaming: EntryStreamingMode::Buffered,
+            host_capabilities: Vec::new(),
         }
     }
 
@@ -281,7 +357,7 @@ impl ToolDecl {
         self
     }
 
-    pub fn behavior(mut self, b: ToolBehavior) -> Self {
+    pub fn behavior(mut self, b: EntryBehavior) -> Self {
         self.behavior = b;
         self
     }
@@ -295,7 +371,71 @@ impl ToolDecl {
         self.input_paths.push(spec);
         self
     }
+
+    pub fn search_terms<I, S>(mut self, search_terms: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.search_terms = search_terms
+            .into_iter()
+            .map(Into::into)
+            .filter(|term| !term.trim().is_empty())
+            .collect();
+        self
+    }
+
+    pub fn load_priority(mut self, load_priority: EntryLoadPriority) -> Self {
+        self.load_priority = load_priority;
+        self
+    }
+
+    pub fn always_load(self) -> Self {
+        self.load_priority(EntryLoadPriority::Always)
+    }
+
+    pub fn deferred_load(self) -> Self {
+        self.load_priority(EntryLoadPriority::Deferred)
+    }
+
+    pub fn concurrency_safe(mut self, concurrency_safe: bool) -> Self {
+        self.concurrency_safe = Some(concurrency_safe);
+        self
+    }
+
+    pub fn requires_user_interaction(mut self, requires_user_interaction: bool) -> Self {
+        self.requires_user_interaction = requires_user_interaction;
+        self
+    }
+
+    pub fn strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
+    }
+
+    pub fn plan_mode_policy(mut self, policy: PlanModePolicy) -> Self {
+        self.plan_mode_policy = policy;
+        self
+    }
+
+    pub fn streaming(mut self, streaming: EntryStreamingMode) -> Self {
+        self.streaming = streaming;
+        self
+    }
+
+    pub fn host_capability(mut self, capability: HostCapability) -> Self {
+        self.host_capabilities.push(capability);
+        self
+    }
+
+    pub fn host_capabilities(
+        mut self,
+        capabilities: impl IntoIterator<Item = HostCapability>,
+    ) -> Self {
+        self.host_capabilities.extend(capabilities);
+        self
+    }
 }
 
-/// Map a tool-name and any plugin-scoped options to the registry-side key.
+/// Map an entry name and any plugin-scoped options to the registry-side key.
 pub type Metadata = BTreeMap<String, String>;

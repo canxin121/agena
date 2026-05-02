@@ -121,7 +121,9 @@ impl GeminiProvider {
         )
     }
 
-    fn map_response_format(fmt: Option<&ResponseFormat>) -> (Option<String>, Option<serde_json::Value>) {
+    fn map_response_format(
+        fmt: Option<&ResponseFormat>,
+    ) -> (Option<String>, Option<serde_json::Value>) {
         match fmt {
             Some(ResponseFormat::JsonObject) => (Some("application/json".to_owned()), None),
             Some(ResponseFormat::JsonSchema { schema, .. }) => {
@@ -687,7 +689,11 @@ struct GeminiGenerationConfig {
     top_p: Option<f32>,
     #[serde(rename = "topK", skip_serializing_if = "Option::is_none")]
     top_k: Option<u32>,
-    #[serde(rename = "stopSequences", skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(
+        rename = "stopSequences",
+        skip_serializing_if = "Vec::is_empty",
+        default
+    )]
     stop_sequences: Vec<String>,
     #[serde(rename = "responseMimeType", skip_serializing_if = "Option::is_none")]
     response_mime_type: Option<String>,

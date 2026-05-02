@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
-use crate::message::AskUserToolInput;
+use crate::message::{AskUserToolInput, BuiltinToolOutput};
 
-use super::ToolError;
+use super::{BuiltinExecution, ToolError, ToolExecutionView};
 
 const MAX_QUESTIONS: usize = 3;
 const MAX_OPTIONS: usize = 8;
@@ -13,7 +13,7 @@ pub(super) fn execute(input: &AskUserToolInput) -> Result<super::BuiltinExecutio
     Err(ToolError::UserInputRequired(input.clone()))
 }
 
-fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {
+pub(super) fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {
     if input.questions.is_empty() {
         return Err(ToolError::InvalidInput(
             "ask_user requires at least one question".to_string(),
@@ -77,6 +77,29 @@ fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {
     }
 
     Ok(())
+}
+
+pub(super) fn execution_from_answers(
+    input: &AskUserToolInput,
+    answers: BTreeMap<String, Vec<String>>,
+) -> BuiltinExecution {
+    let mut lines = vec!["Answers:".to_string()];
+    for question in &input.questions {
+        if let Some(answer) = answers.get(question.id.as_str()) {
+            lines.push(format!("- {}: {}", question.id, answer.join(", ")));
+        }
+    }
+
+    let mut view = ToolExecutionView::simple("Ask user", lines.join("\n"));
+    let selection_count: usize = answers.values().map(Vec::len).sum();
+    view.metadata
+        .insert("answer_count".to_string(), selection_count.to_string());
+    view.metadata.insert(
+        "question_count".to_string(),
+        input.questions.len().to_string(),
+    );
+
+    BuiltinExecution::new(BuiltinToolOutput::AskUser { answers }, view)
 }
 
 #[cfg(test)]

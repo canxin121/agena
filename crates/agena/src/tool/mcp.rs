@@ -1,54 +1,101 @@
-//! Bridge between agena's tool subsystem and `agena-mcp-client`.
-//!
-//! Two responsibilities:
-//!
-//! * Convert an MCP `tools/call` result (a vector of [`ContentBlock`]) into
-//!   the agena-side [`McpToolOutput`] (vector of [`ToolResultBlock`] +
-//!   optional structured payload).
-//! * Provide a sync wrapper around the async `call_tool` so the existing
-//!   sync `ToolExecutor::execute_invocation_detailed` path can call into
-//!   the MCP layer without going async itself.
+//! First-party in-process plugin that exposes configured MCP server tools as
+//! plugin entries.
 
 use std::sync::Arc;
 
 use agena_mcp_client::McpConnectionManager;
-use agena_mcp_client::protocol::{CallToolResult, ContentBlock};
+use agena_mcp_client::protocol::{CallToolResult, ContentBlock, ToolDescriptor};
+use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::message::{McpToolOutput, StructuredObject, ToolOutput, ToolResultBlock};
+use crate::message::{AttachmentItem, ToolResultBlock};
+use crate::plugin::PluginError;
+use crate::plugin::sdk::{
+    EntryBehavior as SdkEntryBehavior, HookSubscription, InitContext, InitOutcome, Plugin,
+    PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+};
 
-use super::{ToolError, ToolExecutionView, ToolInvocationExecution};
+pub(super) const MCP_PLUGIN_ID: &str = "agena.mcp";
 
-/// Block-on the MCP call from a sync context, then translate the result.
-pub(super) fn invoke(
-    manager: &Arc<McpConnectionManager>,
-    server: &str,
-    tool: &str,
-    input: &StructuredObject,
-) -> Result<ToolInvocationExecution, ToolError> {
-    let arguments: Option<Value> = if input.fields.is_empty() {
-        None
-    } else {
-        match serde_json::to_value(input) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                return Err(ToolError::Plugin(format!(
-                    "mcp:{server}:{tool} argument serialization failed: {e}"
-                )));
-            }
-        }
-    };
+pub(super) struct McpPlugin {
+    manager: Arc<McpConnectionManager>,
+}
 
-    let manager_for_call = manager.clone();
-    let server_name = server.to_string();
-    let tool_name = tool.to_string();
-    let result: CallToolResult = block_on(async move {
-        manager_for_call
-            .call_tool(&server_name, &tool_name, arguments)
+impl McpPlugin {
+    pub(super) fn new(manager: Arc<McpConnectionManager>) -> Self {
+        Self { manager }
+    }
+
+    fn manifest_from_tools(&self, tools: Vec<(String, ToolDescriptor)>) -> PluginManifest {
+        PluginManifest::builder("agena-mcp", env!("CARGO_PKG_VERSION"))
+            .description("Agena MCP bridge exposed as first-party plugin entries.")
+            .hooks(HookSubscription::TOOL_INVOKE)
+            .entries(
+                tools
+                    .into_iter()
+                    .map(|(server, tool)| entry_decl(server, tool)),
+            )
+            .build()
+    }
+}
+
+#[async_trait]
+impl Plugin for McpPlugin {
+    fn manifest(&self) -> PluginManifest {
+        let manager = Arc::clone(&self.manager);
+        self.manifest_from_tools(block_on(async move { manager.all_tools().await }))
+    }
+
+    async fn init(
+        &self,
+        _ctx: InitContext,
+        _host: Arc<dyn crate::plugin::sdk::HostClient>,
+    ) -> SdkResult<InitOutcome> {
+        Ok(InitOutcome::ack(
+            self.manifest_from_tools(self.manager.all_tools().await),
+        ))
+    }
+
+    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
+        let (server, tool) = target_from_entry_name(input.tool_name.as_str()).ok_or_else(|| {
+            PluginError::invalid_params(format!("invalid MCP plugin entry '{}'", input.tool_name))
+        })?;
+        let arguments = input_arguments(input.input);
+        let result = self
+            .manager
+            .call_tool(server, tool, arguments)
             .await
-    })
-    .map_err(|e| ToolError::Plugin(format!("mcp:{server}:{tool} call failed: {e}")))?;
+            .map_err(|err| PluginError::new(format!("mcp:{server}:{tool} call failed: {err}")))?;
+        invoke_output(server, tool, result)
+    }
+}
 
+pub(super) fn target_from_entry_name(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix("mcp:")?;
+    let (server, tool) = rest.split_once(':')?;
+    (!server.is_empty() && !tool.is_empty()).then_some((server, tool))
+}
+
+fn entry_decl(server: String, tool: ToolDescriptor) -> PluginEntryDecl {
+    let name = format!("mcp:{server}:{}", tool.name);
+    let schema = tool
+        .input_schema
+        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
+    PluginEntryDecl::new(name, schema)
+        .description(tool.description.unwrap_or_default())
+        .behavior(SdkEntryBehavior::WriteUnsandboxed)
+        .search_terms(["mcp".to_string(), server, tool.name])
+}
+
+fn input_arguments(input: Value) -> Option<Value> {
+    match input {
+        Value::Null => None,
+        Value::Object(map) if map.is_empty() => None,
+        other => Some(other),
+    }
+}
+
+fn invoke_output(server: &str, tool: &str, result: CallToolResult) -> SdkResult<ToolInvokeOutput> {
     if matches!(result.is_error, Some(true)) {
         let combined = result
             .content
@@ -59,7 +106,7 @@ pub(super) fn invoke(
             })
             .collect::<Vec<_>>()
             .join("\n");
-        return Err(ToolError::Plugin(format!(
+        return Err(PluginError::new(format!(
             "mcp:{server}:{tool} returned isError=true: {combined}"
         )));
     }
@@ -69,44 +116,38 @@ pub(super) fn invoke(
         .iter()
         .filter_map(content_block_to_result_block)
         .collect();
-
-    let summary_text = blocks
+    let output_text = blocks
         .iter()
-        .filter_map(|b| match b {
-            ToolResultBlock::Text { text } => Some(text.clone()),
+        .filter_map(|block| match block {
+            ToolResultBlock::Text { text } => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let attachments = blocks
+        .iter()
+        .filter_map(ToolResultBlock::to_attachment_item)
+        .collect::<Vec<AttachmentItem>>();
+    let payload = serde_json::json!({
+        "server": server,
+        "tool": tool,
+        "content_blocks": blocks,
+    });
 
-    let view = ToolExecutionView {
+    Ok(ToolInvokeOutput {
         title: format!("MCP {server}/{tool}"),
-        output_text: if summary_text.is_empty() {
+        output_text: if output_text.is_empty() {
             format!(
                 "(mcp:{server}:{tool} returned {} content block(s))",
-                blocks.len()
+                result.content.len()
             )
         } else {
-            summary_text
+            output_text
         },
+        payload: Some(payload),
         metadata: Default::default(),
-        attachments: blocks
-            .iter()
-            .filter_map(|b| b.to_attachment_item())
-            .collect(),
-    };
-
-    let output = ToolOutput::Mcp {
-        output: McpToolOutput {
-            server: server.to_string(),
-            tool: tool.to_string(),
-            content_blocks: blocks,
-            structured_content: None,
-        },
-    };
-
-    let execution = ToolInvocationExecution::new(output, view);
-    Ok(execution)
+        attachments,
+    })
 }
 
 fn content_block_to_result_block(block: &ContentBlock) -> Option<ToolResultBlock> {
@@ -114,39 +155,55 @@ fn content_block_to_result_block(block: &ContentBlock) -> Option<ToolResultBlock
         ContentBlock::Text { text } => Some(ToolResultBlock::Text { text: text.clone() }),
         ContentBlock::Image { data, mime_type } => Some(ToolResultBlock::Image {
             mime: mime_type.clone(),
-            // The MCP wire format embeds the bytes as base64; surface them
-            // as a `data:` URL so downstream attachment handling can pick
-            // them up uniformly.
             url: format!("data:{};base64,{}", mime_type, data),
         }),
-        ContentBlock::Resource { resource } => {
-            let mime = resource.mime_type.clone().unwrap_or_default();
-            Some(ToolResultBlock::EmbeddedResource {
-                uri: resource.uri.clone(),
-                mime,
-                text: resource.text.clone(),
-                base64: resource.blob.clone(),
-            })
-        }
+        ContentBlock::Resource { resource } => Some(ToolResultBlock::EmbeddedResource {
+            uri: resource.uri.clone(),
+            mime: resource.mime_type.clone().unwrap_or_default(),
+            text: resource.text.clone(),
+            base64: resource.blob.clone(),
+        }),
         ContentBlock::Other => None,
     }
 }
 
-/// Run an async future to completion from a sync context.  Mirrors
-/// `agena_plugin_host::host::PluginHost::block_on` so callers don't need
-/// to know whether they're already on a tokio runtime.
-pub(super) fn block_on<F: std::future::Future>(fut: F) -> F::Output
+pub(super) fn block_on<F>(fut: F) -> F::Output
 where
-    F: Send,
+    F: std::future::Future + Send,
     F::Output: Send,
 {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| handle.block_on(fut))
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(fut))
+            }
+            _ => block_on_scoped_thread(fut),
+        }
     } else {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("mcp bridge fallback runtime");
-        rt.block_on(fut)
+        block_on_new_runtime(fut)
     }
+}
+
+fn block_on_scoped_thread<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || block_on_new_runtime(fut))
+            .join()
+            .expect("mcp plugin fallback runtime thread panicked")
+    })
+}
+
+fn block_on_new_runtime<F>(fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("mcp plugin fallback runtime");
+    rt.block_on(fut)
 }

@@ -2,6 +2,7 @@
 //! REST and WS handlers funnel through these helpers so semantics stay
 //! identical regardless of transport.
 
+use agena::event::{EventStore, StoreRange};
 use agena::{
     event::EventKind,
     model::ModelRef,
@@ -23,20 +24,16 @@ use agena_api::{
     },
     resource::{RunOptions, SessionResource},
 };
-use agena::event::{EventStore, StoreRange};
 
 use crate::{error::ServerError, state::AppState};
 
 const DEFAULT_MODEL_REF: &str = "openai/gpt-4o-mini";
 
 fn run_options_to_core(options: &RunOptions) -> SessionRunOptions {
-    let model = options
-        .model
-        .clone()
-        .unwrap_or_else(|| {
-            let parts: Vec<&str> = DEFAULT_MODEL_REF.split('/').collect();
-            ModelRef::new(parts[0], parts.get(1).copied().unwrap_or("gpt-4o-mini"))
-        });
+    let model = options.model.clone().unwrap_or_else(|| {
+        let parts: Vec<&str> = DEFAULT_MODEL_REF.split('/').collect();
+        ModelRef::new(parts[0], parts.get(1).copied().unwrap_or("gpt-4o-mini"))
+    });
     SessionRunOptions {
         model,
         system: options.system.clone(),
@@ -156,10 +153,7 @@ pub async fn dispatch_command(
 
 // ─── Query dispatch ─────────────────────────────────────────────────────
 
-pub async fn dispatch_query(
-    state: &AppState,
-    query: Query,
-) -> Result<QueryResult, ServerError> {
+pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResult, ServerError> {
     let manager = state.session_manager()?;
     match query {
         Query::ListSessions(ListSessionsParams {
@@ -229,9 +223,7 @@ pub async fn dispatch_query(
             let session_id = manager
                 .find_session_id_for_message(message_id)
                 .await?
-                .ok_or_else(|| {
-                    ServerError::NotFound(format!("message {message_id} not found"))
-                })?;
+                .ok_or_else(|| ServerError::NotFound(format!("message {message_id} not found")))?;
             let session = manager.get_session(session_id).await?;
             let m = session
                 .messages

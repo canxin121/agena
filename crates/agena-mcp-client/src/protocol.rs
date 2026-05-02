@@ -196,7 +196,11 @@ pub struct ToolDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, rename = "inputSchema", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "inputSchema",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub input_schema: Option<Value>,
 }
 
@@ -204,7 +208,11 @@ pub struct ToolDescriptor {
 pub struct ListToolsResult {
     #[serde(default)]
     pub tools: Vec<ToolDescriptor>,
-    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "nextCursor",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
 }
 
@@ -270,7 +278,11 @@ pub struct ResourceDescriptor {
 pub struct ListResourcesResult {
     #[serde(default)]
     pub resources: Vec<ResourceDescriptor>,
-    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "nextCursor",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
 }
 
@@ -309,7 +321,11 @@ pub struct PromptDescriptor {
 pub struct ListPromptsResult {
     #[serde(default)]
     pub prompts: Vec<PromptDescriptor>,
-    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "nextCursor",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
 }
 

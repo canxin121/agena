@@ -11,11 +11,12 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        StreamResumePolicy, ThinkingRequest, sse, utils, wire_message,
+        StreamResumePolicy, ThinkingRequest,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
         },
+        sse, utils, wire_message,
     },
     role::Role,
 };
@@ -315,7 +316,9 @@ impl OpenAiProvider {
             prompt_cache_key: None,
             prompt_cache_key_camel_case: None,
             stream: true,
-            stream_options: Some(ChatStreamOptions { include_usage: true }),
+            stream_options: Some(ChatStreamOptions {
+                include_usage: true,
+            }),
             stop: request.stop_sequences.clone(),
             top_p: request.top_p,
             seed: request.seed,
@@ -800,7 +803,7 @@ impl OpenAiProvider {
         })
     }
 
-    fn responses_tools(tools: &[crate::tool::ToolDefinition]) -> Vec<OpenAiResponsesTool> {
+    fn responses_tools(tools: &[crate::tool::EntryDefinition]) -> Vec<OpenAiResponsesTool> {
         tools
             .iter()
             .map(|tool| OpenAiResponsesTool {
@@ -1003,7 +1006,8 @@ impl OpenAiProvider {
                     Self::push_responses_text_message(input, "user", message.as_text_lossy());
                 } else {
                     let tool_results = wire_message::tool_results(projected_parts.as_slice());
-                    let extra_parts = wire_message::non_tool_result_parts(projected_parts.as_slice());
+                    let extra_parts =
+                        wire_message::non_tool_result_parts(projected_parts.as_slice());
 
                     if tool_results.len() > 1 {
                         let mut buffered_parts = Vec::new();
@@ -1186,7 +1190,6 @@ impl OpenAiProvider {
     fn apply_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         utils::apply_request_headers(PROVIDER_ID, req, &self.extra_headers)
     }
-
 }
 
 fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
@@ -1275,7 +1278,10 @@ impl ModelProvider for OpenAiProvider {
             top_p: request.top_p,
             seed: request.seed,
             response_format: chat_wire::map_response_format(request.response_format.as_ref()),
-            reasoning_effort: chat_wire::reasoning_effort(request.thinking.as_ref().or(self.default_thinking.as_ref()), model.as_str()),
+            reasoning_effort: chat_wire::reasoning_effort(
+                request.thinking.as_ref().or(self.default_thinking.as_ref()),
+                model.as_str(),
+            ),
         };
 
         let response: OpenAiResponsesResponse =
@@ -1352,7 +1358,10 @@ impl ModelProvider for OpenAiProvider {
             top_p: request.top_p,
             seed: request.seed,
             response_format: chat_wire::map_response_format(request.response_format.as_ref()),
-            reasoning_effort: chat_wire::reasoning_effort(request.thinking.as_ref().or(self.default_thinking.as_ref()), model.as_str()),
+            reasoning_effort: chat_wire::reasoning_effort(
+                request.thinking.as_ref().or(self.default_thinking.as_ref()),
+                model.as_str(),
+            ),
         };
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
@@ -1785,10 +1794,7 @@ fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
     )
 }
 
-fn session_text_lossy(
-    message: &Message,
-    projected_parts: &[wire_message::WirePart],
-) -> String {
+fn session_text_lossy(message: &Message, projected_parts: &[wire_message::WirePart]) -> String {
     if projected_parts.is_empty() {
         message.as_text_lossy()
     } else {
@@ -1809,10 +1815,10 @@ mod tests {
         TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
     };
     use crate::model::ModelId;
-    use crate::tool::{ToolBehavior, ToolDefinition};
+    use crate::tool::{EntryBehavior, EntryDefinition};
 
-    fn sample_tool_definition() -> ToolDefinition {
-        ToolDefinition::plugin(
+    fn sample_tool_definition() -> EntryDefinition {
+        EntryDefinition::plugin(
             "project_search",
             "Search project files.",
             serde_json::json!({
@@ -1822,7 +1828,7 @@ mod tests {
                 },
                 "required": ["query"]
             }),
-            ToolBehavior::ReadOnly,
+            EntryBehavior::ReadOnly,
             "fixture",
         )
     }

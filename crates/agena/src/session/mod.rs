@@ -2,8 +2,8 @@ mod cache;
 mod compaction_worker;
 mod context_governor;
 mod context_policy;
-pub mod cost;
 pub(crate) mod control;
+pub mod cost;
 mod doom_loop;
 pub(crate) mod history;
 pub mod ids;
@@ -26,8 +26,7 @@ pub use manager::{
 };
 #[allow(unused_imports)]
 pub(crate) use model::{
-    MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED,
-    MESSAGE_TAG_PROMPT_COMPACTED,
+    MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_PROMPT_COMPACTED,
     MESSAGE_TAG_TOOL_RESULT_PRUNED,
 };
 pub use model::{

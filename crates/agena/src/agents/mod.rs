@@ -259,8 +259,7 @@ mod tests {
 
     #[test]
     fn missing_frontmatter_treats_whole_file_as_prompt() {
-        let profile =
-            AgentProfile::from_raw("just the prompt", "plain", AgentScope::User).unwrap();
+        let profile = AgentProfile::from_raw("just the prompt", "plain", AgentScope::User).unwrap();
         assert_eq!(profile.prompt, "just the prompt");
         assert!(profile.frontmatter.description.is_empty());
     }

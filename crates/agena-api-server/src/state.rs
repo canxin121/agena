@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use agena::{event::EventKind, runtime::AgenaRuntime, session::SessionManager};
 use agena::event::EventBus;
+use agena::{event::EventKind, runtime::AgenaRuntime, session::SessionManager};
 
 use crate::error::ServerError;
 
@@ -35,16 +35,16 @@ impl AppState {
         self.manager_override
             .clone()
             .or_else(|| self.runtime.session_manager())
-            .ok_or_else(|| ServerError::ServiceUnavailable("session manager not initialised".into()))
+            .ok_or_else(|| {
+                ServerError::ServiceUnavailable("session manager not initialised".into())
+            })
     }
 
     pub fn event_bus(&self) -> Result<Arc<dyn EventBus<EventKind>>, ServerError> {
         Ok(self.session_manager()?.event_bus())
     }
 
-    pub fn event_publisher(
-        &self,
-    ) -> Result<Arc<agena::event::EventPublisher>, ServerError> {
+    pub fn event_publisher(&self) -> Result<Arc<agena::event::EventPublisher>, ServerError> {
         Ok(self.session_manager()?.event_publisher())
     }
 }

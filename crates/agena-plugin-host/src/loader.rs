@@ -116,7 +116,7 @@ pub async fn load_entry(
             }
             let env_map: std::collections::HashMap<String, String> =
                 env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            let host_handler = host_handle.host_handler();
+            let host_handler = host_handle.host_handler_for(plugin_id.to_string());
             let t = StdioTransport::spawn_with_policy(
                 command,
                 args,
@@ -167,11 +167,13 @@ pub async fn load_entry(
         }
     };
 
-    // For in-process transports we need to wire a typed HostClient. The static
-    // registration handler has already done so internally; cdylib doesn't
-    // expose host callbacks today (no shared memory marshalling); stdio's host
-    // handler is wired through the StdioTransport itself; HTTP plugins call
-    // back through the http-api endpoint.
+    transport
+        .attach_host(host_handle.scoped_host_client(plugin_id.to_string()))
+        .await
+        .map_err(|e| HostError::Load {
+            plugin: plugin_id.to_string(),
+            message: e.to_string(),
+        })?;
 
     let init_ctx = InitContext {
         agena_version: agena_version.to_string(),
@@ -202,12 +204,159 @@ pub async fn load_entry(
             message: e.to_string(),
         })?;
 
+    validate_manifest_options(plugin_id, &outcome.manifest, entry.options())?;
+
     Ok(LoadedPlugin::new(
         plugin_id.to_string(),
         entry.kind_str(),
         transport,
         outcome.manifest,
     ))
+}
+
+fn validate_manifest_options(
+    plugin_id: &str,
+    manifest: &PluginManifest,
+    options: &serde_json::Value,
+) -> Result<(), HostError> {
+    let Some(schema) = manifest.options_schema.as_ref() else {
+        return Ok(());
+    };
+    validate_schema_value("$", schema, options).map_err(|message| {
+        HostError::Config(format!(
+            "plugin `{plugin_id}` options do not match manifest schema: {message}"
+        ))
+    })
+}
+
+fn validate_schema_value(
+    path: &str,
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    match schema {
+        serde_json::Value::Bool(true) => return Ok(()),
+        serde_json::Value::Bool(false) => {
+            return Err(format!("{path}: schema rejects this value"));
+        }
+        serde_json::Value::Object(_) => {}
+        _ => return Ok(()),
+    }
+
+    let schema_obj = schema.as_object().expect("object already checked");
+
+    if let Some(expected) = schema_obj.get("const")
+        && expected != value
+    {
+        return Err(format!("{path}: value must equal {expected}"));
+    }
+
+    if let Some(variants) = schema_obj.get("enum").and_then(|v| v.as_array())
+        && !variants.iter().any(|candidate| candidate == value)
+    {
+        return Err(format!(
+            "{path}: value is not one of the allowed enum variants"
+        ));
+    }
+
+    if let Some(expected_type) = schema_obj.get("type") {
+        validate_schema_type(path, expected_type, value)?;
+    }
+
+    if let Some(required) = schema_obj.get("required").and_then(|v| v.as_array()) {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("{path}: required fields require an object value"))?;
+        for field in required {
+            let Some(field) = field.as_str() else {
+                continue;
+            };
+            if !object.contains_key(field) {
+                return Err(format!("{path}: missing required property '{field}'"));
+            }
+        }
+    }
+
+    if let Some(properties) = schema_obj.get("properties").and_then(|v| v.as_object())
+        && let Some(object) = value.as_object()
+    {
+        for (key, subschema) in properties {
+            if let Some(child) = object.get(key) {
+                validate_schema_value(&format!("{path}.{key}"), subschema, child)?;
+            }
+        }
+    }
+
+    if let Some(additional) = schema_obj.get("additionalProperties")
+        && let Some(object) = value.as_object()
+    {
+        let properties = schema_obj.get("properties").and_then(|v| v.as_object());
+        for (key, child) in object {
+            if properties.is_some_and(|props| props.contains_key(key)) {
+                continue;
+            }
+            match additional {
+                serde_json::Value::Bool(true) => {}
+                serde_json::Value::Bool(false) => {
+                    return Err(format!("{path}: unexpected property '{key}'"));
+                }
+                other => validate_schema_value(&format!("{path}.{key}"), other, child)?,
+            }
+        }
+    }
+
+    if let Some(item_schema) = schema_obj.get("items")
+        && let Some(items) = value.as_array()
+    {
+        for (index, item) in items.iter().enumerate() {
+            validate_schema_value(&format!("{path}[{index}]"), item_schema, item)?;
+        }
+    }
+
+    if let Some(min_length) = schema_obj.get("minLength").and_then(|v| v.as_u64())
+        && let Some(text) = value.as_str()
+        && text.chars().count() < min_length as usize
+    {
+        return Err(format!(
+            "{path}: string is shorter than minLength {}",
+            min_length
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_schema_type(
+    path: &str,
+    expected: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    let matches = match expected {
+        serde_json::Value::String(kind) => value_matches_type(kind, value),
+        serde_json::Value::Array(kinds) => kinds
+            .iter()
+            .filter_map(|kind| kind.as_str())
+            .any(|kind| value_matches_type(kind, value)),
+        _ => true,
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(format!("{path}: value does not match declared schema type"))
+    }
+}
+
+fn value_matches_type(kind: &str, value: &serde_json::Value) -> bool {
+    match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        _ => true,
+    }
 }
 
 pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(), TransportError> {
@@ -223,6 +372,67 @@ pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(
 #[allow(dead_code)]
 pub fn manifest_summary(m: &PluginManifest) -> String {
     format!("{}@{}", m.name, m.version)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::validate_schema_value;
+
+    #[test]
+    fn schema_validator_accepts_matching_object() {
+        let schema = json!({
+            "type": "object",
+            "required": ["token"],
+            "properties": {
+                "token": { "type": "string", "minLength": 1 },
+                "enabled": { "type": "boolean" }
+            },
+            "additionalProperties": false
+        });
+        let value = json!({
+            "token": "abc",
+            "enabled": true
+        });
+
+        validate_schema_value("$", &schema, &value).expect("value should satisfy schema");
+    }
+
+    #[test]
+    fn schema_validator_rejects_missing_required_property() {
+        let schema = json!({
+            "type": "object",
+            "required": ["token"],
+            "properties": {
+                "token": { "type": "string" }
+            }
+        });
+        let value = json!({});
+
+        let err = validate_schema_value("$", &schema, &value)
+            .expect_err("schema should reject missing required property");
+        assert!(err.contains("missing required property 'token'"));
+    }
+
+    #[test]
+    fn schema_validator_rejects_unexpected_property() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "token": { "type": "string" }
+            },
+            "additionalProperties": false
+        });
+        let value = json!({
+            "token": "abc",
+            "extra": true
+        });
+
+        let err = validate_schema_value("$", &schema, &value)
+            .expect_err("schema should reject unexpected property");
+        assert!(err.contains("unexpected property 'extra'"));
+    }
 }
 
 /// Verify the sha256 of a file against an expected hex digest. Used by both

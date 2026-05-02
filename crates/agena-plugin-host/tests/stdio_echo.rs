@@ -58,7 +58,7 @@ async fn stdio_echo_plugin_loads_and_invokes() {
 
     assert_eq!(host.plugins().len(), 1, "stdio plugin should load");
 
-    let resolved = host.lookup_tool("echo").expect("tool exposed");
+    let resolved = host.lookup_entry("echo").expect("tool exposed");
     let out = host
         .invoke_tool(
             &resolved.handle,

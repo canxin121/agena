@@ -1,6 +1,6 @@
 //! `PluginHost` — the central handle agena holds. Owns:
 //! - the loaded plugins,
-//! - the tool registry,
+//! - the plugin entry registry,
 //! - the dedicated tokio runtime that drives plugin transports,
 //! - the host-callback router used by stdio/http plugins.
 
@@ -15,22 +15,27 @@ use crate::config::{PluginEntry, PluginsConfig, TimeoutsConfig};
 use crate::dispatcher::{self, call_with_timeout};
 use crate::error::{HostError, TransportError};
 use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
-use crate::registry::{ToolEntry, ToolRegistry};
-use crate::sdk::host_api::{EventSubscription, HostClient, LogLevel, NoopHostClient};
+use crate::registry::{PluginEntry as RegistryPluginEntry, PluginEntryRegistry};
+use crate::sdk::host_api::{
+    self, AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription,
+    HostCallbackContext, HostClient, LogLevel, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+};
 use crate::sdk::rpc::method;
 use crate::sdk::{
     AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatHeadersInput, ChatHeadersPatch,
     ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput, ChatMessagesTransformPatch,
     ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
-    CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
-    PermissionAskDecision, PermissionAskInput, PermissionDecision, PluginError, PluginManifest,
-    PostTurnInput, PreTurnInput, ProviderListInput, ProviderListPatch, SessionCompactedInput,
-    SessionCompactingInput, SessionCompactingPatch, SessionEndInput, SessionStartInput,
-    SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
-    ToolBeforeInput, ToolBeforePatch, ToolDecl, ToolDefinitionInput, ToolDefinitionPatch,
-    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolStreamChunk, ToolStreamEnd,
-    UserPromptSubmitInput, UserPromptSubmitPatch,
+    CommandBeforeResponse, ConfigInput, ConfigPatch, EntryDefinitionInput, EntryDefinitionPatch,
+    EventEnvelope, EventFilter, HookSubscription, PermissionAskDecision, PermissionAskInput,
+    PermissionDecision, PluginEntryDecl, PluginError, PluginManifest, PostTurnInput, PreTurnInput,
+    ProviderListInput, ProviderListPatch, SessionCompactedInput, SessionCompactingInput,
+    SessionCompactingPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
+    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolPermissionPathsInput, ToolStreamChunk,
+    ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
@@ -72,19 +77,68 @@ impl LoadedPlugin {
     }
 }
 
-/// Opaque handle returned by `PluginHost::lookup_tool`. Pass it to
-/// `invoke_tool` to actually call the plugin.
+fn block_on_handle_or_thread<F>(handle: tokio::runtime::Handle, fut: F) -> F::Output
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    match handle.runtime_flavor() {
+        tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(fut))
+        }
+        tokio::runtime::RuntimeFlavor::CurrentThread => block_on_new_thread(fut),
+        _ => block_on_new_thread(fut),
+    }
+}
+
+fn block_on_new_thread<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("plugin host fallback runtime");
+        rt.block_on(fut)
+    })
+    .join()
+    .expect("plugin host fallback runtime thread panicked")
+}
+
+fn block_on_scoped_thread<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("plugin host fallback runtime");
+                rt.block_on(fut)
+            })
+            .join()
+            .expect("plugin host fallback runtime thread panicked")
+    })
+}
+
+/// Opaque handle returned by `PluginHost::lookup_entry`. Pass it to
+/// `invoke_tool` to actually call the plugin entry.
 #[derive(Debug, Clone)]
-pub struct PluginToolHandle {
+pub struct PluginEntryHandle {
     pub plugin_id: String,
     pub original_name: String,
     pub exposed_name: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct ToolResolution {
-    pub handle: PluginToolHandle,
-    pub decl: ToolDecl,
+pub struct PluginEntryResolution {
+    pub handle: PluginEntryHandle,
+    pub decl: PluginEntryDecl,
 }
 
 /// Live handle to an in-flight tool stream. Consume `chunks` for incremental
@@ -93,7 +147,7 @@ pub struct ToolResolution {
 pub struct ToolInvokeStream {
     pub stream_id: String,
     pub chunks: tokio::sync::mpsc::Receiver<ToolStreamChunk>,
-    pub end: ToolStreamEnd,
+    pub end: tokio::sync::oneshot::Receiver<Result<ToolStreamEnd, PluginError>>,
 }
 
 /// Result of dispatching `session.compacting` through the plugin chain.
@@ -112,7 +166,7 @@ pub struct SessionCompactingOutcome {
 pub struct PluginHost {
     plugins: Vec<Arc<LoadedPlugin>>,
     plugins_by_id: HashMap<String, Arc<LoadedPlugin>>,
-    tools: ToolRegistry,
+    entries: PluginEntryRegistry,
     timeouts: TimeoutsConfig,
     /// Dedicated runtime used to block_on async transport calls when invoked
     /// from sync code.
@@ -133,7 +187,7 @@ impl PluginHost {
         Arc::new(Self {
             plugins: Vec::new(),
             plugins_by_id: HashMap::new(),
-            tools: ToolRegistry::new(Vec::<String>::new()),
+            entries: PluginEntryRegistry::new(Vec::<String>::new()),
             timeouts: TimeoutsConfig::default(),
             runtime: None,
             runtime_handle: None,
@@ -158,19 +212,21 @@ impl PluginHost {
         (self.plugins.len(), by_kind)
     }
 
-    pub fn lookup_tool(&self, exposed_name: &str) -> Option<ToolResolution> {
-        self.tools.lookup(exposed_name).map(|entry| ToolResolution {
-            handle: PluginToolHandle {
-                plugin_id: entry.plugin_name.clone(),
-                original_name: entry.original_name.clone(),
-                exposed_name: entry.exposed_name.clone(),
-            },
-            decl: entry.decl.clone(),
-        })
+    pub fn lookup_entry(&self, exposed_name: &str) -> Option<PluginEntryResolution> {
+        self.entries
+            .lookup(exposed_name)
+            .map(|entry| PluginEntryResolution {
+                handle: PluginEntryHandle {
+                    plugin_id: entry.plugin_name.clone(),
+                    original_name: entry.original_name.clone(),
+                    exposed_name: entry.exposed_name.clone(),
+                },
+                decl: entry.decl.clone(),
+            })
     }
 
-    pub fn tool_entries(&self) -> impl Iterator<Item = &ToolEntry> {
-        self.tools.entries()
+    pub fn entry_entries(&self) -> impl Iterator<Item = &RegistryPluginEntry> {
+        self.entries.entries()
     }
 
     fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output
@@ -179,17 +235,58 @@ impl PluginHost {
         F::Output: Send,
     {
         if let Some(rt) = &self.runtime {
+            if let Ok(current) = tokio::runtime::Handle::try_current() {
+                return match current.runtime_flavor() {
+                    tokio::runtime::RuntimeFlavor::MultiThread => {
+                        tokio::task::block_in_place(|| rt.block_on(fut))
+                    }
+                    _ => block_on_scoped_thread(fut),
+                };
+            }
+            return rt.block_on(fut);
+        }
+
+        if let Some(handle) = &self.runtime_handle {
+            if tokio::runtime::Handle::try_current().is_ok() {
+                return match handle.runtime_flavor() {
+                    tokio::runtime::RuntimeFlavor::MultiThread => {
+                        tokio::task::block_in_place(|| handle.block_on(fut))
+                    }
+                    _ => block_on_scoped_thread(fut),
+                };
+            }
+            return handle.block_on(fut);
+        }
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            return match handle.runtime_flavor() {
+                tokio::runtime::RuntimeFlavor::MultiThread => {
+                    tokio::task::block_in_place(|| handle.block_on(fut))
+                }
+                _ => block_on_scoped_thread(fut),
+            };
+        }
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("plugin host fallback runtime");
+        rt.block_on(fut)
+    }
+
+    fn block_on_static<F: std::future::Future>(&self, fut: F) -> F::Output
+    where
+        F: Send + 'static,
+        F::Output: Send + 'static,
+    {
+        if let Some(rt) = &self.runtime {
             rt.block_on(fut)
         } else if let Some(handle) = &self.runtime_handle {
-            tokio::task::block_in_place(|| handle.block_on(fut))
+            block_on_handle_or_thread(handle.clone(), fut)
         } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(fut))
+            block_on_handle_or_thread(handle, fut)
         } else {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("plugin host fallback runtime");
-            rt.block_on(fut)
+            block_on_new_thread(fut)
         }
     }
 
@@ -201,7 +298,7 @@ impl PluginHost {
     ) -> Result<ToolBeforeInput, PluginError> {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
-        let res = self.block_on(async move {
+        let res = self.block_on_static(async move {
             dispatcher::chain_patch::<ToolBeforeInput, ToolBeforePatch, _>(
                 &plugins,
                 method::HOOK_TOOL_BEFORE,
@@ -231,7 +328,7 @@ impl PluginHost {
     ) -> Result<ToolAfterInput, PluginError> {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
-        let res = self.block_on(async move {
+        let res = self.block_on_static(async move {
             dispatcher::chain_patch::<ToolAfterInput, ToolAfterPatch, _>(
                 &plugins,
                 method::HOOK_TOOL_AFTER,
@@ -260,7 +357,7 @@ impl PluginHost {
 
     pub fn invoke_tool(
         &self,
-        handle: &PluginToolHandle,
+        handle: &PluginEntryHandle,
         input: ToolInvokeInput,
     ) -> Result<ToolInvokeOutput, PluginError> {
         let plugin = self
@@ -274,26 +371,43 @@ impl PluginHost {
         input.tool_name = handle.original_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let result = self.block_on(async move {
+        let result = self.block_on_static(async move {
             call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout).await
         });
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
     }
 
+    pub fn dispatch_tool_permission_paths(
+        &self,
+        handle: &PluginEntryHandle,
+        input: ToolPermissionPathsInput,
+    ) -> Result<Vec<crate::sdk::PathRequest>, PluginError> {
+        let plugin = self
+            .plugins_by_id
+            .get(&handle.plugin_id)
+            .cloned()
+            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id)))?;
+        let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
+        let mut input = input;
+        input.tool_name = handle.original_name.clone();
+        let params =
+            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+        let result = self.block_on_static(async move {
+            call_with_timeout(&plugin, method::HOOK_TOOL_PERMISSION_PATHS, params, timeout).await
+        });
+        let value = result.map_err(transport_to_plugin_error)?;
+        serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
+    }
+
     /// Streaming variant: returns a receiver of [`ToolStreamChunk`]s plus a
-    /// future that resolves to the terminal [`ToolStreamEnd`] (or error).
-    /// For in-process and cdylib transports this is materialised by running
-    /// the plugin's `tool_invoke_stream` and forwarding chunks; for stdio /
-    /// HTTP it's driven by the `tool.stream.chunk` / `tool.stream.end`
-    /// notifications.
-    ///
-    /// Currently only the in-process path is fully implemented; remote
-    /// transports fall back to a single-chunk emulation built from the
-    /// non-streaming `tool_invoke` response.
+    /// oneshot for the terminal [`ToolStreamEnd`] (or error). Transports with
+    /// native stream support should surface it through `PluginTransport`;
+    /// others fall back to a single-chunk emulation built from the regular
+    /// `tool_invoke` response.
     pub async fn invoke_tool_stream(
         &self,
-        handle: &PluginToolHandle,
+        handle: &PluginEntryHandle,
         input: ToolInvokeInput,
     ) -> Result<ToolInvokeStream, PluginError> {
         let plugin = self
@@ -304,9 +418,19 @@ impl PluginHost {
         let mut input = input;
         input.tool_name = handle.original_name.clone();
 
-        // Try the streaming dispatch endpoint first; transports that don't
-        // know it (or the SDK's default impl) emulate a single-chunk stream
-        // from the regular tool_invoke result.
+        if let Some(stream) = plugin
+            .transport
+            .invoke_stream(input.clone())
+            .await
+            .map_err(transport_to_plugin_error)?
+        {
+            return Ok(ToolInvokeStream {
+                stream_id: stream.stream_id,
+                chunks: stream.chunks,
+                end: stream.end,
+            });
+        }
+
         let timeout = self.timeouts.tool_invoke_or(Duration::from_secs(300));
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
@@ -317,6 +441,7 @@ impl PluginHost {
             .map_err(|e| PluginError::invalid_params(e.to_string()))?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(8);
+        let (end_tx, end_rx) = tokio::sync::oneshot::channel();
         let stream_id = format!("emu-{}", uuid::Uuid::new_v4().simple());
         let chunk = ToolStreamChunk {
             stream_id: stream_id.clone(),
@@ -326,24 +451,25 @@ impl PluginHost {
         };
         let _ = tx.send(chunk).await;
         drop(tx);
-        Ok(ToolInvokeStream {
+        let _ = end_tx.send(Ok(ToolStreamEnd {
             stream_id: stream_id.clone(),
+            title: result.title,
+            output_text: result.output_text,
+            payload: result.payload,
+            metadata: result.metadata,
+            attachments: result.attachments,
+        }));
+        Ok(ToolInvokeStream {
+            stream_id,
             chunks: rx,
-            end: ToolStreamEnd {
-                stream_id,
-                title: result.title,
-                output_text: result.output_text,
-                payload: result.payload,
-                metadata: result.metadata,
-                attachments: result.attachments,
-            },
+            end: end_rx,
         })
     }
 
     pub fn dispatch_shell_env(&self, input: ShellEnvInput) -> Result<ShellEnvPatch, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let plugins = self.plugins.clone();
-        let res: Result<ShellEnvPatch, TransportError> = self.block_on(async move {
+        let res: Result<ShellEnvPatch, TransportError> = self.block_on_static(async move {
             let mut acc = ShellEnvPatch::default();
             for plugin in &plugins {
                 if !plugin.subscribes(HookSubscription::SHELL_ENV) {
@@ -864,10 +990,10 @@ impl PluginHost {
 
     pub async fn dispatch_tool_definition(
         &self,
-        input: ToolDefinitionInput,
-    ) -> Result<ToolDefinitionInput, PluginError> {
+        input: EntryDefinitionInput,
+    ) -> Result<EntryDefinitionInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
-        dispatcher::chain_patch::<ToolDefinitionInput, ToolDefinitionPatch, _>(
+        dispatcher::chain_patch::<EntryDefinitionInput, EntryDefinitionPatch, _>(
             &self.plugins,
             method::HOOK_TOOL_DEFINITION,
             HookSubscription::TOOL_DEFINITION,
@@ -888,8 +1014,8 @@ impl PluginHost {
 
     pub fn dispatch_tool_definition_blocking(
         &self,
-        input: ToolDefinitionInput,
-    ) -> Result<ToolDefinitionInput, PluginError> {
+        input: EntryDefinitionInput,
+    ) -> Result<EntryDefinitionInput, PluginError> {
         self.block_on(self.dispatch_tool_definition(input))
     }
 
@@ -1162,7 +1288,7 @@ impl PluginHostBuilder {
         let mut static_registry = self.static_plugins;
         let mut loaded: Vec<Arc<LoadedPlugin>> = Vec::new();
         let mut by_id: HashMap<String, Arc<LoadedPlugin>> = HashMap::new();
-        let mut tools = ToolRegistry::new(self.builtin_tool_names);
+        let mut entry_registry = PluginEntryRegistry::new(self.builtin_tool_names);
 
         // Sort entries by id for deterministic load order.
         let mut entries: Vec<(String, PluginEntry)> = self.config.list.into_iter().collect();
@@ -1199,7 +1325,15 @@ impl PluginHostBuilder {
                         .await
                         .insert(id.clone());
                 }
-                tools.extend_from_plugin(idx, &reused.id, &reused.manifest.tools);
+                reused
+                    .transport
+                    .attach_host(host_handle.scoped_host_client(reused.id.clone()))
+                    .await
+                    .map_err(|e| HostError::Load {
+                        plugin: reused.id.clone(),
+                        message: e.to_string(),
+                    })?;
+                entry_registry.extend_from_plugin(idx, &reused.id, &reused.manifest.entries);
                 by_id.insert(reused.id.clone(), Arc::clone(&reused));
                 loaded.push(reused);
                 continue;
@@ -1218,7 +1352,7 @@ impl PluginHostBuilder {
             {
                 Ok(plugin) => {
                     let plugin = Arc::new(plugin);
-                    tools.extend_from_plugin(idx, &plugin.id, &plugin.manifest.tools);
+                    entry_registry.extend_from_plugin(idx, &plugin.id, &plugin.manifest.entries);
                     by_id.insert(plugin.id.clone(), plugin.clone());
                     loaded.push(plugin);
                 }
@@ -1235,7 +1369,7 @@ impl PluginHostBuilder {
         Ok(Arc::new(PluginHost {
             plugins: loaded,
             plugins_by_id: by_id,
-            tools,
+            entries: entry_registry,
             timeouts: self.config.timeouts,
             runtime: None,
             runtime_handle: tokio::runtime::Handle::try_current().ok(),
@@ -1290,11 +1424,29 @@ impl HostHandle {
         None
     }
 
-    pub fn host_handler(self: &Arc<Self>) -> crate::transport::stdio::HostHandler {
+    pub fn scoped_host_client(
+        self: &Arc<Self>,
+        plugin_id: impl Into<String>,
+    ) -> Arc<dyn HostClient> {
+        Arc::new(ScopedHostClient {
+            handle: Arc::clone(self),
+            plugin_id: plugin_id.into(),
+        })
+    }
+
+    pub fn host_handler_for(
+        self: &Arc<Self>,
+        plugin_id: impl Into<String>,
+    ) -> crate::transport::stdio::HostHandler {
         let this = Arc::clone(self);
+        let plugin_id = plugin_id.into();
         Arc::new(move |method: String, params: serde_json::Value| {
             let this = Arc::clone(&this);
-            Box::pin(async move { this.handle_call(&method, params).await })
+            let plugin_id = plugin_id.clone();
+            Box::pin(async move {
+                this.handle_call_for_plugin(plugin_id.as_str(), &method, params)
+                    .await
+            })
         })
     }
 
@@ -1303,40 +1455,150 @@ impl HostHandle {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, PluginError> {
+        self.handle_call_for_plugin("", method, params).await
+    }
+
+    pub async fn handle_call_for_plugin(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, PluginError> {
         let inner = self.inner.read().await.clone();
+        let plugin_id = (!plugin_id.is_empty()).then(|| plugin_id.to_string());
         match method {
             method::HOST_LOG => {
                 let p: HostLogParams = parse(params)?;
-                inner.log(p.level, p.message, p.fields).await;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, None),
+                    inner.log(p.level, p.message, p.fields),
+                )
+                .await;
                 Ok(serde_json::Value::Object(Default::default()))
             }
             method::HOST_EVENT_PUBLISH => {
                 let env: EventEnvelope = parse(params)?;
-                inner.publish_event(env).await?;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, None),
+                    inner.publish_event(env),
+                )
+                .await?;
                 Ok(serde_json::Value::Object(Default::default()))
             }
             method::HOST_EVENT_SUBSCRIBE => {
                 let p: HostSubscribeParams = parse(params)?;
-                let sub: EventSubscription = inner.subscribe_events(p.filter).await?;
+                let sub: EventSubscription = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, None),
+                    inner.subscribe_events(p.filter),
+                )
+                .await?;
                 Ok(serde_json::json!({ "subscription_id": sub.id }))
             }
             method::HOST_EVENT_UNSUBSCRIBE => {
                 let p: HostUnsubscribeParams = parse(params)?;
-                inner.unsubscribe_events(p.subscription_id).await?;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, None),
+                    inner.unsubscribe_events(p.subscription_id),
+                )
+                .await?;
                 Ok(serde_json::Value::Object(Default::default()))
             }
             method::HOST_PERMISSION_ASK => {
                 let req: PermissionAskInput = parse(params)?;
-                let d = inner.ask_permission(req).await?;
+                let d = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, None),
+                    inner.ask_permission(req),
+                )
+                .await?;
                 serde_json::to_value(&d).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             method::HOST_CONFIG_READ => {
                 let p: HostConfigReadParams = parse(params)?;
-                inner.read_config(p.path).await
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.read_config(p.path),
+                )
+                .await
             }
             method::HOST_TOOL_INVOKE => {
                 let p: HostInvokeToolParams = parse(params)?;
-                let out = inner.invoke_tool(p.tool, p.input).await?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.invoke_tool(p.tool, p.input),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_ASK_USER => {
+                let p: HostAskUserParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.ask_user(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_SUBTASK_SPAWN => {
+                let p: HostSpawnSubtaskParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.spawn_subtask(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_TOOL_LIST => {
+                let p: HostListToolsParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.list_tools(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_BUILTIN_EXECUTE => {
+                let p: HostBuiltinExecuteParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.execute_builtin_tool(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_MONITOR_START => {
+                let p: HostMonitorStartParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.monitor_start(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_MONITOR_LIST => {
+                let p: HostMonitorListParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.monitor_list(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_MONITOR_READ => {
+                let p: HostMonitorReadParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.monitor_read(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_MONITOR_STOP => {
+                let p: HostMonitorStopParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.monitor_stop(p.request),
+                )
+                .await?;
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             other => Err(PluginError::not_implemented(other)),
@@ -1366,6 +1628,8 @@ struct HostUnsubscribeParams {
 struct HostConfigReadParams {
     #[serde(default)]
     path: Option<String>,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1373,10 +1637,190 @@ struct HostInvokeToolParams {
     tool: String,
     #[serde(default)]
     input: serde_json::Value,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostAskUserParams {
+    request: AskUserRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostSpawnSubtaskParams {
+    request: SpawnSubtaskRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostListToolsParams {
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostBuiltinExecuteParams {
+    request: BuiltinToolRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostMonitorStartParams {
+    request: MonitorStartRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostMonitorListParams {
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostMonitorReadParams {
+    request: MonitorReadRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostMonitorStopParams {
+    request: MonitorStopRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+fn scoped_context(
+    plugin_id: Option<String>,
+    context: Option<HostCallbackContext>,
+) -> HostCallbackContext {
+    let mut context = context.unwrap_or_default();
+    if let Some(plugin_id) = plugin_id {
+        context.plugin_id = Some(plugin_id);
+    }
+    context
 }
 
 fn parse<T: DeserializeOwned>(v: serde_json::Value) -> Result<T, PluginError> {
     serde_json::from_value(v).map_err(|e| PluginError::invalid_params(e.to_string()))
+}
+
+struct ScopedHostClient {
+    handle: Arc<HostHandle>,
+    plugin_id: String,
+}
+
+impl ScopedHostClient {
+    fn context(&self) -> HostCallbackContext {
+        HostCallbackContext {
+            plugin_id: Some(self.plugin_id.clone()),
+            ..HostCallbackContext::default()
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl HostClient for ScopedHostClient {
+    async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.log(level, message, fields))
+            .await;
+    }
+
+    async fn publish_event(&self, env: EventEnvelope) -> crate::sdk::Result<()> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.publish_event(env)).await
+    }
+
+    async fn subscribe_events(&self, filter: EventFilter) -> crate::sdk::Result<EventSubscription> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.subscribe_events(filter)).await
+    }
+
+    async fn unsubscribe_events(&self, subscription_id: String) -> crate::sdk::Result<()> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(
+            self.context(),
+            inner.unsubscribe_events(subscription_id),
+        )
+        .await
+    }
+
+    async fn ask_permission(
+        &self,
+        req: PermissionAskInput,
+    ) -> crate::sdk::Result<PermissionDecision> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.ask_permission(req)).await
+    }
+
+    async fn read_config(&self, path: Option<String>) -> crate::sdk::Result<serde_json::Value> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.read_config(path)).await
+    }
+
+    async fn invoke_tool(
+        &self,
+        tool: String,
+        input: serde_json::Value,
+    ) -> crate::sdk::Result<ToolInvokeOutput> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.invoke_tool(tool, input)).await
+    }
+
+    async fn ask_user(&self, req: AskUserRequest) -> crate::sdk::Result<AskUserResponse> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.ask_user(req)).await
+    }
+
+    async fn spawn_subtask(
+        &self,
+        req: SpawnSubtaskRequest,
+    ) -> crate::sdk::Result<SpawnSubtaskResponse> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.spawn_subtask(req)).await
+    }
+
+    async fn list_tools(&self) -> crate::sdk::Result<Vec<ToolDescriptor>> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.list_tools()).await
+    }
+
+    async fn execute_builtin_tool(
+        &self,
+        req: BuiltinToolRequest,
+    ) -> crate::sdk::Result<ToolInvokeOutput> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.execute_builtin_tool(req)).await
+    }
+
+    async fn monitor_start(&self, req: MonitorStartRequest) -> crate::sdk::Result<MonitorHandle> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.monitor_start(req)).await
+    }
+
+    async fn monitor_list(&self) -> crate::sdk::Result<Vec<MonitorHandle>> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.monitor_list()).await
+    }
+
+    async fn monitor_read(
+        &self,
+        req: MonitorReadRequest,
+    ) -> crate::sdk::Result<MonitorReadResponse> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.monitor_read(req)).await
+    }
+
+    async fn monitor_stop(&self, req: MonitorStopRequest) -> crate::sdk::Result<MonitorHandle> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.monitor_stop(req)).await
+    }
 }
 
 /// Convenience: a `HostClient` impl that always errors. Used as the default

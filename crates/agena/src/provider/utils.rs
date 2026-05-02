@@ -257,10 +257,15 @@ where
         }
     }
 
-    let (pid, model, finish_reason, usage, provider_metadata) =
-        completed.unwrap_or_else(|| {
-            (ProviderId::new(provider_id), fallback_model, None, None, None)
-        });
+    let (pid, model, finish_reason, usage, provider_metadata) = completed.unwrap_or_else(|| {
+        (
+            ProviderId::new(provider_id),
+            fallback_model,
+            None,
+            None,
+            None,
+        )
+    });
 
     let calls = tool_calls
         .into_iter()
@@ -306,7 +311,11 @@ pub fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::V
 pub fn normalize_optional_text(value: Option<String>) -> Option<String> {
     value.and_then(|raw| {
         let trimmed = raw.trim();
-        if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
     })
 }
 
@@ -594,8 +603,7 @@ fn classify_http_error(
             retryable: false,
         };
     }
-    if provider_id.trim().eq_ignore_ascii_case("openai")
-        && status == reqwest::StatusCode::NOT_FOUND
+    if provider_id.trim().eq_ignore_ascii_case("openai") && status == reqwest::StatusCode::NOT_FOUND
     {
         return ProviderErrorClassification {
             kind: ProviderErrorKind::ApiError,
@@ -636,7 +644,9 @@ fn classify_stream_error(provider_id: &str, code: Option<&str>, message: &str) -
     if normalized_code == "usage_not_included" {
         return AppError::ProviderClassified {
             provider: provider_id.to_owned(),
-            message: "To use Codex models and OpenAI reasoning summaries, upgrade to Plus plan first.".to_owned(),
+            message:
+                "To use Codex models and OpenAI reasoning summaries, upgrade to Plus plan first."
+                    .to_owned(),
             kind: ProviderErrorKind::ApiError,
             retryable: false,
         };

@@ -15,7 +15,7 @@ pub use part::{
     LspHoverToolInput, LspReferencesToolInput, McpToolOutput, MessagePart, MessagePartSummary,
     MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput, NotebookCellType,
     NotebookEditMode, NotebookEditToolInput, PartContent, PartKind, PartStateTransitionError,
-    PermissionRequestPart, PowerShellToolInput, ReadToolInput, ReasoningPart,
+    PermissionRequestPart, PluginInvocation, PowerShellToolInput, ReadToolInput, ReasoningPart,
     RequestUserInputToolInput, ScheduleWakeupToolInput, SkillRunToolInput, StructuredField,
     StructuredObject, StructuredValue, TaskSubagentType, TaskToolInput, TextPart, TimeRange,
     TodoItem, TodoListPart, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment,

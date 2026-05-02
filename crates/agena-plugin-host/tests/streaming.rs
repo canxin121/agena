@@ -16,8 +16,8 @@ impl Plugin for StreamingPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("streamy", "0.1.0")
             .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::TOOL_INVOKE_STREAM)
-            .tool(
-                ToolDecl::new(
+            .entry(
+                PluginEntryDecl::new(
                     "count",
                     json!({"type":"object","properties":{"n":{"type":"integer"}}}),
                 )
@@ -27,11 +27,7 @@ impl Plugin for StreamingPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
-        let n = input
-            .input
-            .get("n")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(3);
+        let n = input.input.get("n").and_then(|v| v.as_i64()).unwrap_or(3);
         Ok(ToolInvokeOutput::text(format!("counted to {n}")))
     }
 }
@@ -58,7 +54,7 @@ async fn streaming_emulation_yields_one_chunk() {
         .await
         .expect("build");
 
-    let resolved = host.lookup_tool("count").expect("count exposed");
+    let resolved = host.lookup_entry("count").expect("count exposed");
     let mut stream = host
         .invoke_tool_stream(
             &resolved.handle,
@@ -79,5 +75,10 @@ async fn streaming_emulation_yields_one_chunk() {
     }
     assert!(!chunks.is_empty(), "expected at least one chunk");
     assert!(chunks[0].text_delta.as_deref() == Some("counted to 5"));
-    assert_eq!(stream.end.output_text, "counted to 5");
+    let end = stream
+        .end
+        .await
+        .expect("stream end channel")
+        .expect("stream result");
+    assert_eq!(end.output_text, "counted to 5");
 }

@@ -5,9 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::pagination::{PageInfo, PaginatedResponse};
 use crate::resource::{
-    HealthResponse, MessageResource, PartLoadMode, PermissionRuleResource,
-    ProviderModelsResponse, ProviderSummaryResource, RuntimeStatusResponse, SessionResource,
-    WorkspaceResource,
+    HealthResponse, MessageResource, PartLoadMode, PermissionRuleResource, ProviderModelsResponse,
+    ProviderSummaryResource, RuntimeStatusResponse, SessionResource, WorkspaceResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

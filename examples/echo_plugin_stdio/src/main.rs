@@ -16,8 +16,8 @@ impl Plugin for EchoPlugin {
                     | HookSubscription::SHELL_ENV
                     | HookSubscription::CHAT_PARAMS,
             )
-            .tool(
-                ToolDecl::new(
+            .entry(
+                PluginEntryDecl::new(
                     "echo",
                     json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}),
                 )

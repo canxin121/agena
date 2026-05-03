@@ -85,9 +85,119 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
     }
 
     pub fn install(&self, req: InstallRequest) -> Result<InstallOutcome, MarketplaceError> {
+        // Build the dependency plan first: any DependencySpec in the
+        // resolved version is followed transitively through the same
+        // registry, with cycle detection. Each dependency is installed
+        // before its dependents.
+        self.cache.ensure_dirs()?;
+        let registry_handle = self.registry(req.registry.clone());
+        let index = registry_handle.fetch_index(req.refresh_index)?;
+        let installed = self.cache.load_installed()?;
+
+        let mut plan: Vec<(String, Option<String>)> = Vec::new();
+        let mut visiting: std::collections::BTreeSet<String> = Default::default();
+        let mut visited: std::collections::BTreeSet<String> = Default::default();
+        self.collect_install_plan(
+            &req.plugin_id,
+            req.version.clone(),
+            &index,
+            &installed,
+            &mut visiting,
+            &mut visited,
+            &mut plan,
+        )?;
+
+        let mut last: Option<InstallOutcome> = None;
+        for (plugin_id, version_req) in plan {
+            // Dependencies fetched via dependency resolution always treat
+            // the registry as the same one and re-use force/dry_run/etc
+            // flags. The first record here is the explicit user-requested
+            // plugin (it appears last in plan).
+            let is_root = plugin_id == req.plugin_id;
+            let mut sub = req.clone();
+            sub.plugin_id = plugin_id.clone();
+            sub.version = version_req.clone();
+            // For pre-existing dependencies we should not clobber. If a
+            // dep is already installed we already skipped it during
+            // collect_install_plan. The only entries reaching here are
+            // not-yet-installed deps and the root.
+            if !is_root {
+                sub.force = false;
+            }
+            let outcome = self.install_one(sub)?;
+            last = Some(outcome);
+        }
+        last.ok_or_else(|| MarketplaceError::Config("install plan was empty".into()))
+    }
+
+    fn collect_install_plan(
+        &self,
+        plugin_id: &str,
+        version_req: Option<String>,
+        index: &RegistryIndex,
+        installed: &crate::cache::InstalledRecords,
+        visiting: &mut std::collections::BTreeSet<String>,
+        visited: &mut std::collections::BTreeSet<String>,
+        out: &mut Vec<(String, Option<String>)>,
+    ) -> Result<(), MarketplaceError> {
+        if visited.contains(plugin_id) {
+            return Ok(());
+        }
+        if !visiting.insert(plugin_id.to_string()) {
+            return Err(MarketplaceError::CircularDependency(plugin_id.to_string()));
+        }
+        let plugin = index
+            .plugins
+            .iter()
+            .find(|p| p.id == plugin_id)
+            .ok_or_else(|| MarketplaceError::PluginNotFound(plugin_id.to_string()))?;
+        let version = select_version(
+            &plugin.versions,
+            version_req.as_deref(),
+            current_target_triple(),
+        )
+        .ok_or_else(|| {
+            MarketplaceError::NoMatchingVersion(
+                plugin_id.to_string(),
+                current_target_triple().to_string(),
+            )
+        })?;
+        for dep in &version.dependencies {
+            // Skip already-installed deps that satisfy the requirement.
+            if let Some(record) = installed.records.get(&dep.plugin_id) {
+                if dep_satisfied(&record.version, &dep.version_req) {
+                    visited.insert(dep.plugin_id.clone());
+                    continue;
+                }
+            }
+            // Otherwise recurse, picking the highest matching version.
+            let dep_version = pick_version_for_req(index, &dep.plugin_id, &dep.version_req)
+                .ok_or_else(|| {
+                    MarketplaceError::MissingDependency(
+                        dep.plugin_id.clone(),
+                        plugin_id.to_string(),
+                    )
+                })?;
+            self.collect_install_plan(
+                &dep.plugin_id,
+                Some(dep_version),
+                index,
+                installed,
+                visiting,
+                visited,
+                out,
+            )?;
+        }
+        visiting.remove(plugin_id);
+        visited.insert(plugin_id.to_string());
+        out.push((plugin_id.to_string(), version_req));
+        Ok(())
+    }
+
+    fn install_one(&self, req: InstallRequest) -> Result<InstallOutcome, MarketplaceError> {
         self.cache.ensure_dirs()?;
         let registry = self.registry(req.registry.clone());
-        let index = registry.fetch_index(req.refresh_index)?;
+        let index = registry.fetch_index(false)?;
         let plugin = index
             .plugins
             .into_iter()
@@ -217,6 +327,35 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
     }
 
     pub fn uninstall(&self, plugin_id: &str) -> Result<UninstallOutcome, MarketplaceError> {
+        self.uninstall_with(plugin_id, false)
+            .map(|outs| outs.into_iter().next().expect("at least one"))
+    }
+
+    /// Uninstall `plugin_id`. With `cascade=false`, refuses if any other
+    /// installed plugin depends on it (the list is computed from manifest
+    /// snapshots saved at install time). With `cascade=true`, uninstalls
+    /// downstream dependents first, then the requested plugin.
+    pub fn uninstall_with(
+        &self,
+        plugin_id: &str,
+        cascade: bool,
+    ) -> Result<Vec<UninstallOutcome>, MarketplaceError> {
+        let dependents = self.find_dependents(plugin_id)?;
+        if !dependents.is_empty() && !cascade {
+            return Err(MarketplaceError::RequiredByOthers {
+                plugin: plugin_id.to_string(),
+                dependents,
+            });
+        }
+        let mut out = Vec::new();
+        for dep in dependents {
+            out.push(self.uninstall_one(&dep)?);
+        }
+        out.push(self.uninstall_one(plugin_id)?);
+        Ok(out)
+    }
+
+    fn uninstall_one(&self, plugin_id: &str) -> Result<UninstallOutcome, MarketplaceError> {
         let mut records = self.cache.load_installed()?;
         let record = records
             .records
@@ -235,6 +374,38 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             version: record.version,
             config_path: record.config_path,
         })
+    }
+
+    /// Look at every installed plugin's manifest snapshot and report any
+    /// that depend on `plugin_id`.
+    fn find_dependents(&self, plugin_id: &str) -> Result<Vec<String>, MarketplaceError> {
+        let installed = self.cache.load_installed()?;
+        let mut deps = Vec::new();
+        for record in installed.records.values() {
+            if record.plugin_id == plugin_id {
+                continue;
+            }
+            let snapshot_path = self
+                .cache
+                .manifest_snapshot_path(&record.plugin_id, &record.version);
+            if !snapshot_path.exists() {
+                continue;
+            }
+            let bytes = std::fs::read(&snapshot_path)?;
+            let version: PluginVersion = match serde_json::from_slice(&bytes) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if version
+                .dependencies
+                .iter()
+                .any(|d| d.plugin_id == plugin_id)
+            {
+                deps.push(record.plugin_id.clone());
+            }
+        }
+        deps.sort();
+        Ok(deps)
     }
 
     pub fn list_installed(&self) -> Result<Vec<InstalledRecord>, MarketplaceError> {
@@ -376,6 +547,45 @@ fn is_newer(candidate: &str, installed: &str) -> bool {
         (Ok(c), Ok(i)) => c > i,
         _ => candidate != installed,
     }
+}
+
+fn dep_satisfied(installed_version: &str, req: &str) -> bool {
+    match (
+        semver::Version::parse(installed_version),
+        semver::VersionReq::parse(req),
+    ) {
+        (Ok(v), Ok(r)) => r.matches(&v),
+        // If either side fails to parse, fall back to literal equality.
+        _ => installed_version == req,
+    }
+}
+
+/// Pick the highest version of `plugin_id` matching `req` in `index`,
+/// platform-filtered. Returns the version string or None.
+fn pick_version_for_req(index: &RegistryIndex, plugin_id: &str, req: &str) -> Option<String> {
+    let plugin = index.plugins.iter().find(|p| p.id == plugin_id)?;
+    let parsed_req = semver::VersionReq::parse(req).ok();
+    let target = current_target_triple();
+    let mut candidates: Vec<&PluginVersion> = plugin
+        .versions
+        .iter()
+        .filter(|v| v.platform == target || v.platform == "any")
+        .filter(
+            |v| match (&parsed_req, semver::Version::parse(&v.version).ok()) {
+                (Some(r), Some(parsed)) => r.matches(&parsed),
+                _ => v.version == req,
+            },
+        )
+        .collect();
+    candidates.sort_by(|a, b| {
+        let av = semver::Version::parse(&a.version).ok();
+        let bv = semver::Version::parse(&b.version).ok();
+        match (av, bv) {
+            (Some(a), Some(b)) => b.cmp(&a),
+            _ => b.version.cmp(&a.version),
+        }
+    });
+    candidates.first().map(|v| v.version.clone())
 }
 
 fn extract_tar_gz(bytes: &[u8], dest: &Path) -> Result<(), String> {
@@ -1012,6 +1222,114 @@ mod tests {
 
         let outdated = client.list_outdated().expect("outdated empty");
         assert!(outdated.is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn install_pulls_in_dependencies_and_uninstall_blocks_when_required() {
+        use crate::manifest::DependencySpec;
+
+        let root = temp_root("deps");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+
+        let lib_bytes = b"LIB".to_vec();
+        let app_bytes = b"APP".to_vec();
+        let lib_sha = sha256_hex(&lib_bytes);
+        let app_sha = sha256_hex(&app_bytes);
+        fetcher.insert("https://example.com/lib.wasm", lib_bytes);
+        fetcher.insert("https://example.com/app.wasm", app_bytes);
+
+        let lib = PluginVersion {
+            version: "0.1.0".into(),
+            kind: PluginKind::Wasm,
+            platform: "any".into(),
+            url: "https://example.com/lib.wasm".into(),
+            sha256: Some(lib_sha),
+            signature: None,
+            command: None,
+            args: Vec::new(),
+            env: Default::default(),
+            options: serde_json::Value::Null,
+            min_agena_version: None,
+            archive: None,
+            dependencies: Vec::new(),
+        };
+        let app = PluginVersion {
+            version: "0.2.0".into(),
+            url: "https://example.com/app.wasm".into(),
+            sha256: Some(app_sha),
+            dependencies: vec![DependencySpec {
+                plugin_id: "lib".into(),
+                version_req: "^0.1".into(),
+            }],
+            ..lib.clone()
+        };
+        let index = RegistryIndex {
+            version: 1,
+            plugins: vec![
+                PluginRecord {
+                    id: "lib".into(),
+                    name: String::new(),
+                    description: String::new(),
+                    homepage: None,
+                    versions: vec![lib],
+                },
+                PluginRecord {
+                    id: "app".into(),
+                    name: String::new(),
+                    description: String::new(),
+                    homepage: None,
+                    versions: vec![app],
+                },
+            ],
+        };
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&index).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        let registry = RegistrySpec {
+            id: "test".into(),
+            url: "https://registry.test/index.json".into(),
+            require_signature: false,
+        };
+
+        // Installing `app` must transitively install `lib` first.
+        client
+            .install(InstallRequest {
+                registry: registry.clone(),
+                plugin_id: "app".into(),
+                version: None,
+                config_path: root.join("config.toml"),
+                force: false,
+                dry_run: false,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect("install app + lib");
+        let installed: Vec<_> = client
+            .list_installed()
+            .expect("list")
+            .into_iter()
+            .map(|r| r.plugin_id)
+            .collect();
+        assert!(installed.contains(&"lib".to_string()));
+        assert!(installed.contains(&"app".to_string()));
+
+        // Plain uninstall of `lib` is rejected because `app` depends on it.
+        let err = client.uninstall("lib").expect_err("dependent blocks");
+        assert!(matches!(err, MarketplaceError::RequiredByOthers { .. }));
+
+        // Cascade removes both.
+        let outs = client
+            .uninstall_with("lib", true)
+            .expect("cascade uninstall");
+        let removed_ids: Vec<_> = outs.into_iter().map(|o| o.plugin_id).collect();
+        assert!(removed_ids.contains(&"lib".to_string()));
+        assert!(removed_ids.contains(&"app".to_string()));
+        assert!(client.list_installed().unwrap().is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 }

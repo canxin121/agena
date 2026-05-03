@@ -187,6 +187,9 @@ pub struct PluginInstallArgs {
 #[derive(Debug, Clone, Args)]
 pub struct PluginUninstallArgs {
     pub plugin_id: String,
+    /// Also uninstall any plugin that depends on this one.
+    #[arg(long, default_value_t = false)]
+    pub cascade: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -722,15 +725,17 @@ impl AgenaCli {
                 Ok(())
             }
             PluginSubcommand::Uninstall(args) => {
-                let outcome = client
-                    .uninstall(&args.plugin_id)
+                let outcomes = client
+                    .uninstall_with(&args.plugin_id, args.cascade)
                     .map_err(|err| AppError::Config(err.to_string()))?;
-                println!(
-                    "Uninstalled {} v{} from {}",
-                    outcome.plugin_id,
-                    outcome.version,
-                    outcome.config_path.display()
-                );
+                for outcome in outcomes {
+                    println!(
+                        "Uninstalled {} v{} from {}",
+                        outcome.plugin_id,
+                        outcome.version,
+                        outcome.config_path.display()
+                    );
+                }
                 Ok(())
             }
             PluginSubcommand::ListInstalled => {

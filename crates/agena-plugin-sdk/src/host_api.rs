@@ -253,6 +253,29 @@ pub trait HostClient: Send + Sync + 'static {
     async fn agent_list(&self) -> Result<HostAgentListResponse> {
         Err(unavailable())
     }
+
+    /// Hook registry — list every hook currently subscribed across plugins.
+    async fn hook_list(&self) -> Result<HostHookListResponse> {
+        Err(unavailable())
+    }
+
+    /// MCP registry — list known MCP servers.
+    async fn mcp_list_servers(&self) -> Result<HostMcpListServersResponse> {
+        Err(unavailable())
+    }
+
+    /// MCP registry — register or replace a server.
+    async fn mcp_add_server(&self, _req: HostMcpAddServerRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// MCP registry — remove a server by name.
+    async fn mcp_remove_server(
+        &self,
+        _req: HostMcpRemoveServerRequest,
+    ) -> Result<HostMcpRemoveServerResponse> {
+        Err(unavailable())
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -891,6 +914,65 @@ pub struct HostAgentRemoveResponse {
 pub struct HostAgentListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<HostAgentDescriptor>,
+}
+
+// ---------------- hooks ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostHookListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<HostHookEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostHookEntry {
+    pub plugin_id: String,
+    pub hooks: Vec<String>,
+}
+
+// ---------------- mcp ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostMcpListServersResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HostMcpServerSpec {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+    },
+    Http {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer: Option<String>,
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostMcpAddServerRequest {
+    pub name: String,
+    pub spec: HostMcpServerSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostMcpRemoveServerRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostMcpRemoveServerResponse {
+    pub removed: bool,
 }
 
 fn default_true() -> bool {

@@ -141,6 +141,8 @@ pub enum HostCapability {
     CronScheduler,
     CommandRegistry,
     AgentRegistry,
+    HookRegistry,
+    McpRegistry,
 }
 
 /// Single declarative path extraction rule. `jsonpath` is a subset:

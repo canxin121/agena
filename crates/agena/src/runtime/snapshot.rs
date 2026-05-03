@@ -82,6 +82,7 @@ struct RuntimeServices {
     plugins: Arc<PluginHost>,
     auth_store: RuntimeAuthStore,
     session_manager: Option<Arc<SessionManager>>,
+    mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     /// Lives for as long as this snapshot does; aborts the event bridge
     /// task when the snapshot is dropped.
     _event_bridge: Option<Arc<EventBridgeGuard>>,
@@ -125,6 +126,7 @@ impl RuntimeServices {
         plugins: Arc<PluginHost>,
         auth_store: RuntimeAuthStore,
         session_manager: Option<Arc<SessionManager>>,
+        mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
         event_bridge: Option<Arc<EventBridgeGuard>>,
         plugin_shutdown: Option<Arc<PluginShutdownGuard>>,
     ) -> Self {
@@ -133,6 +135,7 @@ impl RuntimeServices {
             plugins,
             auth_store,
             session_manager,
+            mcp_manager,
             _event_bridge: event_bridge,
             _plugin_shutdown: plugin_shutdown,
         }
@@ -241,7 +244,7 @@ impl RuntimeSnapshot {
                 .map_err(AppError::from)?
         } else {
             resolution
-                .build_plugin_host_with_previous_and_mcp(None, None, mcp_manager)
+                .build_plugin_host_with_previous_and_mcp(None, None, mcp_manager.clone())
                 .await
                 .map_err(AppError::from)?
         };
@@ -300,6 +303,7 @@ impl RuntimeSnapshot {
             plugins,
             auth_store,
             session_manager,
+            mcp_manager,
             event_bridge,
             plugin_shutdown,
         );
@@ -328,6 +332,10 @@ impl RuntimeSnapshot {
 
     pub fn provider_registry(&self) -> Arc<ProviderRegistry> {
         Arc::clone(&self.services.providers)
+    }
+
+    pub fn mcp_manager(&self) -> Option<Arc<agena_mcp_client::McpConnectionManager>> {
+        self.services.mcp_manager.clone()
     }
 
     pub async fn list_provider_models(

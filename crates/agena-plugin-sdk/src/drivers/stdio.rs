@@ -32,8 +32,11 @@ use crate::host_api::{
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
     HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
     HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostSkillGetRequest, HostSkillGetResponse, HostStatuslineContributeRequest,
+    HostStatuslineListResponse, HostStatuslineRemoveRequest, HostStatuslineRemoveResponse,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
+    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
     HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
     MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse,
     ToolDescriptor,
@@ -804,6 +807,83 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<HostMcpRemoveServerResponse> {
         self.call(
             method::HOST_MCP_REMOVE_SERVER,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn ui_statusline_contribute(
+        &self,
+        req: HostStatuslineContributeRequest,
+    ) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_UI_STATUSLINE_CONTRIBUTE,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn ui_statusline_list(&self) -> crate::error::Result<HostStatuslineListResponse> {
+        self.call(
+            method::HOST_UI_STATUSLINE_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn ui_statusline_remove(
+        &self,
+        req: HostStatuslineRemoveRequest,
+    ) -> crate::error::Result<HostStatuslineRemoveResponse> {
+        self.call(
+            method::HOST_UI_STATUSLINE_REMOVE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn ui_theme_register(&self, req: HostThemeRegisterRequest) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_UI_THEME_REGISTER,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn ui_theme_list(&self) -> crate::error::Result<HostThemeListResponse> {
+        self.call(
+            method::HOST_UI_THEME_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn ui_theme_remove(
+        &self,
+        req: HostThemeRemoveRequest,
+    ) -> crate::error::Result<HostThemeRemoveResponse> {
+        self.call(
+            method::HOST_UI_THEME_REMOVE,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),

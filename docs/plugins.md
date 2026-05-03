@@ -186,6 +186,8 @@ Available callbacks include:
 | `agent_register`, `agent_remove`, `agent_list` / `host/agent.*` | `AgentRegistry` |
 | `hook_list` / `host/hook.list` | `HookRegistry` |
 | `mcp_list_servers`, `mcp_add_server`, `mcp_remove_server` / `host/mcp.*` | `McpRegistry` |
+| `ui_statusline_contribute`, `ui_statusline_list`, `ui_statusline_remove` / `host/ui.statusline.*` | `Statusline` |
+| `ui_theme_register`, `ui_theme_list`, `ui_theme_remove` / `host/ui.theme.*` | `Theme` |
 
 For stdio / HTTP plugins, callbacks travel back over the same JSON-RPC wire
 (stdio multiplexed on stdin/stdout, HTTP via `POST /plugin-rpc/{plugin_id}`

@@ -143,6 +143,9 @@ pub enum HostCapability {
     AgentRegistry,
     HookRegistry,
     McpRegistry,
+    Statusline,
+    Theme,
+    PermissionUi,
 }
 
 /// Single declarative path extraction rule. `jsonpath` is a subset:

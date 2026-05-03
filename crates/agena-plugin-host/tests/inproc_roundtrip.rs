@@ -767,3 +767,75 @@ async fn hook_capability_returns_loaded_plugin_capabilities() {
                 == Some("capability-plugin"))
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ui_statusline_round_trip_under_capability() {
+    let host = host_with_capability_plugin(vec![HostCapability::Statusline]).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    host.host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_UI_STATUSLINE_CONTRIBUTE,
+            json!({
+                "request": {
+                    "segment_id": "branch",
+                    "content": "main",
+                    "priority": 10,
+                }
+            }),
+        )
+        .await
+        .expect("statusline.contribute should succeed");
+
+    let listed = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_UI_STATUSLINE_LIST,
+            json!({}),
+        )
+        .await
+        .expect("statusline.list should succeed");
+    assert_eq!(
+        listed
+            .get("segments")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|seg| seg.get("content"))
+            .and_then(|v| v.as_str()),
+        Some("main")
+    );
+
+    let removed = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_UI_STATUSLINE_REMOVE,
+            json!({ "request": { "segment_id": "branch" } }),
+        )
+        .await
+        .expect("statusline.remove should succeed");
+    assert_eq!(removed.get("removed").and_then(|v| v.as_bool()), Some(true));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ui_theme_calls_require_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_UI_THEME_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("theme.list should require Theme capability");
+    assert!(err.message.contains("Theme"));
+}

@@ -276,6 +276,42 @@ pub trait HostClient: Send + Sync + 'static {
     ) -> Result<HostMcpRemoveServerResponse> {
         Err(unavailable())
     }
+
+    /// UI statusline — contribute or update a segment.
+    async fn ui_statusline_contribute(&self, _req: HostStatuslineContributeRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// UI statusline — list every contributed segment in priority order.
+    async fn ui_statusline_list(&self) -> Result<HostStatuslineListResponse> {
+        Err(unavailable())
+    }
+
+    /// UI statusline — remove a segment by id.
+    async fn ui_statusline_remove(
+        &self,
+        _req: HostStatuslineRemoveRequest,
+    ) -> Result<HostStatuslineRemoveResponse> {
+        Err(unavailable())
+    }
+
+    /// UI theme — register or update a palette.
+    async fn ui_theme_register(&self, _req: HostThemeRegisterRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// UI theme — list every registered palette.
+    async fn ui_theme_list(&self) -> Result<HostThemeListResponse> {
+        Err(unavailable())
+    }
+
+    /// UI theme — remove a palette by id.
+    async fn ui_theme_remove(
+        &self,
+        _req: HostThemeRemoveRequest,
+    ) -> Result<HostThemeRemoveResponse> {
+        Err(unavailable())
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -973,6 +1009,76 @@ pub struct HostMcpRemoveServerRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostMcpRemoveServerResponse {
     pub removed: bool,
+}
+
+// ---------------- UI: statusline / theme ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostStatuslineSegment {
+    pub plugin_id: String,
+    pub segment_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostStatuslineContributeRequest {
+    pub segment_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostStatuslineRemoveRequest {
+    pub segment_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostStatuslineRemoveResponse {
+    pub removed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostStatuslineListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<HostStatuslineSegment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostThemePalette {
+    pub id: String,
+    pub plugin_id: String,
+    pub display_name: String,
+    pub colors: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostThemeRegisterRequest {
+    pub id: String,
+    pub display_name: String,
+    pub colors: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostThemeRemoveRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostThemeRemoveResponse {
+    pub removed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostThemeListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub themes: Vec<HostThemePalette>,
 }
 
 fn default_true() -> bool {

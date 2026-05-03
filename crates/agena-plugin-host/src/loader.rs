@@ -118,13 +118,16 @@ pub async fn load_entry(
             let env_map: std::collections::HashMap<String, String> =
                 env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             let host_handler = host_handle.host_handler_for(plugin_id.to_string());
-            let t = StdioTransport::spawn_with_policy(
+            let status_sink = host_handle.status_registry();
+            let t = StdioTransport::spawn_with_policy_and_status(
                 command,
                 args,
                 &env_map,
                 cwd.as_ref(),
                 Some(host_handler),
                 restart.clone(),
+                Some(plugin_id.to_string()),
+                Some(status_sink),
             )
             .await
             .map_err(|e| HostError::Load {

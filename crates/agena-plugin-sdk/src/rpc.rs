@@ -181,4 +181,6 @@ pub mod method {
     pub const HOST_SECRET_SET: &str = "host/secret.set";
     pub const HOST_SECRET_DELETE: &str = "host/secret.delete";
     pub const HOST_SECRET_LIST: &str = "host/secret.list";
+    pub const HOST_PLUGIN_STATUS_LIST: &str = "host/plugin.status.list";
+    pub const HOST_PLUGIN_STATUS_GET: &str = "host/plugin.status.get";
 }

@@ -110,6 +110,11 @@ enabled = true
 # # secrets_backend = "auto"   # auto | keyring | file
 # # fallback_to_file = true
 #
+# Stdio plugins respect [plugins.list.<id>.restart] for backoff/retry and the
+# host tracks their pid + restart history. Plugins that declare
+# HostCapability::PluginStatus can query host/plugin.status.list /
+# host/plugin.status.get for daemon health.
+#
 # Examples (commented out — copy and adapt as needed):
 #
 # [plugins.list.echo]

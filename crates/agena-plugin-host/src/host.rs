@@ -22,11 +22,12 @@ use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription,
     HostCallbackContext, HostClient, HostEntryDescriptor, HostEntryListResponse,
     HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
-    HostEntryUpdateRequest, HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse,
-    HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, LogLevel,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    HostEntryUpdateRequest, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSecretDeleteRequest,
+    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
     MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::sdk::rpc::method;
@@ -175,6 +176,7 @@ pub struct PluginHost {
     plugins: Vec<Arc<LoadedPlugin>>,
     plugins_by_id: HashMap<String, Arc<LoadedPlugin>>,
     entries: Arc<RwLock<PluginEntryRegistry>>,
+    statuses: Arc<crate::status::StatusRegistry>,
     timeouts: TimeoutsConfig,
     /// Dedicated runtime used to block_on async transport calls when invoked
     /// from sync code.
@@ -192,15 +194,18 @@ pub struct PluginHost {
 impl PluginHost {
     pub fn new_empty() -> Arc<Self> {
         let entries = Arc::new(RwLock::new(PluginEntryRegistry::new(Vec::<String>::new())));
-        let host_handle = Arc::new(HostHandle::new_with_registry(
+        let statuses = Arc::new(crate::status::StatusRegistry::new());
+        let host_handle = Arc::new(HostHandle::new_with_components(
             Arc::new(NoopHostClient),
             Arc::clone(&entries),
             Arc::new(RwLock::new(HashMap::new())),
+            Arc::clone(&statuses),
         ));
         Arc::new(Self {
             plugins: Vec::new(),
             plugins_by_id: HashMap::new(),
             entries,
+            statuses,
             timeouts: TimeoutsConfig::default(),
             runtime: None,
             runtime_handle: None,
@@ -259,6 +264,18 @@ impl PluginHost {
 
     pub fn entry_generation(&self) -> u64 {
         self.entries.read().map(|reg| reg.generation()).unwrap_or(0)
+    }
+
+    pub fn status_registry(&self) -> Arc<crate::status::StatusRegistry> {
+        Arc::clone(&self.statuses)
+    }
+
+    pub fn plugin_status(&self, plugin_id: &str) -> Option<crate::status::PluginStatus> {
+        self.statuses.get(plugin_id)
+    }
+
+    pub fn plugin_statuses(&self) -> Vec<crate::status::PluginStatus> {
+        self.statuses.list()
     }
 
     fn block_on<F>(&self, fut: F) -> F::Output
@@ -1314,10 +1331,12 @@ impl PluginHostBuilder {
         )));
         let plugin_indices: Arc<RwLock<HashMap<String, usize>>> =
             Arc::new(RwLock::new(HashMap::new()));
-        let mut handle = HostHandle::new_with_registry(
+        let statuses_shared = Arc::new(crate::status::StatusRegistry::new());
+        let mut handle = HostHandle::new_with_components(
             host_inner,
             Arc::clone(&entries_shared),
             Arc::clone(&plugin_indices),
+            Arc::clone(&statuses_shared),
         );
         if let Some(url) = self.callback_base_url.clone() {
             handle = handle.with_callback_base_url(url);
@@ -1386,6 +1405,11 @@ impl PluginHostBuilder {
                         effective_host_capabilities(&reused.manifest.entries),
                     )
                     .await;
+                let status_kind = reused.kind;
+                statuses_shared.set(crate::status::PluginStatus::initial(
+                    reused.id.clone(),
+                    status_kind,
+                ));
                 by_id.insert(reused.id.clone(), Arc::clone(&reused));
                 loaded.push(reused);
                 continue;
@@ -1416,6 +1440,10 @@ impl PluginHostBuilder {
                             effective_host_capabilities(&plugin.manifest.entries),
                         )
                         .await;
+                    let status_kind = plugin.kind;
+                    let initial =
+                        crate::status::PluginStatus::initial(plugin.id.clone(), status_kind);
+                    statuses_shared.set(initial);
                     by_id.insert(plugin.id.clone(), plugin.clone());
                     loaded.push(plugin);
                 }
@@ -1433,6 +1461,7 @@ impl PluginHostBuilder {
             plugins: loaded,
             plugins_by_id: by_id,
             entries: entries_shared,
+            statuses: statuses_shared,
             timeouts: self.config.timeouts,
             runtime: None,
             runtime_handle: tokio::runtime::Handle::try_current().ok(),
@@ -1457,6 +1486,7 @@ pub struct HostHandle {
     callback_base_url: Option<String>,
     entries: Arc<RwLock<PluginEntryRegistry>>,
     plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
+    statuses: Arc<crate::status::StatusRegistry>,
 }
 
 impl HostHandle {
@@ -1473,6 +1503,20 @@ impl HostHandle {
         entries: Arc<RwLock<PluginEntryRegistry>>,
         plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
     ) -> Self {
+        Self::new_with_components(
+            inner,
+            entries,
+            plugin_indices,
+            Arc::new(crate::status::StatusRegistry::new()),
+        )
+    }
+
+    pub fn new_with_components(
+        inner: Arc<dyn HostClient>,
+        entries: Arc<RwLock<PluginEntryRegistry>>,
+        plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
+        statuses: Arc<crate::status::StatusRegistry>,
+    ) -> Self {
         Self {
             inner: tokio::sync::RwLock::new(inner),
             capabilities: tokio::sync::RwLock::new(HashMap::new()),
@@ -1480,7 +1524,12 @@ impl HostHandle {
             callback_base_url: None,
             entries,
             plugin_indices,
+            statuses,
         }
+    }
+
+    pub fn status_registry(&self) -> Arc<crate::status::StatusRegistry> {
+        Arc::clone(&self.statuses)
     }
 
     pub fn with_callback_base_url(mut self, url: String) -> Self {
@@ -1957,6 +2006,21 @@ impl HostHandle {
                 .await?;
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
+            method::HOST_PLUGIN_STATUS_LIST => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::PluginStatus)
+                    .await?;
+                let response = self.plugin_status_list_response();
+                serde_json::to_value(&response)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_PLUGIN_STATUS_GET => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::PluginStatus)
+                    .await?;
+                let p: HostPluginStatusGetParams = parse(params)?;
+                let response = self.plugin_status_get_response(&p.request.plugin_id);
+                serde_json::to_value(&response)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
             other => Err(PluginError::not_implemented(other)),
         }
     }
@@ -2027,6 +2091,36 @@ impl HostHandle {
             generation: snapshot.generation,
             entries,
         })
+    }
+
+    fn plugin_status_list_response(&self) -> HostPluginStatusListResponse {
+        HostPluginStatusListResponse {
+            entries: self
+                .statuses
+                .list()
+                .into_iter()
+                .map(host_status_from)
+                .collect(),
+        }
+    }
+
+    fn plugin_status_get_response(&self, plugin_id: &str) -> HostPluginStatusGetResponse {
+        HostPluginStatusGetResponse {
+            status: self.statuses.get(plugin_id).map(host_status_from),
+        }
+    }
+}
+
+fn host_status_from(status: crate::status::PluginStatus) -> HostPluginStatus {
+    HostPluginStatus {
+        plugin_id: status.plugin_id,
+        kind: status.kind.to_string(),
+        state: status.state.as_str().to_string(),
+        pid: status.pid,
+        restart_count: status.restart_count,
+        last_exit_code: status.last_exit_code,
+        last_restart_at_ms: status.last_restart_at_ms,
+        last_error: status.last_error,
     }
 }
 
@@ -2202,6 +2296,14 @@ struct HostSecretDeleteParams {
 
 #[derive(serde::Deserialize, Default)]
 struct HostSecretListParams {
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostPluginStatusGetParams {
+    request: HostPluginStatusGetRequest,
+    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -2492,6 +2594,24 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.secret_list()).await
+    }
+
+    async fn plugin_status_list(&self) -> crate::sdk::Result<HostPluginStatusListResponse> {
+        self.require_capability(
+            method::HOST_PLUGIN_STATUS_LIST,
+            HostCapability::PluginStatus,
+        )
+        .await?;
+        Ok(self.handle.plugin_status_list_response())
+    }
+
+    async fn plugin_status_get(
+        &self,
+        req: HostPluginStatusGetRequest,
+    ) -> crate::sdk::Result<HostPluginStatusGetResponse> {
+        self.require_capability(method::HOST_PLUGIN_STATUS_GET, HostCapability::PluginStatus)
+            .await?;
+        Ok(self.handle.plugin_status_get_response(&req.plugin_id))
     }
 }
 

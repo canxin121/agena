@@ -351,3 +351,77 @@ async fn session_compacting_patch_can_replace_summary() {
     assert_eq!(outcome.summary.as_deref(), Some("plugin-supplied summary"));
     assert_eq!(outcome.messages.len(), 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn entry_register_requires_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_ENTRY_REGISTER,
+            json!({
+                "request": {
+                    "entry": PluginEntryDecl::new("dynamic", json!({"type": "object"})),
+                },
+            }),
+        )
+        .await
+        .expect_err("entry.register should require EntryRegistry capability");
+    assert!(err.message.contains("EntryRegistry"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn entry_register_then_lookup_resolves() {
+    let host = host_with_capability_plugin(vec![HostCapability::EntryRegistry]).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let response = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_ENTRY_REGISTER,
+            json!({
+                "request": {
+                    "entry": PluginEntryDecl::new("dynamic-entry", json!({"type": "object"})),
+                },
+            }),
+        )
+        .await
+        .expect("entry.register should succeed");
+    assert!(response.get("generation").and_then(|v| v.as_u64()).unwrap() > 0);
+
+    let resolved = host
+        .lookup_entry("dynamic-entry")
+        .expect("dynamic entry should resolve via lookup");
+    assert_eq!(resolved.handle.plugin_id, "capability-plugin");
+    assert_eq!(resolved.handle.original_name, "dynamic-entry");
+
+    let removed = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_ENTRY_REMOVE,
+            json!({
+                "request": {
+                    "name": "dynamic-entry",
+                    "exposed": false,
+                },
+            }),
+        )
+        .await
+        .expect("entry.remove should succeed");
+    assert!(
+        removed
+            .get("exposed_name")
+            .and_then(|v| v.as_str())
+            .is_some()
+    );
+    assert!(host.lookup_entry("dynamic-entry").is_none());
+}

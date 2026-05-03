@@ -174,6 +174,7 @@ Available callbacks include:
 | `subscribe_events`, `unsubscribe_events` / `host/event.*` | `SubscribeEvents` |
 | `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` / `host/monitor.*` | `MonitorRegistry` |
 | `skill_get` / `host/skill.get` | `SkillsManager` |
+| `entry_register`, `entry_update`, `entry_remove`, `entry_list` / `host/entry.*` | `EntryRegistry` |
 
 For stdio / HTTP plugins, callbacks travel back over the same JSON-RPC wire
 (stdio multiplexed on stdin/stdout, HTTP via `POST /plugin-rpc/{plugin_id}`
@@ -183,6 +184,21 @@ on the agena HTTP API server).
 the core tool catalog. It uses `skill_get` to read skill content and returns the
 same payload metadata shape as the previous built-in adapter, including
 `allowed_tools`.
+
+## Dynamic entry registry
+
+Plugins that declare `HostCapability::EntryRegistry` can mutate the plugin
+host's entry registry at runtime via `entry_register`, `entry_update`,
+`entry_remove`, and `entry_list`. New entries become visible to the model
+catalog without rebuilding the host. This is the mechanism MCP, LSP, agents,
+or skills plugins should use to react to upstream catalog changes.
+
+The registry is in-memory and session-scoped — dynamic entries are not
+persisted across restarts. Exposed-name collision handling matches static
+manifest registration: bare entry names are namespaced as `plugin__entry` if
+they conflict with builtins or existing entries. Removal does not
+de-namespace previously renamed siblings, so model-visible tool names stay
+stable for the rest of the session.
 
 ## Config schema
 

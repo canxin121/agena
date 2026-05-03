@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -20,9 +20,11 @@ use crate::registry::{
 };
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription,
-    HostCallbackContext, HostClient, HostSkillGetRequest, HostSkillGetResponse, LogLevel,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostCallbackContext, HostClient, HostEntryDescriptor, HostEntryListResponse,
+    HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
+    HostEntryUpdateRequest, HostSkillGetRequest, HostSkillGetResponse, LogLevel, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -169,7 +171,7 @@ pub struct SessionCompactingOutcome {
 pub struct PluginHost {
     plugins: Vec<Arc<LoadedPlugin>>,
     plugins_by_id: HashMap<String, Arc<LoadedPlugin>>,
-    entries: PluginEntryRegistry,
+    entries: Arc<RwLock<PluginEntryRegistry>>,
     timeouts: TimeoutsConfig,
     /// Dedicated runtime used to block_on async transport calls when invoked
     /// from sync code.
@@ -186,11 +188,16 @@ pub struct PluginHost {
 
 impl PluginHost {
     pub fn new_empty() -> Arc<Self> {
-        let host_handle = Arc::new(HostHandle::new(Arc::new(NoopHostClient)));
+        let entries = Arc::new(RwLock::new(PluginEntryRegistry::new(Vec::<String>::new())));
+        let host_handle = Arc::new(HostHandle::new_with_registry(
+            Arc::new(NoopHostClient),
+            Arc::clone(&entries),
+            Arc::new(RwLock::new(HashMap::new())),
+        ));
         Arc::new(Self {
             plugins: Vec::new(),
             plugins_by_id: HashMap::new(),
-            entries: PluginEntryRegistry::new(Vec::<String>::new()),
+            entries,
             timeouts: TimeoutsConfig::default(),
             runtime: None,
             runtime_handle: None,
@@ -217,6 +224,8 @@ impl PluginHost {
 
     pub fn lookup_entry(&self, exposed_name: &str) -> Option<PluginEntryResolution> {
         self.entries
+            .read()
+            .ok()?
             .lookup(exposed_name)
             .map(|entry| PluginEntryResolution {
                 handle: PluginEntryHandle {
@@ -228,8 +237,25 @@ impl PluginHost {
             })
     }
 
-    pub fn entry_entries(&self) -> impl Iterator<Item = &RegistryPluginEntry> {
-        self.entries.entries()
+    pub fn entry_entries(&self) -> Vec<RegistryPluginEntry> {
+        self.entries
+            .read()
+            .map(|reg| reg.entries_owned())
+            .unwrap_or_default()
+    }
+
+    pub fn entry_snapshot(&self) -> crate::registry::PluginEntrySnapshot {
+        self.entries
+            .read()
+            .map(|reg| reg.snapshot())
+            .unwrap_or_else(|_| crate::registry::PluginEntrySnapshot {
+                generation: 0,
+                entries: Vec::new(),
+            })
+    }
+
+    pub fn entry_generation(&self) -> u64 {
+        self.entries.read().map(|reg| reg.generation()).unwrap_or(0)
     }
 
     fn block_on<F>(&self, fut: F) -> F::Output
@@ -1280,7 +1306,16 @@ impl PluginHostBuilder {
         }
 
         let host_inner = self.host_client.unwrap_or_else(|| Arc::new(NoopHostClient));
-        let mut handle = HostHandle::new(host_inner);
+        let entries_shared = Arc::new(RwLock::new(PluginEntryRegistry::new(
+            self.builtin_tool_names,
+        )));
+        let plugin_indices: Arc<RwLock<HashMap<String, usize>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let mut handle = HostHandle::new_with_registry(
+            host_inner,
+            Arc::clone(&entries_shared),
+            Arc::clone(&plugin_indices),
+        );
         if let Some(url) = self.callback_base_url.clone() {
             handle = handle.with_callback_base_url(url);
         }
@@ -1292,7 +1327,6 @@ impl PluginHostBuilder {
         let mut static_registry = self.static_plugins;
         let mut loaded: Vec<Arc<LoadedPlugin>> = Vec::new();
         let mut by_id: HashMap<String, Arc<LoadedPlugin>> = HashMap::new();
-        let mut entry_registry = PluginEntryRegistry::new(self.builtin_tool_names);
 
         // Sort entries by id for deterministic load order.
         let mut entries: Vec<(String, PluginEntry)> = self.config.list.into_iter().collect();
@@ -1337,7 +1371,12 @@ impl PluginHostBuilder {
                         plugin: reused.id.clone(),
                         message: e.to_string(),
                     })?;
-                entry_registry.extend_from_plugin(idx, &reused.id, &reused.manifest.entries);
+                if let Ok(mut reg) = entries_shared.write() {
+                    reg.extend_from_plugin(idx, &reused.id, &reused.manifest.entries);
+                }
+                if let Ok(mut indices) = plugin_indices.write() {
+                    indices.insert(reused.id.clone(), idx);
+                }
                 host_handle
                     .set_plugin_capabilities(
                         reused.id.clone(),
@@ -1362,7 +1401,12 @@ impl PluginHostBuilder {
             {
                 Ok(plugin) => {
                     let plugin = Arc::new(plugin);
-                    entry_registry.extend_from_plugin(idx, &plugin.id, &plugin.manifest.entries);
+                    if let Ok(mut reg) = entries_shared.write() {
+                        reg.extend_from_plugin(idx, &plugin.id, &plugin.manifest.entries);
+                    }
+                    if let Ok(mut indices) = plugin_indices.write() {
+                        indices.insert(plugin.id.clone(), idx);
+                    }
                     host_handle
                         .set_plugin_capabilities(
                             plugin.id.clone(),
@@ -1385,7 +1429,7 @@ impl PluginHostBuilder {
         Ok(Arc::new(PluginHost {
             plugins: loaded,
             plugins_by_id: by_id,
-            entries: entry_registry,
+            entries: entries_shared,
             timeouts: self.config.timeouts,
             runtime: None,
             runtime_handle: tokio::runtime::Handle::try_current().ok(),
@@ -1408,15 +1452,31 @@ pub struct HostHandle {
     #[allow(dead_code)]
     tokens: tokio::sync::Mutex<HashMap<String, String>>,
     callback_base_url: Option<String>,
+    entries: Arc<RwLock<PluginEntryRegistry>>,
+    plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
 }
 
 impl HostHandle {
     pub fn new(inner: Arc<dyn HostClient>) -> Self {
+        Self::new_with_registry(
+            inner,
+            Arc::new(RwLock::new(PluginEntryRegistry::new(Vec::<String>::new()))),
+            Arc::new(RwLock::new(HashMap::new())),
+        )
+    }
+
+    pub fn new_with_registry(
+        inner: Arc<dyn HostClient>,
+        entries: Arc<RwLock<PluginEntryRegistry>>,
+        plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
+    ) -> Self {
         Self {
             inner: tokio::sync::RwLock::new(inner),
             capabilities: tokio::sync::RwLock::new(HashMap::new()),
             tokens: tokio::sync::Mutex::new(HashMap::new()),
             callback_base_url: None,
+            entries,
+            plugin_indices,
         }
     }
 
@@ -1720,8 +1780,130 @@ impl HostHandle {
                 .await?;
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
+            method::HOST_ENTRY_REGISTER => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::EntryRegistry,
+                )
+                .await?;
+                let p: HostEntryRegisterParams = parse(params)?;
+                let plugin_id = plugin_id
+                    .ok_or_else(|| host_unavailable("entry.register requires plugin id"))?;
+                let response = self.entry_upsert_for_plugin(&plugin_id, p.request.entry)?;
+                serde_json::to_value(&response)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_ENTRY_UPDATE => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::EntryRegistry,
+                )
+                .await?;
+                let p: HostEntryUpdateParams = parse(params)?;
+                let plugin_id =
+                    plugin_id.ok_or_else(|| host_unavailable("entry.update requires plugin id"))?;
+                let response = self.entry_upsert_for_plugin(&plugin_id, p.request.entry)?;
+                serde_json::to_value(&response)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_ENTRY_REMOVE => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::EntryRegistry,
+                )
+                .await?;
+                let p: HostEntryRemoveParams = parse(params)?;
+                let plugin_id =
+                    plugin_id.ok_or_else(|| host_unavailable("entry.remove requires plugin id"))?;
+                let response =
+                    self.entry_remove_for_plugin(&plugin_id, &p.request.name, p.request.exposed)?;
+                serde_json::to_value(&response)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_ENTRY_LIST => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::EntryRegistry,
+                )
+                .await?;
+                let response = self.entry_list_response()?;
+                serde_json::to_value(&response)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
             other => Err(PluginError::not_implemented(other)),
         }
+    }
+
+    fn entry_upsert_for_plugin(
+        &self,
+        plugin_id: &str,
+        decl: crate::sdk::PluginEntryDecl,
+    ) -> Result<HostEntryMutationResponse, PluginError> {
+        let plugin_index = self
+            .plugin_indices
+            .read()
+            .map_err(|_| host_unavailable("plugin index lock poisoned"))?
+            .get(plugin_id)
+            .copied()
+            .ok_or_else(|| host_unavailable(format!("plugin `{plugin_id}` is not registered")))?;
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|_| host_unavailable("entry registry lock poisoned"))?;
+        let entry = entries.upsert_from_plugin(plugin_index, plugin_id, decl);
+        Ok(HostEntryMutationResponse {
+            generation: entries.generation(),
+            exposed_name: Some(entry.exposed_name.clone()),
+            entry: Some(entry.decl.clone()),
+        })
+    }
+
+    fn entry_remove_for_plugin(
+        &self,
+        plugin_id: &str,
+        name: &str,
+        exposed: bool,
+    ) -> Result<HostEntryMutationResponse, PluginError> {
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|_| host_unavailable("entry registry lock poisoned"))?;
+        let removed = if exposed {
+            entries.remove_exposed_from_plugin(plugin_id, name)
+        } else {
+            entries.remove_from_plugin(plugin_id, name)
+        };
+        Ok(HostEntryMutationResponse {
+            generation: entries.generation(),
+            exposed_name: removed.as_ref().map(|entry| entry.exposed_name.clone()),
+            entry: removed.map(|entry| entry.decl),
+        })
+    }
+
+    fn entry_list_response(&self) -> Result<HostEntryListResponse, PluginError> {
+        let snapshot = self
+            .entries
+            .read()
+            .map_err(|_| host_unavailable("entry registry lock poisoned"))?
+            .snapshot();
+        let entries = snapshot
+            .entries
+            .into_iter()
+            .map(|entry| HostEntryDescriptor {
+                plugin_id: entry.plugin_name,
+                original_name: entry.original_name,
+                exposed_name: entry.exposed_name,
+                entry: entry.decl,
+            })
+            .collect();
+        Ok(HostEntryListResponse {
+            generation: snapshot.generation,
+            entries,
+        })
     }
 }
 
@@ -1819,6 +2001,40 @@ struct HostMonitorStopParams {
     request: MonitorStopRequest,
     #[serde(default)]
     context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostEntryRegisterParams {
+    request: HostEntryRegisterRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostEntryUpdateParams {
+    request: HostEntryUpdateRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostEntryRemoveParams {
+    request: HostEntryRemoveRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+fn host_unavailable(message: impl Into<String>) -> PluginError {
+    PluginError {
+        code: PluginErrorCode::HostUnavailable,
+        message: message.into(),
+        hook: None,
+        plugin: None,
+        data: None,
+    }
 }
 
 fn scoped_context(
@@ -1996,6 +2212,42 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.monitor_stop(req)).await
+    }
+
+    async fn entry_register(
+        &self,
+        req: HostEntryRegisterRequest,
+    ) -> crate::sdk::Result<HostEntryMutationResponse> {
+        self.require_capability(method::HOST_ENTRY_REGISTER, HostCapability::EntryRegistry)
+            .await?;
+        self.handle
+            .entry_upsert_for_plugin(&self.plugin_id, req.entry)
+    }
+
+    async fn entry_update(
+        &self,
+        req: HostEntryUpdateRequest,
+    ) -> crate::sdk::Result<HostEntryMutationResponse> {
+        self.require_capability(method::HOST_ENTRY_UPDATE, HostCapability::EntryRegistry)
+            .await?;
+        self.handle
+            .entry_upsert_for_plugin(&self.plugin_id, req.entry)
+    }
+
+    async fn entry_remove(
+        &self,
+        req: HostEntryRemoveRequest,
+    ) -> crate::sdk::Result<HostEntryMutationResponse> {
+        self.require_capability(method::HOST_ENTRY_REMOVE, HostCapability::EntryRegistry)
+            .await?;
+        self.handle
+            .entry_remove_for_plugin(&self.plugin_id, &req.name, req.exposed)
+    }
+
+    async fn entry_list(&self) -> crate::sdk::Result<HostEntryListResponse> {
+        self.require_capability(method::HOST_ENTRY_LIST, HostCapability::EntryRegistry)
+            .await?;
+        self.handle.entry_list_response()
     }
 }
 

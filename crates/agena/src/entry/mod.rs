@@ -434,6 +434,7 @@ impl ToolExecutor {
         let catalog = self.tool_catalog();
         self.plugins
             .entry_entries()
+            .into_iter()
             .filter(|entry| entry.plugin_name == builtins::BUILTIN_PLUGIN_ID)
             .map(|entry| {
                 EntryDefinition::from_decl(
@@ -451,6 +452,7 @@ impl ToolExecutor {
         let mut definitions = self
             .plugins
             .entry_entries()
+            .into_iter()
             .map(|entry| {
                 let source = if entry.plugin_name == builtins::BUILTIN_PLUGIN_ID {
                     EntrySource::Builtin
@@ -2408,6 +2410,7 @@ mod tests {
         let registry = executor
             .plugin_manager()
             .entry_entries()
+            .into_iter()
             .filter(|entry| entry.plugin_name == builtins::BUILTIN_PLUGIN_ID)
             .map(|entry| entry.exposed_name.clone())
             .collect::<std::collections::BTreeSet<_>>();

@@ -432,7 +432,7 @@ pub enum BuiltinToolInput {
     Task(TaskToolInput),
     ToolSearch(ToolSearchToolInput),
     TodoWrite(TodoWriteToolInput),
-    #[serde(rename = "ask_user", alias = "request_user_input")]
+    #[serde(rename = "ask_user")]
     AskUser(AskUserToolInput),
     Monitor(MonitorToolInput),
     WebFetch(WebFetchToolInput),
@@ -525,8 +525,7 @@ impl BuiltinToolInput {
     }
 }
 
-/// Returns `Some(canonical_tag)` if `name` matches a built-in tool. Includes
-/// the legacy `request_user_input` alias.
+/// Returns `Some(canonical_tag)` if `name` matches a built-in tool.
 pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
     Some(match name {
         "bash" => "bash",
@@ -538,7 +537,7 @@ pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
         "task" => "task",
         "tool_search" => "tool_search",
         "todo_write" => "todo_write",
-        "ask_user" | "request_user_input" => "ask_user",
+        "ask_user" => "ask_user",
         "monitor" => "monitor",
         "web_fetch" => "web_fetch",
         "web_search" => "web_search",
@@ -669,7 +668,7 @@ pub enum BuiltinToolOutput {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         items: Vec<TodoItem>,
     },
-    #[serde(rename = "ask_user", alias = "request_user_input")]
+    #[serde(rename = "ask_user")]
     AskUser {
         #[serde(
             default,

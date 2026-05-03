@@ -743,6 +743,28 @@ impl Plugin for BuiltinPlugin {
                     .map(crate::plugin::sdk::PathRequest::write)
                     .collect())
             }
+            "bash" => {
+                let payload: BashToolInput = serde_json::from_value(input.clone())?;
+                Ok(default_workspace_read(payload.workdir.is_none()))
+            }
+            "powershell" => {
+                let payload: PowerShellToolInput = serde_json::from_value(input.clone())?;
+                Ok(default_workspace_read(payload.workdir.is_none()))
+            }
+            "glob" => {
+                let payload: GlobToolInput = serde_json::from_value(input.clone())?;
+                Ok(default_workspace_read(payload.path.is_none()))
+            }
+            "grep" => {
+                let payload: GrepToolInput = serde_json::from_value(input.clone())?;
+                Ok(default_workspace_read(payload.path.is_none()))
+            }
+            "monitor" => {
+                let payload: MonitorToolInput = serde_json::from_value(input.clone())?;
+                let needs_workspace =
+                    matches!(payload, MonitorToolInput::Start { workdir: None, .. });
+                Ok(default_workspace_read(needs_workspace))
+            }
             _ => Ok(Vec::new()),
         }
     }
@@ -842,6 +864,13 @@ fn optional_path(jsonpath: &str, kind: PathKind) -> InputPathSpec {
     }
 }
 
+fn default_workspace_read(needs_workspace: bool) -> Vec<crate::plugin::sdk::PathRequest> {
+    needs_workspace
+        .then(|| crate::plugin::sdk::PathRequest::read(""))
+        .into_iter()
+        .collect()
+}
+
 pub(crate) fn parse_builtin(
     tool: &str,
     input: JsonValue,
@@ -856,9 +885,7 @@ pub(crate) fn parse_builtin(
         "task" => BuiltinToolInput::Task(serde_json::from_value(input)?),
         "tool_search" => BuiltinToolInput::ToolSearch(serde_json::from_value(input)?),
         "todo_write" => BuiltinToolInput::TodoWrite(serde_json::from_value(input)?),
-        "ask_user" | "request_user_input" => {
-            BuiltinToolInput::AskUser(serde_json::from_value(input)?)
-        }
+        "ask_user" => BuiltinToolInput::AskUser(serde_json::from_value(input)?),
         "monitor" => BuiltinToolInput::Monitor(serde_json::from_value(input)?),
         "web_fetch" => BuiltinToolInput::WebFetch(serde_json::from_value(input)?),
         "web_search" => BuiltinToolInput::WebSearch(serde_json::from_value(input)?),
@@ -925,7 +952,7 @@ pub(crate) fn payload_to_builtin_envelope(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1264,6 +1291,81 @@ mod tests {
                 assert_eq!(status, Some(MonitorStatus::Running));
             }
             other => panic!("unexpected output: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn builtin_entry_decls_have_unique_names() {
+        let names = entry_decls()
+            .into_iter()
+            .map(|decl| decl.name)
+            .collect::<Vec<_>>();
+        let unique = names.iter().cloned().collect::<BTreeSet<_>>();
+        assert_eq!(names.len(), unique.len());
+    }
+
+    #[test]
+    fn builtin_manifest_names_match_parser_samples() {
+        for decl in entry_decls() {
+            let sample = builtin_sample_input(decl.name.as_str());
+            let parsed = parse_builtin(decl.name.as_str(), sample)
+                .unwrap_or_else(|err| panic!("failed to parse {}: {err}", decl.name));
+            assert_eq!(parsed.tool_name(), decl.name);
+        }
+    }
+
+    #[test]
+    fn request_user_input_alias_is_not_a_builtin_entry() {
+        let err = parse_builtin("request_user_input", serde_json::json!({"questions": []}))
+            .expect_err("legacy alias should not parse");
+        assert!(err.to_string().contains("unknown built-in tool"));
+    }
+
+    fn builtin_sample_input(name: &str) -> serde_json::Value {
+        match name {
+            "bash" => serde_json::json!({"command": "echo hi", "description": "demo"}),
+            "read" => serde_json::json!({"file_path": "notes.txt"}),
+            "view_file" => serde_json::json!({"path": "notes.txt"}),
+            "apply_patch" => serde_json::json!({"patch": "*** Begin Patch\n*** End Patch"}),
+            "glob" => serde_json::json!({"pattern": "*.rs"}),
+            "grep" => serde_json::json!({"pattern": "needle"}),
+            "task" => serde_json::json!({
+                "description": "inspect",
+                "prompt": "look around",
+                "subagent_type": "explore"
+            }),
+            "tool_search" => serde_json::json!({"query": "read"}),
+            "todo_write" => serde_json::json!({"items": []}),
+            "ask_user" => serde_json::json!({"questions": []}),
+            "monitor" => serde_json::json!({"action": "list"}),
+            "web_fetch" => serde_json::json!({"url": "https://example.com"}),
+            "web_search" => serde_json::json!({"query": "agena"}),
+            "enter_plan_mode" => serde_json::json!({}),
+            "exit_plan_mode" => serde_json::json!({}),
+            "skill_run" => serde_json::json!({"name": "demo"}),
+            "enter_worktree" => serde_json::json!({}),
+            "exit_worktree" => serde_json::json!({"action": "keep", "discard_changes": false}),
+            "cron_create" => serde_json::json!({"expression": "0 0 1 1 * *", "prompt": "demo"}),
+            "cron_list" => serde_json::json!({}),
+            "cron_delete" => serde_json::json!({"id": "job-1"}),
+            "schedule_wakeup" => serde_json::json!({"delay_seconds": 60, "prompt": "demo"}),
+            "lsp_definition" => {
+                serde_json::json!({"file_path": "src/main.rs", "line": 1, "character": 1})
+            }
+            "lsp_references" => {
+                serde_json::json!({"file_path": "src/main.rs", "line": 1, "character": 1})
+            }
+            "lsp_hover" => {
+                serde_json::json!({"file_path": "src/main.rs", "line": 1, "character": 1})
+            }
+            "lsp_diagnostics" => serde_json::json!({"file_path": "src/main.rs"}),
+            "notebook_edit" => serde_json::json!({
+                "notebook_path": "demo.ipynb",
+                "edit_mode": "replace",
+                "new_source": "print(1)"
+            }),
+            "powershell" => serde_json::json!({"command": "Write-Host hi", "description": "demo"}),
+            other => panic!("missing sample input for builtin {other}"),
         }
     }
 }

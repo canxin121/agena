@@ -1,5 +1,4 @@
 use crate::agent::Agent;
-use crate::message::BuiltinToolInput;
 
 use super::{EntryBehavior, EntryDefinition, EntrySource, builtins};
 
@@ -28,7 +27,7 @@ impl ModelToolProfile {
 
 #[derive(Debug, Clone)]
 pub struct ToolAvailability {
-    pub tool_name: &'static str,
+    pub tool_name: String,
     pub enabled: bool,
     pub reason: String,
 }
@@ -45,22 +44,27 @@ impl ToolCatalog {
         }
     }
 
-    pub fn availability_for_input(
+    pub fn availability_for_definition(
         &self,
         agent: &Agent,
-        input: &BuiltinToolInput,
+        definition: &EntryDefinition,
     ) -> ToolAvailability {
-        let tool_name = crate::permission::builtin_name(input);
-        let enabled = self.is_enabled(tool_name);
+        let enabled = self.is_behavior_enabled(definition.behavior);
         let reason = if agent.disable {
             format!("agent '{}' is disabled", agent.name)
         } else if enabled {
-            format!("tool '{tool_name}' enabled for {:?} profile", self.profile)
+            format!(
+                "tool '{}' enabled for {:?} profile",
+                definition.name, self.profile
+            )
         } else {
-            format!("tool '{tool_name}' disabled for {:?} profile", self.profile)
+            format!(
+                "tool '{}' disabled for {:?} profile",
+                definition.name, self.profile
+            )
         };
         ToolAvailability {
-            tool_name,
+            tool_name: definition.name.clone(),
             enabled: enabled && !agent.disable,
             reason,
         }
@@ -79,34 +83,6 @@ impl ToolCatalog {
             ModelToolProfile::Full => true,
             ModelToolProfile::ReadOnly => behavior == EntryBehavior::ReadOnly,
             ModelToolProfile::NoTask => behavior != EntryBehavior::Task,
-        }
-    }
-
-    fn is_enabled(&self, tool_name: &str) -> bool {
-        match self.profile {
-            ModelToolProfile::Full => true,
-            ModelToolProfile::ReadOnly => {
-                matches!(
-                    tool_name,
-                    "read"
-                        | "view_file"
-                        | "glob"
-                        | "grep"
-                        | "tool_search"
-                        | "todo_write"
-                        | "ask_user"
-                        | "web_fetch"
-                        | "web_search"
-                        | "enter_plan_mode"
-                        | "exit_plan_mode"
-                        | "skill_run"
-                        | "lsp_definition"
-                        | "lsp_references"
-                        | "lsp_hover"
-                        | "lsp_diagnostics"
-                )
-            }
-            ModelToolProfile::NoTask => tool_name != "task",
         }
     }
 }
@@ -150,16 +126,43 @@ mod tests {
     }
 
     #[test]
-    fn readonly_profile_keeps_lsp_tools_enabled() {
+    fn readonly_profile_filters_by_behavior_not_name() {
         let catalog = ToolCatalog::for_model(Some("readonly-model"));
-        let definitions = catalog.builtin_definitions();
+        let agent = Agent::new("test", crate::permission::PermissionPolicy::allow_all());
+        let readonly_plugin = EntryDefinition::plugin(
+            "third_party_read",
+            "read from a third-party plugin",
+            serde_json::json!({"type": "object"}),
+            EntryBehavior::ReadOnly,
+            "third_party",
+        );
+        let mutating_builtin = EntryDefinition::builtin::<crate::message::ApplyPatchToolInput>(
+            "apply_patch",
+            "patch files",
+            EntryBehavior::Mutating,
+        );
+        let task_plugin = EntryDefinition::plugin(
+            "third_party_task",
+            "delegate work",
+            serde_json::json!({"type": "object"}),
+            EntryBehavior::Task,
+            "third_party",
+        );
 
         assert!(
-            definitions
-                .iter()
-                .any(|tool| tool.name == "lsp_diagnostics")
+            catalog
+                .availability_for_definition(&agent, &readonly_plugin)
+                .enabled
         );
-        assert!(!definitions.iter().any(|tool| tool.name == "notebook_edit"));
-        assert!(!definitions.iter().any(|tool| tool.name == "powershell"));
+        assert!(
+            !catalog
+                .availability_for_definition(&agent, &mutating_builtin)
+                .enabled
+        );
+        assert!(
+            !catalog
+                .availability_for_definition(&agent, &task_plugin)
+                .enabled
+        );
     }
 }

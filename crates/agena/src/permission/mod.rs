@@ -219,9 +219,6 @@ impl ToolPermissionPolicy {
             .tool_modes
             .get(name)
             .copied()
-            .or_else(|| {
-                legacy_tool_alias(name).and_then(|alias| self.tool_modes.get(alias).copied())
-            })
             .unwrap_or(self.default_mode);
         match mode {
             PermissionMode::Allow => PermissionDecision::Allow,
@@ -331,14 +328,6 @@ pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
         BuiltinToolInput::LspDiagnostics(_) => "lsp_diagnostics",
         BuiltinToolInput::NotebookEdit(_) => "notebook_edit",
         BuiltinToolInput::PowerShell(_) => "powershell",
-    }
-}
-
-fn legacy_tool_alias(name: &str) -> Option<&'static str> {
-    match name {
-        "ask_user" => Some("request_user_input"),
-        "request_user_input" => Some("ask_user"),
-        _ => None,
     }
 }
 

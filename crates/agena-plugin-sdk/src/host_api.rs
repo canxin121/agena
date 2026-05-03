@@ -13,6 +13,7 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
+use crate::manifest::PluginEntryDecl;
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
@@ -85,6 +86,36 @@ pub trait HostClient: Send + Sync + 'static {
 
     /// Long-lived background process registry — stop.
     async fn monitor_stop(&self, _req: MonitorStopRequest) -> Result<MonitorHandle> {
+        Err(unavailable())
+    }
+
+    /// Dynamic entry registry — register a new entry owned by this plugin.
+    async fn entry_register(
+        &self,
+        _req: HostEntryRegisterRequest,
+    ) -> Result<HostEntryMutationResponse> {
+        Err(unavailable())
+    }
+
+    /// Dynamic entry registry — replace the decl of an existing entry owned by
+    /// this plugin (matched by `entry.name`).
+    async fn entry_update(
+        &self,
+        _req: HostEntryUpdateRequest,
+    ) -> Result<HostEntryMutationResponse> {
+        Err(unavailable())
+    }
+
+    /// Dynamic entry registry — remove an entry owned by this plugin.
+    async fn entry_remove(
+        &self,
+        _req: HostEntryRemoveRequest,
+    ) -> Result<HostEntryMutationResponse> {
+        Err(unavailable())
+    }
+
+    /// Dynamic entry registry — list all entries known to the plugin host.
+    async fn entry_list(&self) -> Result<HostEntryListResponse> {
         Err(unavailable())
     }
 }
@@ -347,6 +378,49 @@ pub struct MonitorStopRequest {
     pub id: String,
     #[serde(default)]
     pub force: bool,
+}
+
+// ---------------- entry registry ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostEntryRegisterRequest {
+    pub entry: PluginEntryDecl,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostEntryUpdateRequest {
+    pub entry: PluginEntryDecl,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostEntryRemoveRequest {
+    pub name: String,
+    #[serde(default)]
+    pub exposed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostEntryMutationResponse {
+    pub generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposed_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<PluginEntryDecl>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostEntryDescriptor {
+    pub plugin_id: String,
+    pub original_name: String,
+    pub exposed_name: String,
+    pub entry: PluginEntryDecl,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostEntryListResponse {
+    pub generation: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<HostEntryDescriptor>,
 }
 
 fn default_true() -> bool {

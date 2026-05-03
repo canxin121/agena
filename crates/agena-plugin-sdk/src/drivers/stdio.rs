@@ -21,9 +21,10 @@ use crate::hooks::{
 };
 use crate::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostClient,
-    HostSkillGetRequest, HostSkillGetResponse, LogLevel, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest,
-    SpawnSubtaskResponse, ToolDescriptor,
+    HostEntryListResponse, HostEntryMutationResponse, HostEntryRegisterRequest,
+    HostEntryRemoveRequest, HostEntryUpdateRequest, HostSkillGetRequest, HostSkillGetResponse,
+    LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -399,6 +400,58 @@ impl HostClient for StdioHostClient {
             method::HOST_MONITOR_STOP,
             serde_json::json!({
                 "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn entry_register(
+        &self,
+        req: HostEntryRegisterRequest,
+    ) -> crate::error::Result<HostEntryMutationResponse> {
+        self.call(
+            method::HOST_ENTRY_REGISTER,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn entry_update(
+        &self,
+        req: HostEntryUpdateRequest,
+    ) -> crate::error::Result<HostEntryMutationResponse> {
+        self.call(
+            method::HOST_ENTRY_UPDATE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn entry_remove(
+        &self,
+        req: HostEntryRemoveRequest,
+    ) -> crate::error::Result<HostEntryMutationResponse> {
+        self.call(
+            method::HOST_ENTRY_REMOVE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn entry_list(&self) -> crate::error::Result<HostEntryListResponse> {
+        self.call(
+            method::HOST_ENTRY_LIST,
+            serde_json::json!({
                 "context": crate::host_api::current_host_callback_context(),
             }),
         )

@@ -169,4 +169,8 @@ pub mod method {
     pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
     pub const HOST_MONITOR_READ: &str = "host/monitor.read";
     pub const HOST_MONITOR_STOP: &str = "host/monitor.stop";
+    pub const HOST_ENTRY_REGISTER: &str = "host/entry.register";
+    pub const HOST_ENTRY_UPDATE: &str = "host/entry.update";
+    pub const HOST_ENTRY_REMOVE: &str = "host/entry.remove";
+    pub const HOST_ENTRY_LIST: &str = "host/entry.list";
 }

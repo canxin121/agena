@@ -12,8 +12,9 @@ pub use std::sync::Arc;
 pub use crate::error::{PluginError, PluginErrorCode, Result};
 pub use crate::hooks::*;
 pub use crate::host_api::{
-    EventSubscription, HostClient, HostSkillGetRequest, HostSkillGetResponse, LogLevel,
-    NoopHostClient,
+    EventSubscription, HostClient, HostEntryDescriptor, HostEntryListResponse,
+    HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
+    HostEntryUpdateRequest, HostSkillGetRequest, HostSkillGetResponse, LogLevel, NoopHostClient,
 };
 pub use crate::manifest::{
     EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,

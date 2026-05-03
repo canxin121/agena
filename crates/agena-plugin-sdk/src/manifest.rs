@@ -134,6 +134,7 @@ pub enum HostCapability {
     WorktreeRegistry,
     SkillsManager,
     LspRegistry,
+    EntryRegistry,
 }
 
 /// Single declarative path extraction rule. `jsonpath` is a subset:

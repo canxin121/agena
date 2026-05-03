@@ -185,6 +185,21 @@ pub fn effective_host_capabilities(decls: &[PluginEntryDecl]) -> Vec<HostCapabil
     capabilities
 }
 
+/// Per-entry capability map: each declared entry maps to its own
+/// declared `host_capabilities` list. Used by [`HostHandle`] so that a
+/// plugin shipping multiple entries can scope dangerous capabilities to
+/// just the entry that needs them rather than leaking them via the union
+/// to every entry the plugin owns.
+pub fn per_entry_host_capabilities(
+    decls: &[PluginEntryDecl],
+) -> std::collections::HashMap<String, Vec<HostCapability>> {
+    let mut out = std::collections::HashMap::new();
+    for decl in decls {
+        out.insert(decl.name.clone(), decl.host_capabilities.clone());
+    }
+    out
+}
+
 /// A behavior helper for plugin-shipped entries the host has to filter against
 /// the catalog/agent.
 pub fn behavior_label(b: EntryBehavior) -> &'static str {

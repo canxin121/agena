@@ -339,6 +339,12 @@ pub struct HostCallbackContext {
     pub call_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<String>,
+    /// When the active host call originated from a `tool_invoke`, this holds
+    /// the plugin-original entry name. Used for per-entry capability scoping
+    /// so that capabilities declared by entry A do not implicitly authorize
+    /// host calls coming back through entry B.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_name: Option<String>,
 }
 
 tokio::task_local! {
@@ -361,6 +367,9 @@ where
     }
     if let Some(workspace_root) = patch.workspace_root {
         current.workspace_root = Some(workspace_root);
+    }
+    if let Some(entry_name) = patch.entry_name {
+        current.entry_name = Some(entry_name);
     }
     HOST_CALLBACK_CONTEXT.scope(current, fut).await
 }

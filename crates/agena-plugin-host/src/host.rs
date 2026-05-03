@@ -434,6 +434,7 @@ impl PluginHost {
         let call_id = input.call_id;
         let workspace_root = input.workspace_root.clone();
         let plugin_id = handle.plugin_id.clone();
+        let entry_name = handle.original_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let result = self.block_on_static(async move {
@@ -443,6 +444,7 @@ impl PluginHost {
                     session_id: Some(session_id),
                     call_id: Some(call_id),
                     workspace_root: Some(workspace_root),
+                    entry_name: Some(entry_name),
                 },
                 call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
             )
@@ -1430,6 +1432,12 @@ impl PluginHostBuilder {
                         effective_host_capabilities(&reused.manifest.entries),
                     )
                     .await;
+                host_handle
+                    .set_plugin_entry_capabilities(
+                        reused.id.clone(),
+                        crate::registry::per_entry_host_capabilities(&reused.manifest.entries),
+                    )
+                    .await;
                 let status_kind = reused.kind;
                 statuses_shared.set(crate::status::PluginStatus::initial(
                     reused.id.clone(),
@@ -1463,6 +1471,12 @@ impl PluginHostBuilder {
                         .set_plugin_capabilities(
                             plugin.id.clone(),
                             effective_host_capabilities(&plugin.manifest.entries),
+                        )
+                        .await;
+                    host_handle
+                        .set_plugin_entry_capabilities(
+                            plugin.id.clone(),
+                            crate::registry::per_entry_host_capabilities(&plugin.manifest.entries),
                         )
                         .await;
                     let status_kind = plugin.kind;
@@ -1504,7 +1518,15 @@ impl PluginHostBuilder {
 /// don't get callbacks (would require shared FFI surface).
 pub struct HostHandle {
     inner: tokio::sync::RwLock<Arc<dyn HostClient>>,
+    /// Plugin-level capability union. Used as a fallback when a host call
+    /// cannot be attributed to a specific entry (e.g. hook callbacks) or
+    /// when the plugin did not register per-entry capabilities.
     capabilities: tokio::sync::RwLock<HashMap<String, Vec<HostCapability>>>,
+    /// Per-entry capability map: `plugin_id -> entry_name -> capabilities`.
+    /// `tool_invoke` paths look up capabilities by `entry_name` so a plugin
+    /// shipping multiple entries cannot have entry A's privileges leak to
+    /// callbacks coming back through entry B.
+    entry_capabilities: tokio::sync::RwLock<HashMap<String, HashMap<String, Vec<HostCapability>>>>,
     /// Per-plugin bearer tokens for HTTP callbacks.
     #[allow(dead_code)]
     tokens: tokio::sync::Mutex<HashMap<String, String>>,
@@ -1547,6 +1569,7 @@ impl HostHandle {
         Self {
             inner: tokio::sync::RwLock::new(inner),
             capabilities: tokio::sync::RwLock::new(HashMap::new()),
+            entry_capabilities: tokio::sync::RwLock::new(HashMap::new()),
             tokens: tokio::sync::Mutex::new(HashMap::new()),
             callback_base_url: None,
             entries,
@@ -1583,6 +1606,20 @@ impl HostHandle {
             .insert(plugin_id.into(), capabilities);
     }
 
+    /// Register the per-entry capability map for `plugin_id`. Lookups on
+    /// `tool_invoke` paths consult this first, falling back to the
+    /// plugin-level union set via [`set_plugin_capabilities`].
+    pub async fn set_plugin_entry_capabilities(
+        &self,
+        plugin_id: impl Into<String>,
+        by_entry: HashMap<String, Vec<HostCapability>>,
+    ) {
+        self.entry_capabilities
+            .write()
+            .await
+            .insert(plugin_id.into(), by_entry);
+    }
+
     async fn require_capability(
         &self,
         plugin_id: Option<&str>,
@@ -1592,6 +1629,35 @@ impl HostHandle {
         let Some(plugin_id) = plugin_id else {
             return Ok(());
         };
+        // Prefer per-entry scope if the active host call originates from
+        // tool_invoke (entry_name set in HostCallbackContext). Otherwise
+        // fall back to the plugin-level union.
+        let entry_name =
+            host_api::current_host_callback_context().and_then(|ctx| ctx.entry_name.clone());
+        if let Some(entry) = entry_name.as_deref() {
+            let entry_caps = self.entry_capabilities.read().await;
+            if let Some(by_entry) = entry_caps.get(plugin_id)
+                && let Some(caps) = by_entry.get(entry)
+            {
+                if caps.contains(&capability) {
+                    return Ok(());
+                }
+                // Per-entry map exists for this entry but does not grant
+                // the requested capability: deny without consulting the
+                // plugin-level union, otherwise per-entry scoping would
+                // be meaningless.
+                return Err(PluginError {
+                    code: PluginErrorCode::HostUnavailable,
+                    message: format!(
+                        "plugin `{plugin_id}` entry `{entry}` cannot call `{method}`: \
+                         missing host capability `{capability:?}`"
+                    ),
+                    hook: Some(method.to_string()),
+                    plugin: Some(plugin_id.to_string()),
+                    data: None,
+                });
+            }
+        }
         let capabilities = self.capabilities.read().await;
         if capabilities
             .get(plugin_id)

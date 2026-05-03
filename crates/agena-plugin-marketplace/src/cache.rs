@@ -154,6 +154,17 @@ pub struct InstalledRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
     pub installed_at: DateTime<Utc>,
+    /// Registry id used to fetch this plugin. Required for `upgrade` and
+    /// `outdated` to know which index to consult.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub registry_id: String,
+    /// Registry index URL stored verbatim so upgrades can re-resolve without
+    /// requiring the user to pass `--registry` every time.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub registry_url: String,
+    /// True when the artifact was extracted from a tar.gz archive.
+    #[serde(default)]
+    pub archive_extracted: bool,
 }
 
 /// Default cache root: `$AGENA_MARKETPLACE_DIR` or `~/.agena/marketplace`.
@@ -214,6 +225,9 @@ mod tests {
                 config_path: root.join("config.toml"),
                 sha256: Some("abc".to_string()),
                 installed_at: Utc::now(),
+                registry_id: "default".to_string(),
+                registry_url: String::new(),
+                archive_extracted: false,
             },
         );
         cache.save_installed(&records).unwrap();

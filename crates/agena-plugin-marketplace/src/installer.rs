@@ -134,14 +134,42 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             });
         }
 
-        // Lay out artifact on disk
-        let artifact_path = self
-            .cache
-            .artifact_path(&plugin.id, &version.version, version.kind);
-        if let Some(parent) = artifact_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        write_secure_file(&artifact_path, &bytes)?;
+        // Lay out artifact on disk. Archive payloads are extracted under the
+        // plugin/version dir; non-archive payloads go straight to a single
+        // file named binary.<ext>.
+        let plugin_dir = self.cache.plugin_dir(&plugin.id, &version.version);
+        std::fs::create_dir_all(&plugin_dir)?;
+        let (artifact_path, archive_extracted) = match version.archive.as_ref() {
+            Some(crate::manifest::ArchiveSpec::TarGz { entrypoint }) => {
+                extract_tar_gz(&bytes, &plugin_dir).map_err(|err| MarketplaceError::Archive {
+                    plugin: plugin.id.clone(),
+                    message: err,
+                })?;
+                let entrypoint_path = plugin_dir.join(entrypoint);
+                if !entrypoint_path.exists() {
+                    return Err(MarketplaceError::Archive {
+                        plugin: plugin.id.clone(),
+                        message: format!("entrypoint `{entrypoint}` not found in archive"),
+                    });
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if matches!(version.kind, PluginKind::Stdio) {
+                        let perms = std::fs::Permissions::from_mode(0o755);
+                        let _ = std::fs::set_permissions(&entrypoint_path, perms);
+                    }
+                }
+                (entrypoint_path, true)
+            }
+            None => {
+                let path = self
+                    .cache
+                    .artifact_path(&plugin.id, &version.version, version.kind);
+                write_secure_file(&path, &bytes)?;
+                (path, false)
+            }
+        };
         self.cache.save_manifest_snapshot(&plugin.id, &version)?;
 
         // Update config
@@ -169,6 +197,9 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
                 config_path: config_path.clone(),
                 sha256: version.sha256.clone(),
                 installed_at: Utc::now(),
+                registry_id: req.registry.id.clone(),
+                registry_url: req.registry.url.clone(),
+                archive_extracted,
             },
         );
         if !req.dry_run {
@@ -209,6 +240,175 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
     pub fn list_installed(&self) -> Result<Vec<InstalledRecord>, MarketplaceError> {
         Ok(self.cache.load_installed()?.records.into_values().collect())
     }
+
+    /// Re-resolve `plugin_id` against its recorded registry and reinstall if a
+    /// strictly newer semver version is available. Returns the outcome
+    /// describing whether anything changed.
+    pub fn upgrade(
+        &self,
+        plugin_id: &str,
+        registry_override: Option<RegistrySpec>,
+    ) -> Result<UpgradeOutcome, MarketplaceError> {
+        let installed = self.cache.load_installed()?;
+        let record =
+            installed.records.get(plugin_id).cloned().ok_or_else(|| {
+                MarketplaceError::Config(format!("`{plugin_id}` is not installed"))
+            })?;
+        let registry = registry_override
+            .or_else(|| {
+                if record.registry_url.is_empty() {
+                    None
+                } else {
+                    Some(RegistrySpec {
+                        id: if record.registry_id.is_empty() {
+                            "default".into()
+                        } else {
+                            record.registry_id.clone()
+                        },
+                        url: record.registry_url.clone(),
+                        require_signature: false,
+                    })
+                }
+            })
+            .ok_or_else(|| {
+                MarketplaceError::Config(format!(
+                    "`{plugin_id}` has no recorded registry url; pass --registry to upgrade"
+                ))
+            })?;
+
+        let handle = self.registry(registry.clone());
+        let index = handle.fetch_index(true)?;
+        let plugin = index
+            .plugins
+            .iter()
+            .find(|p| p.id == plugin_id)
+            .ok_or_else(|| MarketplaceError::PluginNotFound(plugin_id.to_string()))?;
+        let candidate = select_version(&plugin.versions, None, current_target_triple())
+            .ok_or_else(|| {
+                MarketplaceError::NoMatchingVersion(
+                    plugin_id.to_string(),
+                    current_target_triple().to_string(),
+                )
+            })?;
+
+        if !is_newer(&candidate.version, &record.version) {
+            return Ok(UpgradeOutcome {
+                plugin_id: plugin_id.to_string(),
+                previous_version: record.version.clone(),
+                installed_version: record.version,
+                upgraded: false,
+                outcome: None,
+            });
+        }
+
+        let outcome = self.install(InstallRequest {
+            registry,
+            plugin_id: plugin_id.to_string(),
+            version: Some(candidate.version.clone()),
+            config_path: record.config_path.clone(),
+            force: true,
+            dry_run: false,
+            allow_unverified: record.sha256.is_none(),
+            refresh_index: false,
+        })?;
+
+        Ok(UpgradeOutcome {
+            plugin_id: plugin_id.to_string(),
+            previous_version: record.version,
+            installed_version: outcome.version.clone(),
+            upgraded: true,
+            outcome: Some(outcome),
+        })
+    }
+
+    /// Iterate over all installed records and report those that have a newer
+    /// version available on their registry. Records with no `registry_url`
+    /// are skipped silently.
+    pub fn list_outdated(&self) -> Result<Vec<OutdatedRecord>, MarketplaceError> {
+        let installed = self.cache.load_installed()?;
+        let mut out = Vec::new();
+        for (_, record) in installed.records {
+            if record.registry_url.is_empty() {
+                continue;
+            }
+            let registry = RegistrySpec {
+                id: if record.registry_id.is_empty() {
+                    "default".into()
+                } else {
+                    record.registry_id.clone()
+                },
+                url: record.registry_url.clone(),
+                require_signature: false,
+            };
+            let handle = self.registry(registry);
+            let index = match handle.fetch_index(false) {
+                Ok(idx) => idx,
+                Err(err) => {
+                    tracing::warn!(plugin = %record.plugin_id, error = %err, "skip outdated check");
+                    continue;
+                }
+            };
+            let Some(plugin) = index.plugins.iter().find(|p| p.id == record.plugin_id) else {
+                continue;
+            };
+            let Some(latest) = select_version(&plugin.versions, None, current_target_triple())
+            else {
+                continue;
+            };
+            if is_newer(&latest.version, &record.version) {
+                out.push(OutdatedRecord {
+                    plugin_id: record.plugin_id.clone(),
+                    installed_version: record.version.clone(),
+                    latest_version: latest.version.clone(),
+                });
+            }
+        }
+        out.sort_by(|a, b| a.plugin_id.cmp(&b.plugin_id));
+        Ok(out)
+    }
+}
+
+fn is_newer(candidate: &str, installed: &str) -> bool {
+    match (
+        semver::Version::parse(candidate),
+        semver::Version::parse(installed),
+    ) {
+        (Ok(c), Ok(i)) => c > i,
+        _ => candidate != installed,
+    }
+}
+
+fn extract_tar_gz(bytes: &[u8], dest: &Path) -> Result<(), String> {
+    let decoder = flate2::read::GzDecoder::new(bytes);
+    let mut archive = tar::Archive::new(decoder);
+    archive.set_preserve_permissions(true);
+    archive.set_overwrite(true);
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("read tar entries: {e}"))?
+    {
+        let mut entry = entry.map_err(|e| format!("read entry: {e}"))?;
+        let entry_path = entry
+            .path()
+            .map_err(|e| format!("entry path: {e}"))?
+            .into_owned();
+        for component in entry_path.components() {
+            use std::path::Component;
+            match component {
+                Component::Normal(_) | Component::CurDir => {}
+                _ => {
+                    return Err(format!(
+                        "archive contains unsafe path: {}",
+                        entry_path.display()
+                    ));
+                }
+            }
+        }
+        entry
+            .unpack_in(dest)
+            .map_err(|e| format!("unpack {}: {e}", entry_path.display()))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +438,22 @@ pub struct UninstallOutcome {
     pub plugin_id: String,
     pub version: String,
     pub config_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpgradeOutcome {
+    pub plugin_id: String,
+    pub previous_version: String,
+    pub installed_version: String,
+    pub upgraded: bool,
+    pub outcome: Option<InstallOutcome>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OutdatedRecord {
+    pub plugin_id: String,
+    pub installed_version: String,
+    pub latest_version: String,
 }
 
 fn select_version<'a>(
@@ -454,6 +670,8 @@ mod tests {
                     env: Default::default(),
                     options: serde_json::Value::Null,
                     min_agena_version: None,
+                    archive: None,
+                    dependencies: Vec::new(),
                 }],
             }],
         };
@@ -528,6 +746,8 @@ mod tests {
                     env: Default::default(),
                     options: serde_json::Value::Null,
                     min_agena_version: None,
+                    archive: None,
+                    dependencies: Vec::new(),
                 }],
             }],
         };
@@ -582,6 +802,8 @@ mod tests {
                     env: Default::default(),
                     options: serde_json::Value::Null,
                     min_agena_version: None,
+                    archive: None,
+                    dependencies: Vec::new(),
                 }],
             }],
         };
@@ -613,6 +835,183 @@ mod tests {
             ..req
         };
         client.install(req).expect("allow-unverified install");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn build_tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let buf: Vec<u8> = Vec::new();
+        let encoder = flate2::write::GzEncoder::new(buf, flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for (name, contents) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, name, *contents)
+                .expect("append");
+        }
+        let encoder = builder.into_inner().expect("finish builder");
+        let mut out = encoder.finish().expect("finish gz");
+        out.flush().ok();
+        out
+    }
+
+    #[test]
+    fn install_extracts_tar_gz_archive() {
+        let root = temp_root("archive");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+
+        let archive = build_tar_gz(&[
+            ("bin/agent-tool", b"#!/bin/sh\necho hi\n"),
+            ("README", b"hello\n"),
+        ]);
+        let archive_sha = sha256_hex(&archive);
+        fetcher.insert("https://example.com/bundle.tar.gz", archive.clone());
+
+        let index = RegistryIndex {
+            version: 1,
+            plugins: vec![PluginRecord {
+                id: "bundle".into(),
+                name: String::new(),
+                description: String::new(),
+                homepage: None,
+                versions: vec![PluginVersion {
+                    version: "0.1.0".into(),
+                    kind: PluginKind::Stdio,
+                    platform: "any".into(),
+                    url: "https://example.com/bundle.tar.gz".into(),
+                    sha256: Some(archive_sha),
+                    signature: None,
+                    command: None,
+                    args: Vec::new(),
+                    env: Default::default(),
+                    options: serde_json::Value::Null,
+                    min_agena_version: None,
+                    archive: Some(crate::manifest::ArchiveSpec::TarGz {
+                        entrypoint: "bin/agent-tool".into(),
+                    }),
+                    dependencies: Vec::new(),
+                }],
+            }],
+        };
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&index).unwrap(),
+        );
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        let outcome = client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "test".into(),
+                    url: "https://registry.test/index.json".into(),
+                    require_signature: false,
+                },
+                plugin_id: "bundle".into(),
+                version: None,
+                config_path: root.join("config.toml"),
+                force: false,
+                dry_run: false,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect("install");
+        assert!(outcome.artifact_path.ends_with("bin/agent-tool"));
+        assert!(outcome.artifact_path.exists());
+        assert!(root.join("plugins/bundle/0.1.0/README").exists());
+
+        let listed = client.list_installed().unwrap();
+        assert!(listed[0].archive_extracted);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn upgrade_replaces_when_newer_version_available() {
+        let root = temp_root("upgrade");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+
+        let v1 = b"V1".to_vec();
+        let v2 = b"V2".to_vec();
+        let v1_sha = sha256_hex(&v1);
+        let v2_sha = sha256_hex(&v2);
+        fetcher.insert("https://example.com/p-0.1.0.wasm", v1);
+        fetcher.insert("https://example.com/p-0.2.0.wasm", v2);
+
+        let mk_index = |versions: Vec<PluginVersion>| RegistryIndex {
+            version: 1,
+            plugins: vec![PluginRecord {
+                id: "p".into(),
+                name: String::new(),
+                description: String::new(),
+                homepage: None,
+                versions,
+            }],
+        };
+        let v1_record = PluginVersion {
+            version: "0.1.0".into(),
+            kind: PluginKind::Wasm,
+            platform: "any".into(),
+            url: "https://example.com/p-0.1.0.wasm".into(),
+            sha256: Some(v1_sha.clone()),
+            signature: None,
+            command: None,
+            args: Vec::new(),
+            env: Default::default(),
+            options: serde_json::Value::Null,
+            min_agena_version: None,
+            archive: None,
+            dependencies: Vec::new(),
+        };
+        let v2_record = PluginVersion {
+            version: "0.2.0".into(),
+            url: "https://example.com/p-0.2.0.wasm".into(),
+            sha256: Some(v2_sha.clone()),
+            ..v1_record.clone()
+        };
+        // Initial index: only v1
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&mk_index(vec![v1_record.clone()])).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        let registry = RegistrySpec {
+            id: "test".into(),
+            url: "https://registry.test/index.json".into(),
+            require_signature: false,
+        };
+        client
+            .install(InstallRequest {
+                registry: registry.clone(),
+                plugin_id: "p".into(),
+                version: None,
+                config_path: root.join("config.toml"),
+                force: false,
+                dry_run: false,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect("initial install");
+
+        // Upgrade with same index: nothing to do.
+        let no_op = client.upgrade("p", None).expect("upgrade no-op");
+        assert!(!no_op.upgraded);
+
+        // Refresh index with v2 added.
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&mk_index(vec![v1_record, v2_record])).unwrap(),
+        );
+        let result = client.upgrade("p", None).expect("upgrade run");
+        assert!(result.upgraded);
+        assert_eq!(result.previous_version, "0.1.0");
+        assert_eq!(result.installed_version, "0.2.0");
+
+        let outdated = client.list_outdated().expect("outdated empty");
+        assert!(outdated.is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 }

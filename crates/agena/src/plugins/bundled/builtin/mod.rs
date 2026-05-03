@@ -37,8 +37,8 @@ use crate::message::{
     GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
     LspReferencesToolInput, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput,
     NotebookEditToolInput, PowerShellToolInput, ReadToolInput, ScheduleWakeupToolInput,
-    SkillRunToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput,
-    WebFetchToolInput, WebSearchToolInput,
+    TaskToolInput, TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
+    WebSearchToolInput,
 };
 
 thread_local! {
@@ -595,14 +595,6 @@ pub(crate) fn entry_decls() -> Vec<PluginEntryDecl> {
         .always_load()
         .plan_mode_policy(PlanModePolicy::Allowed)
         .host_capability(HostCapability::PlanRegistry),
-        decl::<SkillRunToolInput>(
-            "skill_run",
-            "Run a discovered or bundled skill by name. Returns the skill's system body so the model can follow it on subsequent turns.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["skill", "workflow", "macro", "preset"])
-        .always_load()
-        .host_capability(HostCapability::SkillsManager),
         decl::<EnterWorktreeToolInput>(
             "enter_worktree",
             "Create or attach to a git worktree under .agena/worktrees and switch the session into it.",
@@ -957,7 +949,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use crate::message::{TaskSubagentType, UserInputOption, UserInputQuestion};
+    use crate::message::{SkillRunToolInput, TaskSubagentType, UserInputOption, UserInputQuestion};
     use crate::plugin::sdk::host_api::{
         AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, LogLevel,
         MonitorEvent as HostMonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,

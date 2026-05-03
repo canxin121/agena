@@ -56,7 +56,7 @@ use crate::plugin::{
         PlanModePolicy as SdkPlanModePolicy, ShellEnvInput as PluginShellEnvInput,
     },
 };
-use crate::plugins::bundled::{builtin as builtins, mcp};
+use crate::plugins::bundled::{builtin as builtins, mcp, skills};
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
@@ -91,12 +91,28 @@ pub fn new_builtins_plugin() -> impl crate::plugin::sdk::Plugin {
     builtins::BuiltinPlugin::new()
 }
 
+pub fn skills_plugin_id() -> &'static str {
+    skills::SKILLS_PLUGIN_ID
+}
+
+pub fn new_skills_plugin() -> impl crate::plugin::sdk::Plugin {
+    skills::SkillsPlugin::new()
+}
+
 pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
     let workspace_root = workspace_root.into();
     let plugin_id = builtins_plugin_id().to_string();
+    let skills_id = skills_plugin_id().to_string();
     let mut list = std::collections::BTreeMap::new();
     list.insert(
         plugin_id.clone(),
+        crate::plugin::PluginEntry::Static {
+            options: serde_json::Value::Null,
+            timeouts: Default::default(),
+        },
+    );
+    list.insert(
+        skills_id.clone(),
         crate::plugin::PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
@@ -112,6 +128,7 @@ pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Pl
         PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION"))
             .with_config(config)
             .register_static(plugin_id, new_builtins_plugin())
+            .register_static(skills_id, new_skills_plugin())
             .build()
             .await
     })
@@ -1839,9 +1856,17 @@ mod tests {
         use std::collections::BTreeMap;
 
         let builtin_id = super::builtins_plugin_id().to_string();
+        let skills_id = super::skills_plugin_id().to_string();
         let mut list = BTreeMap::new();
         list.insert(
             builtin_id.clone(),
+            PluginEntry::Static {
+                options: serde_json::Value::Null,
+                timeouts: Default::default(),
+            },
+        );
+        list.insert(
+            skills_id.clone(),
             PluginEntry::Static {
                 options: serde_json::Value::Null,
                 timeouts: Default::default(),
@@ -1865,6 +1890,7 @@ mod tests {
                 .with_config(config)
                 .with_host_client(Arc::new(TestToolHost))
                 .register_static(builtin_id, super::new_builtins_plugin())
+                .register_static(skills_id, super::new_skills_plugin())
                 .register_static("fixture", FixturePlugin)
                 .build()
                 .await
@@ -1876,9 +1902,17 @@ mod tests {
         use std::collections::BTreeMap;
 
         let plugin_id = super::builtins_plugin_id().to_string();
+        let skills_id = super::skills_plugin_id().to_string();
         let mut list = BTreeMap::new();
         list.insert(
             plugin_id.clone(),
+            PluginEntry::Static {
+                options: serde_json::Value::Null,
+                timeouts: Default::default(),
+            },
+        );
+        list.insert(
+            skills_id.clone(),
             PluginEntry::Static {
                 options: serde_json::Value::Null,
                 timeouts: Default::default(),
@@ -1895,6 +1929,7 @@ mod tests {
                 .with_config(config)
                 .with_host_client(Arc::new(TestToolHost))
                 .register_static(plugin_id, super::new_builtins_plugin())
+                .register_static(skills_id, super::new_skills_plugin())
                 .build()
                 .await
                 .expect("builtins plugin host should build")
@@ -2339,6 +2374,24 @@ mod tests {
                 definition.name
             );
         }
+    }
+
+    #[test]
+    fn skill_run_is_backed_by_skills_plugin() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+        let resolution = executor
+            .plugin_manager()
+            .lookup_entry("skill_run")
+            .expect("skill_run should be registered");
+
+        assert_eq!(resolution.handle.plugin_id, super::skills_plugin_id());
+        assert!(
+            resolution
+                .decl
+                .host_capabilities
+                .contains(&HostCapability::SkillsManager)
+        );
     }
 
     #[test]

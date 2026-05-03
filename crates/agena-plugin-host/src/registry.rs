@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::sdk::{EntryBehavior, PluginEntryDecl};
+use crate::sdk::{EntryBehavior, HostCapability, PluginEntryDecl};
 
 #[derive(Debug, Clone)]
 pub struct PluginEntryRegistry {
@@ -83,6 +83,18 @@ impl PluginEntryRegistry {
     }
 }
 
+pub fn effective_host_capabilities(decls: &[PluginEntryDecl]) -> Vec<HostCapability> {
+    let mut capabilities = Vec::new();
+    for decl in decls {
+        for capability in &decl.host_capabilities {
+            if !capabilities.contains(capability) {
+                capabilities.push(*capability);
+            }
+        }
+    }
+    capabilities
+}
+
 /// A behavior helper for plugin-shipped entries the host has to filter against
 /// the catalog/agent.
 pub fn behavior_label(b: EntryBehavior) -> &'static str {
@@ -91,5 +103,41 @@ pub fn behavior_label(b: EntryBehavior) -> &'static str {
         EntryBehavior::WriteSandboxed => "write-sandboxed",
         EntryBehavior::WriteUnsandboxed => "write-unsandboxed",
         EntryBehavior::Task => "task",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_host_capabilities_unions_plugin_entries() {
+        let decls = vec![
+            PluginEntryDecl::new("one", serde_json::json!({}))
+                .host_capability(HostCapability::ReadConfig)
+                .host_capability(HostCapability::ListTools),
+            PluginEntryDecl::new("two", serde_json::json!({}))
+                .host_capability(HostCapability::ListTools)
+                .host_capability(HostCapability::InvokeTool),
+        ];
+
+        assert_eq!(
+            effective_host_capabilities(&decls),
+            vec![
+                HostCapability::ReadConfig,
+                HostCapability::ListTools,
+                HostCapability::InvokeTool,
+            ]
+        );
+    }
+
+    #[test]
+    fn effective_host_capabilities_are_empty_without_declarations() {
+        let decls = vec![
+            PluginEntryDecl::new("one", serde_json::json!({})),
+            PluginEntryDecl::new("two", serde_json::json!({})),
+        ];
+
+        assert!(effective_host_capabilities(&decls).is_empty());
     }
 }

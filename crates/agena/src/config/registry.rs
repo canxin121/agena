@@ -151,6 +151,10 @@ impl super::ConfigResolution {
                 crate::tool::new_builtins_plugin(),
             )
             .register_static(
+                crate::tool::skills_plugin_id(),
+                crate::tool::new_skills_plugin(),
+            )
+            .register_static(
                 "agena-memory",
                 crate::memory::new_memory_plugin(self.config.memory.clone()),
             )

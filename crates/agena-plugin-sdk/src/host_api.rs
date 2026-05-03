@@ -63,6 +63,11 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Read a skill body and metadata by name.
+    async fn skill_get(&self, _req: HostSkillGetRequest) -> Result<HostSkillGetResponse> {
+        Err(unavailable())
+    }
+
     /// Long-lived background process registry — start.
     async fn monitor_start(&self, _req: MonitorStartRequest) -> Result<MonitorHandle> {
         Err(unavailable())
@@ -230,6 +235,19 @@ pub struct BuiltinToolRequest {
     pub tool_name: String,
     #[serde(default)]
     pub input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSkillGetRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSkillGetResponse {
+    pub name: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
 }
 
 // ---------------- monitor ----------------

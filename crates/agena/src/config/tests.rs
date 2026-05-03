@@ -990,7 +990,7 @@ default_model = "gpt-4.1-mini"
         .build_plugin_host()
         .await
         .expect("plugin host should build");
-    assert_eq!(host.plugins().len(), 6);
+    assert_eq!(host.plugins().len(), 10);
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&"agena-memory"));
     assert!(ids.contains(&crate::hooks::ShellHookPlugin::id()));
@@ -998,6 +998,10 @@ default_model = "gpt-4.1-mini"
     assert!(ids.contains(&crate::tool::skills_plugin_id()));
     assert!(ids.contains(&crate::tool::lsp_plugin_id()));
     assert!(ids.contains(&crate::tool::cron_plugin_id()));
+    assert!(ids.contains(&crate::tool::fs_plugin_id()));
+    assert!(ids.contains(&crate::tool::shell_plugin_id()));
+    assert!(ids.contains(&crate::tool::web_plugin_id()));
+    assert!(ids.contains(&crate::tool::workflow_plugin_id()));
 }
 
 #[tokio::test]
@@ -1033,7 +1037,7 @@ default_model = "gpt-4.1-mini"
         .expect("host build accepts but skips broken plugins");
     // The bogus cdylib entry is skipped; only the in-process built-in plugins
     // remain.
-    assert_eq!(host.plugins().len(), 6);
+    assert_eq!(host.plugins().len(), 10);
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&"agena-memory"));
     assert!(ids.contains(&crate::hooks::ShellHookPlugin::id()));
@@ -1041,6 +1045,10 @@ default_model = "gpt-4.1-mini"
     assert!(ids.contains(&crate::tool::skills_plugin_id()));
     assert!(ids.contains(&crate::tool::lsp_plugin_id()));
     assert!(ids.contains(&crate::tool::cron_plugin_id()));
+    assert!(ids.contains(&crate::tool::fs_plugin_id()));
+    assert!(ids.contains(&crate::tool::shell_plugin_id()));
+    assert!(ids.contains(&crate::tool::web_plugin_id()));
+    assert!(ids.contains(&crate::tool::workflow_plugin_id()));
 }
 
 fn write_temp_config(content: &str) -> PathBuf {

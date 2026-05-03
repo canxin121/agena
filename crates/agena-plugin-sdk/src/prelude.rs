@@ -26,8 +26,11 @@ pub use crate::host_api::{
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
-    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostSkillGetResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
+    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStatuslineSegment,
+    HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
+    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
     HostWorktreeEntry, HostWorktreeListResponse, LogLevel, NoopHostClient,
 };
 pub use crate::manifest::{

@@ -33,8 +33,11 @@ use crate::sdk::host_api::{
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
-    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostSkillGetResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
+    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStatuslineSegment,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
+    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
     HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
     MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
     SpawnSubtaskResponse, ToolDescriptor,
@@ -1496,6 +1499,8 @@ pub struct HostHandle {
     entries: Arc<RwLock<PluginEntryRegistry>>,
     plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
     statuses: Arc<crate::status::StatusRegistry>,
+    statusline: Arc<RwLock<std::collections::BTreeMap<(String, String), HostStatuslineSegment>>>,
+    themes: Arc<RwLock<std::collections::BTreeMap<String, HostThemePalette>>>,
 }
 
 impl HostHandle {
@@ -1534,6 +1539,8 @@ impl HostHandle {
             entries,
             plugin_indices,
             statuses,
+            statusline: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            themes: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
         }
     }
 
@@ -2252,6 +2259,59 @@ impl HostHandle {
                 .await?;
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
+            method::HOST_UI_STATUSLINE_CONTRIBUTE => {
+                let plugin_id = plugin_id.ok_or_else(|| {
+                    host_unavailable("ui.statusline.contribute requires plugin id")
+                })?;
+                self.require_capability(Some(&plugin_id), method, HostCapability::Statusline)
+                    .await?;
+                let p: HostStatuslineContributeParams = parse(params)?;
+                self.statusline_contribute(&plugin_id, p.request);
+                Ok(serde_json::Value::Object(Default::default()))
+            }
+            method::HOST_UI_STATUSLINE_LIST => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::Statusline)
+                    .await?;
+                let response = self.statusline_list_response();
+                serde_json::to_value(&response)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_UI_STATUSLINE_REMOVE => {
+                let plugin_id = plugin_id
+                    .ok_or_else(|| host_unavailable("ui.statusline.remove requires plugin id"))?;
+                self.require_capability(Some(&plugin_id), method, HostCapability::Statusline)
+                    .await?;
+                let p: HostStatuslineRemoveParams = parse(params)?;
+                let removed = self.statusline_remove(&plugin_id, &p.request.segment_id);
+                serde_json::to_value(&HostStatuslineRemoveResponse { removed })
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_UI_THEME_REGISTER => {
+                let plugin_id = plugin_id
+                    .ok_or_else(|| host_unavailable("ui.theme.register requires plugin id"))?;
+                self.require_capability(Some(&plugin_id), method, HostCapability::Theme)
+                    .await?;
+                let p: HostThemeRegisterParams = parse(params)?;
+                self.theme_register(&plugin_id, p.request);
+                Ok(serde_json::Value::Object(Default::default()))
+            }
+            method::HOST_UI_THEME_LIST => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::Theme)
+                    .await?;
+                let response = self.theme_list_response();
+                serde_json::to_value(&response)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_UI_THEME_REMOVE => {
+                let plugin_id = plugin_id
+                    .ok_or_else(|| host_unavailable("ui.theme.remove requires plugin id"))?;
+                self.require_capability(Some(&plugin_id), method, HostCapability::Theme)
+                    .await?;
+                let p: HostThemeRemoveParams = parse(params)?;
+                let removed = self.theme_remove(&plugin_id, &p.request.id);
+                serde_json::to_value(&HostThemeRemoveResponse { removed })
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
             other => Err(PluginError::not_implemented(other)),
         }
     }
@@ -2361,6 +2421,80 @@ impl HostHandle {
             })
             .collect();
         HostHookListResponse { entries }
+    }
+
+    fn statusline_contribute(&self, plugin_id: &str, req: HostStatuslineContributeRequest) {
+        if let Ok(mut guard) = self.statusline.write() {
+            let key = (plugin_id.to_string(), req.segment_id.clone());
+            guard.insert(
+                key,
+                HostStatuslineSegment {
+                    plugin_id: plugin_id.to_string(),
+                    segment_id: req.segment_id,
+                    content: req.content,
+                    priority: req.priority,
+                    color: req.color,
+                },
+            );
+        }
+    }
+
+    fn statusline_remove(&self, plugin_id: &str, segment_id: &str) -> bool {
+        if let Ok(mut guard) = self.statusline.write() {
+            return guard
+                .remove(&(plugin_id.to_string(), segment_id.to_string()))
+                .is_some();
+        }
+        false
+    }
+
+    fn statusline_list_response(&self) -> HostStatuslineListResponse {
+        let mut segments: Vec<HostStatuslineSegment> = self
+            .statusline
+            .read()
+            .map(|guard| guard.values().cloned().collect())
+            .unwrap_or_default();
+        segments.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+                .then_with(|| a.segment_id.cmp(&b.segment_id))
+        });
+        HostStatuslineListResponse { segments }
+    }
+
+    fn theme_register(&self, plugin_id: &str, req: HostThemeRegisterRequest) {
+        if let Ok(mut guard) = self.themes.write() {
+            guard.insert(
+                req.id.clone(),
+                HostThemePalette {
+                    id: req.id,
+                    plugin_id: plugin_id.to_string(),
+                    display_name: req.display_name,
+                    colors: req.colors,
+                },
+            );
+        }
+    }
+
+    fn theme_remove(&self, plugin_id: &str, id: &str) -> bool {
+        if let Ok(mut guard) = self.themes.write() {
+            if let Some(existing) = guard.get(id)
+                && existing.plugin_id == plugin_id
+            {
+                return guard.remove(id).is_some();
+            }
+        }
+        false
+    }
+
+    fn theme_list_response(&self) -> HostThemeListResponse {
+        let themes: Vec<HostThemePalette> = self
+            .themes
+            .read()
+            .map(|guard| guard.values().cloned().collect())
+            .unwrap_or_default();
+        HostThemeListResponse { themes }
     }
 }
 
@@ -2676,6 +2810,38 @@ struct HostMcpAddServerParams {
 #[derive(serde::Deserialize)]
 struct HostMcpRemoveServerParams {
     request: HostMcpRemoveServerRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostStatuslineContributeParams {
+    request: HostStatuslineContributeRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostStatuslineRemoveParams {
+    request: HostStatuslineRemoveRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostThemeRegisterParams {
+    request: HostThemeRegisterRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostThemeRemoveParams {
+    request: HostThemeRemoveRequest,
+    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -3133,6 +3299,63 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.mcp_remove_server(req)).await
+    }
+
+    async fn ui_statusline_contribute(
+        &self,
+        req: HostStatuslineContributeRequest,
+    ) -> crate::sdk::Result<()> {
+        self.require_capability(
+            method::HOST_UI_STATUSLINE_CONTRIBUTE,
+            HostCapability::Statusline,
+        )
+        .await?;
+        self.handle.statusline_contribute(&self.plugin_id, req);
+        Ok(())
+    }
+
+    async fn ui_statusline_list(&self) -> crate::sdk::Result<HostStatuslineListResponse> {
+        self.require_capability(method::HOST_UI_STATUSLINE_LIST, HostCapability::Statusline)
+            .await?;
+        Ok(self.handle.statusline_list_response())
+    }
+
+    async fn ui_statusline_remove(
+        &self,
+        req: HostStatuslineRemoveRequest,
+    ) -> crate::sdk::Result<HostStatuslineRemoveResponse> {
+        self.require_capability(
+            method::HOST_UI_STATUSLINE_REMOVE,
+            HostCapability::Statusline,
+        )
+        .await?;
+        let removed = self
+            .handle
+            .statusline_remove(&self.plugin_id, &req.segment_id);
+        Ok(HostStatuslineRemoveResponse { removed })
+    }
+
+    async fn ui_theme_register(&self, req: HostThemeRegisterRequest) -> crate::sdk::Result<()> {
+        self.require_capability(method::HOST_UI_THEME_REGISTER, HostCapability::Theme)
+            .await?;
+        self.handle.theme_register(&self.plugin_id, req);
+        Ok(())
+    }
+
+    async fn ui_theme_list(&self) -> crate::sdk::Result<HostThemeListResponse> {
+        self.require_capability(method::HOST_UI_THEME_LIST, HostCapability::Theme)
+            .await?;
+        Ok(self.handle.theme_list_response())
+    }
+
+    async fn ui_theme_remove(
+        &self,
+        req: HostThemeRemoveRequest,
+    ) -> crate::sdk::Result<HostThemeRemoveResponse> {
+        self.require_capability(method::HOST_UI_THEME_REMOVE, HostCapability::Theme)
+            .await?;
+        let removed = self.handle.theme_remove(&self.plugin_id, &req.id);
+        Ok(HostThemeRemoveResponse { removed })
     }
 }
 

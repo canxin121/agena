@@ -201,4 +201,10 @@ pub mod method {
     pub const HOST_MCP_LIST_SERVERS: &str = "host/mcp.list_servers";
     pub const HOST_MCP_ADD_SERVER: &str = "host/mcp.add_server";
     pub const HOST_MCP_REMOVE_SERVER: &str = "host/mcp.remove_server";
+    pub const HOST_UI_STATUSLINE_CONTRIBUTE: &str = "host/ui.statusline.contribute";
+    pub const HOST_UI_STATUSLINE_LIST: &str = "host/ui.statusline.list";
+    pub const HOST_UI_STATUSLINE_REMOVE: &str = "host/ui.statusline.remove";
+    pub const HOST_UI_THEME_REGISTER: &str = "host/ui.theme.register";
+    pub const HOST_UI_THEME_LIST: &str = "host/ui.theme.list";
+    pub const HOST_UI_THEME_REMOVE: &str = "host/ui.theme.remove";
 }

@@ -109,6 +109,7 @@ pub struct ResolvedConfig {
     pub runtime: RuntimeConfig,
     pub permission: PermissionConfig,
     pub plugins: PluginConfig,
+    pub plugin_storage: PluginStorageConfig,
     pub memory: MemoryConfig,
     pub mcp: McpConfig,
     pub lsp: LspConfig,
@@ -169,6 +170,32 @@ impl ResolvedConfig {
             }
         }
     }
+
+    pub fn plugin_storage(&self) -> std::sync::Arc<dyn crate::plugins::storage::PluginStorage> {
+        std::sync::Arc::new(crate::plugins::storage::FilePluginStorage::new(
+            self.plugin_storage.root_path.clone(),
+        ))
+    }
+
+    pub fn plugin_secret_store(
+        &self,
+    ) -> std::sync::Arc<dyn crate::plugins::storage::PluginSecretStore> {
+        let root = self.plugin_storage.root_path.clone();
+        match self.plugin_storage.secrets_backend {
+            PluginSecretsBackend::Auto => {
+                std::sync::Arc::new(crate::plugins::storage::PluginKeyringSecretStore::system(
+                    root,
+                    self.plugin_storage.fallback_to_file,
+                ))
+            }
+            PluginSecretsBackend::Keyring => std::sync::Arc::new(
+                crate::plugins::storage::PluginKeyringSecretStore::system(root, false),
+            ),
+            PluginSecretsBackend::File => std::sync::Arc::new(
+                crate::plugins::storage::PluginKeyringSecretStore::system(root, true),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -189,6 +216,32 @@ pub enum AuthStoreBackend {
     Auto,
     File,
     Keyring,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PluginStorageConfig {
+    pub root_path: PathBuf,
+    pub secrets_backend: PluginSecretsBackend,
+    pub fallback_to_file: bool,
+}
+
+impl Default for PluginStorageConfig {
+    fn default() -> Self {
+        Self {
+            root_path: crate::plugins::storage::default_storage_root(),
+            secrets_backend: PluginSecretsBackend::Auto,
+            fallback_to_file: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginSecretsBackend {
+    #[default]
+    Auto,
+    Keyring,
+    File,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

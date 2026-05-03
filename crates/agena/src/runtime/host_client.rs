@@ -15,15 +15,19 @@ use crate::message::{
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostCallbackContext,
-    HostClient, HostSkillGetRequest, HostSkillGetResponse, LogLevel, MonitorEvent, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostClient, HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse,
+    HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse,
+    HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, LogLevel, MonitorEvent,
+    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
     current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
     PermissionDecision as PluginPermissionDecision, PluginError, ToolInvokeOutput,
 };
+use crate::plugins::storage::{PluginSecretStore, PluginStorage, PluginStorageError};
 use crate::runtime::AgenaRuntime;
 use crate::tool::{EntrySource, MonitorError, MonitorReadParams, MonitorStartParams};
 
@@ -68,6 +72,29 @@ impl RuntimeHostClient {
             .ok_or_else(|| host_unavailable("host callback context is missing call_id"))?;
         Ok((session_id, call_id))
     }
+
+    fn callback_plugin_id(&self) -> Result<String, PluginError> {
+        self.callback_context()?
+            .plugin_id
+            .filter(|id| !id.trim().is_empty())
+            .ok_or_else(|| host_unavailable("host callback context is missing plugin_id"))
+    }
+
+    fn plugin_storage(&self) -> Arc<dyn PluginStorage> {
+        self.runtime
+            .current_snapshot()
+            .config_resolution()
+            .config
+            .plugin_storage()
+    }
+
+    fn plugin_secret_store(&self) -> Arc<dyn PluginSecretStore> {
+        self.runtime
+            .current_snapshot()
+            .config_resolution()
+            .config
+            .plugin_secret_store()
+    }
 }
 
 fn host_unavailable(message: impl Into<String>) -> PluginError {
@@ -77,6 +104,26 @@ fn host_unavailable(message: impl Into<String>) -> PluginError {
         hook: None,
         plugin: None,
         data: None,
+    }
+}
+
+fn map_storage_error(err: PluginStorageError) -> PluginError {
+    use crate::plugin::sdk::PluginErrorCode;
+    match err {
+        PluginStorageError::MissingPluginId
+        | PluginStorageError::EmptyNamespace
+        | PluginStorageError::EmptyKey
+        | PluginStorageError::Data(_) => PluginError::invalid_params(err.to_string()),
+        PluginStorageError::SecretUnavailable(_) => PluginError {
+            code: PluginErrorCode::HostUnavailable,
+            message: err.to_string(),
+            hook: None,
+            plugin: None,
+            data: None,
+        },
+        PluginStorageError::Io(_) | PluginStorageError::Secret(_) => {
+            PluginError::new(err.to_string())
+        }
     }
 }
 
@@ -595,6 +642,92 @@ impl HostClient for RuntimeHostClient {
             .ok_or_else(|| host_unavailable("monitor registry is not enabled in this runtime"))?;
         let stop = registry.stop(req.id.as_str()).map_err(map_monitor_error)?;
         Ok(render_monitor_handle(stop.summary))
+    }
+
+    async fn storage_get(
+        &self,
+        req: HostStorageGetRequest,
+    ) -> Result<HostStorageGetResponse, PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let store = self.plugin_storage();
+        let value = store
+            .get(&plugin_id, req.namespace.as_str(), req.key.as_str())
+            .map_err(map_storage_error)?;
+        Ok(HostStorageGetResponse { value })
+    }
+
+    async fn storage_set(&self, req: HostStorageSetRequest) -> Result<(), PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let store = self.plugin_storage();
+        store
+            .set(
+                &plugin_id,
+                req.namespace.as_str(),
+                req.key.as_str(),
+                req.value.as_str(),
+            )
+            .map_err(map_storage_error)
+    }
+
+    async fn storage_delete(&self, req: HostStorageDeleteRequest) -> Result<(), PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let store = self.plugin_storage();
+        store
+            .delete(&plugin_id, req.namespace.as_str(), req.key.as_str())
+            .map_err(map_storage_error)
+    }
+
+    async fn storage_list(
+        &self,
+        req: HostStorageListRequest,
+    ) -> Result<HostStorageListResponse, PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let store = self.plugin_storage();
+        let entries = store
+            .list(&plugin_id, req.namespace.as_deref(), req.prefix.as_deref())
+            .map_err(map_storage_error)?
+            .into_iter()
+            .map(|entry| HostStorageEntry {
+                namespace: entry.namespace,
+                key: entry.key,
+            })
+            .collect();
+        Ok(HostStorageListResponse { entries })
+    }
+
+    async fn secret_get(
+        &self,
+        req: HostSecretGetRequest,
+    ) -> Result<HostSecretGetResponse, PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let store = self.plugin_secret_store();
+        let value = store
+            .get(&plugin_id, req.name.as_str())
+            .map_err(map_storage_error)?;
+        Ok(HostSecretGetResponse { value })
+    }
+
+    async fn secret_set(&self, req: HostSecretSetRequest) -> Result<(), PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let store = self.plugin_secret_store();
+        store
+            .set(&plugin_id, req.name.as_str(), req.value.as_str())
+            .map_err(map_storage_error)
+    }
+
+    async fn secret_delete(&self, req: HostSecretDeleteRequest) -> Result<(), PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let store = self.plugin_secret_store();
+        store
+            .delete(&plugin_id, req.name.as_str())
+            .map_err(map_storage_error)
+    }
+
+    async fn secret_list(&self) -> Result<HostSecretListResponse, PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let store = self.plugin_secret_store();
+        let names = store.list(&plugin_id).map_err(map_storage_error)?;
+        Ok(HostSecretListResponse { names })
     }
 }
 

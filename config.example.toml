@@ -100,6 +100,16 @@ enabled = true
 # their manifest entries. For example, host/config.read requires ReadConfig and
 # host/skill.get requires SkillsManager.
 #
+# Plugin storage and secrets live under ~/.agena/plugin-storage by default
+# (override with the AGENA_PLUGIN_STORAGE_DIR environment variable). Storage is
+# plain JSON keyed by (plugin_id, namespace, key); secrets go to the OS keyring
+# under the agena.plugin service. Set [plugins.storage] to override:
+#
+# [plugins.storage]
+# # root_path = "/var/lib/agena/plugin-storage"
+# # secrets_backend = "auto"   # auto | keyring | file
+# # fallback_to_file = true
+#
 # Examples (commented out — copy and adapt as needed):
 #
 # [plugins.list.echo]

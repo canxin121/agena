@@ -425,3 +425,70 @@ async fn entry_register_then_lookup_resolves() {
     );
     assert!(host.lookup_entry("dynamic-entry").is_none());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_and_secret_calls_require_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let storage_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_STORAGE_GET,
+            json!({ "request": { "namespace": "ns", "key": "k" } }),
+        )
+        .await
+        .expect_err("storage.get should require PluginStorage");
+    assert!(storage_err.message.contains("PluginStorage"));
+
+    let secret_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_SECRET_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("secret.list should require PluginSecrets");
+    assert!(secret_err.message.contains("PluginSecrets"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_and_secret_capability_unlocks_dispatch() {
+    let host = host_with_capability_plugin(vec![
+        HostCapability::PluginStorage,
+        HostCapability::PluginSecrets,
+    ])
+    .await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    // FakeHostClient does not implement storage_get; the default trait method
+    // returns HostUnavailable, which proves the capability gate let the call
+    // through to the underlying host implementation.
+    let storage_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_STORAGE_GET,
+            json!({ "request": { "namespace": "ns", "key": "k" } }),
+        )
+        .await
+        .expect_err("storage.get should reach default trait method");
+    assert!(!storage_err.message.contains("PluginStorage"));
+
+    let secret_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_SECRET_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("secret.list should reach default trait method");
+    assert!(!secret_err.message.contains("PluginSecrets"));
+}

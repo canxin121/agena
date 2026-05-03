@@ -175,6 +175,8 @@ Available callbacks include:
 | `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` / `host/monitor.*` | `MonitorRegistry` |
 | `skill_get` / `host/skill.get` | `SkillsManager` |
 | `entry_register`, `entry_update`, `entry_remove`, `entry_list` / `host/entry.*` | `EntryRegistry` |
+| `storage_get`, `storage_set`, `storage_delete`, `storage_list` / `host/storage.*` | `PluginStorage` |
+| `secret_get`, `secret_set`, `secret_delete`, `secret_list` / `host/secret.*` | `PluginSecrets` |
 
 For stdio / HTTP plugins, callbacks travel back over the same JSON-RPC wire
 (stdio multiplexed on stdin/stdout, HTTP via `POST /plugin-rpc/{plugin_id}`
@@ -199,6 +201,23 @@ manifest registration: bare entry names are namespaced as `plugin__entry` if
 they conflict with builtins or existing entries. Removal does not
 de-namespace previously renamed siblings, so model-visible tool names stay
 stable for the rest of the session.
+
+## Plugin storage and secrets
+
+Plugins that declare `HostCapability::PluginStorage` can read and write a
+namespaced JSON KV store via `storage_get / storage_set / storage_delete /
+storage_list`. Data is keyed by `(plugin_id, namespace, key)`; one plugin
+cannot read another's store. Files live under
+`~/.agena/plugin-storage/{plugin_id}/{namespace}.json` (override with
+`AGENA_PLUGIN_STORAGE_DIR`). The store is plain JSON — use it for
+configuration, caches, or feature flags, not for secrets.
+
+For credentials, declare `HostCapability::PluginSecrets` and use
+`secret_get / secret_set / secret_delete / secret_list`. Values go to the OS
+keyring under the `agena.plugin` service, keyed as `plugin/{plugin_id}/{name}`.
+On systems without a keyring the host falls back to a 0o600 file unless the
+`secrets_backend` is forced to `keyring`. `secret_list` only returns names —
+values are never enumerated. Keep secret names short and stable.
 
 ## Config schema
 

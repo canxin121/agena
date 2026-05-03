@@ -118,6 +118,46 @@ pub trait HostClient: Send + Sync + 'static {
     async fn entry_list(&self) -> Result<HostEntryListResponse> {
         Err(unavailable())
     }
+
+    /// Plugin-namespaced KV storage — read.
+    async fn storage_get(&self, _req: HostStorageGetRequest) -> Result<HostStorageGetResponse> {
+        Err(unavailable())
+    }
+
+    /// Plugin-namespaced KV storage — write.
+    async fn storage_set(&self, _req: HostStorageSetRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Plugin-namespaced KV storage — delete.
+    async fn storage_delete(&self, _req: HostStorageDeleteRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Plugin-namespaced KV storage — enumerate keys.
+    async fn storage_list(&self, _req: HostStorageListRequest) -> Result<HostStorageListResponse> {
+        Err(unavailable())
+    }
+
+    /// Plugin-scoped secret storage — read a secret value.
+    async fn secret_get(&self, _req: HostSecretGetRequest) -> Result<HostSecretGetResponse> {
+        Err(unavailable())
+    }
+
+    /// Plugin-scoped secret storage — write a secret value.
+    async fn secret_set(&self, _req: HostSecretSetRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Plugin-scoped secret storage — delete a secret value.
+    async fn secret_delete(&self, _req: HostSecretDeleteRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Plugin-scoped secret storage — list secret names (never values).
+    async fn secret_list(&self) -> Result<HostSecretListResponse> {
+        Err(unavailable())
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -421,6 +461,83 @@ pub struct HostEntryListResponse {
     pub generation: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<HostEntryDescriptor>,
+}
+
+// ---------------- plugin storage ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostStorageGetRequest {
+    pub namespace: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostStorageGetResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostStorageSetRequest {
+    pub namespace: String,
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostStorageDeleteRequest {
+    pub namespace: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostStorageListRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostStorageListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<HostStorageEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostStorageEntry {
+    pub namespace: String,
+    pub key: String,
+}
+
+// ---------------- plugin secrets ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSecretGetRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSecretGetResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSecretSetRequest {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSecretDeleteRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostSecretListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
 }
 
 fn default_true() -> bool {

@@ -1464,6 +1464,32 @@ mod tests {
         assert_eq!(models[0].display_name.as_deref(), Some("Plugin Mock"));
     }
 
+    #[tokio::test]
+    async fn plugin_registered_provider_completion_returns_clear_error() {
+        let mut registry = ProviderRegistry::new();
+        registry
+            .register_plugin_provider(crate::plugin::ProviderDescriptor {
+                id: "plugin-mock".to_owned(),
+                display_name: "Plugin Mock".to_owned(),
+                models: vec!["mock-model".to_owned()],
+                endpoint: None,
+                kind: crate::plugin::ProviderKind::Custom,
+            })
+            .expect("plugin provider should register");
+
+        let err = registry
+            .complete(
+                &model_ref("plugin-mock", "mock-model"),
+                completion_request("mock-model"),
+            )
+            .await
+            .expect_err("plugin provider completion should not be executable yet");
+
+        assert!(
+            matches!(err, AppError::Provider(message) if message.contains("does not implement completions"))
+        );
+    }
+
     #[test]
     fn register_alias_requires_existing_target_provider() {
         let mut registry = ProviderRegistry::new();

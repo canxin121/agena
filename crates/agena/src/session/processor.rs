@@ -1041,11 +1041,9 @@ fn placeholder_tool_invocation(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown");
-    let canonical_name = canonical_builtin_tool_name(requested_name);
-
     let Some(tool) = available_tools
         .iter()
-        .find(|tool| tool.name == requested_name || tool.name == canonical_name)
+        .find(|tool| tool.name == requested_name)
     else {
         return ToolInvocation::Custom {
             name: requested_name.to_string(),
@@ -1062,23 +1060,15 @@ pub(crate) fn parse_tool_invocation(
     available_tools: &[EntryDefinition],
 ) -> Result<ToolInvocation, AppError> {
     let trimmed_name = name.trim();
-    let canonical_name = canonical_builtin_tool_name(trimmed_name);
     let tool = available_tools
         .iter()
-        .find(|tool| tool.name == trimmed_name || tool.name == canonical_name)
+        .find(|tool| tool.name == trimmed_name)
         .ok_or_else(|| {
             AppError::Provider(format!("unsupported tool call from model: {trimmed_name}"))
         })?;
 
     let parsed = parse_custom_input(arguments_json)?;
     Ok(tool_invocation_for_definition(tool, parsed))
-}
-
-fn canonical_builtin_tool_name(name: &str) -> &str {
-    match name {
-        "request_user_input" => "ask_user",
-        other => other,
-    }
 }
 
 fn tool_invocation_for_definition(

@@ -341,7 +341,6 @@ impl ToolExecutor {
         }
 
         let tool_name = invocation_name(invocation);
-        let source = self.invocation_source_for(invocation);
         let (behavior, policy) = self
             .invocation_manifest_metadata(invocation)
             .unwrap_or((SdkEntryBehavior::WriteSandboxed, SdkPlanModePolicy::Blocked));
@@ -371,9 +370,7 @@ impl ToolExecutor {
                 )))
             }
             SdkPlanModePolicy::Derived => {
-                if matches!(source, EntrySource::Builtin)
-                    && matches!(behavior, SdkEntryBehavior::ReadOnly)
-                {
+                if matches!(behavior, SdkEntryBehavior::ReadOnly) {
                     return Ok(());
                 }
                 Err(ToolError::PermissionDenied(format!(
@@ -418,54 +415,18 @@ impl ToolExecutor {
 
     pub fn available_builtins(&self) -> Vec<ToolAvailability> {
         let catalog = self.tool_catalog();
-        vec![
-            BuiltinToolInput::Bash(crate::message::BashToolInput {
-                command: String::new(),
-                description: String::new(),
-                timeout_ms: None,
-                workdir: None,
-            }),
-            BuiltinToolInput::Read(crate::message::ReadToolInput {
-                file_path: String::new(),
-                offset: None,
-                limit: None,
-            }),
-            BuiltinToolInput::ViewFile(crate::message::ViewFileToolInput {
-                path: String::new(),
-            }),
-            BuiltinToolInput::ApplyPatch(crate::message::ApplyPatchToolInput {
-                patch: String::new(),
-            }),
-            BuiltinToolInput::Glob(crate::message::GlobToolInput {
-                pattern: String::new(),
-                path: None,
-            }),
-            BuiltinToolInput::Grep(crate::message::GrepToolInput {
-                pattern: String::new(),
-                path: None,
-                include: None,
-            }),
-            BuiltinToolInput::Task(crate::message::TaskToolInput {
-                description: String::new(),
-                prompt: String::new(),
-                subagent_type: crate::message::TaskSubagentType::Explore,
-                task_id: None,
-                command: None,
-            }),
-            BuiltinToolInput::ToolSearch(crate::message::ToolSearchToolInput {
-                query: String::new(),
-                load: Vec::new(),
-                limit: None,
-            }),
-            BuiltinToolInput::TodoWrite(crate::message::TodoWriteToolInput { items: Vec::new() }),
-            BuiltinToolInput::AskUser(crate::message::AskUserToolInput {
-                questions: Vec::new(),
-            }),
-            BuiltinToolInput::Monitor(crate::message::MonitorToolInput::List {}),
-        ]
-        .into_iter()
-        .map(|input| catalog.availability_for_input(&self.agent, &input))
-        .collect()
+        self.plugins
+            .entry_entries()
+            .filter(|entry| entry.plugin_name == builtins::BUILTIN_PLUGIN_ID)
+            .map(|entry| {
+                EntryDefinition::from_decl(
+                    entry.exposed_name.clone(),
+                    &entry.decl,
+                    EntrySource::Builtin,
+                )
+            })
+            .map(|definition| catalog.availability_for_definition(&self.agent, &definition))
+            .collect()
     }
 
     fn catalogued_tools(&self) -> Vec<EntryDefinition> {
@@ -762,42 +723,6 @@ impl ToolExecutor {
         self.push_path_checks(checks, sdk_path_kind_to_access_kind(kind), &target);
     }
 
-    fn collect_builtin_default_path_checks(
-        &self,
-        checks: &mut Vec<ToolPermissionCheck>,
-        builtin: &BuiltinToolInput,
-    ) {
-        match builtin {
-            BuiltinToolInput::Bash(payload) if payload.workdir.is_none() => {
-                self.push_path_checks(checks, AccessKind::Read, self.workspace_root());
-            }
-            BuiltinToolInput::Glob(payload) if payload.path.is_none() => {
-                self.push_path_checks(checks, AccessKind::Read, self.workspace_root());
-            }
-            BuiltinToolInput::Grep(payload) if payload.path.is_none() => {
-                self.push_path_checks(checks, AccessKind::Read, self.workspace_root());
-            }
-            BuiltinToolInput::Monitor(crate::message::MonitorToolInput::Start {
-                workdir, ..
-            }) if workdir.is_none() => {
-                self.push_path_checks(checks, AccessKind::Read, self.workspace_root());
-            }
-            BuiltinToolInput::PowerShell(payload) if payload.workdir.is_none() => {
-                self.push_path_checks(checks, AccessKind::Read, self.workspace_root());
-            }
-            _ => {}
-        }
-    }
-
-    fn collect_legacy_builtin_path_checks(
-        &self,
-        checks: &mut Vec<ToolPermissionCheck>,
-        builtin: &BuiltinToolInput,
-    ) -> Result<(), ToolError> {
-        checks.extend(self.collect_permission_checks(builtin)?.into_iter().skip(1));
-        Ok(())
-    }
-
     pub fn execute_builtin_detailed(
         &self,
         input: &BuiltinToolInput,
@@ -900,109 +825,7 @@ impl ToolExecutor {
         &self,
         input: &BuiltinToolInput,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
-        self.ensure_builtin_enabled(input)?;
-
-        let mut checks = vec![ToolPermissionCheck {
-            action: PermissionAction::BuiltinTool {
-                tool_name: crate::permission::builtin_name(input).to_string(),
-            },
-            decision: self.agent.authorize_builtin_tool(input),
-        }];
-
-        match input {
-            BuiltinToolInput::Bash(payload) => {
-                let cwd = payload
-                    .workdir
-                    .as_deref()
-                    .map(|workdir| self.resolve_target_path(workdir))
-                    .unwrap_or_else(|| self.workspace_root().to_path_buf());
-                self.push_path_checks(&mut checks, AccessKind::Read, &cwd);
-            }
-            BuiltinToolInput::Read(payload) => {
-                let target = self.resolve_target_path(&payload.file_path);
-                self.push_path_checks(&mut checks, AccessKind::Read, &target);
-            }
-            BuiltinToolInput::ViewFile(payload) => {
-                let target = self.resolve_target_path(&payload.path);
-                self.push_path_checks(&mut checks, AccessKind::Read, &target);
-            }
-            BuiltinToolInput::ApplyPatch(payload) => {
-                for path in apply_patch::planned_paths(&payload.patch)? {
-                    let target = self.resolve_target_path(&path);
-                    self.push_path_checks(&mut checks, AccessKind::Write, &target);
-                }
-            }
-            BuiltinToolInput::Glob(payload) => {
-                let base_path = payload
-                    .path
-                    .as_deref()
-                    .map(|path| self.resolve_target_path(path))
-                    .unwrap_or_else(|| self.workspace_root().to_path_buf());
-                self.push_path_checks(&mut checks, AccessKind::Read, &base_path);
-            }
-            BuiltinToolInput::Grep(payload) => {
-                let base_path = payload
-                    .path
-                    .as_deref()
-                    .map(|path| self.resolve_target_path(path))
-                    .unwrap_or_else(|| self.workspace_root().to_path_buf());
-                self.push_path_checks(&mut checks, AccessKind::Read, &base_path);
-            }
-            BuiltinToolInput::ToolSearch(_) => {}
-            BuiltinToolInput::TodoWrite(_) => {}
-            BuiltinToolInput::Task(_) => {}
-            BuiltinToolInput::AskUser(_) => {}
-            BuiltinToolInput::Monitor(payload) => {
-                if let crate::message::MonitorToolInput::Start { workdir, .. } = payload {
-                    let cwd = workdir
-                        .as_deref()
-                        .map(|w| self.resolve_target_path(w))
-                        .unwrap_or_else(|| self.workspace_root().to_path_buf());
-                    self.push_path_checks(&mut checks, AccessKind::Read, &cwd);
-                }
-            }
-            BuiltinToolInput::WebFetch(_) => {}
-            BuiltinToolInput::WebSearch(_) => {}
-            BuiltinToolInput::EnterPlanMode(_) => {}
-            BuiltinToolInput::ExitPlanMode(_) => {}
-            BuiltinToolInput::SkillRun(_) => {}
-            BuiltinToolInput::EnterWorktree(_) => {}
-            BuiltinToolInput::ExitWorktree(_) => {}
-            BuiltinToolInput::CronCreate(_) => {}
-            BuiltinToolInput::CronList(_) => {}
-            BuiltinToolInput::CronDelete(_) => {}
-            BuiltinToolInput::ScheduleWakeup(_) => {}
-            BuiltinToolInput::LspDefinition(payload) => {
-                let target = self.resolve_target_path(&payload.file_path);
-                self.push_path_checks(&mut checks, AccessKind::Read, &target);
-            }
-            BuiltinToolInput::LspReferences(payload) => {
-                let target = self.resolve_target_path(&payload.file_path);
-                self.push_path_checks(&mut checks, AccessKind::Read, &target);
-            }
-            BuiltinToolInput::LspHover(payload) => {
-                let target = self.resolve_target_path(&payload.file_path);
-                self.push_path_checks(&mut checks, AccessKind::Read, &target);
-            }
-            BuiltinToolInput::LspDiagnostics(payload) => {
-                let target = self.resolve_target_path(&payload.file_path);
-                self.push_path_checks(&mut checks, AccessKind::Read, &target);
-            }
-            BuiltinToolInput::NotebookEdit(payload) => {
-                let target = self.resolve_target_path(&payload.notebook_path);
-                self.push_path_checks(&mut checks, AccessKind::Write, &target);
-            }
-            BuiltinToolInput::PowerShell(payload) => {
-                let cwd = payload
-                    .workdir
-                    .as_deref()
-                    .map(|workdir| self.resolve_target_path(workdir))
-                    .unwrap_or_else(|| self.workspace_root().to_path_buf());
-                self.push_path_checks(&mut checks, AccessKind::Read, &cwd);
-            }
-        }
-
-        Ok(checks)
+        self.collect_permission_checks_for_invocation(&input.clone().into_invocation())
     }
 
     pub fn prepare_invocation(
@@ -1058,13 +881,6 @@ impl ToolExecutor {
             decision,
         }];
 
-        if let Some(builtin) = builtin.as_ref()
-            && self.plugins.lookup_entry(tool_name.as_str()).is_none()
-        {
-            self.collect_legacy_builtin_path_checks(&mut checks, builtin)?;
-            return Ok(checks);
-        }
-
         let input_value = invocation_input_value(invocation);
         if let Some(resolution) =
             self.plugin_resolution_for_invocation(invocation, builtin.as_ref())
@@ -1076,10 +892,6 @@ impl ToolExecutor {
             )?;
             self.collect_dynamic_path_checks(&mut checks, &resolution.handle, &input_value)?;
         }
-        if let Some(builtin) = builtin.as_ref() {
-            self.collect_builtin_default_path_checks(&mut checks, builtin);
-        }
-
         Ok(checks)
     }
 
@@ -1264,13 +1076,22 @@ impl ToolExecutor {
     }
 
     fn ensure_builtin_enabled(&self, input: &BuiltinToolInput) -> Result<(), ToolError> {
+        let tool_name = crate::permission::builtin_name(input);
+        let resolution = self
+            .plugins
+            .lookup_entry(tool_name)
+            .filter(|resolution| resolution.handle.plugin_id == builtins::BUILTIN_PLUGIN_ID)
+            .ok_or_else(|| ToolError::UnknownTool(tool_name.to_string()))?;
+        let definition = EntryDefinition::from_decl(
+            resolution.handle.exposed_name.clone(),
+            &resolution.decl,
+            EntrySource::Builtin,
+        );
         let availability = self
             .tool_catalog()
-            .availability_for_input(&self.agent, input);
+            .availability_for_definition(&self.agent, &definition);
         if !availability.enabled {
-            return Err(ToolError::UnsupportedInvocation(
-                availability.tool_name.to_string(),
-            ));
+            return Err(ToolError::UnsupportedInvocation(availability.tool_name));
         }
         Ok(())
     }
@@ -1771,7 +1592,7 @@ mod tests {
     use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
-    use super::{EntrySource, ExecutionPolicy, ToolError, ToolExecutor};
+    use super::{EntrySource, ExecutionPolicy, ToolError, ToolExecutor, builtins};
 
     #[derive(Debug)]
     struct TempWorkspace {
@@ -2489,6 +2310,56 @@ mod tests {
 
         let read_count = tools.iter().filter(|tool| tool.name == "read").count();
         assert_eq!(read_count, 1);
+    }
+
+    #[test]
+    fn available_tools_are_backed_by_plugin_registry() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_plugin_manager(&workspace.root));
+
+        for definition in executor.available_tools() {
+            assert!(
+                executor
+                    .plugin_manager()
+                    .lookup_entry(definition.name.as_str())
+                    .is_some(),
+                "missing registry entry for {}",
+                definition.name
+            );
+        }
+
+        for definition in executor.searchable_tools() {
+            assert!(
+                executor
+                    .plugin_manager()
+                    .lookup_entry(definition.name.as_str())
+                    .is_some(),
+                "missing registry entry for {}",
+                definition.name
+            );
+        }
+    }
+
+    #[test]
+    fn available_builtins_are_projected_from_builtin_plugin_entries() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_builtins_plugin_manager(&workspace.root));
+
+        let available = executor
+            .available_builtins()
+            .into_iter()
+            .map(|item| item.tool_name)
+            .collect::<std::collections::BTreeSet<_>>();
+        let registry = executor
+            .plugin_manager()
+            .entry_entries()
+            .filter(|entry| entry.plugin_name == builtins::BUILTIN_PLUGIN_ID)
+            .map(|entry| entry.exposed_name.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(available, registry);
     }
 
     #[test]

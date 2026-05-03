@@ -15,13 +15,14 @@ use crate::message::{
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostCallbackContext,
-    HostClient, HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse,
-    HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse,
-    HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, LogLevel, MonitorEvent,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
-    current_host_callback_context,
+    HostClient, HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
+    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
+    SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -728,6 +729,39 @@ impl HostClient for RuntimeHostClient {
         let store = self.plugin_secret_store();
         let names = store.list(&plugin_id).map_err(map_storage_error)?;
         Ok(HostSecretListResponse { names })
+    }
+
+    async fn plugin_status_list(&self) -> Result<HostPluginStatusListResponse, PluginError> {
+        let host = self.runtime.current_snapshot().plugin_manager();
+        let entries = host
+            .plugin_statuses()
+            .into_iter()
+            .map(host_status_to_sdk)
+            .collect();
+        Ok(HostPluginStatusListResponse { entries })
+    }
+
+    async fn plugin_status_get(
+        &self,
+        req: HostPluginStatusGetRequest,
+    ) -> Result<HostPluginStatusGetResponse, PluginError> {
+        let host = self.runtime.current_snapshot().plugin_manager();
+        Ok(HostPluginStatusGetResponse {
+            status: host.plugin_status(&req.plugin_id).map(host_status_to_sdk),
+        })
+    }
+}
+
+fn host_status_to_sdk(status: agena_plugin_host::status::PluginStatus) -> HostPluginStatus {
+    HostPluginStatus {
+        plugin_id: status.plugin_id,
+        kind: status.kind.to_string(),
+        state: status.state.as_str().to_string(),
+        pid: status.pid,
+        restart_count: status.restart_count,
+        last_exit_code: status.last_exit_code,
+        last_restart_at_ms: status.last_restart_at_ms,
+        last_error: status.last_error,
     }
 }
 

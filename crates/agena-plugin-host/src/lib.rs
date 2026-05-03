@@ -8,6 +8,7 @@ pub mod host;
 pub mod loader;
 pub mod manifest_io;
 pub mod registry;
+pub mod status;
 pub mod transport;
 
 pub use agena_plugin_sdk as sdk;

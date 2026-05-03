@@ -22,6 +22,7 @@ use crate::sdk::PluginError;
 use crate::sdk::rpc::{
     ErrorObject, Frame, JsonRpcVersion, Notification, Request, RequestId, Response, ResponsePayload,
 };
+use crate::status::StatusRegistry;
 use crate::transport::PluginTransport;
 
 pub type HostHandler = Arc<
@@ -56,6 +57,8 @@ struct Inner {
     host_handler: Mutex<Option<HostHandler>>,
     closed: std::sync::atomic::AtomicBool,
     restart_attempts: AtomicU32,
+    plugin_id: Option<String>,
+    status_sink: Option<Arc<StatusRegistry>>,
 }
 
 struct ChildHandles {
@@ -71,13 +74,15 @@ impl StdioTransport {
         cwd: Option<&PathBuf>,
         host_handler: Option<HostHandler>,
     ) -> Result<Self, TransportError> {
-        Self::spawn_with_policy(
+        Self::spawn_with_policy_and_status(
             command,
             args,
             env,
             cwd,
             host_handler,
             RestartPolicy::default(),
+            None,
+            None,
         )
         .await
     }
@@ -89,6 +94,29 @@ impl StdioTransport {
         cwd: Option<&PathBuf>,
         host_handler: Option<HostHandler>,
         restart_policy: RestartPolicy,
+    ) -> Result<Self, TransportError> {
+        Self::spawn_with_policy_and_status(
+            command,
+            args,
+            env,
+            cwd,
+            host_handler,
+            restart_policy,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn spawn_with_policy_and_status(
+        command: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        cwd: Option<&PathBuf>,
+        host_handler: Option<HostHandler>,
+        restart_policy: RestartPolicy,
+        plugin_id: Option<String>,
+        status_sink: Option<Arc<StatusRegistry>>,
     ) -> Result<Self, TransportError> {
         let spawn_spec = SpawnSpec {
             command: command.to_string(),
@@ -106,6 +134,8 @@ impl StdioTransport {
             host_handler: Mutex::new(host_handler),
             closed: std::sync::atomic::AtomicBool::new(false),
             restart_attempts: AtomicU32::new(0),
+            plugin_id,
+            status_sink,
         });
 
         Inner::spawn_child(&inner, false).await?;
@@ -141,6 +171,9 @@ impl Inner {
                     max = self.restart_policy.max_retries,
                     "stdio plugin exhausted restart budget"
                 );
+                self.record_status(|sink, plugin_id| {
+                    sink.record_spawn_failure(plugin_id, "restart budget exhausted");
+                });
                 return Err(TransportError::Disconnected);
             }
             let min = self.restart_policy.min_backoff.0;
@@ -166,7 +199,17 @@ impl Inner {
         if let Some(cwd) = &self.spawn_spec.cwd {
             cmd.current_dir(cwd);
         }
-        let mut child = cmd.spawn()?;
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                let message = err.to_string();
+                self.record_status(|sink, plugin_id| {
+                    sink.record_spawn_failure(plugin_id, message.clone());
+                });
+                return Err(err.into());
+            }
+        };
+        let pid = child.id();
         let stdin = child
             .stdin
             .take()
@@ -213,6 +256,9 @@ impl Inner {
         }
 
         *self.handles.lock().await = Some(ChildHandles { child, stdin });
+        self.record_status(|sink, plugin_id| {
+            sink.record_started(plugin_id, pid, is_restart);
+        });
         Ok(())
     }
 
@@ -221,7 +267,21 @@ impl Inner {
             return;
         }
         // Drop current handles + fail every in-flight request.
-        *self.handles.lock().await = None;
+        let exit_code = {
+            let mut handles_lock = self.handles.lock().await;
+            let exit_code = if let Some(handles) = handles_lock.as_mut() {
+                handles
+                    .child
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .and_then(|status| status.code())
+            } else {
+                None
+            };
+            *handles_lock = None;
+            exit_code
+        };
         let pending: Vec<_> = self.pending.iter().map(|e| e.key().clone()).collect();
         for id in pending {
             if let Some((_, slot)) = self.pending.remove(&id) {
@@ -238,6 +298,14 @@ impl Inner {
                 });
             }
         }
+
+        let will_restart = matches!(
+            self.restart_policy.policy,
+            RestartMode::OnFailure | RestartMode::Always
+        );
+        self.record_status(|sink, plugin_id| {
+            sink.record_exit(plugin_id, will_restart, exit_code, None);
+        });
 
         match self.restart_policy.policy {
             RestartMode::Never => {}
@@ -318,6 +386,16 @@ impl Inner {
         let v = *id;
         *id += 1;
         v
+    }
+
+    fn record_status<F>(&self, mutate: F)
+    where
+        F: FnOnce(&StatusRegistry, &str),
+    {
+        if let (Some(sink), Some(plugin_id)) = (self.status_sink.as_ref(), self.plugin_id.as_ref())
+        {
+            mutate(sink.as_ref(), plugin_id.as_str());
+        }
     }
 }
 
@@ -415,6 +493,9 @@ impl PluginTransport for StdioTransport {
         if let Some(mut h) = self.inner.handles.lock().await.take() {
             let _ = h.child.start_kill();
         }
+        self.inner.record_status(|sink, plugin_id| {
+            sink.record_stopped(plugin_id);
+        });
         Ok(())
     }
 }

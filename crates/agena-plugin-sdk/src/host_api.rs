@@ -158,6 +158,19 @@ pub trait HostClient: Send + Sync + 'static {
     async fn secret_list(&self) -> Result<HostSecretListResponse> {
         Err(unavailable())
     }
+
+    /// Daemon lifecycle — list every plugin status known to the host.
+    async fn plugin_status_list(&self) -> Result<HostPluginStatusListResponse> {
+        Err(unavailable())
+    }
+
+    /// Daemon lifecycle — fetch a single plugin status by id.
+    async fn plugin_status_get(
+        &self,
+        _req: HostPluginStatusGetRequest,
+    ) -> Result<HostPluginStatusGetResponse> {
+        Err(unavailable())
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -538,6 +551,42 @@ pub struct HostSecretDeleteRequest {
 pub struct HostSecretListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
+}
+
+// ---------------- plugin status ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostPluginStatus {
+    pub plugin_id: String,
+    pub kind: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub restart_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_restart_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostPluginStatusListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<HostPluginStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostPluginStatusGetRequest {
+    pub plugin_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostPluginStatusGetResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<HostPluginStatus>,
 }
 
 fn default_true() -> bool {

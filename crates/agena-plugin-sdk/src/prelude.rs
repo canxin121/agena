@@ -14,11 +14,12 @@ pub use crate::hooks::*;
 pub use crate::host_api::{
     EventSubscription, HostClient, HostEntryDescriptor, HostEntryListResponse,
     HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
-    HostEntryUpdateRequest, HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse,
-    HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse,
-    HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, LogLevel,
-    NoopHostClient,
+    HostEntryUpdateRequest, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSecretDeleteRequest,
+    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, LogLevel, NoopHostClient,
 };
 pub use crate::manifest::{
     EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,

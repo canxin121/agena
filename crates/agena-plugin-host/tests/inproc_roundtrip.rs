@@ -492,3 +492,82 @@ async fn storage_and_secret_capability_unlocks_dispatch() {
         .expect_err("secret.list should reach default trait method");
     assert!(!secret_err.message.contains("PluginSecrets"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_status_calls_require_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PLUGIN_STATUS_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("plugin.status.list should require PluginStatus");
+    assert!(err.message.contains("PluginStatus"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_status_capability_returns_loaded_plugin() {
+    let host = host_with_capability_plugin(vec![HostCapability::PluginStatus]).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let response = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PLUGIN_STATUS_LIST,
+            json!({}),
+        )
+        .await
+        .expect("plugin.status.list should succeed");
+
+    let entries = response
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.get("plugin_id").and_then(|v| v.as_str())
+                == Some("capability-plugin")
+                && entry.get("kind").and_then(|v| v.as_str()) == Some("static")
+                && entry.get("state").and_then(|v| v.as_str()) == Some("running"))
+    );
+
+    let single = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PLUGIN_STATUS_GET,
+            json!({ "request": { "plugin_id": "capability-plugin" } }),
+        )
+        .await
+        .expect("plugin.status.get should succeed");
+    assert_eq!(
+        single
+            .get("status")
+            .and_then(|v| v.get("state"))
+            .and_then(|v| v.as_str()),
+        Some("running")
+    );
+
+    let missing = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PLUGIN_STATUS_GET,
+            json!({ "request": { "plugin_id": "no-such-plugin" } }),
+        )
+        .await
+        .expect("plugin.status.get on missing plugin should succeed");
+    assert!(missing.get("status").is_none_or(|v| v.is_null()));
+}

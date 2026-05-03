@@ -32,12 +32,11 @@ use crate::entry::{
 };
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput,
-    CronCreateToolInput, CronDeleteToolInput, CronListToolInput, EnterPlanModeToolInput,
-    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, GlobToolInput,
-    GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
-    LspReferencesToolInput, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput,
-    NotebookEditToolInput, PowerShellToolInput, ReadToolInput, ScheduleWakeupToolInput,
-    TaskToolInput, TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
+    EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput,
+    GlobToolInput, GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput,
+    LspHoverToolInput, LspReferencesToolInput, MonitorStatus, MonitorStream, MonitorSummary,
+    MonitorToolInput, NotebookEditToolInput, PowerShellToolInput, ReadToolInput, TaskToolInput,
+    TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
     WebSearchToolInput,
 };
 
@@ -611,38 +610,6 @@ pub(crate) fn entry_decls() -> Vec<PluginEntryDecl> {
         .search_terms(["git", "worktree", "exit", "cleanup"])
         .deferred_load()
         .host_capability(HostCapability::WorktreeRegistry),
-        decl::<CronCreateToolInput>(
-            "cron_create",
-            "Schedule a recurring prompt with a 6-field cron expression.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["cron", "schedule", "recurring", "background"])
-        .deferred_load()
-        .host_capability(HostCapability::Scheduler),
-        decl::<CronListToolInput>(
-            "cron_list",
-            "List all currently scheduled cron jobs and one-shot wakeups.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["cron", "list", "scheduled jobs"])
-        .deferred_load()
-        .host_capability(HostCapability::Scheduler),
-        decl::<CronDeleteToolInput>(
-            "cron_delete",
-            "Delete a scheduled job by id.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["cron", "delete", "remove", "cancel"])
-        .deferred_load()
-        .host_capability(HostCapability::Scheduler),
-        decl::<ScheduleWakeupToolInput>(
-            "schedule_wakeup",
-            "Schedule a one-shot prompt to fire after `delay_seconds`.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["wakeup", "remind", "later", "delay"])
-        .deferred_load()
-        .host_capability(HostCapability::Scheduler),
         decl::<LspDefinitionToolInput>(
             "lsp_definition",
             "Resolve the symbol at file_path:line:character to its definition site(s) via the configured LSP server.",

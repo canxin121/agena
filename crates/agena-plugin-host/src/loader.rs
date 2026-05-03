@@ -16,6 +16,7 @@ pub struct StaticRegistration {
     pub builder: Box<dyn FnOnce() -> Arc<dyn PluginTransport> + Send + Sync>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn load_entry(
     plugin_id: &str,
     entry: &PluginEntry,
@@ -214,6 +215,7 @@ pub async fn load_entry(
     ))
 }
 
+#[allow(clippy::result_large_err)]
 fn validate_manifest_options(
     plugin_id: &str,
     manifest: &PluginManifest,

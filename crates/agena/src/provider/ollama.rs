@@ -76,10 +76,10 @@ impl OllamaProvider {
                 let mut entry = ProviderModel::new(self.id.clone(), id)
                     .with_capabilities(capabilities)
                     .with_metadata(metadata);
-                if let Some(details) = model.details {
-                    if let Some(family) = details.family.filter(|value| !value.trim().is_empty()) {
-                        entry.display_name = Some(family);
-                    }
+                if let Some(details) = model.details
+                    && let Some(family) = details.family.filter(|value| !value.trim().is_empty())
+                {
+                    entry.display_name = Some(family);
                 }
                 Some(entry)
             })
@@ -400,7 +400,7 @@ fn to_ollama_messages(request: &CompletionRequest) -> Vec<OllamaChatMessage> {
 fn message_text(message: &Message) -> Option<String> {
     let text = wire_message::project_text_lossy(message);
     let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| text)
+    (!trimmed.is_empty()).then_some(text)
 }
 
 fn role_name(role: Role) -> &'static str {

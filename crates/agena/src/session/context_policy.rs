@@ -50,15 +50,19 @@ mod tests {
 
     #[test]
     fn proactive_threshold_disabled_returns_full_budget() {
-        let mut p = ContextPolicy::default();
-        p.compaction_headroom_pct = 0;
+        let p = ContextPolicy {
+            compaction_headroom_pct: 0,
+            ..ContextPolicy::default()
+        };
         assert_eq!(p.proactive_char_threshold(100_000), 100_000);
     }
 
     #[test]
     fn proactive_threshold_clamps_pathological_pct() {
-        let mut p = ContextPolicy::default();
-        p.compaction_headroom_pct = 200;
+        let p = ContextPolicy {
+            compaction_headroom_pct: 200,
+            ..ContextPolicy::default()
+        };
         // >= 100 disables the threshold.
         assert_eq!(p.proactive_char_threshold(100_000), 100_000);
     }

@@ -8,21 +8,11 @@ use super::{
 const DEFAULT_CONFIG_DIR_NAME: &str = ".agena";
 const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LoadConfigRequest {
     pub config_path: Option<PathBuf>,
     pub mode: Option<ConfigModeName>,
     pub overrides: Vec<ConfigOverride>,
-}
-
-impl Default for LoadConfigRequest {
-    fn default() -> Self {
-        Self {
-            config_path: None,
-            mode: None,
-            overrides: Vec::new(),
-        }
-    }
 }
 
 pub trait ConfigEnvironment: Send + Sync {
@@ -172,13 +162,12 @@ where
     ) -> Result<Vec<ConfigModeName>, ConfigError> {
         let path = config_path.unwrap_or_else(|| self.default_config_path());
         let file = RawConfigFile::read(&path)?;
-        Ok(file
-            .config
+        file.config
             .modes
             .keys()
             .cloned()
             .map(ConfigModeName::try_from)
-            .collect::<Result<Vec<_>, _>>()?)
+            .collect::<Result<Vec<_>, _>>()
     }
 }
 

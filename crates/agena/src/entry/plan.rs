@@ -59,12 +59,12 @@ pub(super) fn execute_enter(
         )));
     }
     let file_path: PathBuf = plans_dir.join(format!("{slug}.md"));
-    if !file_path.exists() {
-        if let Err(e) = std::fs::write(&file_path, "# Plan\n\n_(write your plan here)_\n") {
-            return Err(ToolError::Plugin(format!(
-                "enter_plan_mode: failed to seed plan file: {e}"
-            )));
-        }
+    if !file_path.exists()
+        && let Err(e) = std::fs::write(&file_path, "# Plan\n\n_(write your plan here)_\n")
+    {
+        return Err(ToolError::Plugin(format!(
+            "enter_plan_mode: failed to seed plan file: {e}"
+        )));
     }
 
     let state = PlanState {

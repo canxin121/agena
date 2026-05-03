@@ -7,7 +7,7 @@
 //! * `start`     — spawn a child, return a stable `monitor_id`
 //! * `list`      — enumerate active and recently-finished monitors
 //! * `read`      — pull events with `seq > since_seq`, optionally blocking
-//!                 up to `wait_ms` for fresh output
+//!   up to `wait_ms` for fresh output
 //! * `stop`      — kill a running child
 //!
 //! Captured events live in a ring buffer (default 1000 lines) so the model can
@@ -302,10 +302,10 @@ impl MonitorService for MonitorRegistry {
         let wait_ms = params.wait_ms.min(MAX_WAIT_MS);
 
         // Fast path: try once.
-        if let Some(read) = collect_events(&state, params.since_seq, limit) {
-            if !read.events.is_empty() || wait_ms == 0 || read.status != MonitorStatus::Running {
-                return Ok(read);
-            }
+        if let Some(read) = collect_events(&state, params.since_seq, limit)
+            && (!read.events.is_empty() || wait_ms == 0 || read.status != MonitorStatus::Running)
+        {
+            return Ok(read);
         }
 
         if wait_ms == 0 {

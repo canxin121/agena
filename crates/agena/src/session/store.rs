@@ -429,7 +429,7 @@ impl SessionStore {
                 let updated = session::touch_session_updated_at(txn, session_id, runtime)
                     .await?
                     .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
-                Ok(session_from_model_db(updated)?)
+                session_from_model_db(updated)
             })
         })
         .await?;

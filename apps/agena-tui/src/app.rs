@@ -2386,10 +2386,7 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-timeline-empty");
         match result {
             Ok(events) => {
-                dialog.all_items = events
-                    .iter()
-                    .map(|event| build_timeline_item(event))
-                    .collect();
+                dialog.all_items = events.iter().map(build_timeline_item).collect();
                 Self::refresh_timeline_overlay(&mut dialog);
             }
             Err(error) => self.flash_error(error),
@@ -3660,10 +3657,10 @@ impl App {
     }
 
     fn current_or_selected_session_title(&self) -> Option<String> {
-        if self.focus == Focus::Sessions {
-            if let Some(session) = self.sessions.current_selected() {
-                return Some(session.title.clone());
-            }
+        if self.focus == Focus::Sessions
+            && let Some(session) = self.sessions.current_selected()
+        {
+            return Some(session.title.clone());
         }
         if let Some(execution) = self.transcript.execution.as_ref() {
             return Some(execution.session.title.clone());
@@ -4986,10 +4983,10 @@ impl App {
     }
 
     fn maybe_request_older_messages(&mut self) {
-        if self.transcript.should_load_older() {
-            if let Some(session_id) = self.transcript.session_id {
-                self.request_messages(session_id, MessageLoadMode::Prepend);
-            }
+        if self.transcript.should_load_older()
+            && let Some(session_id) = self.transcript.session_id
+        {
+            self.request_messages(session_id, MessageLoadMode::Prepend);
         }
     }
 
@@ -5101,13 +5098,7 @@ impl App {
                         Style::default().fg(Color::Yellow),
                     ));
                 }
-                if is_current_child {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-child")),
-                        Style::default().fg(Color::Green),
-                    ));
-                } else if matches!(lineage_relation, Some(LineageRelation::Child)) {
+                if is_current_child || matches!(lineage_relation, Some(LineageRelation::Child)) {
                     title_spans.push(Span::raw(" "));
                     title_spans.push(Span::styled(
                         format!("[{}]", ui_text::t(&self.i18n, "session-tag-child")),
@@ -7604,11 +7595,10 @@ fn render_message(message: &MessageResource, width: u16, i18n: &I18n) -> Vec<Ren
         )));
     }
 
-    let wrapped = lines
+    lines
         .into_iter()
         .flat_map(|line| wrap_rendered_line(line, width))
-        .collect::<Vec<_>>();
-    wrapped
+        .collect::<Vec<_>>()
 }
 
 fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n: &I18n) {
@@ -8721,6 +8711,7 @@ fn session_lineage_chain(
     chain
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_lineage_items(
     session_id: i64,
     depth: usize,
@@ -9077,7 +9068,7 @@ fn split_editor_lines_with_offsets(text: &str) -> Vec<Range<usize>> {
         }
     }
     lines.push(start..text.len());
-    if lines.is_empty() { vec![0..0] } else { lines }
+    lines
 }
 
 fn previous_grapheme_boundary(text: &str, index: usize) -> usize {

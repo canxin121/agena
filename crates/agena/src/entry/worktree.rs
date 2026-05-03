@@ -201,16 +201,16 @@ fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolE
     for line in listing.lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
             current_path = Some(p.to_string());
-        } else if let Some(b) = line.strip_prefix("branch ") {
-            if let Some(cp) = current_path.as_deref() {
-                let cp_canonical = PathBuf::from(cp)
-                    .canonicalize()
-                    .unwrap_or_else(|_| PathBuf::from(cp))
-                    .to_string_lossy()
-                    .to_string();
-                if cp_canonical == canonical || cp == path {
-                    found_branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
-                }
+        } else if let Some(b) = line.strip_prefix("branch ")
+            && let Some(cp) = current_path.as_deref()
+        {
+            let cp_canonical = PathBuf::from(cp)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(cp))
+                .to_string_lossy()
+                .to_string();
+            if cp_canonical == canonical || cp == path {
+                found_branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
             }
         }
     }

@@ -709,8 +709,7 @@ impl ModelProvider for CopilotProvider {
                     .and_then(|delta| delta.content.as_ref())
                     .map(extract_chat_content_text)
                     .or_else(|| choice.and_then(|item| item.text.clone()))
-                {
-                    if !delta.is_empty() {
+                    && !delta.is_empty() {
                         stream_has_content = true;
                         yield CompletionStreamEvent::TextDelta {
                             provider_id: provider_id.clone(),
@@ -718,7 +717,6 @@ impl ModelProvider for CopilotProvider {
                             delta,
                         };
                     }
-                }
 
                 let tool_deltas = choice
                     .and_then(|item| item.delta.as_ref())
@@ -750,8 +748,8 @@ impl ModelProvider for CopilotProvider {
                         if let Some(name) = utils::normalize_optional_text(function.name) {
                             state.name = Some(name);
                         }
-                        if let Some(args) = function.arguments {
-                            if !args.is_empty() {
+                        if let Some(args) = function.arguments
+                            && !args.is_empty() {
                                 state.arguments.push_str(args.as_str());
                                 stream_has_content = true;
                                 yield CompletionStreamEvent::ToolCallDelta {
@@ -763,7 +761,6 @@ impl ModelProvider for CopilotProvider {
                                     arguments_delta: args,
                                 };
                             }
-                        }
                     }
                 }
 

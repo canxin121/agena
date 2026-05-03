@@ -205,10 +205,10 @@ impl GitlabProvider {
                     AppError::Internal("gitlab direct access cache lock poisoned".to_owned())
                 })?
                 .clone();
-            if let Some(cached) = cached {
-                if cached.expires_at_ms > now_ms() {
-                    return Ok(cached);
-                }
+            if let Some(cached) = cached
+                && cached.expires_at_ms > now_ms()
+            {
+                return Ok(cached);
             }
         }
 

@@ -12,11 +12,13 @@ pub mod message;
 pub mod model;
 pub mod permission;
 pub use agena_plugin_host as plugin;
+pub mod entry;
 pub mod provider;
 pub mod role;
 pub mod runtime;
 pub mod session;
 pub mod storage;
-pub mod tool;
+pub use entry as tool;
+pub mod plugins;
 
 pub use error::AppError;

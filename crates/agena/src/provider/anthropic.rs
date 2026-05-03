@@ -174,23 +174,18 @@ impl AnthropicProvider {
             AttachmentKind::Audio | AttachmentKind::Video => Vec::new(),
         }
         .into_iter()
-        .chain(
-            match item.kind {
-                AttachmentKind::Audio | AttachmentKind::Video => {
-                    Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
-                }
-                AttachmentKind::Image | AttachmentKind::Pdf
-                    if Self::binary_source(item).is_none() =>
-                {
-                    Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
-                }
-                AttachmentKind::File if wire_message::attachment_text(item).is_none() => {
-                    Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
-                }
-                _ => None,
+        .chain(match item.kind {
+            AttachmentKind::Audio | AttachmentKind::Video => {
+                Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
             }
-            .into_iter(),
-        )
+            AttachmentKind::Image | AttachmentKind::Pdf if Self::binary_source(item).is_none() => {
+                Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
+            }
+            AttachmentKind::File if wire_message::attachment_text(item).is_none() => {
+                Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
+            }
+            _ => None,
+        })
         .collect()
     }
 
@@ -387,7 +382,7 @@ impl ModelProvider for AnthropicProvider {
         }
         Self::apply_prompt_cache_hints(
             system_chunks.as_mut_slice(),
-            tools.as_mut().map(Vec::as_mut_slice).unwrap_or(&mut []),
+            tools.as_deref_mut().unwrap_or(&mut []),
             messages.as_mut_slice(),
         );
 
@@ -514,7 +509,7 @@ impl ModelProvider for AnthropicProvider {
         }
         Self::apply_prompt_cache_hints(
             system_chunks.as_mut_slice(),
-            tools.as_mut().map(Vec::as_mut_slice).unwrap_or(&mut []),
+            tools.as_deref_mut().unwrap_or(&mut []),
             messages.as_mut_slice(),
         );
 
@@ -649,8 +644,8 @@ impl ModelProvider for AnthropicProvider {
                         }
 
                         // Thinking/reasoning content — only yield when thinking was requested
-                        if include_thinking {
-                            if let Some(thinking_delta) = delta.thinking.clone().filter(|v| !v.is_empty()) {
+                        if include_thinking
+                            && let Some(thinking_delta) = delta.thinking.clone().filter(|v| !v.is_empty()) {
                                 stream_has_content = true;
                                 yield CompletionStreamEvent::ThinkingDelta {
                                     provider_id: provider_id.clone(),
@@ -658,7 +653,6 @@ impl ModelProvider for AnthropicProvider {
                                     delta: thinking_delta,
                                 };
                             }
-                        }
 
                         let is_tool_delta = matches!(delta.kind.as_deref(), Some("input_json_delta"));
                         if is_tool_delta {
@@ -1263,7 +1257,7 @@ mod tests {
         );
         let tools = provider.tools(&[sample_tool_definition()]);
 
-        assert!(provider.extra_headers.get("anthropic-beta").is_none());
+        assert!(!provider.extra_headers.contains_key("anthropic-beta"));
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].eager_input_streaming, None);
     }

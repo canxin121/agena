@@ -1,3 +1,5 @@
+#![allow(clippy::module_inception)]
+
 mod message;
 mod metadata;
 mod part;

@@ -339,7 +339,7 @@ async fn read_frame<R: AsyncBufReadExt + Unpin>(
         if n == 0 {
             return Ok(None);
         }
-        let trimmed = line.trim_end_matches(|c| c == '\r' || c == '\n');
+        let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.is_empty() {
             break;
         }
@@ -388,7 +388,7 @@ impl PluginTransport for StdioTransport {
                     .data
                     .as_ref()
                     .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or_else(|| PluginError {
+                let pe = pe.unwrap_or(PluginError {
                     code: crate::sdk::PluginErrorCode::Generic,
                     message: error.message,
                     hook: None,

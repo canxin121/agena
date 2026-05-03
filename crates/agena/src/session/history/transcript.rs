@@ -406,8 +406,8 @@ struct MessageLocation {
 
 impl ProviderTranscriptBuilder {
     fn record_turn(&mut self, turn_id: TurnId) {
-        if !self.pending_turns.contains_key(&turn_id) {
-            self.pending_turns.insert(turn_id, Vec::new());
+        if let std::collections::hash_map::Entry::Vacant(e) = self.pending_turns.entry(turn_id) {
+            e.insert(Vec::new());
             self.turn_order.push(turn_id);
         }
     }
@@ -506,16 +506,14 @@ impl HistoryFold for ProviderTranscriptBuilder {
                 let bucket = self.pending_turns.entry(*turn_id).or_default();
                 if let Some(loc) = self.message_index.get(message_id).copied()
                     && loc.turn_id == *turn_id
-                {
-                    if let Some(PendingFragment::AssistantWithCalls { tool_calls, .. }) =
+                    && let Some(PendingFragment::AssistantWithCalls { tool_calls, .. }) =
                         bucket.get_mut(loc.fragment_index)
-                    {
-                        tool_calls.push(TranscriptToolCall {
-                            call_id: call_id.clone(),
-                            name: name.clone(),
-                            arguments: canonical_json_string(arguments),
-                        });
-                    }
+                {
+                    tool_calls.push(TranscriptToolCall {
+                        call_id: call_id.clone(),
+                        name: name.clone(),
+                        arguments: canonical_json_string(arguments),
+                    });
                 }
             }
             EventKind::ToolCallCompleted(ToolCallCompleted {

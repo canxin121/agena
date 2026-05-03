@@ -43,15 +43,15 @@ pub(crate) async fn run(runtime: AgenaRuntime) {
         let observed = capture_path_stamps(snapshot.watch_paths());
         let changed_paths = diff_changed_paths(&known_stamps, &observed);
 
-        if snapshot.reload_enabled() && !changed_paths.is_empty() {
-            if let Err(err) = runtime
+        if snapshot.reload_enabled()
+            && !changed_paths.is_empty()
+            && let Err(err) = runtime
                 .reload_with_cause(RuntimeReloadCause::WatchedPathsChanged {
                     paths: changed_paths.clone(),
                 })
                 .await
-            {
-                tracing::warn!(error = %err, changed_paths = changed_paths.len(), "runtime reload failed");
-            }
+        {
+            tracing::warn!(error = %err, changed_paths = changed_paths.len(), "runtime reload failed");
         }
 
         known_stamps = observed;

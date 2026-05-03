@@ -95,7 +95,7 @@ impl PluginTransport for HttpTransport {
                     .data
                     .as_ref()
                     .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or_else(|| PluginError {
+                let pe = pe.unwrap_or(PluginError {
                     code: crate::sdk::PluginErrorCode::Generic,
                     message: error.message,
                     hook: None,

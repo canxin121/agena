@@ -620,25 +620,22 @@ impl AmazonBedrockProvider {
             AttachmentKind::Audio | AttachmentKind::Video => Vec::new(),
         }
         .into_iter()
-        .chain(
-            match item.kind {
-                AttachmentKind::Audio | AttachmentKind::Video => Some(
-                    BedrockAnthropicTextBlock::text(wire_message::hint_text(item)),
-                ),
-                AttachmentKind::Image | AttachmentKind::Pdf
-                    if Self::anthropic_binary_source(item).is_none() =>
-                {
-                    Some(BedrockAnthropicTextBlock::text(wire_message::hint_text(
-                        item,
-                    )))
-                }
-                AttachmentKind::File if wire_message::attachment_text(item).is_none() => Some(
-                    BedrockAnthropicTextBlock::text(wire_message::hint_text(item)),
-                ),
-                _ => None,
+        .chain(match item.kind {
+            AttachmentKind::Audio | AttachmentKind::Video => Some(BedrockAnthropicTextBlock::text(
+                wire_message::hint_text(item),
+            )),
+            AttachmentKind::Image | AttachmentKind::Pdf
+                if Self::anthropic_binary_source(item).is_none() =>
+            {
+                Some(BedrockAnthropicTextBlock::text(wire_message::hint_text(
+                    item,
+                )))
             }
-            .into_iter(),
-        )
+            AttachmentKind::File if wire_message::attachment_text(item).is_none() => Some(
+                BedrockAnthropicTextBlock::text(wire_message::hint_text(item)),
+            ),
+            _ => None,
+        })
         .collect()
     }
 
@@ -703,7 +700,7 @@ impl AmazonBedrockProvider {
 
         Self::apply_anthropic_prompt_cache_hints(
             system_chunks.as_mut_slice(),
-            tools.as_mut().map(Vec::as_mut_slice).unwrap_or(&mut []),
+            tools.as_deref_mut().unwrap_or(&mut []),
             messages.as_mut_slice(),
         );
 
@@ -1190,8 +1187,8 @@ impl AmazonBedrockProvider {
                         if let Some(name) = utils::normalize_optional_text(function.name) {
                             state.name = Some(name);
                         }
-                        if let Some(args) = function.arguments {
-                            if !args.is_empty() {
+                        if let Some(args) = function.arguments
+                            && !args.is_empty() {
                                 state.arguments.push_str(args.as_str());
                                 stream_has_content = true;
                                 yield CompletionStreamEvent::ToolCallDelta {
@@ -1203,7 +1200,6 @@ impl AmazonBedrockProvider {
                                     arguments_delta: args,
                                 };
                             }
-                        }
                     }
                 }
 

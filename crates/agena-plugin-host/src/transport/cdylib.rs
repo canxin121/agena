@@ -50,14 +50,13 @@ impl PluginTransport for CdylibTransport {
                     }
                     Err(err_str) => {
                         let s: String = err_str.into();
-                        let pe: PluginError =
-                            serde_json::from_str(&s).unwrap_or_else(|_| PluginError {
-                                code: crate::sdk::PluginErrorCode::Generic,
-                                message: s,
-                                hook: None,
-                                plugin: None,
-                                data: None,
-                            });
+                        let pe: PluginError = serde_json::from_str(&s).unwrap_or(PluginError {
+                            code: crate::sdk::PluginErrorCode::Generic,
+                            message: s,
+                            hook: None,
+                            plugin: None,
+                            data: None,
+                        });
                         Err(TransportError::Plugin(pe))
                     }
                 },

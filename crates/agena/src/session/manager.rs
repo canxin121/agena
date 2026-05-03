@@ -2567,6 +2567,7 @@ fn resolve_pending_tool(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_tool_message(
     ids: ReservedMessageIds,
     pending_tool: &ResolvedPendingTool,
@@ -2962,16 +2963,15 @@ fn validate_user_input_reply(
             .map(|option| option.label.trim())
             .filter(|label| !label.is_empty())
             .collect::<std::collections::HashSet<_>>();
-        if !question.allow_custom {
-            if let Some(answer) = normalized
+        if !question.allow_custom
+            && let Some(answer) = normalized
                 .iter()
                 .find(|value| !allowed.contains(value.as_str()))
-            {
-                return Err(AppError::Internal(format!(
-                    "unsupported answer '{}' for question {}",
-                    answer, question.id
-                )));
-            }
+        {
+            return Err(AppError::Internal(format!(
+                "unsupported answer '{}' for question {}",
+                answer, question.id
+            )));
         }
 
         answers.insert(question.id.clone(), normalized);
@@ -3774,6 +3774,7 @@ mod tests {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_manager_with_provider_and_plugins_on_db<P>(
         root: &std::path::Path,
         db: DatabaseConnection,
@@ -4896,7 +4897,7 @@ mod tests {
                 .expect("records");
             // Take only the closed prefix (everything before the trailing
             // edit) — for this single-turn test the entire prefix is closed.
-            let prefix_records: Vec<_> = records.iter().cloned().collect();
+            let prefix_records: Vec<_> = records.to_vec();
             let _ = trailing; // Trailing message is intentionally unused: we compare digests of the closed prefix only.
             let transcript = fold_history::<ProviderTranscriptBuilder>(prefix_records.as_slice())
                 .expect("fold")

@@ -919,6 +919,7 @@ struct OpenAiResponsesRequest {
 }
 
 impl OpenAiResponsesRequest {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         model: String,
         input: Vec<OpenAiResponsesInputItem>,

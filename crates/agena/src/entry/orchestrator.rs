@@ -17,7 +17,7 @@ fn apply_patch_output_text(result: &apply_patch::ApplyPatchExecution) -> String 
     lines.join("\n")
 }
 
-pub(super) fn execute_builtin(
+pub(crate) fn execute_builtin(
     executor: &ToolExecutor,
     input: &BuiltinToolInput,
     context: BuiltinExecutionContext,

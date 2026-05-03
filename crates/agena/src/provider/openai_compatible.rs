@@ -871,7 +871,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
                 let delta = choice
                     .and_then(|item| item.delta.as_ref())
                     .and_then(|delta| delta.content.as_ref())
-                    .map(|v| chat_wire::extract_text_from_content(v))
+                    .map(chat_wire::extract_text_from_content)
                     .or_else(|| choice.and_then(|item| item.text.clone()))
                     .unwrap_or_default();
 
@@ -916,8 +916,8 @@ impl ModelProvider for OpenAiCompatibleProvider {
                         if let Some(name) = utils::normalize_optional_text(function.name) {
                             state.name = Some(name);
                         }
-                        if let Some(args) = function.arguments {
-                            if !args.is_empty() {
+                        if let Some(args) = function.arguments
+                            && !args.is_empty() {
                                 state.arguments.push_str(args.as_str());
                                 stream_has_content = true;
                                 yield CompletionStreamEvent::ToolCallDelta {
@@ -929,7 +929,6 @@ impl ModelProvider for OpenAiCompatibleProvider {
                                     arguments_delta: args,
                                 };
                             }
-                        }
                     }
                 }
 

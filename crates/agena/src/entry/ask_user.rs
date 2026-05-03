@@ -8,12 +8,12 @@ const MAX_QUESTIONS: usize = 3;
 const MAX_OPTIONS: usize = 8;
 const MAX_HEADER_CHARS: usize = 12;
 
-pub(super) fn execute(input: &AskUserToolInput) -> Result<super::BuiltinExecution, ToolError> {
+pub(crate) fn execute(input: &AskUserToolInput) -> Result<super::BuiltinExecution, ToolError> {
     validate(input)?;
     Err(ToolError::UserInputRequired(input.clone()))
 }
 
-pub(super) fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {
+pub(crate) fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {
     if input.questions.is_empty() {
         return Err(ToolError::InvalidInput(
             "ask_user requires at least one question".to_string(),
@@ -79,7 +79,7 @@ pub(super) fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {
     Ok(())
 }
 
-pub(super) fn execution_from_answers(
+pub(crate) fn execution_from_answers(
     input: &AskUserToolInput,
     answers: BTreeMap<String, Vec<String>>,
 ) -> BuiltinExecution {

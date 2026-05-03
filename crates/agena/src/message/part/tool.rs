@@ -1000,7 +1000,9 @@ pub struct CustomToolOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "source", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ToolOutput {
+    #[default]
     None,
     Mcp {
         output: McpToolOutput,
@@ -1023,12 +1025,6 @@ impl ToolOutput {
             Self::Custom { output } => BuiltinToolOutput::from_custom(output),
             _ => None,
         }
-    }
-}
-
-impl Default for ToolOutput {
-    fn default() -> Self {
-        Self::None
     }
 }
 
@@ -1103,7 +1099,7 @@ impl ToolExecutionPart {
                 lifecycle,
             } => {
                 *self = Self::InProgress {
-                    call_id: call_id.clone(),
+                    call_id: *call_id,
                     invocation: invocation.clone(),
                     title: title.clone(),
                     output_text: delta.to_string(),

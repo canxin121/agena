@@ -128,7 +128,7 @@ impl From<StructuredValue> for serde_json::Value {
                         }
                         _ => None,
                     })
-                    .unwrap_or_else(|| serde_json::Value::String(value))
+                    .unwrap_or(serde_json::Value::String(value))
             }
             StructuredValue::Text { value } => serde_json::Value::String(value),
             StructuredValue::Array { items } => {

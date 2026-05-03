@@ -45,7 +45,7 @@ impl Plugin for EchoHttpPlugin {
 
 async fn spawn_test_server() -> String {
     let host: Arc<dyn HostClient> = Arc::new(NoopHostClient);
-    let app = agena_plugin_sdk::drivers::http::router(EchoHttpPlugin::default(), host);
+    let app = agena_plugin_sdk::drivers::http::router(EchoHttpPlugin, host);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local = listener.local_addr().unwrap();
     tokio::spawn(async move {

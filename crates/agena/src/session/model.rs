@@ -232,6 +232,7 @@ impl PromptTokenRuntime {
             && self.request_options_fingerprint == request_options_fingerprint
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_success(
         &mut self,
         assistant_message_id: i64,
@@ -362,6 +363,7 @@ impl SessionRuntimeState {
         self.loaded_deferred_tools = merged.into_iter().collect();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_prompt_tokens(
         &mut self,
         assistant_message_id: i64,
@@ -573,7 +575,7 @@ impl Session {
             let SessionPendingOperation::UserInput { pending } = pending else {
                 return None;
             };
-            self.pending_user_input_request(&pending)
+            self.pending_user_input_request(pending)
                 .filter(|request| request.request_id == request_id)
                 .map(|_| pending.clone())
         })
@@ -628,7 +630,7 @@ impl Session {
             let SessionPendingOperation::Permission { pending } = pending else {
                 return None;
             };
-            self.pending_permission_request(&pending)
+            self.pending_permission_request(pending)
                 .filter(|request| request.request_id == request_id)
                 .map(|_| pending.clone())
         })

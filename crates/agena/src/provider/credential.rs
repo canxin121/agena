@@ -184,18 +184,18 @@ impl ManagedCredential {
 
         {
             let cached = self.inner.cached.lock().await;
-            if !force_refresh {
-                if let Some(entry) = cached.as_ref().filter(|entry| entry.is_fresh(now_ms)) {
-                    return Ok(entry.clone());
-                }
+            if !force_refresh
+                && let Some(entry) = cached.as_ref().filter(|entry| entry.is_fresh(now_ms))
+            {
+                return Ok(entry.clone());
             }
         }
 
         let mut cached = self.inner.cached.lock().await;
-        if !force_refresh {
-            if let Some(entry) = cached.as_ref().filter(|entry| entry.is_fresh(now_ms)) {
-                return Ok(entry.clone());
-            }
+        if !force_refresh
+            && let Some(entry) = cached.as_ref().filter(|entry| entry.is_fresh(now_ms))
+        {
+            return Ok(entry.clone());
         }
 
         let resolved = self.inner.source.resolve(force_refresh).await?;
@@ -308,7 +308,7 @@ impl CredentialSource {
             } => {
                 let value = std::env::var(env_key)
                     .ok()
-                    .and_then(|value| normalize_optional_text(value))
+                    .and_then(normalize_optional_text)
                     .ok_or_else(|| {
                         AppError::Config(format!(
                             "{provider_id} is missing required environment variable `{env_key}` for `{field}`"

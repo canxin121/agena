@@ -143,8 +143,8 @@ impl SessionViewBuilder {
     }
 
     fn ensure_turn(&mut self, turn_id: TurnId) -> &mut TurnState {
-        if !self.turn_state.contains_key(&turn_id) {
-            self.turn_state.insert(turn_id, TurnState::default());
+        if let std::collections::hash_map::Entry::Vacant(e) = self.turn_state.entry(turn_id) {
+            e.insert(TurnState::default());
             self.turn_order.push(turn_id);
         }
         self.turn_state
@@ -301,8 +301,10 @@ impl SessionViewBuilder {
         );
         part.operation_id = Some(payload.call_id.as_str().to_owned());
 
-        let mut metadata = MessageMetadata::default();
-        metadata.source = MessageSource::Tool;
+        let metadata = MessageMetadata {
+            source: MessageSource::Tool,
+            ..MessageMetadata::default()
+        };
         let message = Message {
             id: message_id,
             role: Role::Tool,
@@ -344,8 +346,10 @@ impl SessionViewBuilder {
         );
         part.part_index = 0;
 
-        let mut metadata = MessageMetadata::default();
-        metadata.source = MessageSource::System;
+        let mut metadata = MessageMetadata {
+            source: MessageSource::System,
+            ..MessageMetadata::default()
+        };
         metadata.add_tag(system_notice_tag(payload.kind));
         let message = Message {
             id: payload.message_id.raw(),

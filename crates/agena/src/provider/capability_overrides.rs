@@ -123,6 +123,7 @@ pub struct CapabilityOverrideProvider {
 }
 
 impl CapabilityOverrideProvider {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         target: Arc<dyn ModelProvider>,
         rules: Vec<ProviderCapabilityOverrideRule>,

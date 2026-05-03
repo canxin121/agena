@@ -10,9 +10,11 @@
 //! indicates an empty / `null` value. Use the high bit of the length to
 //! signal an error (length |= 0x8000_0000).
 //!
-//! The module is sandboxed by wasmtime; no host imports are exposed in this
-//! v1, so wasm plugins cannot call back into the host. They are a
-//! deliberately conservative transport for untrusted code.
+//! WASI preview1 imports are wired only when the operator opts in via
+//! `[plugins.list.<id>.sandbox]`. Default policy is "no host imports": the
+//! linker still adds preview1 stubs but the WasiCtx has no preopens, no
+//! env, no network. Pluggable preopen / env / net align with
+//! [`crate::config::WasmSandboxConfig`].
 
 #![cfg(feature = "wasm")]
 
@@ -21,7 +23,10 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use wasmtime::{Engine, Instance, Linker, Module, Store, TypedFunc};
+use wasmtime_wasi::preview1::{self, WasiP1Ctx};
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
+use crate::config::WasmSandboxConfig;
 use crate::error::TransportError;
 use crate::sdk::PluginError;
 use crate::transport::PluginTransport;
@@ -33,7 +38,7 @@ pub struct WasmTransport {
 }
 
 struct WasmInner {
-    store: Store<()>,
+    store: Store<WasiP1Ctx>,
     instance: Instance,
     alloc: TypedFunc<i32, i32>,
     dispatch: TypedFunc<(i32, i32, i32, i32), i64>,
@@ -41,17 +46,34 @@ struct WasmInner {
 
 impl WasmTransport {
     pub fn load(path: &Path) -> Result<Self, TransportError> {
+        Self::load_with_sandbox(path, &WasmSandboxConfig::default())
+    }
+
+    pub fn load_with_sandbox(
+        path: &Path,
+        sandbox: &WasmSandboxConfig,
+    ) -> Result<Self, TransportError> {
         let bytes = std::fs::read(path)
             .map_err(|e| TransportError::Io(format!("read wasm `{}`: {e}", path.display())))?;
-        Self::from_bytes(&bytes)
+        Self::from_bytes_with_sandbox(&bytes, sandbox)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, TransportError> {
+        Self::from_bytes_with_sandbox(bytes, &WasmSandboxConfig::default())
+    }
+
+    pub fn from_bytes_with_sandbox(
+        bytes: &[u8],
+        sandbox: &WasmSandboxConfig,
+    ) -> Result<Self, TransportError> {
         let engine = Engine::default();
         let module = Module::new(&engine, bytes)
             .map_err(|e| TransportError::Io(format!("compile wasm: {e}")))?;
-        let mut store = Store::new(&engine, ());
-        let linker: Linker<()> = Linker::new(&engine);
+        let wasi = build_wasi_ctx(sandbox)?;
+        let mut store = Store::new(&engine, wasi);
+        let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+        preview1::add_to_linker_sync(&mut linker, |state: &mut WasiP1Ctx| state)
+            .map_err(|e| TransportError::Io(format!("link wasi preview1: {e}")))?;
         let instance = linker
             .instantiate(&mut store, &module)
             .map_err(|e| TransportError::Io(format!("instantiate wasm: {e}")))?;
@@ -76,6 +98,41 @@ impl WasmTransport {
             }),
         })
     }
+}
+
+fn build_wasi_ctx(sandbox: &WasmSandboxConfig) -> Result<WasiP1Ctx, TransportError> {
+    let mut builder = WasiCtxBuilder::new();
+    for path in &sandbox.allow_fs_read {
+        let display = path.display().to_string();
+        builder
+            .preopened_dir(path, &display, DirPerms::READ, FilePerms::READ)
+            .map_err(|e| {
+                TransportError::Io(format!(
+                    "wasm sandbox: cannot preopen read path `{display}`: {e}"
+                ))
+            })?;
+    }
+    for path in &sandbox.allow_fs_write {
+        let display = path.display().to_string();
+        builder
+            .preopened_dir(path, &display, DirPerms::all(), FilePerms::all())
+            .map_err(|e| {
+                TransportError::Io(format!(
+                    "wasm sandbox: cannot preopen write path `{display}`: {e}"
+                ))
+            })?;
+    }
+    for name in &sandbox.allow_env {
+        if let Ok(value) = std::env::var(name) {
+            builder.env(name, value);
+        }
+    }
+    if sandbox.allow_net {
+        builder.allow_tcp(true);
+        builder.allow_udp(true);
+        builder.allow_ip_name_lookup(true);
+    }
+    Ok(builder.build_p1())
 }
 
 #[async_trait]

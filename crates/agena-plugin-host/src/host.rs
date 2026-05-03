@@ -68,6 +68,12 @@ pub struct LoadedPlugin {
     pub transport: Arc<dyn PluginTransport>,
 }
 
+impl LoadedPlugin {
+    pub fn transport(&self) -> Arc<dyn PluginTransport> {
+        Arc::clone(&self.transport)
+    }
+}
+
 impl std::fmt::Debug for LoadedPlugin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoadedPlugin")
@@ -1451,6 +1457,9 @@ impl PluginHostBuilder {
                     status_kind,
                 ));
                 by_id.insert(reused.id.clone(), Arc::clone(&reused));
+                host_handle
+                    .register_plugin_transport(reused.id.clone(), reused.transport())
+                    .await;
                 loaded.push(reused);
                 continue;
             }
@@ -1491,6 +1500,9 @@ impl PluginHostBuilder {
                         crate::status::PluginStatus::initial(plugin.id.clone(), status_kind);
                     statuses_shared.set(initial);
                     by_id.insert(plugin.id.clone(), plugin.clone());
+                    host_handle
+                        .register_plugin_transport(plugin.id.clone(), plugin.transport())
+                        .await;
                     loaded.push(plugin);
                 }
                 Err(err) => {
@@ -1544,6 +1556,15 @@ pub struct HostHandle {
     statusline: Arc<RwLock<std::collections::BTreeMap<(String, String), HostStatuslineSegment>>>,
     themes: Arc<RwLock<std::collections::BTreeMap<String, HostThemePalette>>>,
     quotas: Arc<crate::quota::QuotaRegistry>,
+    /// Plugin id of the registered permission UI handler, if any. When set,
+    /// `HOST_PERMISSION_ASK` delegates the prompt to that plugin via
+    /// `plugin/permission.render` instead of going to the regular
+    /// `HostClient::ask_permission` implementation.
+    permission_handler: tokio::sync::RwLock<Option<String>>,
+    /// Plugin transport registry shared by the parent [`PluginHost`]. Lets
+    /// the handle dispatch host->plugin calls (e.g. permission handler
+    /// rendering) without holding a reference to PluginHost itself.
+    plugin_transports: tokio::sync::RwLock<HashMap<String, Arc<dyn PluginTransport>>>,
 }
 
 impl HostHandle {
@@ -1586,6 +1607,8 @@ impl HostHandle {
             statusline: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             themes: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             quotas: Arc::new(crate::quota::QuotaRegistry::default()),
+            permission_handler: tokio::sync::RwLock::new(None),
+            plugin_transports: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
 
@@ -1595,6 +1618,24 @@ impl HostHandle {
 
     pub fn install_quota_registry(&mut self, registry: Arc<crate::quota::QuotaRegistry>) {
         self.quotas = registry;
+    }
+
+    /// Register a plugin transport so the handle can dispatch
+    /// host->plugin calls (currently used by the permission UI handler).
+    pub async fn register_plugin_transport(
+        &self,
+        plugin_id: impl Into<String>,
+        transport: Arc<dyn PluginTransport>,
+    ) {
+        self.plugin_transports
+            .write()
+            .await
+            .insert(plugin_id.into(), transport);
+    }
+
+    /// Read-only view of the current permission handler plugin id.
+    pub async fn permission_handler(&self) -> Option<String> {
+        self.permission_handler.read().await.clone()
     }
 
     pub fn status_registry(&self) -> Arc<crate::status::StatusRegistry> {
@@ -1812,12 +1853,91 @@ impl HostHandle {
             }
             method::HOST_PERMISSION_ASK => {
                 let req: PermissionAskInput = parse(params)?;
-                let d = host_api::with_host_callback_context(
-                    scoped_context(plugin_id, None),
-                    inner.ask_permission(req),
-                )
-                .await?;
+                // If a permission handler plugin is registered, route the
+                // ask through that plugin's `plugin/permission.render`
+                // method. Otherwise fall back to the regular HostClient.
+                let handler_id = self.permission_handler.read().await.clone();
+                let d = if let Some(handler_id) = handler_id {
+                    let transport = self
+                        .plugin_transports
+                        .read()
+                        .await
+                        .get(&handler_id)
+                        .cloned();
+                    match transport {
+                        Some(transport) => {
+                            let params = serde_json::to_value(&req)
+                                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+                            let value = host_api::with_host_callback_context(
+                                scoped_context(plugin_id.clone(), None),
+                                transport.dispatch(method::HOOK_PERMISSION_ASK, params),
+                            )
+                            .await
+                            .map_err(transport_to_plugin_error)?;
+                            // Plugin hook returns Option<PermissionAskDecision>.
+                            // Map it back to PermissionDecision for the
+                            // HOST_PERMISSION_ASK contract: Defer / None
+                            // falls through to the underlying HostClient.
+                            #[derive(serde::Deserialize)]
+                            #[serde(rename_all = "snake_case", tag = "kind", content = "value")]
+                            enum AskKind {
+                                Decide(PermissionDecision),
+                                Defer,
+                            }
+                            let parsed: Option<AskKind> = serde_json::from_value(value)
+                                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+                            match parsed {
+                                Some(AskKind::Decide(decision)) => decision,
+                                _ => {
+                                    host_api::with_host_callback_context(
+                                        scoped_context(plugin_id, None),
+                                        inner.ask_permission(req),
+                                    )
+                                    .await?
+                                }
+                            }
+                        }
+                        None => {
+                            // Handler is set but transport not registered
+                            // (e.g. unloaded). Fall back rather than fail
+                            // the permission flow.
+                            host_api::with_host_callback_context(
+                                scoped_context(plugin_id, None),
+                                inner.ask_permission(req),
+                            )
+                            .await?
+                        }
+                    }
+                } else {
+                    host_api::with_host_callback_context(
+                        scoped_context(plugin_id, None),
+                        inner.ask_permission(req),
+                    )
+                    .await?
+                };
                 serde_json::to_value(d).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_UI_PERMISSION_SET_HANDLER => {
+                let plugin_id = plugin_id.ok_or_else(|| {
+                    host_unavailable("ui.permission.set_handler requires plugin id")
+                })?;
+                self.require_capability(Some(&plugin_id), method, HostCapability::PermissionUi)
+                    .await?;
+                *self.permission_handler.write().await = Some(plugin_id.clone());
+                Ok(serde_json::json!({ "ok": true, "handler": plugin_id }))
+            }
+            method::HOST_UI_PERMISSION_CLEAR_HANDLER => {
+                let plugin_id = plugin_id.ok_or_else(|| {
+                    host_unavailable("ui.permission.clear_handler requires plugin id")
+                })?;
+                self.require_capability(Some(&plugin_id), method, HostCapability::PermissionUi)
+                    .await?;
+                let mut guard = self.permission_handler.write().await;
+                let was = guard.clone();
+                if was.as_deref() == Some(plugin_id.as_str()) {
+                    *guard = None;
+                }
+                Ok(serde_json::json!({ "ok": true, "previous": was }))
             }
             method::HOST_CONFIG_READ => {
                 self.require_capability(plugin_id.as_deref(), method, HostCapability::ReadConfig)

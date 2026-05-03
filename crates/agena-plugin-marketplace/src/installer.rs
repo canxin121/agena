@@ -875,7 +875,7 @@ impl InstallTransaction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{PluginRecord, RegistryIndex};
+    use crate::manifest::{DependencySpec, PluginRecord, RegistryIndex};
     use std::fs;
     use std::sync::{Arc, Mutex};
 
@@ -914,6 +914,29 @@ mod tests {
                 .as_nanos()
         ));
         path
+    }
+
+    fn wasm_version(
+        version: &str,
+        url: &str,
+        sha256: &str,
+        dependencies: Vec<DependencySpec>,
+    ) -> PluginVersion {
+        PluginVersion {
+            version: version.into(),
+            kind: PluginKind::Wasm,
+            platform: "any".into(),
+            url: url.into(),
+            sha256: Some(sha256.into()),
+            signature: None,
+            command: None,
+            args: Vec::new(),
+            env: Default::default(),
+            options: serde_json::Value::Null,
+            min_agena_version: None,
+            archive: None,
+            dependencies,
+        }
     }
 
     #[test]
@@ -1396,6 +1419,131 @@ mod tests {
         assert!(removed_ids.contains(&"lib".to_string()));
         assert!(removed_ids.contains(&"app".to_string()));
         assert!(client.list_installed().unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn install_reports_missing_dependency_before_writing_state() {
+        let root = temp_root("missing-dep");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+        let index = RegistryIndex {
+            version: 1,
+            plugins: vec![PluginRecord {
+                id: "app".into(),
+                name: String::new(),
+                description: String::new(),
+                homepage: None,
+                versions: vec![wasm_version(
+                    "1.0.0",
+                    "https://example.com/app.wasm",
+                    "00",
+                    vec![DependencySpec {
+                        plugin_id: "missing-lib".into(),
+                        version_req: "^1".into(),
+                    }],
+                )],
+            }],
+        };
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&index).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        let err = client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "test".into(),
+                    url: "https://registry.test/index.json".into(),
+                    require_signature: false,
+                },
+                plugin_id: "app".into(),
+                version: None,
+                config_path: root.join("config.toml"),
+                force: false,
+                dry_run: false,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect_err("missing dependency should fail");
+
+        assert!(matches!(
+            err,
+            MarketplaceError::MissingDependency(dep, requested_by)
+                if dep == "missing-lib" && requested_by == "app"
+        ));
+        assert!(client.list_installed().unwrap().is_empty());
+        assert!(!root.join("config.toml").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn install_reports_circular_dependency_before_writing_state() {
+        let root = temp_root("circular-dep");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+        let index = RegistryIndex {
+            version: 1,
+            plugins: vec![
+                PluginRecord {
+                    id: "app".into(),
+                    name: String::new(),
+                    description: String::new(),
+                    homepage: None,
+                    versions: vec![wasm_version(
+                        "1.0.0",
+                        "https://example.com/app.wasm",
+                        "00",
+                        vec![DependencySpec {
+                            plugin_id: "lib".into(),
+                            version_req: "^1".into(),
+                        }],
+                    )],
+                },
+                PluginRecord {
+                    id: "lib".into(),
+                    name: String::new(),
+                    description: String::new(),
+                    homepage: None,
+                    versions: vec![wasm_version(
+                        "1.0.0",
+                        "https://example.com/lib.wasm",
+                        "00",
+                        vec![DependencySpec {
+                            plugin_id: "app".into(),
+                            version_req: "^1".into(),
+                        }],
+                    )],
+                },
+            ],
+        };
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&index).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        let err = client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "test".into(),
+                    url: "https://registry.test/index.json".into(),
+                    require_signature: false,
+                },
+                plugin_id: "app".into(),
+                version: None,
+                config_path: root.join("config.toml"),
+                force: false,
+                dry_run: false,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect_err("cycle should fail");
+
+        assert!(matches!(err, MarketplaceError::CircularDependency(plugin) if plugin == "app"));
+        assert!(client.list_installed().unwrap().is_empty());
+        assert!(!root.join("config.toml").exists());
         let _ = fs::remove_dir_all(&root);
     }
 

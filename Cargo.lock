@@ -291,6 +291,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-marketplace-server"
+version = "0.1.0"
+dependencies = [
+ "axum 0.7.9",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "agena-mcp-client"
 version = "0.1.0"
 dependencies = [

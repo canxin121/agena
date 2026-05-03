@@ -21,6 +21,7 @@ pub struct TuiConfig {
     pub keybindings: ComposerKeyBindings,
     pub double_esc_window_ms: u64,
     pub status_line: TuiStatusLineConfig,
+    pub theme: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -35,6 +36,7 @@ struct RawTuiConfig {
     keybindings: RawKeybindings,
     double_esc_window_ms: Option<u64>,
     status_line: RawStatusLineConfig,
+    theme: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -107,6 +109,7 @@ impl TuiConfig {
             keybindings: ComposerKeyBindings::default(),
             double_esc_window_ms: 600,
             status_line: TuiStatusLineConfig::default(),
+            theme: None,
         }
     }
 
@@ -116,6 +119,10 @@ impl TuiConfig {
             .command
             .map(|command| command.trim().to_string())
             .filter(|command| !command.is_empty());
+        let theme = raw
+            .theme
+            .map(|theme| theme.trim().to_string())
+            .filter(|theme| !theme.is_empty());
         Self {
             keybindings,
             double_esc_window_ms: raw.double_esc_window_ms.unwrap_or(600),
@@ -127,6 +134,7 @@ impl TuiConfig {
                     .unwrap_or(1_000)
                     .max(250),
             },
+            theme,
         }
     }
 }
@@ -139,6 +147,8 @@ mod tests {
     fn parses_status_line_command() {
         let raw: RawTuiConfig = toml::from_str(
             r#"
+theme = "solarized"
+
 [status_line]
 command = "printf ready"
 refresh_interval_ms = 500
@@ -150,6 +160,7 @@ refresh_interval_ms = 500
 
         assert_eq!(config.status_line.command.as_deref(), Some("printf ready"));
         assert_eq!(config.status_line.refresh_interval_ms, 500);
+        assert_eq!(config.theme.as_deref(), Some("solarized"));
     }
 
     #[test]
@@ -167,5 +178,19 @@ refresh_interval_ms = 10
 
         assert!(config.status_line.command.is_none());
         assert_eq!(config.status_line.refresh_interval_ms, 250);
+    }
+
+    #[test]
+    fn trims_empty_theme() {
+        let raw: RawTuiConfig = toml::from_str(
+            r#"
+theme = "   "
+"#,
+        )
+        .unwrap();
+
+        let config = TuiConfig::from_raw(raw, ComposerKeyBindings::default());
+
+        assert!(config.theme.is_none());
     }
 }

@@ -381,6 +381,36 @@ versions are spawned. Entries that disappear are simply shut down.
 This means you can add, remove, or retune most plugins by editing the
 config file; agena restarts only what actually changed.
 
+## Dependencies
+
+A plugin version may declare `dependencies` in its registry manifest.
+When a user installs a plugin, agena resolves the full transitive plan first,
+then installs dependencies before the requested plugin. The resolver uses the
+highest registry version that satisfies each dependency constraint.
+
+If a dependency is missing from the registry, the install fails before any
+files are written. Circular dependencies are rejected as well.
+
+## Archive format
+
+`stdio` plugins can be shipped as `archive = { format = "tar_gz", entrypoint = "..." }`.
+In that mode, the downloaded artifact is verified as a whole, then extracted
+under `plugins/<id>/<version>/`, and the entrypoint path inside the archive
+becomes the launched command target.
+
+## Runtime quota
+
+Plugin host callbacks can be rate-limited and capped per plugin through the
+host quota configuration. The default is permissive; explicit quotas are only
+needed for plugins that should be throttled.
+
+## WASM sandbox
+
+WASM plugins run with an explicit sandbox configuration. By default, they get
+no filesystem preopens, no environment variables, and no network access.
+Each entry may opt into read-only paths, writable paths, selected env vars,
+and network access through the wasm sandbox config.
+
 ## WASM ABI (advanced)
 
 WASM plugins do not use the SDK's `Plugin` trait — they live below the
@@ -401,10 +431,6 @@ to signal an error; the host then deserialises the bytes as `PluginError`.
 
 A return length of `0` means `Value::Null` — useful for hooks whose
 "no opinion" answer is `null`.
-
-The wasm transport is sandboxed: no host imports are exposed in this
-release, so wasm plugins cannot call back into agena. Use them for
-self-contained classifiers, validators, or scoring functions.
 
 ## Plugin signing
 

@@ -679,6 +679,20 @@ impl Backend {
             .context("failed to resolve run options")
     }
 
+    pub fn plugin_statusline_segments(&self) -> Vec<agena::plugin::HostStatuslineSegment> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .statusline_segments()
+    }
+
+    pub fn plugin_theme_palettes(&self) -> Vec<agena::plugin::HostThemePalette> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .theme_palettes()
+    }
+
     pub fn resolve_model_target(&self, target: &str, model: Option<&str>) -> Result<ModelRef> {
         self.runtime
             .current_snapshot()

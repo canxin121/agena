@@ -11,6 +11,7 @@ use tracing::Instrument;
 use crate::error::TransportError;
 use crate::host::LoadedPlugin;
 use crate::sdk::HookSubscription;
+use crate::sdk::host_api::{self, HostCallbackContext};
 use crate::sdk::rpc::method;
 
 /// Sequential `Option<Patch>` chain. Each plugin sees the latest mutated
@@ -20,20 +21,52 @@ pub async fn chain_patch<I, P, F>(
     method_name: &str,
     subscription: HookSubscription,
     timeout: Duration,
-    mut input: I,
-    mut apply: F,
+    input: I,
+    apply: F,
 ) -> Result<I, TransportError>
 where
     I: Serialize + Clone,
     P: DeserializeOwned,
     F: FnMut(&mut I, P),
 {
+    chain_patch_with_context(
+        plugins,
+        method_name,
+        subscription,
+        timeout,
+        input,
+        apply,
+        |_, _| None,
+    )
+    .await
+}
+
+pub async fn chain_patch_with_context<I, P, F, C>(
+    plugins: &[std::sync::Arc<LoadedPlugin>],
+    method_name: &str,
+    subscription: HookSubscription,
+    timeout: Duration,
+    mut input: I,
+    mut apply: F,
+    context: C,
+) -> Result<I, TransportError>
+where
+    I: Serialize + Clone,
+    P: DeserializeOwned,
+    F: FnMut(&mut I, P),
+    C: Fn(&LoadedPlugin, &I) -> Option<HostCallbackContext>,
+{
     for plugin in plugins {
         if !plugin.subscribes(subscription) {
             continue;
         }
         let params = serde_json::to_value(&input)?;
-        let result = call_with_timeout(plugin, method_name, params, timeout).await?;
+        let call = call_with_timeout(plugin, method_name, params, timeout);
+        let result = if let Some(context) = context(plugin, &input) {
+            host_api::with_host_callback_context(context, call).await?
+        } else {
+            call.await?
+        };
         if matches!(&result, serde_json::Value::Null) {
             continue;
         }

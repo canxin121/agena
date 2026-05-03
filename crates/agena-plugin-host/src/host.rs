@@ -102,6 +102,13 @@ impl LoadedPlugin {
     pub fn subscribes(&self, sub: HookSubscription) -> bool {
         self.manifest.hooks.contains(sub)
     }
+
+    pub fn entry_name_for_tool(&self, tool_name: &str) -> Option<String> {
+        self.manifest.entries.iter().find_map(|entry| {
+            (entry.name == tool_name || entry.expose_as.as_deref() == Some(tool_name))
+                .then(|| entry.name.clone())
+        })
+    }
 }
 
 fn block_on_handle_or_thread<F>(handle: tokio::runtime::Handle, fut: F) -> F::Output
@@ -366,7 +373,7 @@ impl PluginHost {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
         let res = self.block_on_static(async move {
-            dispatcher::chain_patch::<ToolBeforeInput, ToolBeforePatch, _>(
+            dispatcher::chain_patch_with_context::<ToolBeforeInput, ToolBeforePatch, _, _>(
                 &plugins,
                 method::HOOK_TOOL_BEFORE,
                 HookSubscription::TOOL_BEFORE,
@@ -383,6 +390,15 @@ impl PluginHost {
                         inp.metadata.insert(k, v);
                     }
                 },
+                |plugin, input| {
+                    Some(tool_hook_context(
+                        plugin,
+                        &input.tool_name,
+                        Some(input.session_id),
+                        Some(input.call_id),
+                        Some(input.workspace_root.clone()),
+                    ))
+                },
             )
             .await
         });
@@ -396,7 +412,7 @@ impl PluginHost {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
         let res = self.block_on_static(async move {
-            dispatcher::chain_patch::<ToolAfterInput, ToolAfterPatch, _>(
+            dispatcher::chain_patch_with_context::<ToolAfterInput, ToolAfterPatch, _, _>(
                 &plugins,
                 method::HOOK_TOOL_AFTER,
                 HookSubscription::TOOL_AFTER,
@@ -415,6 +431,15 @@ impl PluginHost {
                     for (k, v) in patch.metadata {
                         inp.metadata.insert(k, v);
                     }
+                },
+                |plugin, input| {
+                    Some(tool_hook_context(
+                        plugin,
+                        &input.tool_name,
+                        Some(input.session_id),
+                        Some(input.call_id),
+                        Some(input.workspace_root.clone()),
+                    ))
                 },
             )
             .await
@@ -475,8 +500,20 @@ impl PluginHost {
         input.tool_name = handle.original_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+        let plugin_id = handle.plugin_id.clone();
+        let entry_name = handle.original_name.clone();
+        let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
-            call_with_timeout(&plugin, method::HOOK_TOOL_PERMISSION_PATHS, params, timeout).await
+            host_api::with_host_callback_context(
+                HostCallbackContext {
+                    plugin_id: Some(plugin_id),
+                    workspace_root: Some(workspace_root),
+                    entry_name: Some(entry_name),
+                    ..Default::default()
+                },
+                call_with_timeout(&plugin, method::HOOK_TOOL_PERMISSION_PATHS, params, timeout),
+            )
+            .await
         });
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
@@ -500,11 +537,19 @@ impl PluginHost {
         let mut input = input;
         input.tool_name = handle.original_name.clone();
 
-        if let Some(stream) = plugin
-            .transport
-            .invoke_stream(input.clone())
-            .await
-            .map_err(transport_to_plugin_error)?
+        let context = tool_hook_context(
+            &plugin,
+            &input.tool_name,
+            Some(input.session_id),
+            Some(input.call_id),
+            Some(input.workspace_root.clone()),
+        );
+        if let Some(stream) = host_api::with_host_callback_context(
+            context.clone(),
+            plugin.transport.invoke_stream(input.clone()),
+        )
+        .await
+        .map_err(transport_to_plugin_error)?
         {
             return Ok(ToolInvokeStream {
                 stream_id: stream.stream_id,
@@ -516,9 +561,12 @@ impl PluginHost {
         let timeout = self.timeouts.tool_invoke_or(Duration::from_secs(300));
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let invoke_result = call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout)
-            .await
-            .map_err(transport_to_plugin_error)?;
+        let invoke_result = host_api::with_host_callback_context(
+            context,
+            call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
+        )
+        .await
+        .map_err(transport_to_plugin_error)?;
         let result: ToolInvokeOutput = serde_json::from_value(invoke_result)
             .map_err(|e| PluginError::invalid_params(e.to_string()))?;
 
@@ -1075,7 +1123,7 @@ impl PluginHost {
         input: EntryDefinitionInput,
     ) -> Result<EntryDefinitionInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
-        dispatcher::chain_patch::<EntryDefinitionInput, EntryDefinitionPatch, _>(
+        dispatcher::chain_patch_with_context::<EntryDefinitionInput, EntryDefinitionPatch, _, _>(
             &self.plugins,
             method::HOOK_TOOL_DEFINITION,
             HookSubscription::TOOL_DEFINITION,
@@ -1088,6 +1136,15 @@ impl PluginHost {
                 if let Some(s) = patch.input_schema {
                     inp.input_schema = s;
                 }
+            },
+            |plugin, input| {
+                Some(tool_hook_context(
+                    plugin,
+                    &input.tool_name,
+                    None,
+                    None,
+                    None,
+                ))
             },
         )
         .await
@@ -1235,6 +1292,34 @@ impl PluginHost {
     /// callback routes and bidirectional stdio transports.
     pub fn host_handle(&self) -> Arc<HostHandle> {
         Arc::clone(&self._host_handle)
+    }
+
+    pub fn statusline_segments(&self) -> Vec<HostStatuslineSegment> {
+        self._host_handle.statusline_list_response().segments
+    }
+
+    pub fn theme_palettes(&self) -> Vec<HostThemePalette> {
+        self._host_handle.theme_list_response().themes
+    }
+}
+
+fn tool_hook_context(
+    plugin: &LoadedPlugin,
+    tool_name: &str,
+    session_id: Option<i64>,
+    call_id: Option<i64>,
+    workspace_root: Option<String>,
+) -> HostCallbackContext {
+    HostCallbackContext {
+        plugin_id: Some(plugin.id.clone()),
+        session_id,
+        call_id,
+        workspace_root,
+        entry_name: Some(
+            plugin
+                .entry_name_for_tool(tool_name)
+                .unwrap_or_else(|| tool_name.to_string()),
+        ),
     }
 }
 
@@ -2677,7 +2762,7 @@ impl HostHandle {
         false
     }
 
-    fn statusline_list_response(&self) -> HostStatuslineListResponse {
+    pub fn statusline_list_response(&self) -> HostStatuslineListResponse {
         let mut segments: Vec<HostStatuslineSegment> = self
             .statusline
             .read()
@@ -2717,7 +2802,7 @@ impl HostHandle {
         false
     }
 
-    fn theme_list_response(&self) -> HostThemeListResponse {
+    pub fn theme_list_response(&self) -> HostThemeListResponse {
         let themes: Vec<HostThemePalette> = self
             .themes
             .read()

@@ -7,6 +7,7 @@ use async_trait::async_trait;
 
 use crate::error::TransportError;
 use crate::sdk::drivers::dispatch::PluginDispatcher;
+use crate::sdk::host_api::{current_host_callback_context, with_host_callback_context};
 use crate::sdk::{HostClient, Plugin, ToolInvokeInput};
 use crate::transport::{PluginTransport, ToolStreamHandle};
 
@@ -35,7 +36,15 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
     ) -> Result<serde_json::Value, TransportError> {
         let dispatcher = Arc::clone(&self.dispatcher);
         let method = method.to_string();
-        let join = tokio::spawn(async move { dispatcher.dispatch(&method, params).await });
+        let context = current_host_callback_context();
+        let join = tokio::spawn(async move {
+            let fut = dispatcher.dispatch(&method, params);
+            if let Some(context) = context {
+                with_host_callback_context(context, fut).await
+            } else {
+                fut.await
+            }
+        });
         match join.await {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => Err(TransportError::Plugin(e)),

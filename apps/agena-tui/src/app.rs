@@ -164,6 +164,7 @@ pub struct App {
     /// FIFO once the active turn finishes. See `composer_queue.rs`.
     queue: ComposerQueue,
     status_line: Option<StatusLineState>,
+    plugin_theme: Option<agena::plugin::HostThemePalette>,
     keybindings: ComposerKeyBindings,
     user_commands: Vec<Skill>,
     /// Last time the user pressed Esc inside the composer; used to detect
@@ -735,6 +736,12 @@ impl App {
             .map(|manager| manager.list_commands())
             .unwrap_or_default();
         let double_esc_window = Duration::from_millis(launch.tui_config.double_esc_window_ms);
+        let plugin_theme = launch.tui_config.theme.as_ref().and_then(|theme_id| {
+            backend
+                .plugin_theme_palettes()
+                .into_iter()
+                .find(|palette| palette.id == *theme_id)
+        });
         let mut app = Self {
             backend,
             i18n: i18n.clone(),
@@ -772,6 +779,7 @@ impl App {
             active_subscription: None,
             queue: ComposerQueue::new(),
             status_line,
+            plugin_theme,
             keybindings,
             user_commands,
             last_esc_at: None,
@@ -5381,36 +5389,71 @@ impl App {
     }
 
     fn render_status(&self, frame: &mut Frame, area: Rect) {
-        let (text, style) = if let Some(flash) = &self.flash {
-            (
-                flash.text.clone(),
-                match flash.level {
-                    FlashLevel::Success => Style::default().fg(Color::Green),
-                    FlashLevel::Warning => Style::default().fg(Color::Yellow),
-                    FlashLevel::Error => Style::default().fg(Color::Red),
-                    FlashLevel::Info => Style::default().fg(Color::Cyan),
-                },
-            )
-        } else if let Some(text) = self
+        if let Some(flash) = &self.flash {
+            let style = match flash.level {
+                FlashLevel::Success => {
+                    Style::default().fg(self.theme_color("flash_success", Color::Green))
+                }
+                FlashLevel::Warning => {
+                    Style::default().fg(self.theme_color("flash_warning", Color::Yellow))
+                }
+                FlashLevel::Error => {
+                    Style::default().fg(self.theme_color("flash_error", Color::Red))
+                }
+                FlashLevel::Info => {
+                    Style::default().fg(self.theme_color("flash_info", Color::Cyan))
+                }
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(flash.text.clone(), style))),
+                area,
+            );
+            return;
+        }
+
+        let base_style = Style::default().fg(self.theme_color("status", Color::DarkGray));
+        let mut spans = Vec::new();
+        let text = if let Some(text) = self
             .status_line
             .as_ref()
             .and_then(|status_line| status_line.text.clone())
         {
-            (text, Style::default().fg(Color::DarkGray))
+            text
         } else {
             let default_hint = match self.focus {
                 Focus::Sessions => ui_text::t(&self.i18n, "status-sessions"),
                 Focus::Transcript => ui_text::t(&self.i18n, "status-transcript"),
                 Focus::Composer => ui_text::t(&self.i18n, "status-composer"),
             };
-            let text = self
-                .status_context_summary()
+            self.status_context_summary()
                 .map(|context| format!("{context}  |  {default_hint}"))
-                .unwrap_or(default_hint);
-            (text, Style::default().fg(Color::DarkGray))
+                .unwrap_or(default_hint)
         };
+        spans.push(Span::styled(text, base_style));
 
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
+        for segment in self.backend.plugin_statusline_segments() {
+            if segment.content.trim().is_empty() {
+                continue;
+            }
+            spans.push(Span::styled("  |  ", base_style));
+            let style = segment
+                .color
+                .as_deref()
+                .and_then(parse_tui_color)
+                .map(|color| Style::default().fg(color))
+                .unwrap_or(base_style);
+            spans.push(Span::styled(segment.content, style));
+        }
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
+    fn theme_color(&self, key: &str, fallback: Color) -> Color {
+        self.plugin_theme
+            .as_ref()
+            .and_then(|theme| theme.colors.get(key))
+            .and_then(|value| parse_tui_color(value))
+            .unwrap_or(fallback)
     }
 
     fn render_header_row(
@@ -9006,6 +9049,41 @@ fn find_query_match_from(text: &str, query: &str, start_at: usize) -> Option<(us
             .map(|offset| start_at + offset)
             .map(|start| (start, start + query.len()))
     }
+}
+
+fn parse_tui_color(value: &str) -> Option<Color> {
+    let value = value.trim();
+    let lower = value.to_ascii_lowercase();
+    match lower.as_str() {
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "gray" | "grey" => Some(Color::Gray),
+        "darkgray" | "dark_gray" | "dark-grey" | "darkgrey" => Some(Color::DarkGray),
+        "lightred" | "light_red" | "light-red" => Some(Color::LightRed),
+        "lightgreen" | "light_green" | "light-green" => Some(Color::LightGreen),
+        "lightyellow" | "light_yellow" | "light-yellow" => Some(Color::LightYellow),
+        "lightblue" | "light_blue" | "light-blue" => Some(Color::LightBlue),
+        "lightmagenta" | "light_magenta" | "light-magenta" => Some(Color::LightMagenta),
+        "lightcyan" | "light_cyan" | "light-cyan" => Some(Color::LightCyan),
+        "white" => Some(Color::White),
+        _ => parse_hex_color(value),
+    }
+}
+
+fn parse_hex_color(value: &str) -> Option<Color> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let red = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let green = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let blue = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(Color::Rgb(red, green, blue))
 }
 
 fn run_status_line_command(

@@ -67,11 +67,34 @@ impl<P: Plugin> PluginDispatcher<P> {
             }
             method::HOOK_TOOL_BEFORE => {
                 let i: ToolBeforeInput = serde_json::from_value(params)?;
-                ok_json(&plugin.tool_execute_before(i).await?)
+                let ctx = crate::host_api::HostCallbackContext {
+                    session_id: Some(i.session_id),
+                    call_id: Some(i.call_id),
+                    workspace_root: Some(i.workspace_root.clone()),
+                    entry_name: Some(i.tool_name.clone()),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                ok_json(
+                    &crate::host_api::with_host_callback_context(
+                        ctx,
+                        plugin.tool_execute_before(i),
+                    )
+                    .await?,
+                )
             }
             method::HOOK_TOOL_AFTER => {
                 let i: ToolAfterInput = serde_json::from_value(params)?;
-                ok_json(&plugin.tool_execute_after(i).await?)
+                let ctx = crate::host_api::HostCallbackContext {
+                    session_id: Some(i.session_id),
+                    call_id: Some(i.call_id),
+                    workspace_root: Some(i.workspace_root.clone()),
+                    entry_name: Some(i.tool_name.clone()),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                ok_json(
+                    &crate::host_api::with_host_callback_context(ctx, plugin.tool_execute_after(i))
+                        .await?,
+                )
             }
             method::HOOK_TOOL_INVOKE => {
                 let i: ToolInvokeInput = serde_json::from_value(params)?;
@@ -79,6 +102,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                     session_id: Some(i.session_id),
                     call_id: Some(i.call_id),
                     workspace_root: Some(i.workspace_root.clone()),
+                    entry_name: Some(i.tool_name.clone()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 let output =
@@ -87,7 +111,17 @@ impl<P: Plugin> PluginDispatcher<P> {
             }
             method::HOOK_TOOL_PERMISSION_PATHS => {
                 let i: ToolPermissionPathsInput = serde_json::from_value(params)?;
-                ok_json(&plugin.permission_paths(&i.tool_name, &i.input).await?)
+                let ctx = crate::host_api::HostCallbackContext {
+                    entry_name: Some(i.tool_name.clone()),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                ok_json(
+                    &crate::host_api::with_host_callback_context(
+                        ctx,
+                        plugin.permission_paths(&i.tool_name, &i.input),
+                    )
+                    .await?,
+                )
             }
             method::HOOK_TOOL_INVOKE_STREAM => Err(PluginError::new(
                 "tool.invoke.stream cannot be dispatched without a stream sink; \
@@ -167,12 +201,27 @@ impl<P: Plugin> PluginDispatcher<P> {
             }
             method::HOOK_TOOL_FAILURE => {
                 let i: ToolFailureInput = serde_json::from_value(params)?;
-                plugin.tool_execute_failure(i).await?;
+                let ctx = crate::host_api::HostCallbackContext {
+                    session_id: Some(i.session_id),
+                    call_id: Some(i.call_id),
+                    workspace_root: Some(i.workspace_root.clone()),
+                    entry_name: Some(i.tool_name.clone()),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                crate::host_api::with_host_callback_context(ctx, plugin.tool_execute_failure(i))
+                    .await?;
                 Ok(Value::Object(Default::default()))
             }
             method::HOOK_TOOL_DEFINITION => {
                 let i: EntryDefinitionInput = serde_json::from_value(params)?;
-                ok_json(&plugin.tool_definition(i).await?)
+                let ctx = crate::host_api::HostCallbackContext {
+                    entry_name: Some(i.tool_name.clone()),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                ok_json(
+                    &crate::host_api::with_host_callback_context(ctx, plugin.tool_definition(i))
+                        .await?,
+                )
             }
             method::HOOK_AGENT_STOP => {
                 let i: AgentStopInput = serde_json::from_value(params)?;
@@ -207,12 +256,14 @@ impl<P: Plugin> PluginDispatcher<P> {
         let (end_tx, end_rx) = tokio::sync::oneshot::channel::<Result<ToolStreamEnd>>();
         let sink = ToolStreamSink::new(stream_id.clone(), tx);
         let plugin = std::sync::Arc::clone(&self.plugin);
+        let inherited_context = crate::host_api::current_host_callback_context();
         tokio::spawn(async move {
             let ctx = crate::host_api::HostCallbackContext {
                 session_id: Some(input.session_id),
                 call_id: Some(input.call_id),
                 workspace_root: Some(input.workspace_root.clone()),
-                ..crate::host_api::HostCallbackContext::default()
+                entry_name: Some(input.tool_name.clone()),
+                ..inherited_context.unwrap_or_default()
             };
             let result = crate::host_api::with_host_callback_context(
                 ctx,

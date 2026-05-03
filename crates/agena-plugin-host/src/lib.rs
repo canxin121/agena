@@ -24,6 +24,7 @@ pub use host::{
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
 pub use registry::PluginEntryRegistry;
+pub use sdk::host_api::{HostStatuslineSegment, HostThemePalette};
 pub use sdk::{
     AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatDirection, ChatHeadersInput,
     ChatHeadersPatch, ChatMessage, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,

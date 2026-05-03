@@ -1,0 +1,14 @@
+[package]
+name = "agena-marketplace-server"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+server = ["dep:axum", "dep:tokio", "dep:serde", "dep:serde_json"]
+
+[dependencies]
+axum = { version = "0.7", optional = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.149", optional = true }
+tokio = { version = "1.50.0", features = ["net"], optional = true }

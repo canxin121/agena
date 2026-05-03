@@ -215,7 +215,25 @@ impl Plugin for TestPlugin {
     async fn tool_execute_before(&self, _: ToolBeforeInput) -> Result<Option<ToolBeforePatch>> {
         let mut meta = BTreeMap::new();
         meta.insert("touched".into(), "yes".into());
+        if let Some(entry_name) = agena_plugin_sdk::host_api::current_host_callback_context()
+            .and_then(|context| context.entry_name)
+        {
+            meta.insert("before_entry".into(), entry_name);
+        }
         Ok(Some(ToolBeforePatch {
+            metadata: meta,
+            ..Default::default()
+        }))
+    }
+
+    async fn tool_execute_after(&self, _: ToolAfterInput) -> Result<Option<ToolAfterPatch>> {
+        let mut meta = BTreeMap::new();
+        if let Some(entry_name) = agena_plugin_sdk::host_api::current_host_callback_context()
+            .and_then(|context| context.entry_name)
+        {
+            meta.insert("after_entry".into(), entry_name);
+        }
+        Ok(Some(ToolAfterPatch {
             metadata: meta,
             ..Default::default()
         }))
@@ -274,6 +292,46 @@ async fn static_plugin_round_trips_every_hook() {
         )
         .expect("invoke");
     assert_eq!(out.output_text, "pong: hi");
+
+    // tool hooks carry the active entry name into callback context.
+    let before = host
+        .dispatch_tool_before(ToolBeforeInput {
+            tool_name: "ping".into(),
+            source: EntrySource::Plugin {
+                plugin: "test".into(),
+            },
+            session_id: 1,
+            call_id: 1,
+            workspace_root: ".".into(),
+            input: json!({}),
+            title_override: None,
+            metadata: Default::default(),
+        })
+        .expect("tool_before");
+    assert_eq!(
+        before.metadata.get("before_entry").map(String::as_str),
+        Some("ping")
+    );
+
+    let after = host
+        .dispatch_tool_after(ToolAfterInput {
+            tool_name: "ping".into(),
+            source: EntrySource::Plugin {
+                plugin: "test".into(),
+            },
+            session_id: 1,
+            call_id: 1,
+            workspace_root: ".".into(),
+            title: "done".into(),
+            output_text: "ok".into(),
+            payload: None,
+            metadata: Default::default(),
+        })
+        .expect("tool_after");
+    assert_eq!(
+        after.metadata.get("after_entry").map(String::as_str),
+        Some("ping")
+    );
 
     // shell_env
     let patch = host

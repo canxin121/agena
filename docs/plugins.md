@@ -252,6 +252,33 @@ indexing pass. Hover, definition, references, and other write/interactive
 flows still live in the built-in tools and will be plugin-ized in a future
 phase along with commands, plan/worktree/monitor/scheduler, and agents.
 
+## Marketplace and installation
+
+The `agena-plugin-marketplace` crate plus the `agena plugin` CLI gives
+substrate-managed install / uninstall:
+
+```bash
+agena plugin install agena-echo --registry https://example.com/registry/index.json
+agena plugin install agena-echo@0.2.1 --registry https://example.com/registry/index.json
+agena plugin list-installed
+agena plugin uninstall agena-echo
+agena plugin sync https://example.com/registry/index.json
+agena plugin search echo https://example.com/registry/index.json
+```
+
+Registry index is a static JSON file (host it on GitHub Pages or any HTTP
+endpoint). Each version record carries a sha256, an optional ed25519
+signature, and a target triple (`platform: "any"` for portable artifacts
+like wasm). Install always verifies the sha256 — pass `--allow-unverified`
+to opt out. Use `--require-signature` (or `MarketplaceRegistry.require_signature
+= true` in config) to refuse any record without an ed25519 signature; trusted
+public keys come from `[plugins.trusted_keys]`.
+
+The marketplace cache lives at `~/.agena/marketplace/` (override with
+`AGENA_MARKETPLACE_DIR`). It stores the cached index, the downloaded
+artifacts, and an `installed.json` ledger so `uninstall` can reverse what
+`install` wrote into the agena `config.toml`.
+
 ## Config schema
 
 ```toml

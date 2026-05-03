@@ -20,6 +20,8 @@ pub use host::{
     LoadedPlugin, PluginEntryHandle, PluginEntryResolution, PluginHost, PluginHostBuilder,
     ToolInvokeStream,
 };
+#[cfg(feature = "signing")]
+pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
 pub use registry::PluginEntryRegistry;
 pub use sdk::{
     AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatDirection, ChatHeadersInput,

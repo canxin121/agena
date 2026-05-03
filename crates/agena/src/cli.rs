@@ -93,6 +93,7 @@ pub enum AgenaCommand {
     Logout(LogoutArgs),
     McpServer(McpServerArgs),
     Provider(ProviderCommand),
+    Plugin(PluginCommand),
     Resume(ResumeArgs),
     Review(ReviewArgs),
     Serve(ServeCommand),
@@ -127,6 +128,78 @@ pub struct DiagnosticsArgs {
 pub struct ProviderCommand {
     #[command(subcommand)]
     pub command: Option<ProviderSubcommand>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PluginCommand {
+    #[command(subcommand)]
+    pub command: PluginSubcommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PluginSubcommand {
+    /// Install a plugin from a marketplace registry into the active config.
+    Install(PluginInstallArgs),
+    /// Remove a plugin previously installed via `agena plugin install`.
+    Uninstall(PluginUninstallArgs),
+    /// List plugins installed via the marketplace.
+    ListInstalled,
+    /// Refresh the cached registry index.
+    Sync(PluginSyncArgs),
+    /// Search registry plugins by id, name, or description substring.
+    Search(PluginSearchArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PluginInstallArgs {
+    /// Plugin id, optionally with `@<version>` suffix.
+    pub spec: String,
+    /// Registry index URL (overrides the default configured registry).
+    #[arg(long)]
+    pub registry: Option<String>,
+    /// Registry id, used as a cache key (defaults to "default").
+    #[arg(long, default_value = "default")]
+    pub registry_id: String,
+    /// Path to the agena config.toml that should receive the plugin entry.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+    /// Overwrite an existing entry with the same plugin id.
+    #[arg(long, default_value_t = false)]
+    pub force: bool,
+    /// Compute side-effects but skip writing the config or cache.
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
+    /// Allow installing artifacts that lack a sha256 in the registry record.
+    #[arg(long, default_value_t = false)]
+    pub allow_unverified: bool,
+    /// Refresh the cached registry index before resolving versions.
+    #[arg(long, default_value_t = false)]
+    pub refresh: bool,
+    /// Treat the registry as requiring an ed25519 signature on every record.
+    #[arg(long, default_value_t = false)]
+    pub require_signature: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PluginUninstallArgs {
+    pub plugin_id: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PluginSyncArgs {
+    /// Registry index URL.
+    pub registry: String,
+    #[arg(long, default_value = "default")]
+    pub registry_id: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PluginSearchArgs {
+    pub query: String,
+    /// Registry index URL.
+    pub registry: String,
+    #[arg(long, default_value = "default")]
+    pub registry_id: String,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -514,6 +587,7 @@ impl AgenaCli {
             Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args),
             Some(AgenaCommand::McpServer(args)) => self.run_mcp_server(args).await,
             Some(AgenaCommand::Provider(command)) => self.run_provider(loader, command).await,
+            Some(AgenaCommand::Plugin(command)) => self.run_plugin(command),
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
             Some(AgenaCommand::Review(args)) => self.run_review(args).await,
             Some(AgenaCommand::Serve(_command)) => Err(AppError::Config(
@@ -566,6 +640,150 @@ impl AgenaCli {
         let output = self.render_apply_command(args)?;
         println!("{output}");
         Ok(())
+    }
+
+    fn run_plugin(self, command: PluginCommand) -> Result<(), AppError> {
+        use agena_plugin_marketplace::{
+            InstallRequest, MarketplaceCache, MarketplaceClient, RegistrySpec, default_cache_root,
+        };
+
+        let cache = MarketplaceCache::new(default_cache_root());
+        let client =
+            MarketplaceClient::with_default_fetcher(cache, std::collections::BTreeMap::new());
+
+        match command.command {
+            PluginSubcommand::Install(args) => {
+                let registry_url = args.registry.ok_or_else(|| {
+                    AppError::Config("agena plugin install requires --registry <url>".to_string())
+                })?;
+                let (plugin_id, version) = match args.spec.split_once('@') {
+                    Some((id, ver)) => (id.to_string(), Some(ver.to_string())),
+                    None => (args.spec.clone(), None),
+                };
+                let config_path = args
+                    .config
+                    .clone()
+                    .or_else(default_user_config_path)
+                    .ok_or_else(|| {
+                        AppError::Config(
+                            "could not determine config path; pass --config".to_string(),
+                        )
+                    })?;
+                let outcome = client
+                    .install(InstallRequest {
+                        registry: RegistrySpec {
+                            id: args.registry_id.clone(),
+                            url: registry_url,
+                            require_signature: args.require_signature,
+                        },
+                        plugin_id,
+                        version,
+                        config_path,
+                        force: args.force,
+                        dry_run: args.dry_run,
+                        allow_unverified: args.allow_unverified,
+                        refresh_index: args.refresh,
+                    })
+                    .map_err(|err| AppError::Config(err.to_string()))?;
+                if outcome.dry_run {
+                    println!(
+                        "DRY-RUN: would install {} v{} ({}) into {}",
+                        outcome.plugin_id,
+                        outcome.version,
+                        outcome.kind.as_str(),
+                        outcome.config_path.display()
+                    );
+                } else {
+                    println!(
+                        "Installed {} v{} ({}); restart agena to load.",
+                        outcome.plugin_id,
+                        outcome.version,
+                        outcome.kind.as_str()
+                    );
+                }
+                Ok(())
+            }
+            PluginSubcommand::Uninstall(args) => {
+                let outcome = client
+                    .uninstall(&args.plugin_id)
+                    .map_err(|err| AppError::Config(err.to_string()))?;
+                println!(
+                    "Uninstalled {} v{} from {}",
+                    outcome.plugin_id,
+                    outcome.version,
+                    outcome.config_path.display()
+                );
+                Ok(())
+            }
+            PluginSubcommand::ListInstalled => {
+                let records = client
+                    .list_installed()
+                    .map_err(|err| AppError::Config(err.to_string()))?;
+                if records.is_empty() {
+                    println!("(no plugins installed via agena marketplace)");
+                } else {
+                    for record in records {
+                        println!(
+                            "{} v{} ({}) -> {}",
+                            record.plugin_id,
+                            record.version,
+                            record.kind.as_str(),
+                            record.binary_path.display()
+                        );
+                    }
+                }
+                Ok(())
+            }
+            PluginSubcommand::Sync(args) => {
+                let registry = client.registry(RegistrySpec {
+                    id: args.registry_id,
+                    url: args.registry,
+                    require_signature: false,
+                });
+                let index = registry
+                    .fetch_index(true)
+                    .map_err(|err| AppError::Config(err.to_string()))?;
+                println!(
+                    "registry index refreshed: {} plugin(s)",
+                    index.plugins.len()
+                );
+                Ok(())
+            }
+            PluginSubcommand::Search(args) => {
+                let registry = client.registry(RegistrySpec {
+                    id: args.registry_id,
+                    url: args.registry,
+                    require_signature: false,
+                });
+                let index = registry
+                    .fetch_index(false)
+                    .map_err(|err| AppError::Config(err.to_string()))?;
+                let needle = args.query.to_ascii_lowercase();
+                let mut hits = 0usize;
+                for plugin in index.plugins {
+                    let blob = format!("{} {} {}", plugin.id, plugin.name, plugin.description)
+                        .to_ascii_lowercase();
+                    if blob.contains(&needle) {
+                        hits += 1;
+                        println!(
+                            "{} — {} ({} version{})",
+                            plugin.id,
+                            if plugin.description.is_empty() {
+                                plugin.name.as_str()
+                            } else {
+                                plugin.description.as_str()
+                            },
+                            plugin.versions.len(),
+                            if plugin.versions.len() == 1 { "" } else { "s" }
+                        );
+                    }
+                }
+                if hits == 0 {
+                    println!("(no matches)");
+                }
+                Ok(())
+            }
+        }
     }
 
     async fn run_auth(
@@ -1709,6 +1927,14 @@ fn render_completion_command(args: CompletionArgs) -> Result<String, AppError> {
     clap_complete::generate(args.shell, &mut command, "agena", &mut buffer);
     String::from_utf8(buffer)
         .map_err(|err| AppError::Internal(format!("completion output was not utf-8: {err}")))
+}
+
+fn default_user_config_path() -> Option<PathBuf> {
+    let base = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(PathBuf::from)?;
+    Some(base.join(".agena").join("config.toml"))
 }
 
 fn render_serialized<T>(format: ConfigOutputFormat, value: &T) -> Result<String, AppError>

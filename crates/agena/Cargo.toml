@@ -14,6 +14,7 @@ agena-keyring-store = { path = "../agena-keyring-store" }
 agena-scheduler = { path = "../agena-scheduler" }
 agena-skills = { path = "../agena-skills" }
 agena-plugin-host = { path = "../agena-plugin-host" }
+agena-plugin-marketplace = { path = "../agena-plugin-marketplace" }
 arc-swap = "1.7.1"
 chrono = { version = "0.4.42", features = ["serde"] }
 async-trait = "0.1.89"

@@ -68,6 +68,7 @@ dependencies = [
  "agena-mcp-server",
  "agena-otel",
  "agena-plugin-host",
+ "agena-plugin-marketplace",
  "agena-scheduler",
  "agena-skills",
  "arc-swap",
@@ -358,6 +359,25 @@ dependencies = [
  "url",
  "uuid",
  "wasmtime",
+]
+
+[[package]]
+name = "agena-plugin-marketplace"
+version = "0.1.0"
+dependencies = [
+ "agena-plugin-host",
+ "chrono",
+ "hex",
+ "reqwest 0.13.2",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml_edit",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -5239,6 +5259,10 @@ name = "semver"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "serde"
@@ -6181,6 +6205,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.23.10+spec-1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84c8b9f757e028cee9fa244aea147aab2a9ec09d5325a9b01e0a49730c2b5269"
+dependencies = [
+ "indexmap",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow 0.7.15",
 ]
 
 [[package]]

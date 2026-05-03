@@ -986,3 +986,106 @@ async fn quota_burst_then_throttles() {
     assert_eq!(err.code, PluginErrorCode::Generic);
     assert!(err.message.contains("rate exceeded"));
 }
+
+/// A plugin that registers itself as the permission handler. The host
+/// dispatches HOST_PERMISSION_ASK to its `permission_ask` hook when the
+/// handler is set.
+#[derive(Clone)]
+struct PermissionUiPlugin;
+
+#[async_trait]
+impl Plugin for PermissionUiPlugin {
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::builder("perm-ui", "0.1.0")
+            .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::PERMISSION_ASK)
+            .entry(
+                PluginEntryDecl::new("ui", json!({})).host_capability(HostCapability::PermissionUi),
+            )
+            .build()
+    }
+
+    async fn tool_invoke(&self, _input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
+        Ok(ToolInvokeOutput::text("noop"))
+    }
+
+    async fn permission_ask(
+        &self,
+        _input: PermissionAskInput,
+    ) -> Result<Option<PermissionAskDecision>> {
+        Ok(Some(PermissionAskDecision::Decide(
+            PermissionDecision::Allow,
+        )))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn permission_ui_handler_dispatch_routes_to_plugin() {
+    let mut list = BTreeMap::new();
+    list.insert(
+        "perm-ui".to_string(),
+        PluginEntry::Static {
+            options: serde_json::Value::Null,
+            timeouts: Default::default(),
+        },
+    );
+    let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
+        .with_config(PluginsConfig {
+            list,
+            ..Default::default()
+        })
+        .register_static("perm-ui", PermissionUiPlugin)
+        .build()
+        .await
+        .expect("host builds");
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    // Register the handler.
+    let _ = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "perm-ui",
+            agena_plugin_sdk::rpc::method::HOST_UI_PERMISSION_SET_HANDLER,
+            json!({}),
+        )
+        .await
+        .expect("set handler");
+    assert_eq!(
+        host.host_handle().permission_handler().await.as_deref(),
+        Some("perm-ui")
+    );
+
+    // A plain HOST_PERMISSION_ASK call should now hit the plugin's
+    // PLUGIN_PERMISSION_RENDER and bring back our canned decision.
+    let result = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "some-other-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PERMISSION_ASK,
+            json!({
+                "session_id": 1,
+                "action": "fs.read",
+                "subject": {},
+                "default_decision": "prompt"
+            }),
+        )
+        .await
+        .expect("ask routed");
+    assert_eq!(
+        result.as_str(),
+        Some("allow"),
+        "expected handler decision 'allow', got {result}"
+    );
+
+    // Clearing reverts to the FakeHostClient (Prompt).
+    host.host_handle()
+        .handle_call_for_plugin(
+            "perm-ui",
+            agena_plugin_sdk::rpc::method::HOST_UI_PERMISSION_CLEAR_HANDLER,
+            json!({}),
+        )
+        .await
+        .expect("clear handler");
+    assert!(host.host_handle().permission_handler().await.is_none());
+}

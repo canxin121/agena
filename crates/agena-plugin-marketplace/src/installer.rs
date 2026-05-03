@@ -107,26 +107,33 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             &mut plan,
         )?;
 
+        // Snapshot installed.json + the user's config.toml before mutating
+        // anything so we can roll back if any step in the plan fails.
+        let txn = InstallTransaction::begin(&self.cache, &req.config_path)?;
+
         let mut last: Option<InstallOutcome> = None;
         for (plugin_id, version_req) in plan {
-            // Dependencies fetched via dependency resolution always treat
-            // the registry as the same one and re-use force/dry_run/etc
-            // flags. The first record here is the explicit user-requested
-            // plugin (it appears last in plan).
             let is_root = plugin_id == req.plugin_id;
             let mut sub = req.clone();
             sub.plugin_id = plugin_id.clone();
             sub.version = version_req.clone();
-            // For pre-existing dependencies we should not clobber. If a
-            // dep is already installed we already skipped it during
-            // collect_install_plan. The only entries reaching here are
-            // not-yet-installed deps and the root.
             if !is_root {
                 sub.force = false;
             }
-            let outcome = self.install_one(sub)?;
-            last = Some(outcome);
+            match self.install_one(sub) {
+                Ok(outcome) => last = Some(outcome),
+                Err(err) => {
+                    if let Err(rollback_err) = txn.rollback(&self.cache) {
+                        tracing::warn!(
+                            error = %rollback_err,
+                            "rollback failed after install error: {err}"
+                        );
+                    }
+                    return Err(err);
+                }
+            }
         }
+        txn.commit();
         last.ok_or_else(|| MarketplaceError::Config("install plan was empty".into()))
     }
 
@@ -806,6 +813,65 @@ fn remove_plugin_entry(doc: &mut DocumentMut, plugin_id: &str) {
     }
 }
 
+/// Transactional snapshot of `installed.json` + the target config file.
+/// Created at the start of `install`, committed on success, rolled back
+/// on any error mid-plan so a partial dependency install can't leave
+/// the system in a half-applied state.
+struct InstallTransaction {
+    installed_snapshot: Option<Vec<u8>>,
+    config_path: PathBuf,
+    config_snapshot: Option<Vec<u8>>,
+    armed: std::cell::Cell<bool>,
+}
+
+impl InstallTransaction {
+    fn begin(cache: &MarketplaceCache, config_path: &Path) -> Result<Self, MarketplaceError> {
+        let installed_path = cache.installed_path();
+        let installed_snapshot = if installed_path.exists() {
+            Some(std::fs::read(&installed_path)?)
+        } else {
+            None
+        };
+        let config_snapshot = if config_path.exists() {
+            Some(std::fs::read(config_path)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            installed_snapshot,
+            config_path: config_path.to_path_buf(),
+            config_snapshot,
+            armed: std::cell::Cell::new(true),
+        })
+    }
+
+    fn rollback(&self, cache: &MarketplaceCache) -> Result<(), MarketplaceError> {
+        let installed_path = cache.installed_path();
+        match &self.installed_snapshot {
+            Some(bytes) => write_secure_file(&installed_path, bytes)?,
+            None => {
+                if installed_path.exists() {
+                    std::fs::remove_file(&installed_path)?;
+                }
+            }
+        }
+        match &self.config_snapshot {
+            Some(bytes) => write_secure_file(&self.config_path, bytes)?,
+            None => {
+                if self.config_path.exists() {
+                    std::fs::remove_file(&self.config_path)?;
+                }
+            }
+        }
+        self.armed.set(false);
+        Ok(())
+    }
+
+    fn commit(self) {
+        self.armed.set(false);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1330,6 +1396,102 @@ mod tests {
         assert!(removed_ids.contains(&"lib".to_string()));
         assert!(removed_ids.contains(&"app".to_string()));
         assert!(client.list_installed().unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn install_rolls_back_when_a_step_fails() {
+        // Plan: app depends on lib. lib's artifact URL has no fixture so
+        // the lib install fails partway through; the user-facing config.toml
+        // and installed.json must remain untouched.
+        use crate::manifest::DependencySpec;
+        let root = temp_root("rollback");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+
+        let app_bytes = b"APP".to_vec();
+        let app_sha = sha256_hex(&app_bytes);
+        fetcher.insert("https://example.com/app.wasm", app_bytes);
+        // Deliberately do NOT register lib.wasm — fetch will fail.
+
+        let lib = PluginVersion {
+            version: "0.1.0".into(),
+            kind: PluginKind::Wasm,
+            platform: "any".into(),
+            url: "https://example.com/lib.wasm".into(),
+            sha256: Some("00".into()),
+            signature: None,
+            command: None,
+            args: Vec::new(),
+            env: Default::default(),
+            options: serde_json::Value::Null,
+            min_agena_version: None,
+            archive: None,
+            dependencies: Vec::new(),
+        };
+        let app = PluginVersion {
+            url: "https://example.com/app.wasm".into(),
+            sha256: Some(app_sha),
+            dependencies: vec![DependencySpec {
+                plugin_id: "lib".into(),
+                version_req: "^0.1".into(),
+            }],
+            ..lib.clone()
+        };
+        let index = RegistryIndex {
+            version: 1,
+            plugins: vec![
+                PluginRecord {
+                    id: "lib".into(),
+                    name: String::new(),
+                    description: String::new(),
+                    homepage: None,
+                    versions: vec![lib],
+                },
+                PluginRecord {
+                    id: "app".into(),
+                    name: String::new(),
+                    description: String::new(),
+                    homepage: None,
+                    versions: vec![app],
+                },
+            ],
+        };
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&index).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        let config_path = root.join("config.toml");
+        // Pre-existing config we expect the rollback to restore byte-for-byte.
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&config_path, b"# preexisting\n").unwrap();
+
+        let err = client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "test".into(),
+                    url: "https://registry.test/index.json".into(),
+                    require_signature: false,
+                },
+                plugin_id: "app".into(),
+                version: None,
+                config_path: config_path.clone(),
+                force: false,
+                dry_run: false,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect_err("lib download should fail");
+        assert!(matches!(err, MarketplaceError::Http(_)));
+
+        // Config restored to its pre-install bytes.
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(after, "# preexisting\n");
+        // installed.json must not contain either plugin.
+        let listed = client.list_installed().unwrap();
+        assert!(listed.is_empty(), "installed records leaked: {listed:?}");
         let _ = fs::remove_dir_all(&root);
     }
 }

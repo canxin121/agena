@@ -207,4 +207,6 @@ pub mod method {
     pub const HOST_UI_THEME_REGISTER: &str = "host/ui.theme.register";
     pub const HOST_UI_THEME_LIST: &str = "host/ui.theme.list";
     pub const HOST_UI_THEME_REMOVE: &str = "host/ui.theme.remove";
+    pub const HOST_UI_PERMISSION_SET_HANDLER: &str = "host/ui.permission.set_handler";
+    pub const HOST_UI_PERMISSION_CLEAR_HANDLER: &str = "host/ui.permission.clear_handler";
 }

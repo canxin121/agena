@@ -141,7 +141,12 @@ pub async fn load_entry(
             Arc::new(t)
         }
         #[cfg(feature = "wasm")]
-        PluginEntry::Wasm { path, sha256, .. } => {
+        PluginEntry::Wasm {
+            path,
+            sha256,
+            sandbox,
+            ..
+        } => {
             let resolved = if path.is_absolute() {
                 path.clone()
             } else {
@@ -154,12 +159,11 @@ pub async fn load_entry(
                     message: e,
                 })?;
             }
-            let t = crate::transport::wasm::WasmTransport::load(&resolved).map_err(|e| {
-                HostError::Load {
+            let t = crate::transport::wasm::WasmTransport::load_with_sandbox(&resolved, sandbox)
+                .map_err(|e| HostError::Load {
                     plugin: plugin_id.to_string(),
                     message: e.to_string(),
-                }
-            })?;
+                })?;
             Arc::new(t)
         }
         #[cfg(not(feature = "wasm"))]

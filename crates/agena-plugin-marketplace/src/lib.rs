@@ -10,10 +10,12 @@ pub use cache::{
 };
 pub use error::MarketplaceError;
 pub use installer::{
-    InstallOutcome, InstallRequest, MarketplaceClient, RegistryHandle, RegistrySpec,
-    UninstallOutcome,
+    InstallOutcome, InstallRequest, MarketplaceClient, OutdatedRecord, RegistryHandle,
+    RegistrySpec, UninstallOutcome, UpgradeOutcome,
 };
-pub use manifest::{PluginKind, PluginRecord, PluginVersion, RegistryIndex};
+pub use manifest::{
+    ArchiveSpec, DependencySpec, PluginKind, PluginRecord, PluginVersion, RegistryIndex,
+};
 
 /// Pluggable HTTP fetcher so tests can supply local bytes without a network.
 pub trait HttpFetcher: Send + Sync {

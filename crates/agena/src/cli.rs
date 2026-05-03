@@ -148,6 +148,10 @@ pub enum PluginSubcommand {
     Sync(PluginSyncArgs),
     /// Search registry plugins by id, name, or description substring.
     Search(PluginSearchArgs),
+    /// Re-resolve installed plugins against their registry and reinstall newer versions.
+    Upgrade(PluginUpgradeArgs),
+    /// Print plugins for which a newer version is available on their registry.
+    Outdated,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -198,6 +202,20 @@ pub struct PluginSearchArgs {
     pub query: String,
     /// Registry index URL.
     pub registry: String,
+    #[arg(long, default_value = "default")]
+    pub registry_id: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PluginUpgradeArgs {
+    /// Plugin id to upgrade. Pass `--all` to upgrade every installed plugin.
+    pub plugin_id: Option<String>,
+    /// Upgrade every installed plugin in turn.
+    #[arg(long, default_value_t = false)]
+    pub all: bool,
+    /// Override the registry URL recorded at install time.
+    #[arg(long)]
+    pub registry: Option<String>,
     #[arg(long, default_value = "default")]
     pub registry_id: String,
 }
@@ -780,6 +798,65 @@ impl AgenaCli {
                 }
                 if hits == 0 {
                     println!("(no matches)");
+                }
+                Ok(())
+            }
+            PluginSubcommand::Upgrade(args) => {
+                let override_spec = args.registry.as_ref().map(|url| RegistrySpec {
+                    id: args.registry_id.clone(),
+                    url: url.clone(),
+                    require_signature: false,
+                });
+                let targets: Vec<String> = if args.all {
+                    client
+                        .list_installed()
+                        .map_err(|err| AppError::Config(err.to_string()))?
+                        .into_iter()
+                        .map(|r| r.plugin_id)
+                        .collect()
+                } else {
+                    let id = args.plugin_id.clone().ok_or_else(|| {
+                        AppError::Config(
+                            "agena plugin upgrade requires <plugin_id> or --all".to_string(),
+                        )
+                    })?;
+                    vec![id]
+                };
+                let mut errors = Vec::new();
+                for id in targets {
+                    match client.upgrade(&id, override_spec.clone()) {
+                        Ok(out) if out.upgraded => println!(
+                            "Upgraded {} {} -> {}",
+                            out.plugin_id, out.previous_version, out.installed_version
+                        ),
+                        Ok(out) => {
+                            println!(
+                                "{} is up to date (v{})",
+                                out.plugin_id, out.previous_version
+                            )
+                        }
+                        Err(err) => errors.push(format!("{id}: {err}")),
+                    }
+                }
+                if !errors.is_empty() {
+                    return Err(AppError::Config(errors.join("; ")));
+                }
+                Ok(())
+            }
+            PluginSubcommand::Outdated => {
+                let outdated = client
+                    .list_outdated()
+                    .map_err(|err| AppError::Config(err.to_string()))?;
+                if outdated.is_empty() {
+                    println!("(all installed plugins are up to date)");
+                } else {
+                    println!("{:<32} {:<14} {}", "PLUGIN", "INSTALLED", "LATEST");
+                    for record in outdated {
+                        println!(
+                            "{:<32} {:<14} {}",
+                            record.plugin_id, record.installed_version, record.latest_version
+                        );
+                    }
                 }
                 Ok(())
             }

@@ -30,6 +30,17 @@ pub enum MarketplaceError {
     InvalidUrl(String),
     #[error("plugin `{0}` is already installed; use --force")]
     AlreadyInstalled(String),
+    #[error("archive error for `{plugin}`: {message}")]
+    Archive { plugin: String, message: String },
+    #[error("dependency `{0}` requested by `{1}` is missing from the registry")]
+    MissingDependency(String, String),
+    #[error("circular dependency detected involving `{0}`")]
+    CircularDependency(String),
+    #[error("plugin `{plugin}` is required by {dependents:?}; pass --cascade to remove together")]
+    RequiredByOthers {
+        plugin: String,
+        dependents: Vec<String>,
+    },
 }
 
 impl From<reqwest::Error> for MarketplaceError {

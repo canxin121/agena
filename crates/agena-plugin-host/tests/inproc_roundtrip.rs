@@ -839,3 +839,87 @@ async fn ui_theme_calls_require_capability() {
         .expect_err("theme.list should require Theme capability");
     assert!(err.message.contains("Theme"));
 }
+
+/// A plugin shipping two entries: only entry `loud` declares `ReadConfig`;
+/// entry `quiet` declares nothing. With per-entry scoping the same host
+/// call must succeed under `loud` and fail under `quiet`, regardless of
+/// the plugin-level union.
+#[derive(Clone)]
+struct TwoEntryPlugin;
+
+#[async_trait]
+impl Plugin for TwoEntryPlugin {
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::builder("two-entry", "0.1.0")
+            .hooks(HookSubscription::TOOL_INVOKE)
+            .entry(
+                PluginEntryDecl::new("loud", json!({})).host_capability(HostCapability::ReadConfig),
+            )
+            .entry(PluginEntryDecl::new("quiet", json!({})))
+            .build()
+    }
+
+    async fn tool_invoke(&self, _input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
+        Ok(ToolInvokeOutput::text("ok"))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn per_entry_capability_scope_isolates_entries() {
+    use agena_plugin_sdk::host_api::{HostCallbackContext, with_host_callback_context};
+
+    let mut list = BTreeMap::new();
+    list.insert(
+        "two-entry".to_string(),
+        PluginEntry::Static {
+            options: serde_json::Value::Null,
+            timeouts: Default::default(),
+        },
+    );
+    let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
+        .with_config(PluginsConfig {
+            list,
+            ..Default::default()
+        })
+        .register_static("two-entry", TwoEntryPlugin)
+        .build()
+        .await
+        .expect("host builds");
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    // Under entry `loud`: ReadConfig is declared, call must succeed.
+    let value = with_host_callback_context(
+        HostCallbackContext {
+            entry_name: Some("loud".into()),
+            ..Default::default()
+        },
+        host.host_handle().handle_call_for_plugin(
+            "two-entry",
+            agena_plugin_sdk::rpc::method::HOST_CONFIG_READ,
+            json!({ "path": null }),
+        ),
+    )
+    .await
+    .expect("loud entry has ReadConfig");
+    assert_eq!(value, json!({ "ok": true }));
+
+    // Under entry `quiet`: no caps declared; per-entry deny must apply,
+    // not fall through to the plugin-level union.
+    let err = with_host_callback_context(
+        HostCallbackContext {
+            entry_name: Some("quiet".into()),
+            ..Default::default()
+        },
+        host.host_handle().handle_call_for_plugin(
+            "two-entry",
+            agena_plugin_sdk::rpc::method::HOST_CONFIG_READ,
+            json!({ "path": null }),
+        ),
+    )
+    .await
+    .expect_err("quiet entry must be denied");
+    assert_eq!(err.code, PluginErrorCode::HostUnavailable);
+    assert!(err.message.contains("entry `quiet`"));
+}

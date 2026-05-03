@@ -24,15 +24,16 @@ use crate::host_api::{
     HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostClient,
     HostCommandListResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
     HostCommandRemoveResponse, HostEntryListResponse, HostEntryMutationResponse,
-    HostEntryRegisterRequest, HostEntryRemoveRequest, HostEntryUpdateRequest,
+    HostEntryRegisterRequest, HostEntryRemoveRequest, HostEntryUpdateRequest, HostHookListResponse,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
-    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
+    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
     HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
     MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse,
     ToolDescriptor,
@@ -758,6 +759,53 @@ impl HostClient for StdioHostClient {
         self.call(
             method::HOST_AGENT_LIST,
             serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn hook_list(&self) -> crate::error::Result<HostHookListResponse> {
+        self.call(
+            method::HOST_HOOK_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn mcp_list_servers(&self) -> crate::error::Result<HostMcpListServersResponse> {
+        self.call(
+            method::HOST_MCP_LIST_SERVERS,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_MCP_ADD_SERVER,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn mcp_remove_server(
+        &self,
+        req: HostMcpRemoveServerRequest,
+    ) -> crate::error::Result<HostMcpRemoveServerResponse> {
+        self.call(
+            method::HOST_MCP_REMOVE_SERVER,
+            serde_json::json!({
+                "request": req,
                 "context": crate::host_api::current_host_callback_context(),
             }),
         )

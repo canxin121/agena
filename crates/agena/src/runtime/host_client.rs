@@ -19,18 +19,20 @@ use crate::plugin::sdk::host_api::{
     HostAgentRemoveResponse, HostCallbackContext, HostClient, HostCommandDescriptor,
     HostCommandListResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
     HostCommandRemoveResponse, HostLspDiagnostic, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer, HostPlanEntry,
-    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest,
-    HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest,
-    HostStorageListResponse, HostStorageSetRequest, HostWorktreeEntry, HostWorktreeListResponse,
-    LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
-    SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostPlanEntry, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
+    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -1026,6 +1028,71 @@ impl HostClient for RuntimeHostClient {
             .map(agent_to_descriptor)
             .collect();
         Ok(HostAgentListResponse { agents })
+    }
+
+    async fn mcp_list_servers(&self) -> Result<HostMcpListServersResponse, PluginError> {
+        let manager = self
+            .runtime
+            .current_snapshot()
+            .mcp_manager()
+            .ok_or_else(|| host_unavailable("mcp manager is not enabled in this runtime"))?;
+        let servers = manager.server_names().await;
+        Ok(HostMcpListServersResponse { servers })
+    }
+
+    async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> Result<(), PluginError> {
+        let manager = self
+            .runtime
+            .current_snapshot()
+            .mcp_manager()
+            .ok_or_else(|| host_unavailable("mcp manager is not enabled in this runtime"))?;
+        let spec = match req.spec {
+            HostMcpServerSpec::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => agena_mcp_client::ServerSpec::Stdio {
+                command,
+                args,
+                env: env.into_iter().collect(),
+                cwd: cwd.map(std::path::PathBuf::from),
+            },
+            HostMcpServerSpec::Http {
+                url,
+                bearer,
+                headers,
+            } => {
+                let url = url::Url::parse(&url)
+                    .map_err(|e| PluginError::invalid_params(format!("invalid mcp url: {e}")))?;
+                let auth = bearer.map(agena_mcp_client::HttpAuth::Bearer);
+                agena_mcp_client::ServerSpec::Http {
+                    url,
+                    mode: agena_mcp_client::HttpTransportMode::StreamableHttp,
+                    headers: headers.into_iter().collect(),
+                    auth,
+                }
+            }
+        };
+        manager
+            .add_server(&req.name, spec)
+            .await
+            .map_err(|e| PluginError::new(format!("mcp.add_server: {e}")))
+    }
+
+    async fn mcp_remove_server(
+        &self,
+        req: HostMcpRemoveServerRequest,
+    ) -> Result<HostMcpRemoveServerResponse, PluginError> {
+        let manager = self
+            .runtime
+            .current_snapshot()
+            .mcp_manager()
+            .ok_or_else(|| host_unavailable("mcp manager is not enabled in this runtime"))?;
+        match manager.remove_server(&req.name).await {
+            Ok(()) => Ok(HostMcpRemoveServerResponse { removed: true }),
+            Err(_) => Ok(HostMcpRemoveServerResponse { removed: false }),
+        }
     }
 }
 

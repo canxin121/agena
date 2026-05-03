@@ -708,3 +708,62 @@ async fn command_and_agent_calls_require_capability() {
         .expect_err("agent.list should require AgentRegistry");
     assert!(agent_err.message.contains("AgentRegistry"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hook_and_mcp_calls_require_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let hook_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_HOOK_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("hook.list should require HookRegistry");
+    assert!(hook_err.message.contains("HookRegistry"));
+
+    let mcp_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_MCP_LIST_SERVERS,
+            json!({}),
+        )
+        .await
+        .expect_err("mcp.list_servers should require McpRegistry");
+    assert!(mcp_err.message.contains("McpRegistry"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hook_capability_returns_loaded_plugin_capabilities() {
+    let host = host_with_capability_plugin(vec![HostCapability::HookRegistry]).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let response = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_HOOK_LIST,
+            json!({}),
+        )
+        .await
+        .expect("hook.list should be allowed");
+    let entries = response
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.get("plugin_id").and_then(|v| v.as_str())
+                == Some("capability-plugin"))
+    );
+}

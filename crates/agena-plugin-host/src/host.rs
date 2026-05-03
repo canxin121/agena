@@ -24,15 +24,17 @@ use crate::sdk::host_api::{
     HostAgentRemoveResponse, HostCallbackContext, HostClient, HostCommandListResponse,
     HostCommandRegisterRequest, HostCommandRemoveRequest, HostCommandRemoveResponse,
     HostEntryDescriptor, HostEntryListResponse, HostEntryMutationResponse,
-    HostEntryRegisterRequest, HostEntryRemoveRequest, HostEntryUpdateRequest,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
-    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostEntryRegisterRequest, HostEntryRemoveRequest, HostEntryUpdateRequest, HostHookEntry,
+    HostHookListResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
+    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
     HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
     MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
     SpawnSubtaskResponse, ToolDescriptor,
@@ -2210,6 +2212,46 @@ impl HostHandle {
                 .await?;
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
+            method::HOST_HOOK_LIST => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::HookRegistry)
+                    .await?;
+                let response = self.hook_list_response().await;
+                serde_json::to_value(&response)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_MCP_LIST_SERVERS => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::McpRegistry)
+                    .await?;
+                let p: HostMcpListServersParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.mcp_list_servers(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_MCP_ADD_SERVER => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::McpRegistry)
+                    .await?;
+                let p: HostMcpAddServerParams = parse(params)?;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.mcp_add_server(p.request),
+                )
+                .await?;
+                Ok(serde_json::Value::Object(Default::default()))
+            }
+            method::HOST_MCP_REMOVE_SERVER => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::McpRegistry)
+                    .await?;
+                let p: HostMcpRemoveServerParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.mcp_remove_server(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
             other => Err(PluginError::not_implemented(other)),
         }
     }
@@ -2297,6 +2339,28 @@ impl HostHandle {
         HostPluginStatusGetResponse {
             status: self.statuses.get(plugin_id).map(host_status_from),
         }
+    }
+
+    async fn hook_list_response(&self) -> HostHookListResponse {
+        // Walk capability metadata to surface plugins that subscribed to
+        // any tool/event hook. We approximate by listing every plugin id we
+        // know capabilities for; the actual hook subscription bitmask lives
+        // on `LoadedPlugin.manifest.hooks` but is not directly accessible
+        // from within HostHandle without holding the PluginHost. Plugins
+        // can introspect `entry.list` to map capabilities and entries to
+        // each plugin id.
+        let capabilities = self.capabilities.read().await;
+        let entries = capabilities
+            .iter()
+            .map(|(plugin_id, caps)| HostHookEntry {
+                plugin_id: plugin_id.clone(),
+                hooks: caps
+                    .iter()
+                    .map(|cap| format!("{cap:?}"))
+                    .collect::<Vec<_>>(),
+            })
+            .collect();
+        HostHookListResponse { entries }
     }
 }
 
@@ -2592,6 +2656,26 @@ struct HostAgentRemoveParams {
 #[derive(serde::Deserialize, Default)]
 struct HostAgentListParams {
     #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostMcpListServersParams {
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostMcpAddServerParams {
+    request: HostMcpAddServerRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostMcpRemoveServerParams {
+    request: HostMcpRemoveServerRequest,
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -3019,6 +3103,36 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.agent_list()).await
+    }
+
+    async fn hook_list(&self) -> crate::sdk::Result<HostHookListResponse> {
+        self.require_capability(method::HOST_HOOK_LIST, HostCapability::HookRegistry)
+            .await?;
+        Ok(self.handle.hook_list_response().await)
+    }
+
+    async fn mcp_list_servers(&self) -> crate::sdk::Result<HostMcpListServersResponse> {
+        self.require_capability(method::HOST_MCP_LIST_SERVERS, HostCapability::McpRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.mcp_list_servers()).await
+    }
+
+    async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> crate::sdk::Result<()> {
+        self.require_capability(method::HOST_MCP_ADD_SERVER, HostCapability::McpRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.mcp_add_server(req)).await
+    }
+
+    async fn mcp_remove_server(
+        &self,
+        req: HostMcpRemoveServerRequest,
+    ) -> crate::sdk::Result<HostMcpRemoveServerResponse> {
+        self.require_capability(method::HOST_MCP_REMOVE_SERVER, HostCapability::McpRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.mcp_remove_server(req)).await
     }
 }
 

@@ -184,6 +184,8 @@ Available callbacks include:
 | `scheduler_list`, `scheduler_create`, `scheduler_delete` / `host/scheduler.*` | `Scheduler` |
 | `command_register`, `command_remove`, `command_list` / `host/command.*` | `CommandRegistry` |
 | `agent_register`, `agent_remove`, `agent_list` / `host/agent.*` | `AgentRegistry` |
+| `hook_list` / `host/hook.list` | `HookRegistry` |
+| `mcp_list_servers`, `mcp_add_server`, `mcp_remove_server` / `host/mcp.*` | `McpRegistry` |
 
 For stdio / HTTP plugins, callbacks travel back over the same JSON-RPC wire
 (stdio multiplexed on stdin/stdout, HTTP via `POST /plugin-rpc/{plugin_id}`

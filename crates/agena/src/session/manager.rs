@@ -3672,6 +3672,8 @@ mod tests {
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
         };
         crate::plugin::PluginHostBuilder::new(workspace_root, "test")
             .with_config(config)
@@ -3701,6 +3703,8 @@ mod tests {
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
         };
         let host = crate::plugin::PluginHostBuilder::new(workspace_root, "test")
             .with_config(config)
@@ -3733,6 +3737,8 @@ mod tests {
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
         };
         let host = crate::plugin::PluginHostBuilder::new(workspace_root, "test")
             .with_config(config)

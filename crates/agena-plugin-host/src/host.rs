@@ -1368,6 +1368,13 @@ impl PluginHostBuilder {
         if let Some(url) = self.callback_base_url.clone() {
             handle = handle.with_callback_base_url(url);
         }
+        let quotas = Arc::new(crate::quota::QuotaRegistry::new(
+            self.config.default_quota.clone(),
+        ));
+        for (plugin_id, quota) in &self.config.quotas {
+            quotas.set_plugin(plugin_id.clone(), quota.clone());
+        }
+        handle.install_quota_registry(Arc::clone(&quotas));
         let host_handle = Arc::new(handle);
         #[allow(clippy::type_complexity)]
         let env_lookup: Box<dyn Fn(&str) -> Option<String> + Send + Sync> =
@@ -1536,6 +1543,7 @@ pub struct HostHandle {
     statuses: Arc<crate::status::StatusRegistry>,
     statusline: Arc<RwLock<std::collections::BTreeMap<(String, String), HostStatuslineSegment>>>,
     themes: Arc<RwLock<std::collections::BTreeMap<String, HostThemePalette>>>,
+    quotas: Arc<crate::quota::QuotaRegistry>,
 }
 
 impl HostHandle {
@@ -1577,7 +1585,16 @@ impl HostHandle {
             statuses,
             statusline: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             themes: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            quotas: Arc::new(crate::quota::QuotaRegistry::default()),
         }
+    }
+
+    pub fn quota_registry(&self) -> Arc<crate::quota::QuotaRegistry> {
+        Arc::clone(&self.quotas)
+    }
+
+    pub fn install_quota_registry(&mut self, registry: Arc<crate::quota::QuotaRegistry>) {
+        self.quotas = registry;
     }
 
     pub fn status_registry(&self) -> Arc<crate::status::StatusRegistry> {
@@ -1729,6 +1746,19 @@ impl HostHandle {
     ) -> Result<serde_json::Value, PluginError> {
         let inner = self.inner.read().await.clone();
         let plugin_id = (!plugin_id.is_empty()).then(|| plugin_id.to_string());
+        // Per-plugin quota guard. Skipped for callbacks that aren't tied to
+        // any plugin (i.e. handle_call without a plugin_id) since those
+        // can't be attributed to a quota bucket.
+        let _quota_guard = match plugin_id.as_deref() {
+            Some(pid) => Some(self.quotas.acquire(pid).map_err(|err| PluginError {
+                code: PluginErrorCode::Generic,
+                message: err.to_string(),
+                hook: Some(method.to_string()),
+                plugin: Some(pid.to_string()),
+                data: None,
+            })?),
+            None => None,
+        };
         match method {
             method::HOST_LOG => {
                 let p: HostLogParams = parse(params)?;

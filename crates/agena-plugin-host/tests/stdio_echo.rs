@@ -51,6 +51,8 @@ async fn stdio_echo_plugin_loads_and_invokes() {
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
         })
         .build()
         .await

@@ -678,3 +678,33 @@ async fn plan_worktree_scheduler_capability_unlocks_dispatch() {
         assert!(!err.message.contains("Scheduler"));
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn command_and_agent_calls_require_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let cmd_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_COMMAND_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("command.list should require CommandRegistry");
+    assert!(cmd_err.message.contains("CommandRegistry"));
+
+    let agent_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_AGENT_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("agent.list should require AgentRegistry");
+    assert!(agent_err.message.contains("AgentRegistry"));
+}

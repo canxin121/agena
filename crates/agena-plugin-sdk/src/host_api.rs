@@ -220,6 +220,39 @@ pub trait HostClient: Send + Sync + 'static {
     ) -> Result<HostSchedulerDeleteResponse> {
         Err(unavailable())
     }
+
+    /// Slash command registry — register or update a runtime command.
+    async fn command_register(&self, _req: HostCommandRegisterRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Slash command registry — remove a runtime command by name.
+    async fn command_remove(
+        &self,
+        _req: HostCommandRemoveRequest,
+    ) -> Result<HostCommandRemoveResponse> {
+        Err(unavailable())
+    }
+
+    /// Slash command registry — list every command currently registered.
+    async fn command_list(&self) -> Result<HostCommandListResponse> {
+        Err(unavailable())
+    }
+
+    /// Subagent profile registry — register or update a runtime profile.
+    async fn agent_register(&self, _req: HostAgentRegisterRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Subagent profile registry — remove a runtime profile by name.
+    async fn agent_remove(&self, _req: HostAgentRemoveRequest) -> Result<HostAgentRemoveResponse> {
+        Err(unavailable())
+    }
+
+    /// Subagent profile registry — list every profile currently registered.
+    async fn agent_list(&self) -> Result<HostAgentListResponse> {
+        Err(unavailable())
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -782,6 +815,82 @@ pub struct HostSchedulerDeleteRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostSchedulerDeleteResponse {
     pub removed: bool,
+}
+
+// ---------------- commands / agents ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostCommandDescriptor {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostCommandRegisterRequest {
+    pub command: HostCommandDescriptor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostCommandRemoveRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostCommandRemoveResponse {
+    pub removed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostCommandListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<HostCommandDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostAgentDescriptor {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostAgentRegisterRequest {
+    pub agent: HostAgentDescriptor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostAgentRemoveRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostAgentRemoveResponse {
+    pub removed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostAgentListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<HostAgentDescriptor>,
 }
 
 fn default_true() -> bool {

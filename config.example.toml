@@ -92,9 +92,10 @@ enabled = true
 #   * http    — remote service speaking JSON-RPC over POST
 #   * wasm    — WebAssembly module (requires plugin-wasm feature)
 #
-# First-party static plugins such as agena.builtin and agena.skills are
-# registered by the runtime. agena.skills provides the model-visible skill_run
-# entry through the plugin registry.
+# First-party static plugins such as agena.builtin, agena.skills, and agena.lsp
+# are registered by the runtime. agena.skills provides the model-visible
+# skill_run entry; agena.lsp exposes read-only lsp_servers / lsp_diagnostics
+# entries via host/lsp.list_*.
 #
 # Plugins that call host callbacks must declare matching host_capabilities in
 # their manifest entries. For example, host/config.read requires ReadConfig and

@@ -22,7 +22,8 @@ use crate::hooks::{
 use crate::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostClient,
     HostEntryListResponse, HostEntryMutationResponse, HostEntryRegisterRequest,
-    HostEntryRemoveRequest, HostEntryUpdateRequest, HostPluginStatusGetRequest,
+    HostEntryRemoveRequest, HostEntryUpdateRequest, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSecretDeleteRequest,
     HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
     HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest,
@@ -582,6 +583,30 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<HostPluginStatusGetResponse> {
         self.call(
             method::HOST_PLUGIN_STATUS_GET,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn lsp_list_servers(&self) -> crate::error::Result<HostLspListServersResponse> {
+        self.call(
+            method::HOST_LSP_LIST_SERVERS,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn lsp_list_diagnostics(
+        &self,
+        req: HostLspListDiagnosticsRequest,
+    ) -> crate::error::Result<HostLspListDiagnosticsResponse> {
+        self.call(
+            method::HOST_LSP_LIST_DIAGNOSTICS,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),

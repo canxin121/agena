@@ -15,14 +15,15 @@ use crate::message::{
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostCallbackContext,
-    HostClient, HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
-    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
-    SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostClient, HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostLspServer, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSecretDeleteRequest,
+    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -749,6 +750,71 @@ impl HostClient for RuntimeHostClient {
         Ok(HostPluginStatusGetResponse {
             status: host.plugin_status(&req.plugin_id).map(host_status_to_sdk),
         })
+    }
+
+    async fn lsp_list_servers(&self) -> Result<HostLspListServersResponse, PluginError> {
+        let executor = self.tool_executor()?;
+        let registry = executor
+            .lsp_registry()
+            .ok_or_else(|| host_unavailable("lsp registry is not enabled in this runtime"))?;
+        let specs = registry.server_specs().await;
+        let servers = specs
+            .into_iter()
+            .map(|spec| HostLspServer {
+                name: spec.name,
+                command: spec.command,
+                args: spec.args,
+                file_extensions: spec.file_extensions,
+            })
+            .collect();
+        Ok(HostLspListServersResponse { servers })
+    }
+
+    async fn lsp_list_diagnostics(
+        &self,
+        req: HostLspListDiagnosticsRequest,
+    ) -> Result<HostLspListDiagnosticsResponse, PluginError> {
+        let executor = self.tool_executor()?;
+        let registry = executor
+            .lsp_registry()
+            .ok_or_else(|| host_unavailable("lsp registry is not enabled in this runtime"))?;
+        let pairs = registry.collect_diagnostics().await;
+        let mut entries = Vec::new();
+        for (uri, diagnostics) in pairs {
+            if let Some(filter) = req.uri.as_ref()
+                && filter != &uri
+            {
+                continue;
+            }
+            for diagnostic in diagnostics {
+                entries.push(HostLspDiagnostic {
+                    uri: uri.clone(),
+                    severity: lsp_severity_string(diagnostic.severity),
+                    message: diagnostic.message,
+                    start_line: diagnostic.range.start.line,
+                    start_character: diagnostic.range.start.character,
+                    end_line: diagnostic.range.end.line,
+                    end_character: diagnostic.range.end.character,
+                    source: diagnostic.source,
+                    code: diagnostic.code.map(|code| match code {
+                        agena_lsp::lsp_types::NumberOrString::Number(n) => n.to_string(),
+                        agena_lsp::lsp_types::NumberOrString::String(s) => s,
+                    }),
+                });
+            }
+        }
+        Ok(HostLspListDiagnosticsResponse { entries })
+    }
+}
+
+fn lsp_severity_string(severity: Option<agena_lsp::lsp_types::DiagnosticSeverity>) -> String {
+    match severity {
+        Some(agena_lsp::lsp_types::DiagnosticSeverity::ERROR) => "error".to_string(),
+        Some(agena_lsp::lsp_types::DiagnosticSeverity::WARNING) => "warning".to_string(),
+        Some(agena_lsp::lsp_types::DiagnosticSeverity::INFORMATION) => "information".to_string(),
+        Some(agena_lsp::lsp_types::DiagnosticSeverity::HINT) => "hint".to_string(),
+        Some(_) => "unknown".to_string(),
+        None => "unknown".to_string(),
     }
 }
 

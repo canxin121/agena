@@ -22,7 +22,8 @@ use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription,
     HostCallbackContext, HostClient, HostEntryDescriptor, HostEntryListResponse,
     HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
-    HostEntryUpdateRequest, HostPluginStatus, HostPluginStatusGetRequest,
+    HostEntryUpdateRequest, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSecretDeleteRequest,
     HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
     HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest,
@@ -2021,6 +2022,28 @@ impl HostHandle {
                 serde_json::to_value(&response)
                     .map_err(|e| PluginError::invalid_params(e.to_string()))
             }
+            method::HOST_LSP_LIST_SERVERS => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::LspRegistry)
+                    .await?;
+                let p: HostLspListServersParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.lsp_list_servers(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_LSP_LIST_DIAGNOSTICS => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::LspRegistry)
+                    .await?;
+                let p: HostLspListDiagnosticsParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.lsp_list_diagnostics(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
             other => Err(PluginError::not_implemented(other)),
         }
     }
@@ -2304,6 +2327,20 @@ struct HostSecretListParams {
 struct HostPluginStatusGetParams {
     request: HostPluginStatusGetRequest,
     #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostLspListServersParams {
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostLspListDiagnosticsParams {
+    #[serde(default)]
+    request: HostLspListDiagnosticsRequest,
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -2612,6 +2649,26 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_PLUGIN_STATUS_GET, HostCapability::PluginStatus)
             .await?;
         Ok(self.handle.plugin_status_get_response(&req.plugin_id))
+    }
+
+    async fn lsp_list_servers(&self) -> crate::sdk::Result<HostLspListServersResponse> {
+        self.require_capability(method::HOST_LSP_LIST_SERVERS, HostCapability::LspRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.lsp_list_servers()).await
+    }
+
+    async fn lsp_list_diagnostics(
+        &self,
+        req: HostLspListDiagnosticsRequest,
+    ) -> crate::sdk::Result<HostLspListDiagnosticsResponse> {
+        self.require_capability(
+            method::HOST_LSP_LIST_DIAGNOSTICS,
+            HostCapability::LspRegistry,
+        )
+        .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.lsp_list_diagnostics(req)).await
     }
 }
 

@@ -171,6 +171,19 @@ pub trait HostClient: Send + Sync + 'static {
     ) -> Result<HostPluginStatusGetResponse> {
         Err(unavailable())
     }
+
+    /// LSP read-only observability — list configured servers.
+    async fn lsp_list_servers(&self) -> Result<HostLspListServersResponse> {
+        Err(unavailable())
+    }
+
+    /// LSP read-only observability — list cached diagnostics.
+    async fn lsp_list_diagnostics(
+        &self,
+        _req: HostLspListDiagnosticsRequest,
+    ) -> Result<HostLspListDiagnosticsResponse> {
+        Err(unavailable())
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -587,6 +600,51 @@ pub struct HostPluginStatusGetRequest {
 pub struct HostPluginStatusGetResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<HostPluginStatus>,
+}
+
+// ---------------- lsp ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostLspListServersResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<HostLspServer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostLspServer {
+    pub name: String,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_extensions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostLspListDiagnosticsRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostLspListDiagnosticsResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<HostLspDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostLspDiagnostic {
+    pub uri: String,
+    pub severity: String,
+    pub message: String,
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 fn default_true() -> bool {

@@ -52,6 +52,31 @@ impl LspRegistry {
         g.keys().cloned().collect()
     }
 
+    /// Snapshot every registered server's metadata (name, command,
+    /// file_extensions). Used by host APIs that surface the configured LSP
+    /// fleet to plugins or operators.
+    pub async fn server_specs(&self) -> Vec<LspServerSpec> {
+        self.servers.read().await.values().cloned().collect()
+    }
+
+    /// Collect cached `(uri, diagnostics)` pairs from every already-spawned
+    /// client. Diagnostics only appear here after a tool has touched the file
+    /// — this is a read-only observability hook, not a forced indexing pass.
+    pub async fn collect_diagnostics(&self) -> Vec<(String, Vec<lsp_types::Diagnostic>)> {
+        let spawned: Vec<Arc<crate::client::LspClient>> =
+            self.spawned.read().await.values().cloned().collect();
+        let mut out = Vec::new();
+        for client in spawned {
+            for (uri, diagnostics) in client.diagnostics_snapshot() {
+                if diagnostics.is_empty() {
+                    continue;
+                }
+                out.push((uri, diagnostics));
+            }
+        }
+        out
+    }
+
     /// Find the first registered server whose `file_extensions` matches
     /// the given path. Returns `None` if no server claims the file.
     pub async fn server_for_path(&self, path: &Path) -> Option<LspServerSpec> {

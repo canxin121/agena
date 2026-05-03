@@ -547,9 +547,10 @@ impl HostClient for RuntimeHostClient {
         req: BuiltinToolRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
-        if context.plugin_id.as_deref() != Some(crate::tool::builtins_plugin_id()) {
+        let plugin_id = context.plugin_id.as_deref().unwrap_or_default();
+        if !plugin_id.starts_with("agena.") {
             return Err(host_unavailable(
-                "built-in host execution is only available to agena.builtin",
+                "built-in host execution is reserved for first-party agena.* plugins",
             ));
         }
         let executor = self.tool_executor()?;

@@ -609,3 +609,72 @@ async fn lsp_capability_unlocks_dispatch() {
         .expect_err("default lsp_list_servers should reach trait fallback");
     assert!(!err.message.contains("LspRegistry"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plan_worktree_scheduler_calls_require_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let plan_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PLAN_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("plan.list should require PlanRegistry");
+    assert!(plan_err.message.contains("PlanRegistry"));
+
+    let worktree_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_WORKTREE_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("worktree.list should require WorktreeRegistry");
+    assert!(worktree_err.message.contains("WorktreeRegistry"));
+
+    let scheduler_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_SCHEDULER_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("scheduler.list should require Scheduler");
+    assert!(scheduler_err.message.contains("Scheduler"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plan_worktree_scheduler_capability_unlocks_dispatch() {
+    let host = host_with_capability_plugin(vec![
+        HostCapability::PlanRegistry,
+        HostCapability::WorktreeRegistry,
+        HostCapability::Scheduler,
+    ])
+    .await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    for method in [
+        agena_plugin_sdk::rpc::method::HOST_PLAN_LIST,
+        agena_plugin_sdk::rpc::method::HOST_WORKTREE_LIST,
+        agena_plugin_sdk::rpc::method::HOST_SCHEDULER_LIST,
+    ] {
+        let err = host
+            .host_handle()
+            .handle_call_for_plugin("capability-plugin", method, json!({}))
+            .await
+            .expect_err("default trait method should be HostUnavailable, not capability error");
+        assert!(!err.message.contains("PlanRegistry"));
+        assert!(!err.message.contains("WorktreeRegistry"));
+        assert!(!err.message.contains("Scheduler"));
+    }
+}

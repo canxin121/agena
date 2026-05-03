@@ -185,4 +185,10 @@ pub mod method {
     pub const HOST_PLUGIN_STATUS_GET: &str = "host/plugin.status.get";
     pub const HOST_LSP_LIST_SERVERS: &str = "host/lsp.list_servers";
     pub const HOST_LSP_LIST_DIAGNOSTICS: &str = "host/lsp.list_diagnostics";
+    pub const HOST_PLAN_LIST: &str = "host/plan.list";
+    pub const HOST_PLAN_GET: &str = "host/plan.get";
+    pub const HOST_WORKTREE_LIST: &str = "host/worktree.list";
+    pub const HOST_SCHEDULER_LIST: &str = "host/scheduler.list";
+    pub const HOST_SCHEDULER_CREATE: &str = "host/scheduler.create";
+    pub const HOST_SCHEDULER_DELETE: &str = "host/scheduler.delete";
 }

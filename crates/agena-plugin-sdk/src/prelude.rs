@@ -15,12 +15,16 @@ pub use crate::host_api::{
     EventSubscription, HostClient, HostEntryDescriptor, HostEntryListResponse,
     HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
     HostEntryUpdateRequest, HostLspDiagnostic, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer, HostPluginStatus,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer, HostPlanEntry,
+    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
     HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
     HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
     HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest,
     HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest,
-    HostStorageListResponse, HostStorageSetRequest, LogLevel, NoopHostClient,
+    HostStorageListResponse, HostStorageSetRequest, HostWorktreeEntry, HostWorktreeListResponse,
+    LogLevel, NoopHostClient,
 };
 pub use crate::manifest::{
     EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,

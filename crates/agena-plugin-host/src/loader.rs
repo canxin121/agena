@@ -467,6 +467,23 @@ pub fn verify_signature(
     sig: &crate::config::PluginSignature,
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("read `{}`: {e}", path.display()))?;
+    verify_signature_bytes(&bytes, sig, trusted_keys).map_err(|e| {
+        format!(
+            "signature verification failed for `{}`: {e}",
+            path.display()
+        )
+    })
+}
+
+/// Verify an ed25519 signature against in-memory bytes. Used by the marketplace
+/// after a download but before the artifact lands on disk.
+#[cfg(feature = "signing")]
+pub fn verify_signature_bytes(
+    bytes: &[u8],
+    sig: &crate::config::PluginSignature,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     let key_hex = trusted_keys
         .get(&sig.key_id)
@@ -484,11 +501,7 @@ pub fn verify_signature(
         .try_into()
         .map_err(|_| "signature must be 64 bytes".to_string())?;
     let signature = Signature::from_bytes(&sig_array);
-    let bytes = std::fs::read(path).map_err(|e| format!("read `{}`: {e}", path.display()))?;
-    verifier.verify(&bytes, &signature).map_err(|e| {
-        format!(
-            "signature verification failed for `{}`: {e}",
-            path.display()
-        )
-    })
+    verifier
+        .verify(bytes, &signature)
+        .map_err(|e| e.to_string())
 }

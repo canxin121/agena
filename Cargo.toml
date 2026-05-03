@@ -18,6 +18,7 @@ members = [
     "crates/agena-mcp-client",
     "crates/agena-mcp-server",
     "crates/agena-plugin-host",
+    "crates/agena-plugin-marketplace",
     "crates/agena-plugin-sdk",
     "crates/agena-rollout",
     "crates/agena-scheduler",

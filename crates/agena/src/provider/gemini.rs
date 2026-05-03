@@ -176,9 +176,11 @@ impl GeminiProvider {
         let projected_parts = wire_message::project(message);
         if projected_parts.is_empty() {
             let text = message.as_text_lossy();
-            return (!text.trim().is_empty())
-                .then(|| vec![GeminiPart::text(text)])
-                .unwrap_or_default();
+            return if text.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![GeminiPart::text(text)]
+            };
         }
 
         projected_parts
@@ -225,6 +227,7 @@ impl GeminiProvider {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     async fn complete_by_aggregating_stream(
         &self,
         request: CompletionRequest,

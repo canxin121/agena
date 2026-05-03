@@ -274,16 +274,9 @@ pub use agena_plugin_host::PluginsConfig as PluginConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct MemoryConfig {
     pub project_instructions: ProjectInstructionsConfig,
-}
-
-impl Default for MemoryConfig {
-    fn default() -> Self {
-        Self {
-            project_instructions: ProjectInstructionsConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]

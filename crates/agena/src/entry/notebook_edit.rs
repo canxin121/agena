@@ -170,10 +170,10 @@ fn source_to_lines(source: &str) -> Value {
         .split_inclusive('\n')
         .map(|line| Value::String(line.to_string()))
         .collect::<Vec<_>>();
-    if !source.ends_with('\n') {
-        if let Some(Value::String(last)) = lines.last_mut() {
-            *last = last.trim_end_matches('\n').to_string();
-        }
+    if !source.ends_with('\n')
+        && let Some(Value::String(last)) = lines.last_mut()
+    {
+        *last = last.trim_end_matches('\n').to_string();
     }
     Value::Array(lines)
 }

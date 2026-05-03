@@ -229,9 +229,9 @@ impl PluginHost {
         self.entries.entries()
     }
 
-    fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output
+    fn block_on<F>(&self, fut: F) -> F::Output
     where
-        F: Send,
+        F: std::future::Future + Send,
         F::Output: Send,
     {
         if let Some(rt) = &self.runtime {
@@ -274,9 +274,9 @@ impl PluginHost {
         rt.block_on(fut)
     }
 
-    fn block_on_static<F: std::future::Future>(&self, fut: F) -> F::Output
+    fn block_on_static<F>(&self, fut: F) -> F::Output
     where
-        F: Send + 'static,
+        F: std::future::Future + Send + 'static,
         F::Output: Send + 'static,
     {
         if let Some(rt) = &self.runtime {
@@ -1041,13 +1041,13 @@ impl PluginHost {
             }
             let patch: Option<AgentStopPatch> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            if let Some(p) = patch {
-                if p.continue_with_message.is_some() {
-                    acc.continue_with_message = p.continue_with_message;
-                    acc.reason = p.reason;
-                    // First plugin that wants to block stop wins.
-                    break;
-                }
+            if let Some(p) = patch
+                && p.continue_with_message.is_some()
+            {
+                acc.continue_with_message = p.continue_with_message;
+                acc.reason = p.reason;
+                // First plugin that wants to block stop wins.
+                break;
             }
         }
         Ok(acc)
@@ -1282,6 +1282,7 @@ impl PluginHostBuilder {
             handle = handle.with_callback_base_url(url);
         }
         let host_handle = Arc::new(handle);
+        #[allow(clippy::type_complexity)]
         let env_lookup: Box<dyn Fn(&str) -> Option<String> + Send + Sync> =
             Box::new(|k: &str| std::env::var(k).ok());
 
@@ -1510,7 +1511,7 @@ impl HostHandle {
                     inner.ask_permission(req),
                 )
                 .await?;
-                serde_json::to_value(&d).map_err(|e| PluginError::invalid_params(e.to_string()))
+                serde_json::to_value(d).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             method::HOST_CONFIG_READ => {
                 let p: HostConfigReadParams = parse(params)?;

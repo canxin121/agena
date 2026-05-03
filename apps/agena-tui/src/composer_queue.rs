@@ -6,7 +6,7 @@
 //! * `Now`   — pushed to the front (used for cancel/recovery edge cases).
 //! * `Next`  — normal user submissions while the AI is busy. FIFO.
 //! * `Later` — system notifications / side-channel inputs that must never
-//!             starve real user intent.
+//!   starve real user intent.
 //!
 //! The queue is intentionally a plain in-memory structure with no async
 //! state — it lives inside `App` and is touched only from the UI thread.

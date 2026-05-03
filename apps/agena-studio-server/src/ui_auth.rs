@@ -486,7 +486,7 @@ pub(crate) async fn auth_session_status(
             let secure = is_secure_request(&headers);
 
             if let Some(token) = get_token_from_authorization(&headers)
-                && is_session_valid(&inner, &token)
+                && is_session_valid(inner, &token)
             {
                 return Json(AuthStatusOk {
                     authenticated: true,
@@ -497,7 +497,7 @@ pub(crate) async fn auth_session_status(
             }
 
             if let Some(token) = get_token_from_jar(&jar)
-                && is_session_valid(&inner, &token)
+                && is_session_valid(inner, &token)
             {
                 return Json(AuthStatusOk {
                     authenticated: true,
@@ -546,7 +546,7 @@ pub(crate) async fn auth_session_create(
             let now = OffsetDateTime::now_utc();
 
             if let Some(retry_after_seconds) =
-                login_lockout_remaining_seconds(&inner, &attempt_key, now)
+                login_lockout_remaining_seconds(inner, &attempt_key, now)
             {
                 let jar = jar.add(build_expired_cookie(secure, state.ui_cookie_same_site));
                 return (
@@ -568,7 +568,7 @@ pub(crate) async fn auth_session_create(
             if !verify_password(&inner.password_phc, &candidate) {
                 let jar = jar.add(build_expired_cookie(secure, state.ui_cookie_same_site));
                 if let Some(retry_after_seconds) =
-                    record_failed_login_attempt(&inner, &attempt_key, now)
+                    record_failed_login_attempt(inner, &attempt_key, now)
                 {
                     return (
                         StatusCode::TOO_MANY_REQUESTS,
@@ -599,7 +599,7 @@ pub(crate) async fn auth_session_create(
                     .into_response();
             }
 
-            clear_failed_login_attempts(&inner, &attempt_key);
+            clear_failed_login_attempts(inner, &attempt_key);
 
             if let Some(previous) = get_token_from_jar(&jar) {
                 inner.sessions.remove(&previous);
@@ -651,7 +651,7 @@ pub(crate) async fn require_ui_auth(
             // Header token (preferred): avoids third-party cookie issues and doesn't
             // require CSRF origin enforcement because the token isn't sent automatically.
             if let Some(token) = get_token_from_authorization(&headers)
-                && is_session_valid(&inner, &token)
+                && is_session_valid(inner, &token)
             {
                 return next.run(req).await;
             }
@@ -660,7 +660,7 @@ pub(crate) async fn require_ui_auth(
             // Allow a query-token fallback only for the global WS endpoint.
             if is_global_ws_path(&req_method, &req_path)
                 && let Some(token) = get_token_from_query(&req)
-                && is_session_valid(&inner, &token)
+                && is_session_valid(inner, &token)
             {
                 return next.run(req).await;
             }
@@ -668,7 +668,7 @@ pub(crate) async fn require_ui_auth(
             // Cookie token fallback (legacy / same-origin): enforce Origin allowlist for
             // unsafe methods when cookies may be sent cross-site.
             if let Some(token) = get_token_from_jar(&jar)
-                && is_session_valid(&inner, &token)
+                && is_session_valid(inner, &token)
             {
                 if !is_safe_method(req.method())
                     && (matches!(state.ui_cookie_same_site, SameSite::None)

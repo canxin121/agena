@@ -63,11 +63,11 @@ impl MessageStatus {
             return true;
         }
 
-        match (self, next) {
-            (Self::Pending, Self::InProgress | Self::Failed) => true,
-            (Self::InProgress, Self::Completed | Self::Failed) => true,
-            _ => false,
-        }
+        matches!(
+            (self, next),
+            (Self::Pending, Self::InProgress | Self::Failed)
+                | (Self::InProgress, Self::Completed | Self::Failed)
+        )
     }
 }
 

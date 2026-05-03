@@ -201,6 +201,7 @@ struct AggregatedToolCallState {
     arguments: String,
 }
 
+#[allow(clippy::type_complexity)]
 pub async fn aggregate_stream<S>(
     provider_id: &str,
     fallback_model: ModelId,

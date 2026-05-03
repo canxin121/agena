@@ -12,7 +12,7 @@ use super::monitor::{
 };
 use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
 
-pub(super) fn execute(
+pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &MonitorToolInput,
 ) -> Result<BuiltinExecution, ToolError> {
@@ -95,7 +95,7 @@ fn inherited_environment() -> HashMap<String, String> {
     std::env::vars().collect()
 }
 
-pub(super) fn render_start(started: MonitorStart) -> BuiltinExecution {
+pub(crate) fn render_start(started: MonitorStart) -> BuiltinExecution {
     let summary = started.summary;
     let title = format!(
         "Monitor start {}",
@@ -127,7 +127,7 @@ pub(super) fn render_start(started: MonitorStart) -> BuiltinExecution {
     BuiltinExecution::new(output, view)
 }
 
-pub(super) fn render_list(monitors: Vec<MonitorSummary>) -> BuiltinExecution {
+pub(crate) fn render_list(monitors: Vec<MonitorSummary>) -> BuiltinExecution {
     let body = if monitors.is_empty() {
         "No monitors registered in this session.".to_string()
     } else {
@@ -169,7 +169,7 @@ pub(super) fn render_list(monitors: Vec<MonitorSummary>) -> BuiltinExecution {
     BuiltinExecution::new(output, view)
 }
 
-pub(super) fn render_read(read: MonitorRead) -> BuiltinExecution {
+pub(crate) fn render_read(read: MonitorRead) -> BuiltinExecution {
     let body = format_events(&read);
     let title = format!("Monitor read {}", read.monitor_id);
     let mut view = ToolExecutionView::simple(title, body);
@@ -204,7 +204,7 @@ pub(super) fn render_read(read: MonitorRead) -> BuiltinExecution {
     BuiltinExecution::new(output, view)
 }
 
-pub(super) fn render_stop(stop: MonitorStopOutcome) -> BuiltinExecution {
+pub(crate) fn render_stop(stop: MonitorStopOutcome) -> BuiltinExecution {
     let summary = stop.summary;
     let title = format!("Monitor stop {}", summary.monitor_id);
     let body = format!(

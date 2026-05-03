@@ -20,6 +20,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use crate::error::ClientError;
 
 /// Item delivered to a subscriber.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum SubscriptionEvent {
     Event(DomainEvent),

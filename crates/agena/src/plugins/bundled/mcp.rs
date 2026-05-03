@@ -20,14 +20,14 @@ use crate::plugin::sdk::{
     PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
 };
 
-pub(super) const MCP_PLUGIN_ID: &str = "agena.mcp";
+pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
 
-pub(super) struct McpPlugin {
+pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,
 }
 
 impl McpPlugin {
-    pub(super) fn new(manager: Arc<McpConnectionManager>) -> Self {
+    pub(crate) fn new(manager: Arc<McpConnectionManager>) -> Self {
         Self { manager }
     }
 
@@ -517,6 +517,47 @@ fn content_block_summary(block: &ContentBlock) -> String {
     }
 }
 
+pub(crate) fn block_on<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(fut))
+            }
+            _ => block_on_scoped_thread(fut),
+        }
+    } else {
+        block_on_new_runtime(fut)
+    }
+}
+
+fn block_on_scoped_thread<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || block_on_new_runtime(fut))
+            .join()
+            .expect("mcp plugin fallback runtime thread panicked")
+    })
+}
+
+fn block_on_new_runtime<F>(fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("mcp plugin fallback runtime");
+    rt.block_on(fut)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -661,45 +702,4 @@ mod tests {
         .expect("get prompt output");
         assert!(get.output_text.contains("user: Summarize plugin docs"));
     }
-}
-
-pub(super) fn block_on<F>(fut: F) -> F::Output
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        match handle.runtime_flavor() {
-            tokio::runtime::RuntimeFlavor::MultiThread => {
-                tokio::task::block_in_place(|| handle.block_on(fut))
-            }
-            _ => block_on_scoped_thread(fut),
-        }
-    } else {
-        block_on_new_runtime(fut)
-    }
-}
-
-fn block_on_scoped_thread<F>(fut: F) -> F::Output
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    std::thread::scope(|scope| {
-        scope
-            .spawn(move || block_on_new_runtime(fut))
-            .join()
-            .expect("mcp plugin fallback runtime thread panicked")
-    })
-}
-
-fn block_on_new_runtime<F>(fut: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("mcp plugin fallback runtime");
-    rt.block_on(fut)
 }

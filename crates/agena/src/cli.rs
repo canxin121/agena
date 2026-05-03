@@ -1104,6 +1104,7 @@ impl AgenaCli {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn render_prompt_command(
         &self,
         workspace: Option<&PathBuf>,

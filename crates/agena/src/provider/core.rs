@@ -76,14 +76,14 @@ pub trait ModelProvider: Send + Sync {
     > {
         let response = self.complete(request).await?;
         let mut events = Vec::new();
-        if let Some(reasoning) = response.reasoning_text {
-            if !reasoning.is_empty() {
-                events.push(Ok(CompletionStreamEvent::ThinkingDelta {
-                    provider_id: response.provider_id.clone(),
-                    model: response.model.clone(),
-                    delta: reasoning,
-                }));
-            }
+        if let Some(reasoning) = response.reasoning_text
+            && !reasoning.is_empty()
+        {
+            events.push(Ok(CompletionStreamEvent::ThinkingDelta {
+                provider_id: response.provider_id.clone(),
+                model: response.model.clone(),
+                delta: reasoning,
+            }));
         }
         events.push(Ok(CompletionStreamEvent::TextDelta {
             provider_id: response.provider_id.clone(),

@@ -1,33 +1,31 @@
-mod apply_patch;
-mod ask_user;
-mod bash;
-mod builtins;
-mod catalog;
-mod cron;
-mod definition;
-mod glob;
-mod grep;
-mod lsp;
-mod mcp;
-mod monitor;
-mod monitor_tool;
-mod notebook_edit;
-mod orchestrator;
-mod plan;
-mod powershell;
-mod read;
-mod result;
-mod shell;
-mod skill;
-mod subtask;
-mod task;
-mod todo_write;
-mod tool_search;
-mod truncation;
-mod view_file;
-mod web_fetch;
-mod web_search;
-mod worktree;
+pub(crate) mod apply_patch;
+pub(crate) mod ask_user;
+pub(crate) mod bash;
+pub(crate) mod catalog;
+pub(crate) mod cron;
+pub(crate) mod definition;
+pub(crate) mod glob;
+pub(crate) mod grep;
+pub(crate) mod lsp;
+pub(crate) mod monitor;
+pub(crate) mod monitor_tool;
+pub(crate) mod notebook_edit;
+pub(crate) mod orchestrator;
+pub(crate) mod plan;
+pub(crate) mod powershell;
+pub(crate) mod read;
+pub(crate) mod result;
+pub(crate) mod shell;
+pub(crate) mod skill;
+pub(crate) mod subtask;
+pub(crate) mod task;
+pub(crate) mod todo_write;
+pub(crate) mod tool_search;
+pub(crate) mod truncation;
+pub(crate) mod view_file;
+pub(crate) mod web_fetch;
+pub(crate) mod web_search;
+pub(crate) mod worktree;
 
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -58,6 +56,7 @@ use crate::plugin::{
         PlanModePolicy as SdkPlanModePolicy, ShellEnvInput as PluginShellEnvInput,
     },
 };
+use crate::plugins::bundled::{builtin as builtins, mcp};
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
@@ -164,6 +163,7 @@ pub struct StreamingToolExecution {
     pub end: tokio::sync::oneshot::Receiver<Result<ToolInvocationExecution, ToolError>>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum PermissionedBuiltinExecution {
     Executed(BuiltinExecution),

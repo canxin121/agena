@@ -107,7 +107,7 @@ impl PromptCacheShape {
             .filter_map(|key| {
                 let previous_value = field_value(previous, key.as_str());
                 let current_value = field_value(current, key.as_str());
-                (previous_value != current_value).then(|| PromptCacheShapeChange {
+                (previous_value != current_value).then_some(PromptCacheShapeChange {
                     key,
                     previous: previous_value,
                     current: current_value,

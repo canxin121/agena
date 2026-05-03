@@ -2006,17 +2006,17 @@ mod tests {
         let after_cache = &after_json["session_cache"];
         assert!(
             after_cache["misses"].as_u64().unwrap_or_default()
-                >= before_cache["misses"].as_u64().unwrap_or_default() + 1,
+                > before_cache["misses"].as_u64().unwrap_or_default(),
             "unexpected before={before_json} after={after_json}"
         );
         assert!(
             after_cache["hits"].as_u64().unwrap_or_default()
-                >= before_cache["hits"].as_u64().unwrap_or_default() + 1,
+                > before_cache["hits"].as_u64().unwrap_or_default(),
             "unexpected before={before_json} after={after_json}"
         );
         assert!(
             after_cache["inserts"].as_u64().unwrap_or_default()
-                >= before_cache["inserts"].as_u64().unwrap_or_default() + 1,
+                > before_cache["inserts"].as_u64().unwrap_or_default(),
             "unexpected before={before_json} after={after_json}"
         );
         assert!(

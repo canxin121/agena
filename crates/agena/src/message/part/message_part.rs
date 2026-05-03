@@ -19,11 +19,16 @@ fn can_transition(from: ExecutionStatus, to: ExecutionStatus) -> bool {
         return true;
     }
 
-    match (from, to) {
-        (ExecutionStatus::Pending, ExecutionStatus::InProgress | ExecutionStatus::Failed) => true,
-        (ExecutionStatus::InProgress, ExecutionStatus::Completed | ExecutionStatus::Failed) => true,
-        _ => false,
-    }
+    matches!(
+        (from, to),
+        (
+            ExecutionStatus::Pending,
+            ExecutionStatus::InProgress | ExecutionStatus::Failed
+        ) | (
+            ExecutionStatus::InProgress,
+            ExecutionStatus::Completed | ExecutionStatus::Failed
+        )
+    )
 }
 
 fn is_false(value: &bool) -> bool {
@@ -367,10 +372,10 @@ fn file_change_part_summary(part: &FileChangePart) -> Option<String> {
 }
 
 fn file_change_entry_summary(change: &FileChangeEntry) -> String {
-    if change.kind == FileChangeKind::Moved {
-        if let Some(from_path) = change.from_path.as_deref() {
-            return format!("{from_path} -> {} (moved)", change.path);
-        }
+    if change.kind == FileChangeKind::Moved
+        && let Some(from_path) = change.from_path.as_deref()
+    {
+        return format!("{from_path} -> {} (moved)", change.path);
     }
     format!("{} ({})", change.path, file_change_kind_label(change.kind))
 }

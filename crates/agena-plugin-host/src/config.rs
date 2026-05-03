@@ -293,7 +293,9 @@ fn default_max_retries() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum HttpAuth {
+    #[default]
     None,
     Bearer {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -308,10 +310,4 @@ pub enum HttpAuth {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         password_env: Option<String>,
     },
-}
-
-impl Default for HttpAuth {
-    fn default() -> Self {
-        HttpAuth::None
-    }
 }

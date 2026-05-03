@@ -24,6 +24,12 @@ use crate::plugin::sdk::{
     PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
 };
 
+use crate::entry::monitor::{MonitorRead, MonitorStart, MonitorStopOutcome};
+use crate::entry::result::BuiltinExecution;
+use crate::entry::{
+    BuiltinExecutionContext, ToolExecutionView, ToolExecutor, ask_user, monitor_tool, orchestrator,
+    tool_search,
+};
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput,
     CronCreateToolInput, CronDeleteToolInput, CronListToolInput, EnterPlanModeToolInput,
@@ -34,11 +40,6 @@ use crate::message::{
     SkillRunToolInput, TaskToolInput, TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput,
     WebFetchToolInput, WebSearchToolInput,
 };
-use crate::tool::result::BuiltinExecution;
-use crate::tool::{BuiltinExecutionContext, ToolExecutionView, ToolExecutor, orchestrator};
-
-use super::monitor::{MonitorRead, MonitorStart, MonitorStopOutcome};
-use super::{ask_user, monitor_tool, tool_search};
 
 thread_local! {
     static BUILTIN_CTX: RefCell<Option<ToolExecutor>> = const { RefCell::new(None) };
@@ -736,7 +737,7 @@ impl Plugin for BuiltinPlugin {
         match tool {
             "apply_patch" => {
                 let payload: ApplyPatchToolInput = serde_json::from_value(input.clone())?;
-                let paths = crate::tool::apply_patch::planned_paths(&payload.patch)
+                let paths = crate::entry::apply_patch::planned_paths(&payload.patch)
                     .map_err(|err| PluginError::new(err.to_string()))?;
                 Ok(paths
                     .into_iter()
@@ -843,7 +844,7 @@ fn decl<T: schemars::JsonSchema>(
     description: &str,
     behavior: SdkEntryBehavior,
 ) -> PluginEntryDecl {
-    PluginEntryDecl::new(name, crate::tool::definition::json_schema_for::<T>())
+    PluginEntryDecl::new(name, crate::entry::definition::json_schema_for::<T>())
         .description(description)
         .behavior(behavior)
 }
@@ -934,7 +935,7 @@ pub(crate) fn builtin_to_invoke_output(execution: BuiltinExecution) -> ToolInvok
 pub(crate) struct BuiltinResponseEnvelope {
     pub output: BuiltinToolOutput,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub apply_patch: Option<crate::tool::apply_patch::ApplyPatchExecution>,
+    pub apply_patch: Option<crate::entry::apply_patch::ApplyPatchExecution>,
 }
 
 /// Decode the payload emitted by [`builtin_to_invoke_output`] back into a

@@ -143,13 +143,7 @@ impl ApiService {
             id: row.id,
         });
 
-        Ok(build_page(
-            items,
-            has_more,
-            next_cursor,
-            PageOrder::Desc,
-            limit,
-        )?)
+        build_page(items, has_more, next_cursor, PageOrder::Desc, limit)
     }
 
     pub async fn get_workspace(&self, workspace_id: i64) -> ApiResult<Option<WorkspaceResource>> {
@@ -383,13 +377,7 @@ impl ApiService {
             id: row.id,
         });
 
-        Ok(build_page(
-            resources,
-            has_more,
-            next_cursor,
-            PageOrder::Desc,
-            limit,
-        )?)
+        build_page(resources, has_more, next_cursor, PageOrder::Desc, limit)
     }
 
     pub async fn get_session(&self, session_id: i64) -> ApiResult<Option<SessionResource>> {
@@ -470,7 +458,7 @@ impl ApiService {
     pub async fn delete_session(&self, session_id: i64) -> ApiResult<SessionResource> {
         let existing = self.ensure_session_model(session_id).await?;
         let mut resources = self
-            .session_resources_from_models(&[existing.clone()])
+            .session_resources_from_models(std::slice::from_ref(&existing))
             .await?;
         entities::session::Entity::delete_by_id(session_id)
             .exec(self.db.as_ref())
@@ -515,13 +503,7 @@ impl ApiService {
         });
         slice.reverse();
 
-        Ok(build_page(
-            slice,
-            has_more,
-            next_cursor,
-            PageOrder::Asc,
-            limit,
-        )?)
+        build_page(slice, has_more, next_cursor, PageOrder::Asc, limit)
     }
 
     pub async fn list_messages(
@@ -569,13 +551,7 @@ impl ApiService {
             .map(|m| message_resource_from_message(session.id, m, query.parts))
             .collect();
 
-        Ok(build_page(
-            items,
-            has_more,
-            next_cursor,
-            PageOrder::Asc,
-            limit,
-        )?)
+        build_page(items, has_more, next_cursor, PageOrder::Asc, limit)
     }
 
     pub async fn get_message(
@@ -704,13 +680,7 @@ impl ApiService {
             id: row.id,
         });
 
-        Ok(build_page(
-            items,
-            has_more,
-            next_cursor,
-            PageOrder::Desc,
-            limit,
-        )?)
+        build_page(items, has_more, next_cursor, PageOrder::Desc, limit)
     }
 
     pub async fn get_permission_rule(

@@ -8,20 +8,20 @@
 //!
 //! ## Surface
 //!
-//! - [`resource`]: REST resource projections (`SessionResource`,
+//! - `resource`: REST resource projections (`SessionResource`,
 //!   `MessageResource`, `WorkspaceResource`, …) — almost all lifted verbatim
 //!   from the legacy `agena-http-api::dto` so existing clients can be ported
 //!   variant-for-variant.
-//! - [`commands`]: Side-effectful operations the client can invoke
+//! - `commands`: Side-effectful operations the client can invoke
 //!   (`Command::SubmitTurn`, `Command::CancelTurn`, …). One enum, exhaustive,
 //!   `#[serde(tag = "method", content = "params")]`.
-//! - [`queries`]: Read-only requests (list sessions, fetch message, etc.).
-//! - [`notifications`]: Server → client push messages — the unified
+//! - `queries`: Read-only requests (list sessions, fetch message, etc.).
+//! - `notifications`: Server → client push messages — the unified
 //!   [`agena::event::DomainEvent`] envelope plus subscription lifecycle
 //!   notifications.
-//! - [`ws`]: The duplex WebSocket envelope ([`ClientMessage`] / [`ServerMessage`]).
-//! - [`pagination`]: Cursor-based page/cursor types.
-//! - [`subscribe`]: [`SubscribeRequest`] (scope + kind filter + resume cursor)
+//! - `ws`: The duplex WebSocket envelope ([`ClientMessage`] / [`ServerMessage`]).
+//! - `pagination`: Cursor-based page/cursor types.
+//! - `subscribe`: [`SubscribeRequest`] (scope + kind filter + resume cursor)
 //!   and [`SubscriptionId`] for multiplexing many subscriptions over one WS.
 //!
 //! ## Versioning

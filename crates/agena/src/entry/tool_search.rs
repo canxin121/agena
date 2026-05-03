@@ -6,7 +6,7 @@ const DEFAULT_LIMIT: usize = 8;
 const MAX_LIMIT: usize = 25;
 
 #[derive(Debug, Clone)]
-pub(super) struct SearchableTool {
+pub(crate) struct SearchableTool {
     pub name: String,
     pub description: String,
     pub search_terms: Vec<String>,
@@ -16,7 +16,7 @@ pub(super) struct SearchableTool {
 }
 
 impl SearchableTool {
-    pub(super) fn from_definition(definition: super::EntryDefinition) -> Self {
+    pub(crate) fn from_definition(definition: super::EntryDefinition) -> Self {
         let behavior_label = match definition.behavior {
             super::EntryBehavior::Mutating => "mutating",
             super::EntryBehavior::ReadOnly => "read_only",
@@ -35,7 +35,7 @@ impl SearchableTool {
     }
 }
 
-pub(super) fn execute(
+pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &ToolSearchToolInput,
 ) -> Result<BuiltinExecution, ToolError> {
@@ -47,7 +47,7 @@ pub(super) fn execute(
     execute_with_tools(&catalog, input)
 }
 
-pub(super) fn execute_with_tools(
+pub(crate) fn execute_with_tools(
     catalog: &[SearchableTool],
     input: &ToolSearchToolInput,
 ) -> Result<BuiltinExecution, ToolError> {
@@ -131,7 +131,7 @@ fn search_catalog(
         .iter()
         .filter_map(|definition| {
             let score = score_tool(definition, normalized_query.as_str(), tokens.as_slice());
-            (score > 0).then(|| (score, definition))
+            (score > 0).then_some((score, definition))
         })
         .collect::<Vec<_>>();
     ranked.sort_by(|(left_score, left_tool), (right_score, right_tool)| {
@@ -176,7 +176,7 @@ fn score_tool(definition: &SearchableTool, normalized_query: &str, tokens: &[Str
     let normalized_terms = definition
         .search_terms
         .iter()
-        .map(|term| normalize(term))
+        .map(normalize)
         .collect::<Vec<_>>();
 
     let mut score = 0;

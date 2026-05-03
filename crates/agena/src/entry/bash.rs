@@ -300,7 +300,7 @@ fn truncate_output(output: &str) -> (String, bool) {
     }
 
     let joined = lines.join("\n");
-    let byte_truncated = joined.as_bytes().len() > MAX_OUTPUT_BYTES;
+    let byte_truncated = joined.len() > MAX_OUTPUT_BYTES;
     let clipped = if byte_truncated {
         let bytes = joined.as_bytes();
         String::from_utf8_lossy(&bytes[..min(bytes.len(), MAX_OUTPUT_BYTES)]).to_string()

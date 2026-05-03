@@ -254,27 +254,25 @@ impl RuntimeSnapshot {
                 .await?,
         );
         // Notify plugins of the resolved config (best-effort).
-        if !plugins.is_empty() {
-            if let Ok(value) = serde_json::to_value(&resolution) {
-                let _ = plugins
-                    .dispatch_config(crate::plugin::ConfigInput { current: value })
-                    .await;
-            }
+        if !plugins.is_empty()
+            && let Ok(value) = serde_json::to_value(&resolution)
+        {
+            let _ = plugins
+                .dispatch_config(crate::plugin::ConfigInput { current: value })
+                .await;
         }
         let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
         let reusing_session_manager = existing_session_manager.is_some();
-        let session_manager = if let Some(db) = database.as_ref() {
-            Some(build_or_reconfigure_session_manager(
+        let session_manager = database.as_ref().map(|db| {
+            build_or_reconfigure_session_manager(
                 existing_session_manager,
                 db,
                 Arc::clone(&providers),
                 Arc::clone(&plugins),
                 workspace_root,
                 &resolution,
-            ))
-        } else {
-            None
-        };
+            )
+        });
         if !reusing_session_manager && let Some(manager) = session_manager.as_ref() {
             manager
                 .event_publisher()

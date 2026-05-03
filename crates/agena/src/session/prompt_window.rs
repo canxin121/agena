@@ -749,7 +749,7 @@ pub(crate) fn prompt_char_budget(
         .max(1);
     let min_reserve_tokens = MIN_CONTEXT_RESERVE_TOKENS.min(max_reserve_tokens).max(1);
     let requested_reserve_tokens = max_output_tokens
-        .unwrap_or_else(|| context_window_tokens / 8)
+        .unwrap_or(context_window_tokens / 8)
         .max(context_window_tokens / 8);
     let reserve_tokens = requested_reserve_tokens
         .max(min_reserve_tokens)

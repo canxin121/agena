@@ -200,14 +200,14 @@ impl ToolPermissionPolicy {
         command: Option<&str>,
         sensitive: bool,
     ) -> PermissionDecision {
-        if name == "bash" {
-            if let Some(command) = command {
-                if let Some(decision) = self.evaluate_bash_deny(command) {
-                    return decision;
-                }
-                if let Some(decision) = self.evaluate_bash_pattern(command) {
-                    return self.apply_execution_mode(name, sensitive, decision);
-                }
+        if name == "bash"
+            && let Some(command) = command
+        {
+            if let Some(decision) = self.evaluate_bash_deny(command) {
+                return decision;
+            }
+            if let Some(decision) = self.evaluate_bash_pattern(command) {
+                return self.apply_execution_mode(name, sensitive, decision);
             }
         }
         let base = self.check_tool_mode(name);
@@ -1006,9 +1006,8 @@ mod tests {
         // Wait — apply_execution_mode runs after both bash_rules and the
         // tool-name fallback, so explicit allow gets promoted too. Let's
         // just assert it isn't Deny.
-        match policy.check_builtin(&safe) {
-            PermissionDecision::Deny { .. } => panic!("rm tmpfile should not be denied"),
-            _ => {}
+        if let PermissionDecision::Deny { .. } = policy.check_builtin(&safe) {
+            panic!("rm tmpfile should not be denied")
         }
     }
 

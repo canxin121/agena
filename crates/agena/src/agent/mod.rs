@@ -8,16 +8,12 @@ use crate::permission::{AccessKind, PermissionDecision, PermissionPolicy, ToolPe
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AgentMode {
+    #[default]
     Primary,
     Subagent,
     All,
-}
-
-impl Default for AgentMode {
-    fn default() -> Self {
-        Self::Primary
-    }
 }
 
 #[derive(Debug, Clone)]

@@ -930,6 +930,7 @@ impl SessionProcessor {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn emit_part_delta(
         &self,
         run: &SessionRunRequest,

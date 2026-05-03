@@ -127,15 +127,28 @@ output as its input.
 
 ## Calling back into the host
 
-Plugins receive an `Arc<dyn HostClient>` in `init`. Use it to:
+Plugins receive an `Arc<dyn HostClient>` in `init`. Sensitive callbacks are
+capability-gated: at least one entry in the plugin manifest must declare the
+matching `PluginEntryDecl::host_capability(...)`, otherwise the host rejects
+the callback before dispatching it.
+
+Example:
+
+```rust
+PluginEntryDecl::new("inspect-config", json!({"type": "object"}))
+    .description("Read selected runtime config.")
+    .host_capability(HostCapability::ReadConfig)
+```
+
+Available callbacks include:
 
 - `log(level, message, fields)` — appears in agena's tracing output as
-  `target=plugin`.
+  `target=plugin`; no capability is required.
 - `read_config(path)` — read the resolved config tree (dot-paths supported,
   e.g. `runtime.session_cache.max_sessions`).
-- `subscribe_events(filter)` — receive domain events. (Stdio/HTTP plugins
-  must implement the `event` hook; the host bridge auto-pushes to plugins
-  that subscribed via `HookSubscription::EVENT`.)
+- `subscribe_events(filter)` / `unsubscribe_events(id)` — manage event
+  subscriptions. Stdio/HTTP plugins must implement the `event` hook; the host
+  bridge auto-pushes to plugins that subscribed via `HookSubscription::EVENT`.
 - `invoke_tool(tool, input)` — call another plugin's tool. **Reentrancy is
   blocked**: a plugin cannot invoke a tool that maps back to itself in the
   same call stack (returns `cycle detected`).
@@ -143,12 +156,33 @@ Plugins receive an `Arc<dyn HostClient>` in `init`. Use it to:
   domain bus. The synthetic event's payload is opaque JSON; subscribers can
   match on `kind = "plugin_event"` and inspect `plugin_id` / `kind_label`
   inside the payload.
-- `ask_permission(req)` — currently returns `Prompt` (host does not yet
-  surface a unified ask-user channel for plugins).
+- `ask_user(req)`, `spawn_subtask(req)`, `list_tools()`, `monitor_*(...)`, and
+  `skill_get(req)` expose first-party runtime substrate to plugins.
+- `ask_permission(req)` — currently returns `Prompt` and is not capability
+  gated.
+- `execute_builtin_tool(req)` — internal legacy bridge reserved for
+  `agena.builtin`; third-party plugins should not call it.
+
+| HostClient method / JSON-RPC method | Required `HostCapability` |
+|---|---|
+| `read_config` / `host/config.read` | `ReadConfig` |
+| `invoke_tool` / `host/tool.invoke` | `InvokeTool` |
+| `ask_user` / `host/ask_user` | `AskUser` |
+| `spawn_subtask` / `host/subtask.spawn` | `SpawnSubtask` |
+| `list_tools` / `host/tool.list` | `ListTools` |
+| `publish_event` / `host/event.publish` | `PublishEvent` |
+| `subscribe_events`, `unsubscribe_events` / `host/event.*` | `SubscribeEvents` |
+| `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` / `host/monitor.*` | `MonitorRegistry` |
+| `skill_get` / `host/skill.get` | `SkillsManager` |
 
 For stdio / HTTP plugins, callbacks travel back over the same JSON-RPC wire
 (stdio multiplexed on stdin/stdout, HTTP via `POST /plugin-rpc/{plugin_id}`
 on the agena HTTP API server).
+
+`skill_run` is provided by the first-party static plugin `agena.skills`, not by
+the core tool catalog. It uses `skill_get` to read skill content and returns the
+same payload metadata shape as the previous built-in adapter, including
+`allowed_tools`.
 
 ## Config schema
 

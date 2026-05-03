@@ -15,12 +15,14 @@ use crate::config::{PluginEntry, PluginsConfig, TimeoutsConfig};
 use crate::dispatcher::{self, call_with_timeout};
 use crate::error::{HostError, TransportError};
 use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
-use crate::registry::{PluginEntry as RegistryPluginEntry, PluginEntryRegistry};
+use crate::registry::{
+    PluginEntry as RegistryPluginEntry, PluginEntryRegistry, effective_host_capabilities,
+};
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription,
-    HostCallbackContext, HostClient, LogLevel, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostCallbackContext, HostClient, HostSkillGetRequest, HostSkillGetResponse, LogLevel,
+    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -29,13 +31,14 @@ use crate::sdk::{
     ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EntryDefinitionInput, EntryDefinitionPatch,
-    EventEnvelope, EventFilter, HookSubscription, PermissionAskDecision, PermissionAskInput,
-    PermissionDecision, PluginEntryDecl, PluginError, PluginManifest, PostTurnInput, PreTurnInput,
-    ProviderListInput, ProviderListPatch, SessionCompactedInput, SessionCompactingInput,
-    SessionCompactingPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolPermissionPathsInput, ToolStreamChunk,
-    ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
+    EventEnvelope, EventFilter, HookSubscription, HostCapability, PermissionAskDecision,
+    PermissionAskInput, PermissionDecision, PluginEntryDecl, PluginError, PluginErrorCode,
+    PluginManifest, PostTurnInput, PreTurnInput, ProviderListInput, ProviderListPatch,
+    SessionCompactedInput, SessionCompactingInput, SessionCompactingPatch, SessionEndInput,
+    SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput,
+    ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolFailureInput, ToolInvokeInput,
+    ToolInvokeOutput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
@@ -1335,6 +1338,12 @@ impl PluginHostBuilder {
                         message: e.to_string(),
                     })?;
                 entry_registry.extend_from_plugin(idx, &reused.id, &reused.manifest.entries);
+                host_handle
+                    .set_plugin_capabilities(
+                        reused.id.clone(),
+                        effective_host_capabilities(&reused.manifest.entries),
+                    )
+                    .await;
                 by_id.insert(reused.id.clone(), Arc::clone(&reused));
                 loaded.push(reused);
                 continue;
@@ -1354,6 +1363,12 @@ impl PluginHostBuilder {
                 Ok(plugin) => {
                     let plugin = Arc::new(plugin);
                     entry_registry.extend_from_plugin(idx, &plugin.id, &plugin.manifest.entries);
+                    host_handle
+                        .set_plugin_capabilities(
+                            plugin.id.clone(),
+                            effective_host_capabilities(&plugin.manifest.entries),
+                        )
+                        .await;
                     by_id.insert(plugin.id.clone(), plugin.clone());
                     loaded.push(plugin);
                 }
@@ -1388,6 +1403,7 @@ impl PluginHostBuilder {
 /// don't get callbacks (would require shared FFI surface).
 pub struct HostHandle {
     inner: tokio::sync::RwLock<Arc<dyn HostClient>>,
+    capabilities: tokio::sync::RwLock<HashMap<String, Vec<HostCapability>>>,
     /// Per-plugin bearer tokens for HTTP callbacks.
     #[allow(dead_code)]
     tokens: tokio::sync::Mutex<HashMap<String, String>>,
@@ -1398,6 +1414,7 @@ impl HostHandle {
     pub fn new(inner: Arc<dyn HostClient>) -> Self {
         Self {
             inner: tokio::sync::RwLock::new(inner),
+            capabilities: tokio::sync::RwLock::new(HashMap::new()),
             tokens: tokio::sync::Mutex::new(HashMap::new()),
             callback_base_url: None,
         }
@@ -1412,6 +1429,44 @@ impl HostHandle {
     /// constructed and we can install the real implementation).
     pub async fn install_client(&self, client: Arc<dyn HostClient>) {
         *self.inner.write().await = client;
+    }
+
+    pub async fn set_plugin_capabilities(
+        &self,
+        plugin_id: impl Into<String>,
+        capabilities: Vec<HostCapability>,
+    ) {
+        self.capabilities
+            .write()
+            .await
+            .insert(plugin_id.into(), capabilities);
+    }
+
+    async fn require_capability(
+        &self,
+        plugin_id: Option<&str>,
+        method: &str,
+        capability: HostCapability,
+    ) -> Result<(), PluginError> {
+        let Some(plugin_id) = plugin_id else {
+            return Ok(());
+        };
+        let capabilities = self.capabilities.read().await;
+        if capabilities
+            .get(plugin_id)
+            .is_some_and(|capabilities| capabilities.contains(&capability))
+        {
+            return Ok(());
+        }
+        Err(PluginError {
+            code: PluginErrorCode::HostUnavailable,
+            message: format!(
+                "plugin `{plugin_id}` cannot call `{method}`: missing host capability `{capability:?}`"
+            ),
+            hook: Some(method.to_string()),
+            plugin: Some(plugin_id.to_string()),
+            data: None,
+        })
     }
 
     pub fn callback_url(&self, plugin_id: &str) -> Option<String> {
@@ -1478,6 +1533,8 @@ impl HostHandle {
                 Ok(serde_json::Value::Object(Default::default()))
             }
             method::HOST_EVENT_PUBLISH => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::PublishEvent)
+                    .await?;
                 let env: EventEnvelope = parse(params)?;
                 host_api::with_host_callback_context(
                     scoped_context(plugin_id, None),
@@ -1487,6 +1544,12 @@ impl HostHandle {
                 Ok(serde_json::Value::Object(Default::default()))
             }
             method::HOST_EVENT_SUBSCRIBE => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::SubscribeEvents,
+                )
+                .await?;
                 let p: HostSubscribeParams = parse(params)?;
                 let sub: EventSubscription = host_api::with_host_callback_context(
                     scoped_context(plugin_id, None),
@@ -1496,6 +1559,12 @@ impl HostHandle {
                 Ok(serde_json::json!({ "subscription_id": sub.id }))
             }
             method::HOST_EVENT_UNSUBSCRIBE => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::SubscribeEvents,
+                )
+                .await?;
                 let p: HostUnsubscribeParams = parse(params)?;
                 host_api::with_host_callback_context(
                     scoped_context(plugin_id, None),
@@ -1514,6 +1583,8 @@ impl HostHandle {
                 serde_json::to_value(d).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             method::HOST_CONFIG_READ => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::ReadConfig)
+                    .await?;
                 let p: HostConfigReadParams = parse(params)?;
                 host_api::with_host_callback_context(
                     scoped_context(plugin_id, p.context),
@@ -1522,6 +1593,8 @@ impl HostHandle {
                 .await
             }
             method::HOST_TOOL_INVOKE => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::InvokeTool)
+                    .await?;
                 let p: HostInvokeToolParams = parse(params)?;
                 let out = host_api::with_host_callback_context(
                     scoped_context(plugin_id, p.context),
@@ -1531,6 +1604,8 @@ impl HostHandle {
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             method::HOST_ASK_USER => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::AskUser)
+                    .await?;
                 let p: HostAskUserParams = parse(params)?;
                 let out = host_api::with_host_callback_context(
                     scoped_context(plugin_id, p.context),
@@ -1540,6 +1615,8 @@ impl HostHandle {
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             method::HOST_SUBTASK_SPAWN => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::SpawnSubtask)
+                    .await?;
                 let p: HostSpawnSubtaskParams = parse(params)?;
                 let out = host_api::with_host_callback_context(
                     scoped_context(plugin_id, p.context),
@@ -1549,6 +1626,8 @@ impl HostHandle {
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             method::HOST_TOOL_LIST => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::ListTools)
+                    .await?;
                 let p: HostListToolsParams = parse(params)?;
                 let out = host_api::with_host_callback_context(
                     scoped_context(plugin_id, p.context),
@@ -1566,7 +1645,28 @@ impl HostHandle {
                 .await?;
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
+            method::HOST_SKILL_GET => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::SkillsManager,
+                )
+                .await?;
+                let p: HostSkillGetParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.skill_get(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
             method::HOST_MONITOR_START => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::MonitorRegistry,
+                )
+                .await?;
                 let p: HostMonitorStartParams = parse(params)?;
                 let out = host_api::with_host_callback_context(
                     scoped_context(plugin_id, p.context),
@@ -1576,6 +1676,12 @@ impl HostHandle {
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             method::HOST_MONITOR_LIST => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::MonitorRegistry,
+                )
+                .await?;
                 let p: HostMonitorListParams = parse(params)?;
                 let out = host_api::with_host_callback_context(
                     scoped_context(plugin_id, p.context),
@@ -1585,6 +1691,12 @@ impl HostHandle {
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             method::HOST_MONITOR_READ => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::MonitorRegistry,
+                )
+                .await?;
                 let p: HostMonitorReadParams = parse(params)?;
                 let out = host_api::with_host_callback_context(
                     scoped_context(plugin_id, p.context),
@@ -1594,6 +1706,12 @@ impl HostHandle {
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
             method::HOST_MONITOR_STOP => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::MonitorRegistry,
+                )
+                .await?;
                 let p: HostMonitorStopParams = parse(params)?;
                 let out = host_api::with_host_callback_context(
                     scoped_context(plugin_id, p.context),
@@ -1670,6 +1788,13 @@ struct HostBuiltinExecuteParams {
 }
 
 #[derive(serde::Deserialize)]
+struct HostSkillGetParams {
+    request: HostSkillGetRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
 struct HostMonitorStartParams {
     request: MonitorStartRequest,
     #[serde(default)]
@@ -1723,6 +1848,16 @@ impl ScopedHostClient {
             ..HostCallbackContext::default()
         }
     }
+
+    async fn require_capability(
+        &self,
+        method: &str,
+        capability: HostCapability,
+    ) -> crate::sdk::Result<()> {
+        self.handle
+            .require_capability(Some(&self.plugin_id), method, capability)
+            .await
+    }
 }
 
 #[async_trait::async_trait]
@@ -1734,16 +1869,28 @@ impl HostClient for ScopedHostClient {
     }
 
     async fn publish_event(&self, env: EventEnvelope) -> crate::sdk::Result<()> {
+        self.require_capability(method::HOST_EVENT_PUBLISH, HostCapability::PublishEvent)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.publish_event(env)).await
     }
 
     async fn subscribe_events(&self, filter: EventFilter) -> crate::sdk::Result<EventSubscription> {
+        self.require_capability(
+            method::HOST_EVENT_SUBSCRIBE,
+            HostCapability::SubscribeEvents,
+        )
+        .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.subscribe_events(filter)).await
     }
 
     async fn unsubscribe_events(&self, subscription_id: String) -> crate::sdk::Result<()> {
+        self.require_capability(
+            method::HOST_EVENT_UNSUBSCRIBE,
+            HostCapability::SubscribeEvents,
+        )
+        .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(
             self.context(),
@@ -1761,6 +1908,8 @@ impl HostClient for ScopedHostClient {
     }
 
     async fn read_config(&self, path: Option<String>) -> crate::sdk::Result<serde_json::Value> {
+        self.require_capability(method::HOST_CONFIG_READ, HostCapability::ReadConfig)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.read_config(path)).await
     }
@@ -1770,11 +1919,15 @@ impl HostClient for ScopedHostClient {
         tool: String,
         input: serde_json::Value,
     ) -> crate::sdk::Result<ToolInvokeOutput> {
+        self.require_capability(method::HOST_TOOL_INVOKE, HostCapability::InvokeTool)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.invoke_tool(tool, input)).await
     }
 
     async fn ask_user(&self, req: AskUserRequest) -> crate::sdk::Result<AskUserResponse> {
+        self.require_capability(method::HOST_ASK_USER, HostCapability::AskUser)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.ask_user(req)).await
     }
@@ -1783,11 +1936,15 @@ impl HostClient for ScopedHostClient {
         &self,
         req: SpawnSubtaskRequest,
     ) -> crate::sdk::Result<SpawnSubtaskResponse> {
+        self.require_capability(method::HOST_SUBTASK_SPAWN, HostCapability::SpawnSubtask)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.spawn_subtask(req)).await
     }
 
     async fn list_tools(&self) -> crate::sdk::Result<Vec<ToolDescriptor>> {
+        self.require_capability(method::HOST_TOOL_LIST, HostCapability::ListTools)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.list_tools()).await
     }
@@ -1800,12 +1957,26 @@ impl HostClient for ScopedHostClient {
         host_api::with_host_callback_context(self.context(), inner.execute_builtin_tool(req)).await
     }
 
+    async fn skill_get(
+        &self,
+        req: HostSkillGetRequest,
+    ) -> crate::sdk::Result<HostSkillGetResponse> {
+        self.require_capability(method::HOST_SKILL_GET, HostCapability::SkillsManager)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.skill_get(req)).await
+    }
+
     async fn monitor_start(&self, req: MonitorStartRequest) -> crate::sdk::Result<MonitorHandle> {
+        self.require_capability(method::HOST_MONITOR_START, HostCapability::MonitorRegistry)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.monitor_start(req)).await
     }
 
     async fn monitor_list(&self) -> crate::sdk::Result<Vec<MonitorHandle>> {
+        self.require_capability(method::HOST_MONITOR_LIST, HostCapability::MonitorRegistry)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.monitor_list()).await
     }
@@ -1814,11 +1985,15 @@ impl HostClient for ScopedHostClient {
         &self,
         req: MonitorReadRequest,
     ) -> crate::sdk::Result<MonitorReadResponse> {
+        self.require_capability(method::HOST_MONITOR_READ, HostCapability::MonitorRegistry)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.monitor_read(req)).await
     }
 
     async fn monitor_stop(&self, req: MonitorStopRequest) -> crate::sdk::Result<MonitorHandle> {
+        self.require_capability(method::HOST_MONITOR_STOP, HostCapability::MonitorRegistry)
+            .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.monitor_stop(req)).await
     }

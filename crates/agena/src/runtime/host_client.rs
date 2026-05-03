@@ -15,9 +15,10 @@ use crate::message::{
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostCallbackContext,
-    HostClient, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
-    SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostClient, HostSkillGetRequest, HostSkillGetResponse, LogLevel, MonitorEvent, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -496,6 +497,24 @@ impl HostClient for RuntimeHostClient {
                 context.call_id.filter(|id| *id >= 0),
             )
             .map_err(|err| PluginError::new(err.to_string()))
+    }
+
+    async fn skill_get(
+        &self,
+        req: HostSkillGetRequest,
+    ) -> Result<HostSkillGetResponse, PluginError> {
+        let executor = self.tool_executor()?;
+        let manager = executor
+            .skills_manager()
+            .ok_or_else(|| host_unavailable("skills manager is not enabled in this runtime"))?;
+        let skill = manager
+            .get(req.name.trim())
+            .map_err(|err| PluginError::new(format!("skill_get: {err}")))?;
+        Ok(HostSkillGetResponse {
+            name: skill.frontmatter.name.clone(),
+            body: skill.body.clone(),
+            allowed_tools: skill.frontmatter.allowed_tools.clone(),
+        })
     }
 
     async fn monitor_start(&self, req: MonitorStartRequest) -> Result<MonitorHandle, PluginError> {

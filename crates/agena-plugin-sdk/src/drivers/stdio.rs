@@ -20,9 +20,10 @@ use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
 use crate::host_api::{
-    AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostClient, LogLevel,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostClient,
+    HostSkillGetRequest, HostSkillGetResponse, LogLevel, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest,
+    SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -336,6 +337,20 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<ToolInvokeOutput> {
         self.call(
             method::HOST_BUILTIN_EXECUTE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn skill_get(
+        &self,
+        req: HostSkillGetRequest,
+    ) -> crate::error::Result<HostSkillGetResponse> {
+        self.call(
+            method::HOST_SKILL_GET,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),

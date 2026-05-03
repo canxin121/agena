@@ -164,6 +164,7 @@ pub mod method {
     pub const HOST_SUBTASK_SPAWN: &str = "host/subtask.spawn";
     pub const HOST_TOOL_LIST: &str = "host/tool.list";
     pub const HOST_BUILTIN_EXECUTE: &str = "host/builtin.execute";
+    pub const HOST_SKILL_GET: &str = "host/skill.get";
     pub const HOST_MONITOR_START: &str = "host/monitor.start";
     pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
     pub const HOST_MONITOR_READ: &str = "host/monitor.read";

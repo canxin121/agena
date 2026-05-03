@@ -2,9 +2,181 @@
 //! every relevant hook, assert the patches chain.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use agena_plugin_host::{PluginEntry, PluginHostBuilder, PluginsConfig};
+use agena_plugin_sdk::host_api::ToolDescriptor;
 use agena_plugin_sdk::prelude::*;
+
+struct FakeHostClient;
+
+#[async_trait]
+impl HostClient for FakeHostClient {
+    async fn log(&self, _level: LogLevel, _message: String, _fields: serde_json::Value) {}
+
+    async fn publish_event(&self, _env: EventEnvelope) -> Result<()> {
+        Ok(())
+    }
+
+    async fn subscribe_events(&self, _filter: EventFilter) -> Result<EventSubscription> {
+        Ok(EventSubscription { id: "sub".into() })
+    }
+
+    async fn ask_permission(&self, _req: PermissionAskInput) -> Result<PermissionDecision> {
+        Ok(PermissionDecision::Prompt)
+    }
+
+    async fn read_config(&self, _path: Option<String>) -> Result<serde_json::Value> {
+        Ok(json!({ "ok": true }))
+    }
+
+    async fn invoke_tool(
+        &self,
+        _tool: String,
+        _input: serde_json::Value,
+    ) -> Result<ToolInvokeOutput> {
+        Ok(ToolInvokeOutput::text("invoked"))
+    }
+
+    async fn list_tools(&self) -> Result<Vec<ToolDescriptor>> {
+        Ok(vec![ToolDescriptor {
+            name: "demo".into(),
+            description: None,
+            search_terms: Vec::new(),
+            behavior: None,
+            deferred: false,
+            read_only: true,
+            plugin_id: Some("demo".into()),
+        }])
+    }
+}
+
+#[derive(Clone)]
+struct CapabilityPlugin {
+    capabilities: Vec<HostCapability>,
+}
+
+impl CapabilityPlugin {
+    fn new(capabilities: impl IntoIterator<Item = HostCapability>) -> Self {
+        Self {
+            capabilities: capabilities.into_iter().collect(),
+        }
+    }
+}
+
+#[async_trait]
+impl Plugin for CapabilityPlugin {
+    fn manifest(&self) -> PluginManifest {
+        let mut entry = PluginEntryDecl::new("ping", json!({ "type": "object" }));
+        for capability in &self.capabilities {
+            entry = entry.host_capability(*capability);
+        }
+        PluginManifest::builder("capability-plugin", "0.1.0")
+            .hooks(HookSubscription::TOOL_INVOKE)
+            .entry(entry)
+            .build()
+    }
+
+    async fn tool_invoke(&self, _input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
+        Ok(ToolInvokeOutput::text("pong"))
+    }
+}
+
+async fn host_with_capability_plugin(
+    capabilities: Vec<HostCapability>,
+) -> Arc<agena_plugin_host::PluginHost> {
+    let mut list = BTreeMap::new();
+    list.insert(
+        "capability-plugin".to_string(),
+        PluginEntry::Static {
+            options: serde_json::Value::Null,
+            timeouts: Default::default(),
+        },
+    );
+    PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
+        .with_config(PluginsConfig {
+            list,
+            ..Default::default()
+        })
+        .register_static("capability-plugin", CapabilityPlugin::new(capabilities))
+        .build()
+        .await
+        .expect("host builds")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn callback_requires_declared_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_CONFIG_READ,
+            json!({ "path": null }),
+        )
+        .await
+        .expect_err("read_config should require ReadConfig capability");
+
+    assert_eq!(err.code, PluginErrorCode::HostUnavailable);
+    assert!(err.message.contains("ReadConfig"));
+    assert!(
+        err.message
+            .contains(agena_plugin_sdk::rpc::method::HOST_CONFIG_READ)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn callback_allows_declared_capability() {
+    let host = host_with_capability_plugin(vec![HostCapability::ReadConfig]).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let value = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_CONFIG_READ,
+            json!({ "path": null }),
+        )
+        .await
+        .expect("read_config should be allowed");
+
+    assert_eq!(value, json!({ "ok": true }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn list_tools_requires_capability_but_log_does_not() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    host.host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_LOG,
+            json!({ "level": "info", "message": "hello" }),
+        )
+        .await
+        .expect("log should remain available without capabilities");
+
+    let err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_TOOL_LIST,
+            json!({}),
+        )
+        .await
+        .expect_err("list_tools should require ListTools capability");
+
+    assert!(err.message.contains("ListTools"));
+}
 
 #[derive(Default)]
 struct TestPlugin;

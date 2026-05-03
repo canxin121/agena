@@ -90,6 +90,15 @@ enabled = true
 #   * cdylib  — local dynamic library (`abi_stable`-based ABI)
 #   * stdio   — subprocess speaking JSON-RPC over its stdin/stdout
 #   * http    — remote service speaking JSON-RPC over POST
+#   * wasm    — WebAssembly module (requires plugin-wasm feature)
+#
+# First-party static plugins such as agena.builtin and agena.skills are
+# registered by the runtime. agena.skills provides the model-visible skill_run
+# entry through the plugin registry.
+#
+# Plugins that call host callbacks must declare matching host_capabilities in
+# their manifest entries. For example, host/config.read requires ReadConfig and
+# host/skill.get requires SkillsManager.
 #
 # Examples (commented out — copy and adapt as needed):
 #

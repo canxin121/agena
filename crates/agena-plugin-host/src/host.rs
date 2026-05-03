@@ -430,10 +430,23 @@ impl PluginHost {
         let mut input = input;
         // ensure tool name is the plugin-original name (in case caller passed exposed)
         input.tool_name = handle.original_name.clone();
+        let session_id = input.session_id;
+        let call_id = input.call_id;
+        let workspace_root = input.workspace_root.clone();
+        let plugin_id = handle.plugin_id.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let result = self.block_on_static(async move {
-            call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout).await
+            host_api::with_host_callback_context(
+                HostCallbackContext {
+                    plugin_id: Some(plugin_id),
+                    session_id: Some(session_id),
+                    call_id: Some(call_id),
+                    workspace_root: Some(workspace_root),
+                },
+                call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
+            )
+            .await
         });
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))

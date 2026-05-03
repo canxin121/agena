@@ -159,6 +159,16 @@ impl super::ConfigResolution {
                 crate::tool::cron_plugin_id(),
                 crate::tool::new_cron_plugin(),
             )
+            .register_static(crate::tool::fs_plugin_id(), crate::tool::new_fs_plugin())
+            .register_static(
+                crate::tool::shell_plugin_id(),
+                crate::tool::new_shell_plugin(),
+            )
+            .register_static(crate::tool::web_plugin_id(), crate::tool::new_web_plugin())
+            .register_static(
+                crate::tool::workflow_plugin_id(),
+                crate::tool::new_workflow_plugin(),
+            )
             .register_static(
                 "agena-memory",
                 crate::memory::new_memory_plugin(self.config.memory.clone()),

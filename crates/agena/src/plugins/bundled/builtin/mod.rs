@@ -19,9 +19,8 @@ use crate::plugin::sdk::host_api::{
     MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
-    EntryBehavior as SdkEntryBehavior, EntryStreamingMode, HookSubscription, HostCapability,
-    InitContext, InitOutcome, InputPathSpec, PathKind, PlanModePolicy, Plugin, PluginEntryDecl,
-    PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    HookSubscription, InitContext, InitOutcome, Plugin, PluginEntryDecl, PluginManifest,
+    Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
 };
 
 use crate::entry::monitor::{MonitorRead, MonitorStart, MonitorStopOutcome};
@@ -32,12 +31,8 @@ use crate::entry::{
 };
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput,
-    EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput,
-    GlobToolInput, GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput,
-    LspHoverToolInput, LspReferencesToolInput, MonitorStatus, MonitorStream, MonitorSummary,
-    MonitorToolInput, NotebookEditToolInput, PowerShellToolInput, ReadToolInput, TaskToolInput,
-    TodoWriteToolInput, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
-    WebSearchToolInput,
+    GlobToolInput, GrepToolInput, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput,
+    PowerShellToolInput, TaskToolInput, ToolSearchToolInput,
 };
 
 thread_local! {
@@ -99,6 +94,34 @@ fn current_executor(
         .ok()
         .and_then(|contexts| contexts.get(&key).cloned())
         .ok_or_else(|| PluginError::new("built-in plugin invoked without executor context"))
+}
+
+#[cfg(test)]
+pub(crate) fn current_executor_for_test(
+    session_id: i64,
+    call_id: i64,
+    tool_name: &str,
+) -> Option<ToolExecutor> {
+    current_executor_lookup(session_id, call_id, tool_name)
+}
+
+pub(crate) fn current_executor_lookup(
+    session_id: i64,
+    call_id: i64,
+    tool_name: &str,
+) -> Option<ToolExecutor> {
+    if let Some(executor) = BUILTIN_CTX.with(|cell| cell.borrow().clone()) {
+        return Some(executor);
+    }
+    let key = BuiltinContextKey {
+        session_id,
+        call_id,
+        tool_name: tool_name.to_string(),
+    };
+    BUILTIN_CTX_BY_CALL
+        .lock()
+        .ok()
+        .and_then(|contexts| contexts.get(&key).cloned())
 }
 
 /// Static plugin id used for every built-in tool. Keep stable: hot-reload
@@ -451,223 +474,12 @@ impl BuiltinPlugin {
 }
 
 pub(crate) fn entry_decls() -> Vec<PluginEntryDecl> {
-    vec![
-        decl::<BashToolInput>(
-            "bash",
-            "Execute a shell command inside the sandboxed workspace.",
-            SdkEntryBehavior::WriteSandboxed,
-        )
-        .input_path(optional_path("$.workdir", PathKind::Read))
-        .search_terms(["shell", "terminal", "command", "script"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::ConditionalShellReadOnly),
-        decl::<ReadToolInput>(
-            "read",
-            "Read a UTF-8 text file or list a directory with optional pagination.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .input_path(required_path("$.file_path", PathKind::Read))
-        .search_terms(["open file", "view file", "cat", "inspect"])
-        .always_load(),
-        decl::<ViewFileToolInput>(
-            "view_file",
-            "Load a local file and attach it back to the conversation as inline multimodal input.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .input_path(required_path("$.path", PathKind::Read))
-        .search_terms(["file", "image", "pdf", "audio", "document"])
-        .always_load(),
-        decl::<ApplyPatchToolInput>(
-            "apply_patch",
-            "Apply a structured patch that can add, update, move, or delete files.",
-            SdkEntryBehavior::WriteSandboxed,
-        )
-        .search_terms(["patch", "diff", "multi-file edit"])
-        .deferred_load(),
-        decl::<GlobToolInput>(
-            "glob",
-            "Search files by glob pattern from the workspace or a subdirectory.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .input_path(optional_path("$.path", PathKind::Read))
-        .search_terms(["find files", "list files", "pattern search"])
-        .always_load(),
-        decl::<GrepToolInput>(
-            "grep",
-            "Search file contents by regex pattern with optional include glob.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .input_path(optional_path("$.path", PathKind::Read))
-        .search_terms(["search text", "regex search", "ripgrep"])
-        .always_load(),
-        decl::<TaskToolInput>(
-            "task",
-            "Create or resume a typed subagent task session for explore, implement, or verify delegated work.",
-            SdkEntryBehavior::Task,
-        )
-        .search_terms(["delegate", "subagent", "parallel work"])
-        .deferred_load()
-        .host_capability(HostCapability::SpawnSubtask),
-        decl::<ToolSearchToolInput>(
-            "tool_search",
-            "Search the tool catalog and optionally load deferred tools for later turns.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["discover tools", "load tools", "find capability"])
-        .always_load()
-        .host_capability(HostCapability::ListTools),
-        decl::<TodoWriteToolInput>(
-            "todo_write",
-            "Replace the session todo list with a short execution plan and updated statuses.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["plan", "todo", "track progress"])
-        .always_load(),
-        decl::<AskUserToolInput>(
-            "ask_user",
-            "Ask short questions and wait for answers.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms([
-            "ask user",
-            "clarify requirement",
-            "human input",
-            "single select",
-            "multi select",
-            "custom answer",
-            "request user input",
-        ])
-        .always_load()
-        .concurrency_safe(false)
-        .requires_user_interaction(true)
-        .host_capability(HostCapability::AskUser),
-        decl::<MonitorToolInput>(
-            "monitor",
-            "Run a long-lived shell command in the background and stream its stdout/stderr as numbered events. Actions: start (spawn), list (enumerate), read (pull events with optional blocking wait), stop (kill).",
-            SdkEntryBehavior::WriteSandboxed,
-        )
-        .input_path(optional_path("$.workdir", PathKind::Read))
-        .search_terms([
-            "monitor",
-            "background process",
-            "long running",
-            "watch logs",
-            "tail",
-            "follow",
-            "stream output",
-        ])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
-        .streaming(EntryStreamingMode::Streaming)
-        .host_capability(HostCapability::MonitorRegistry),
-        decl::<WebFetchToolInput>(
-            "web_fetch",
-            "Fetch a URL and return its content as Markdown. HTTP is upgraded to HTTPS; cached for 15 minutes.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["web", "fetch", "download", "url", "http", "page"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed),
-        decl::<WebSearchToolInput>(
-            "web_search",
-            "Search the web. Backend selectable in config (tavily, exa, brave, or duckduckgo_html as zero-config default).",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["web", "search", "google", "ddg", "find online"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed),
-        decl::<EnterPlanModeToolInput>(
-            "enter_plan_mode",
-            "Enter plan mode. Allocates a fresh plan markdown file under .agena/plans/, blocks mutating tools, and asks the LLM to draft a plan. Pair with `exit_plan_mode` once the plan is complete.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["plan", "design", "approach", "outline"])
-        .always_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
-        .host_capability(HostCapability::PlanRegistry),
-        decl::<ExitPlanModeToolInput>(
-            "exit_plan_mode",
-            "Leave plan mode and return to normal tool execution. Surfaces a permission ask so the human can review the plan before approving the unblock.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .search_terms(["plan", "approve", "exit"])
-        .always_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
-        .host_capability(HostCapability::PlanRegistry),
-        decl::<EnterWorktreeToolInput>(
-            "enter_worktree",
-            "Create or attach to a git worktree under .agena/worktrees and switch the session into it.",
-            SdkEntryBehavior::WriteSandboxed,
-        )
-        .search_terms(["git", "worktree", "branch", "isolate"])
-        .deferred_load()
-        .host_capability(HostCapability::WorktreeRegistry),
-        decl::<ExitWorktreeToolInput>(
-            "exit_worktree",
-            "Leave the current worktree. action=keep preserves the worktree, action=remove deletes it (refuses unless discard_changes=true when there are uncommitted changes).",
-            SdkEntryBehavior::WriteSandboxed,
-        )
-        .search_terms(["git", "worktree", "exit", "cleanup"])
-        .deferred_load()
-        .host_capability(HostCapability::WorktreeRegistry),
-        decl::<LspDefinitionToolInput>(
-            "lsp_definition",
-            "Resolve the symbol at file_path:line:character to its definition site(s) via the configured LSP server.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .input_path(required_path("$.file_path", PathKind::Read))
-        .search_terms(["lsp", "definition", "go to def", "jump"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
-        .host_capability(HostCapability::LspRegistry),
-        decl::<LspReferencesToolInput>(
-            "lsp_references",
-            "List every reference to the symbol at file_path:line:character via the configured LSP server.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .input_path(required_path("$.file_path", PathKind::Read))
-        .search_terms(["lsp", "references", "callers", "usages"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
-        .host_capability(HostCapability::LspRegistry),
-        decl::<LspHoverToolInput>(
-            "lsp_hover",
-            "Read the hover documentation / type signature for the symbol at file_path:line:character.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .input_path(required_path("$.file_path", PathKind::Read))
-        .search_terms(["lsp", "hover", "type", "signature", "docs"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
-        .host_capability(HostCapability::LspRegistry),
-        decl::<LspDiagnosticsToolInput>(
-            "lsp_diagnostics",
-            "Return the latest LSP-published diagnostics (errors / warnings / hints) for a file.",
-            SdkEntryBehavior::ReadOnly,
-        )
-        .input_path(required_path("$.file_path", PathKind::Read))
-        .search_terms(["lsp", "diagnostics", "errors", "warnings", "lint"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
-        .host_capability(HostCapability::LspRegistry),
-        decl::<NotebookEditToolInput>(
-            "notebook_edit",
-            "Edit a Jupyter .ipynb cell by replacing, inserting, or deleting a cell.",
-            SdkEntryBehavior::WriteSandboxed,
-        )
-        .input_path(required_path("$.notebook_path", PathKind::Write))
-        .search_terms(["notebook", "jupyter", "ipynb", "cell edit"])
-        .deferred_load(),
-        decl::<PowerShellToolInput>(
-            "powershell",
-            "Execute a Windows PowerShell command inside the configured workspace.",
-            SdkEntryBehavior::WriteSandboxed,
-        )
-        .input_path(optional_path("$.workdir", PathKind::Read))
-        .search_terms(["windows", "powershell", "pwsh", "command"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::ConditionalShellReadOnly),
-    ]
+    // All built-in entries have been migrated to dedicated first-party plugins
+    // (`agena.fs`, `agena.shell`, `agena.web`, `agena.workflow`, `agena.lsp`,
+    // `agena.cron`). The `agena.builtin` plugin keeps the in-process backend
+    // implementations alive (used by `host.execute_builtin_tool`) but no
+    // longer exposes any model-visible entries directly.
+    Vec::new()
 }
 
 #[async_trait]
@@ -693,40 +505,7 @@ impl Plugin for BuiltinPlugin {
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
-        match tool {
-            "apply_patch" => {
-                let payload: ApplyPatchToolInput = serde_json::from_value(input.clone())?;
-                let paths = crate::entry::apply_patch::planned_paths(&payload.patch)
-                    .map_err(|err| PluginError::new(err.to_string()))?;
-                Ok(paths
-                    .into_iter()
-                    .map(crate::plugin::sdk::PathRequest::write)
-                    .collect())
-            }
-            "bash" => {
-                let payload: BashToolInput = serde_json::from_value(input.clone())?;
-                Ok(default_workspace_read(payload.workdir.is_none()))
-            }
-            "powershell" => {
-                let payload: PowerShellToolInput = serde_json::from_value(input.clone())?;
-                Ok(default_workspace_read(payload.workdir.is_none()))
-            }
-            "glob" => {
-                let payload: GlobToolInput = serde_json::from_value(input.clone())?;
-                Ok(default_workspace_read(payload.path.is_none()))
-            }
-            "grep" => {
-                let payload: GrepToolInput = serde_json::from_value(input.clone())?;
-                Ok(default_workspace_read(payload.path.is_none()))
-            }
-            "monitor" => {
-                let payload: MonitorToolInput = serde_json::from_value(input.clone())?;
-                let needs_workspace =
-                    matches!(payload, MonitorToolInput::Start { workdir: None, .. });
-                Ok(default_workspace_read(needs_workspace))
-            }
-            _ => Ok(Vec::new()),
-        }
+        permission_paths_for(tool, input)
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
@@ -798,29 +577,42 @@ impl Plugin for BuiltinPlugin {
     }
 }
 
-fn decl<T: schemars::JsonSchema>(
-    name: &str,
-    description: &str,
-    behavior: SdkEntryBehavior,
-) -> PluginEntryDecl {
-    PluginEntryDecl::new(name, crate::entry::definition::json_schema_for::<T>())
-        .description(description)
-        .behavior(behavior)
-}
-
-fn required_path(jsonpath: &str, kind: PathKind) -> InputPathSpec {
-    InputPathSpec {
-        jsonpath: jsonpath.to_string(),
-        kind,
-        optional: false,
-    }
-}
-
-fn optional_path(jsonpath: &str, kind: PathKind) -> InputPathSpec {
-    InputPathSpec {
-        jsonpath: jsonpath.to_string(),
-        kind,
-        optional: true,
+pub(crate) fn permission_paths_for(
+    tool: &str,
+    input: &serde_json::Value,
+) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
+    match tool {
+        "apply_patch" => {
+            let payload: ApplyPatchToolInput = serde_json::from_value(input.clone())?;
+            let paths = crate::entry::apply_patch::planned_paths(&payload.patch)
+                .map_err(|err| PluginError::new(err.to_string()))?;
+            Ok(paths
+                .into_iter()
+                .map(crate::plugin::sdk::PathRequest::write)
+                .collect())
+        }
+        "bash" => {
+            let payload: BashToolInput = serde_json::from_value(input.clone())?;
+            Ok(default_workspace_read(payload.workdir.is_none()))
+        }
+        "powershell" => {
+            let payload: PowerShellToolInput = serde_json::from_value(input.clone())?;
+            Ok(default_workspace_read(payload.workdir.is_none()))
+        }
+        "glob" => {
+            let payload: GlobToolInput = serde_json::from_value(input.clone())?;
+            Ok(default_workspace_read(payload.path.is_none()))
+        }
+        "grep" => {
+            let payload: GrepToolInput = serde_json::from_value(input.clone())?;
+            Ok(default_workspace_read(payload.path.is_none()))
+        }
+        "monitor" => {
+            let payload: MonitorToolInput = serde_json::from_value(input.clone())?;
+            let needs_workspace = matches!(payload, MonitorToolInput::Start { workdir: None, .. });
+            Ok(default_workspace_read(needs_workspace))
+        }
+        _ => Ok(Vec::new()),
     }
 }
 

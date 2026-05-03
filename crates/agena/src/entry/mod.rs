@@ -57,7 +57,8 @@ use crate::plugin::{
     },
 };
 use crate::plugins::bundled::{
-    builtin as builtins, cron as bundled_cron, lsp as bundled_lsp, mcp, skills,
+    builtin as builtins, cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, mcp,
+    shell as bundled_shell, skills, web as bundled_web, workflow as bundled_workflow,
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
@@ -117,25 +118,155 @@ pub fn new_cron_plugin() -> impl crate::plugin::sdk::Plugin {
     bundled_cron::CronPlugin::new()
 }
 
+pub fn fs_plugin_id() -> &'static str {
+    bundled_fs::FS_PLUGIN_ID
+}
+
+pub fn new_fs_plugin() -> impl crate::plugin::sdk::Plugin {
+    bundled_fs::new_plugin()
+}
+
+pub fn shell_plugin_id() -> &'static str {
+    bundled_shell::SHELL_PLUGIN_ID
+}
+
+pub fn new_shell_plugin() -> impl crate::plugin::sdk::Plugin {
+    bundled_shell::new_plugin()
+}
+
+pub fn web_plugin_id() -> &'static str {
+    bundled_web::WEB_PLUGIN_ID
+}
+
+pub fn new_web_plugin() -> impl crate::plugin::sdk::Plugin {
+    bundled_web::new_plugin()
+}
+
+pub fn workflow_plugin_id() -> &'static str {
+    bundled_workflow::WORKFLOW_PLUGIN_ID
+}
+
+pub fn new_workflow_plugin() -> impl crate::plugin::sdk::Plugin {
+    bundled_workflow::new_plugin()
+}
+
+/// First-party plugins (`agena.*`) are surfaced to the catalog and to model
+/// callers as built-in tools, even though their entries now live in dedicated
+/// plugins. Third-party plugins still show up as `EntrySource::Plugin`.
+fn is_first_party_plugin(plugin_id: &str) -> bool {
+    plugin_id.starts_with("agena.")
+}
+
+/// Lightweight `HostClient` used by [`builtins_plugin_host`]: routes
+/// `execute_builtin_tool` back into the in-process built-in executor that the
+/// caller installed via [`builtins::with_executor`]. Any other host callback
+/// is unavailable in this context.
+struct BuiltinsHostClient;
+
+#[async_trait::async_trait]
+impl crate::plugin::sdk::host_api::HostClient for BuiltinsHostClient {
+    async fn log(
+        &self,
+        _level: crate::plugin::sdk::host_api::LogLevel,
+        _message: String,
+        _fields: serde_json::Value,
+    ) {
+    }
+
+    async fn publish_event(
+        &self,
+        _env: crate::plugin::sdk::EventEnvelope,
+    ) -> crate::plugin::sdk::Result<()> {
+        Ok(())
+    }
+
+    async fn subscribe_events(
+        &self,
+        _filter: crate::plugin::sdk::EventFilter,
+    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::host_api::EventSubscription> {
+        Err(crate::plugin::PluginError::new(
+            "subscribe_events is not available in the offline builtins host",
+        ))
+    }
+
+    async fn ask_permission(
+        &self,
+        _req: crate::plugin::sdk::PermissionAskInput,
+    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::PermissionDecision> {
+        Ok(crate::plugin::sdk::PermissionDecision::Prompt)
+    }
+
+    async fn read_config(
+        &self,
+        _path: Option<String>,
+    ) -> crate::plugin::sdk::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+
+    async fn invoke_tool(
+        &self,
+        tool: String,
+        _input: serde_json::Value,
+    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
+        Err(crate::plugin::PluginError::new(format!(
+            "offline builtins host cannot invoke tool {tool}"
+        )))
+    }
+
+    async fn execute_builtin_tool(
+        &self,
+        req: crate::plugin::sdk::host_api::BuiltinToolRequest,
+    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
+        let context =
+            crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
+        let session_id = context.session_id.unwrap_or(-1);
+        let call_id = context.call_id.unwrap_or(-1);
+        let executor = builtins::current_executor_lookup(session_id, call_id, &req.tool_name)
+            .ok_or_else(|| {
+                crate::plugin::PluginError::new(
+                    "offline builtins host: no executor in scope for execute_builtin_tool",
+                )
+            })?;
+        executor
+            .execute_builtin_payload_for_host(
+                req.tool_name.as_str(),
+                req.input,
+                Some(session_id).filter(|id| *id >= 0),
+                Some(call_id).filter(|id| *id >= 0),
+            )
+            .map_err(|err| crate::plugin::PluginError::new(err.to_string()))
+    }
+}
+
 pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
     let workspace_root = workspace_root.into();
     let plugin_id = builtins_plugin_id().to_string();
     let skills_id = skills_plugin_id().to_string();
+    let lsp_id = lsp_plugin_id().to_string();
+    let cron_id = cron_plugin_id().to_string();
+    let fs_id = fs_plugin_id().to_string();
+    let shell_id = shell_plugin_id().to_string();
+    let web_id = web_plugin_id().to_string();
+    let workflow_id = workflow_plugin_id().to_string();
     let mut list = std::collections::BTreeMap::new();
-    list.insert(
-        plugin_id.clone(),
-        crate::plugin::PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-        },
-    );
-    list.insert(
-        skills_id.clone(),
-        crate::plugin::PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-        },
-    );
+    for id in [
+        &plugin_id,
+        &skills_id,
+        &lsp_id,
+        &cron_id,
+        &fs_id,
+        &shell_id,
+        &web_id,
+        &workflow_id,
+    ] {
+        list.insert(
+            (*id).clone(),
+            crate::plugin::PluginEntry::Static {
+                options: serde_json::Value::Null,
+                timeouts: Default::default(),
+            },
+        );
+    }
     let config = crate::plugin::PluginsConfig {
         enabled: true,
         timeouts: Default::default(),
@@ -145,8 +276,15 @@ pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Pl
     mcp::block_on(async move {
         PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION"))
             .with_config(config)
+            .with_host_client(Arc::new(BuiltinsHostClient))
             .register_static(plugin_id, new_builtins_plugin())
             .register_static(skills_id, new_skills_plugin())
+            .register_static(lsp_id, new_lsp_plugin())
+            .register_static(cron_id, new_cron_plugin())
+            .register_static(fs_id, new_fs_plugin())
+            .register_static(shell_id, new_shell_plugin())
+            .register_static(web_id, new_web_plugin())
+            .register_static(workflow_id, new_workflow_plugin())
             .build()
             .await
     })
@@ -453,7 +591,7 @@ impl ToolExecutor {
         self.plugins
             .entry_entries()
             .into_iter()
-            .filter(|entry| entry.plugin_name == builtins::BUILTIN_PLUGIN_ID)
+            .filter(|entry| is_first_party_plugin(&entry.plugin_name))
             .map(|entry| {
                 EntryDefinition::from_decl(
                     entry.exposed_name.clone(),
@@ -472,7 +610,7 @@ impl ToolExecutor {
             .entry_entries()
             .into_iter()
             .map(|entry| {
-                let source = if entry.plugin_name == builtins::BUILTIN_PLUGIN_ID {
+                let source = if is_first_party_plugin(&entry.plugin_name) {
                     EntrySource::Builtin
                 } else {
                     EntrySource::Plugin {
@@ -820,7 +958,7 @@ impl ToolExecutor {
         let resolution = self
             .plugins
             .lookup_entry(&tool_name)
-            .filter(|r| r.handle.plugin_id == builtins::BUILTIN_PLUGIN_ID)
+            .filter(|r| is_first_party_plugin(&r.handle.plugin_id))
             .ok_or_else(|| ToolError::UnknownTool(tool_name.clone()))?;
 
         let payload_value = builtin_input_payload(input)?;
@@ -1117,7 +1255,7 @@ impl ToolExecutor {
         let resolution = self
             .plugins
             .lookup_entry(tool_name)
-            .filter(|resolution| resolution.handle.plugin_id == builtins::BUILTIN_PLUGIN_ID)
+            .filter(|resolution| is_first_party_plugin(&resolution.handle.plugin_id))
             .ok_or_else(|| ToolError::UnknownTool(tool_name.to_string()))?;
         let definition = EntryDefinition::from_decl(
             resolution.handle.exposed_name.clone(),
@@ -1715,6 +1853,28 @@ mod tests {
                 plugin_id: None,
             }])
         }
+
+        async fn execute_builtin_tool(
+            &self,
+            req: crate::plugin::sdk::host_api::BuiltinToolRequest,
+        ) -> SdkResult<ToolInvokeOutput> {
+            let context =
+                crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
+            let session_id = context.session_id.unwrap_or(-1);
+            let call_id = context.call_id.unwrap_or(-1);
+            let executor = builtins::current_executor_for_test(session_id, call_id, &req.tool_name);
+            let executor = executor.ok_or_else(|| {
+                PluginError::new("test host: no executor available for execute_builtin_tool")
+            })?;
+            executor
+                .execute_builtin_payload_for_host(
+                    req.tool_name.as_str(),
+                    req.input,
+                    Some(session_id).filter(|id| *id >= 0),
+                    Some(call_id).filter(|id| *id >= 0),
+                )
+                .map_err(|err| PluginError::new(err.to_string()))
+        }
     }
 
     #[derive(Debug, Default)]
@@ -1877,21 +2037,31 @@ mod tests {
 
         let builtin_id = super::builtins_plugin_id().to_string();
         let skills_id = super::skills_plugin_id().to_string();
+        let lsp_id = super::lsp_plugin_id().to_string();
+        let cron_id = super::cron_plugin_id().to_string();
+        let fs_id = super::fs_plugin_id().to_string();
+        let shell_id = super::shell_plugin_id().to_string();
+        let web_id = super::web_plugin_id().to_string();
+        let workflow_id = super::workflow_plugin_id().to_string();
         let mut list = BTreeMap::new();
-        list.insert(
-            builtin_id.clone(),
-            PluginEntry::Static {
-                options: serde_json::Value::Null,
-                timeouts: Default::default(),
-            },
-        );
-        list.insert(
-            skills_id.clone(),
-            PluginEntry::Static {
-                options: serde_json::Value::Null,
-                timeouts: Default::default(),
-            },
-        );
+        for id in [
+            &builtin_id,
+            &skills_id,
+            &lsp_id,
+            &cron_id,
+            &fs_id,
+            &shell_id,
+            &web_id,
+            &workflow_id,
+        ] {
+            list.insert(
+                (*id).clone(),
+                PluginEntry::Static {
+                    options: serde_json::Value::Null,
+                    timeouts: Default::default(),
+                },
+            );
+        }
         list.insert(
             "fixture".to_string(),
             PluginEntry::Static {
@@ -1911,6 +2081,12 @@ mod tests {
                 .with_host_client(Arc::new(TestToolHost))
                 .register_static(builtin_id, super::new_builtins_plugin())
                 .register_static(skills_id, super::new_skills_plugin())
+                .register_static(lsp_id, super::new_lsp_plugin())
+                .register_static(cron_id, super::new_cron_plugin())
+                .register_static(fs_id, super::new_fs_plugin())
+                .register_static(shell_id, super::new_shell_plugin())
+                .register_static(web_id, super::new_web_plugin())
+                .register_static(workflow_id, super::new_workflow_plugin())
                 .register_static("fixture", FixturePlugin)
                 .build()
                 .await
@@ -1923,21 +2099,31 @@ mod tests {
 
         let plugin_id = super::builtins_plugin_id().to_string();
         let skills_id = super::skills_plugin_id().to_string();
+        let lsp_id = super::lsp_plugin_id().to_string();
+        let cron_id = super::cron_plugin_id().to_string();
+        let fs_id = super::fs_plugin_id().to_string();
+        let shell_id = super::shell_plugin_id().to_string();
+        let web_id = super::web_plugin_id().to_string();
+        let workflow_id = super::workflow_plugin_id().to_string();
         let mut list = BTreeMap::new();
-        list.insert(
-            plugin_id.clone(),
-            PluginEntry::Static {
-                options: serde_json::Value::Null,
-                timeouts: Default::default(),
-            },
-        );
-        list.insert(
-            skills_id.clone(),
-            PluginEntry::Static {
-                options: serde_json::Value::Null,
-                timeouts: Default::default(),
-            },
-        );
+        for id in [
+            &plugin_id,
+            &skills_id,
+            &lsp_id,
+            &cron_id,
+            &fs_id,
+            &shell_id,
+            &web_id,
+            &workflow_id,
+        ] {
+            list.insert(
+                (*id).clone(),
+                PluginEntry::Static {
+                    options: serde_json::Value::Null,
+                    timeouts: Default::default(),
+                },
+            );
+        }
         let config = PluginsConfig {
             enabled: true,
             timeouts: Default::default(),
@@ -1950,6 +2136,12 @@ mod tests {
                 .with_host_client(Arc::new(TestToolHost))
                 .register_static(plugin_id, super::new_builtins_plugin())
                 .register_static(skills_id, super::new_skills_plugin())
+                .register_static(lsp_id, super::new_lsp_plugin())
+                .register_static(cron_id, super::new_cron_plugin())
+                .register_static(fs_id, super::new_fs_plugin())
+                .register_static(shell_id, super::new_shell_plugin())
+                .register_static(web_id, super::new_web_plugin())
+                .register_static(workflow_id, super::new_workflow_plugin())
                 .build()
                 .await
                 .expect("builtins plugin host should build")
@@ -2429,7 +2621,7 @@ mod tests {
             .plugin_manager()
             .entry_entries()
             .into_iter()
-            .filter(|entry| entry.plugin_name == builtins::BUILTIN_PLUGIN_ID)
+            .filter(|entry| super::is_first_party_plugin(&entry.plugin_name))
             .map(|entry| entry.exposed_name.clone())
             .collect::<std::collections::BTreeSet<_>>();
 

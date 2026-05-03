@@ -1,6 +1,11 @@
 use crate::agent::Agent;
 
 use super::{EntryBehavior, EntryDefinition, EntrySource, builtins};
+use crate::plugin::sdk::Plugin;
+use crate::plugins::bundled::{
+    cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, shell as bundled_shell,
+    skills as bundled_skills, web as bundled_web, workflow as bundled_workflow,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelToolProfile {
@@ -71,7 +76,7 @@ impl ToolCatalog {
     }
 
     pub fn builtin_definitions(&self) -> Vec<EntryDefinition> {
-        builtins::entry_decls()
+        first_party_decls()
             .into_iter()
             .map(|decl| EntryDefinition::from_decl(decl.name.clone(), &decl, EntrySource::Builtin))
             .filter(|definition| self.is_behavior_enabled(definition.behavior))
@@ -85,6 +90,18 @@ impl ToolCatalog {
             ModelToolProfile::NoTask => behavior != EntryBehavior::Task,
         }
     }
+}
+
+fn first_party_decls() -> Vec<crate::plugin::sdk::PluginEntryDecl> {
+    let mut decls = builtins::entry_decls();
+    decls.extend(bundled_skills::SkillsPlugin::new().manifest().entries);
+    decls.extend(bundled_lsp::LspPlugin::new().manifest().entries);
+    decls.extend(bundled_cron::CronPlugin::new().manifest().entries);
+    decls.extend(bundled_fs::new_plugin().manifest().entries);
+    decls.extend(bundled_shell::new_plugin().manifest().entries);
+    decls.extend(bundled_web::new_plugin().manifest().entries);
+    decls.extend(bundled_workflow::new_plugin().manifest().entries);
+    decls
 }
 
 #[cfg(test)]

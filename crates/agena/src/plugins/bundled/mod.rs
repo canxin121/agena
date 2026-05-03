@@ -1,5 +1,10 @@
 pub mod builtin;
 pub mod cron;
+pub mod fs;
 pub mod lsp;
 pub mod mcp;
+pub mod router;
+pub mod shell;
 pub mod skills;
+pub mod web;
+pub mod workflow;

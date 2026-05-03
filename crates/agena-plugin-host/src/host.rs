@@ -20,19 +20,22 @@ use crate::registry::{
 };
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription,
-    HostCallbackContext, HostClient, HostEntryDescriptor, HostEntryListResponse,
-    HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
-    HostEntryUpdateRequest, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse,
-    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
+    HostAgentRemoveResponse, HostCallbackContext, HostClient, HostCommandListResponse,
+    HostCommandRegisterRequest, HostCommandRemoveRequest, HostCommandRemoveResponse,
+    HostEntryDescriptor, HostEntryListResponse, HostEntryMutationResponse,
+    HostEntryRegisterRequest, HostEntryRemoveRequest, HostEntryUpdateRequest,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
+    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
+    SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -2117,6 +2120,96 @@ impl HostHandle {
                 .await?;
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
+            method::HOST_COMMAND_REGISTER => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::CommandRegistry,
+                )
+                .await?;
+                let p: HostCommandRegisterParams = parse(params)?;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.command_register(p.request),
+                )
+                .await?;
+                Ok(serde_json::Value::Object(Default::default()))
+            }
+            method::HOST_COMMAND_REMOVE => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::CommandRegistry,
+                )
+                .await?;
+                let p: HostCommandRemoveParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.command_remove(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_COMMAND_LIST => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::CommandRegistry,
+                )
+                .await?;
+                let p: HostCommandListParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.command_list(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_AGENT_REGISTER => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::AgentRegistry,
+                )
+                .await?;
+                let p: HostAgentRegisterParams = parse(params)?;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.agent_register(p.request),
+                )
+                .await?;
+                Ok(serde_json::Value::Object(Default::default()))
+            }
+            method::HOST_AGENT_REMOVE => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::AgentRegistry,
+                )
+                .await?;
+                let p: HostAgentRemoveParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.agent_remove(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_AGENT_LIST => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::AgentRegistry,
+                )
+                .await?;
+                let p: HostAgentListParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.agent_list(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
             other => Err(PluginError::not_implemented(other)),
         }
     }
@@ -2453,6 +2546,52 @@ struct HostSchedulerCreateParams {
 #[derive(serde::Deserialize)]
 struct HostSchedulerDeleteParams {
     request: HostSchedulerDeleteRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostCommandRegisterParams {
+    request: HostCommandRegisterRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostCommandRemoveParams {
+    request: HostCommandRemoveRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostCommandListParams {
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostAgentRegisterParams {
+    request: HostAgentRegisterRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostAgentRemoveParams {
+    request: HostAgentRemoveRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostAgentListParams {
+    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -2829,6 +2968,57 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.scheduler_delete(req)).await
+    }
+
+    async fn command_register(&self, req: HostCommandRegisterRequest) -> crate::sdk::Result<()> {
+        self.require_capability(
+            method::HOST_COMMAND_REGISTER,
+            HostCapability::CommandRegistry,
+        )
+        .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.command_register(req)).await
+    }
+
+    async fn command_remove(
+        &self,
+        req: HostCommandRemoveRequest,
+    ) -> crate::sdk::Result<HostCommandRemoveResponse> {
+        self.require_capability(method::HOST_COMMAND_REMOVE, HostCapability::CommandRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.command_remove(req)).await
+    }
+
+    async fn command_list(&self) -> crate::sdk::Result<HostCommandListResponse> {
+        self.require_capability(method::HOST_COMMAND_LIST, HostCapability::CommandRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.command_list()).await
+    }
+
+    async fn agent_register(&self, req: HostAgentRegisterRequest) -> crate::sdk::Result<()> {
+        self.require_capability(method::HOST_AGENT_REGISTER, HostCapability::AgentRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.agent_register(req)).await
+    }
+
+    async fn agent_remove(
+        &self,
+        req: HostAgentRemoveRequest,
+    ) -> crate::sdk::Result<HostAgentRemoveResponse> {
+        self.require_capability(method::HOST_AGENT_REMOVE, HostCapability::AgentRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.agent_remove(req)).await
+    }
+
+    async fn agent_list(&self) -> crate::sdk::Result<HostAgentListResponse> {
+        self.require_capability(method::HOST_AGENT_LIST, HostCapability::AgentRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.agent_list()).await
     }
 }
 

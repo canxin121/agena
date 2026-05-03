@@ -139,6 +139,8 @@ pub enum HostCapability {
     PluginSecrets,
     PluginStatus,
     CronScheduler,
+    CommandRegistry,
+    AgentRegistry,
 }
 
 /// Single declarative path extraction rule. `jsonpath` is a subset:

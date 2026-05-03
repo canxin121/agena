@@ -23,7 +23,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -72,6 +74,11 @@ pub type AgentResult<T> = Result<T, AgentError>;
 
 #[derive(Debug, Clone, Default)]
 pub struct SubagentRegistry {
+    inner: Arc<RwLock<AgentRegistryInner>>,
+}
+
+#[derive(Debug, Default)]
+struct AgentRegistryInner {
     by_name: BTreeMap<String, AgentProfile>,
 }
 
@@ -84,82 +91,115 @@ impl SubagentRegistry {
     /// `.agena/agents/` ancestors) and `user_root` (typically
     /// `~/.agena/agents`). Project entries win on name collisions.
     pub fn discover(workspace_root: &Path, user_root: Option<&Path>) -> Self {
-        let mut registry = Self::default();
-        if let Some(user) = user_root {
-            registry.load_dir(user, AgentScope::User);
-        }
-        for dir in collect_project_agent_dirs(workspace_root) {
-            registry.load_dir(&dir, AgentScope::Project);
-        }
+        let registry = Self::default();
+        registry.reload_disk(workspace_root, user_root);
         registry
     }
 
-    fn load_dir(&mut self, dir: &Path, scope: AgentScope) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("md") {
-                continue;
-            }
-            let stem = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) if !s.is_empty() => s.to_string(),
-                _ => continue,
-            };
-            match AgentProfile::from_path(&path, &stem, scope) {
-                Ok(profile) => {
-                    self.insert(profile, scope);
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        target: "agena::agents",
-                        "skipping subagent profile `{}`: {err}",
-                        path.display()
-                    );
-                }
-            }
+    pub fn reload_disk(&self, workspace_root: &Path, user_root: Option<&Path>) {
+        let mut inner = self.inner.write();
+        inner.by_name.clear();
+        if let Some(user) = user_root {
+            agents_load_dir(&mut inner.by_name, user, AgentScope::User);
+        }
+        for dir in collect_project_agent_dirs(workspace_root) {
+            agents_load_dir(&mut inner.by_name, &dir, AgentScope::Project);
         }
     }
 
-    fn insert(&mut self, profile: AgentProfile, scope: AgentScope) {
-        let candidate_keys = std::iter::once(profile.name.clone())
-            .chain(profile.frontmatter.aliases.iter().cloned())
-            .collect::<Vec<_>>();
-        for key in candidate_keys {
-            match self.by_name.get(&key) {
-                Some(existing) => {
-                    if scope_priority(scope) >= scope_priority(existing.scope) {
-                        self.by_name.insert(key, profile.clone());
-                    }
-                }
-                None => {
-                    self.by_name.insert(key, profile.clone());
-                }
-            }
+    pub fn register_runtime(&self, profile: AgentProfile) {
+        let mut inner = self.inner.write();
+        let scope = profile.scope;
+        agents_upsert(&mut inner.by_name, profile, scope);
+    }
+
+    pub fn remove_runtime(&self, name: &str) -> bool {
+        let mut inner = self.inner.write();
+        let removed = inner.by_name.remove(name).is_some();
+        let to_drop: Vec<String> = inner
+            .by_name
+            .iter()
+            .filter(|(_, profile)| profile.name == name)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in to_drop {
+            inner.by_name.remove(&key);
         }
+        removed
     }
 
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.by_name.keys().map(String::as_str)
+    pub fn names(&self) -> Vec<String> {
+        self.inner.read().by_name.keys().cloned().collect()
     }
 
-    pub fn list(&self) -> Vec<&AgentProfile> {
-        let mut seen: BTreeMap<String, &AgentProfile> = BTreeMap::new();
-        for profile in self.by_name.values() {
-            seen.entry(profile.name.clone()).or_insert(profile);
+    pub fn list(&self) -> Vec<AgentProfile> {
+        let inner = self.inner.read();
+        let mut seen: BTreeMap<String, AgentProfile> = BTreeMap::new();
+        for profile in inner.by_name.values() {
+            seen.entry(profile.name.clone())
+                .or_insert_with(|| profile.clone());
         }
         seen.into_values().collect()
     }
 
-    pub fn get(&self, name: &str) -> Option<&AgentProfile> {
-        self.by_name.get(name)
+    pub fn get(&self, name: &str) -> Option<AgentProfile> {
+        self.inner.read().by_name.get(name).cloned()
     }
 
-    pub fn require(&self, name: &str) -> AgentResult<&AgentProfile> {
+    pub fn require(&self, name: &str) -> AgentResult<AgentProfile> {
         self.get(name)
             .ok_or_else(|| AgentError::UnknownProfile(name.to_string()))
+    }
+}
+
+fn agents_load_dir(by_name: &mut BTreeMap<String, AgentProfile>, dir: &Path, scope: AgentScope) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => continue,
+        };
+        match AgentProfile::from_path(&path, &stem, scope) {
+            Ok(profile) => {
+                agents_upsert(by_name, profile, scope);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena::agents",
+                    "skipping subagent profile `{}`: {err}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+fn agents_upsert(
+    by_name: &mut BTreeMap<String, AgentProfile>,
+    profile: AgentProfile,
+    scope: AgentScope,
+) {
+    let candidate_keys = std::iter::once(profile.name.clone())
+        .chain(profile.frontmatter.aliases.iter().cloned())
+        .collect::<Vec<_>>();
+    for key in candidate_keys {
+        match by_name.get(&key) {
+            Some(existing) => {
+                if scope_priority(scope) >= scope_priority(existing.scope) {
+                    by_name.insert(key, profile.clone());
+                }
+            }
+            None => {
+                by_name.insert(key, profile.clone());
+            }
+        }
     }
 }
 

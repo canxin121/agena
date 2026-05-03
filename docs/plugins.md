@@ -182,6 +182,8 @@ Available callbacks include:
 | `plan_list`, `plan_get` / `host/plan.*` | `PlanRegistry` |
 | `worktree_list` / `host/worktree.list` | `WorktreeRegistry` |
 | `scheduler_list`, `scheduler_create`, `scheduler_delete` / `host/scheduler.*` | `Scheduler` |
+| `command_register`, `command_remove`, `command_list` / `host/command.*` | `CommandRegistry` |
+| `agent_register`, `agent_remove`, `agent_list` / `host/agent.*` | `AgentRegistry` |
 
 For stdio / HTTP plugins, callbacks travel back over the same JSON-RPC wire
 (stdio multiplexed on stdin/stdout, HTTP via `POST /plugin-rpc/{plugin_id}`

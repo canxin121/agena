@@ -191,4 +191,10 @@ pub mod method {
     pub const HOST_SCHEDULER_LIST: &str = "host/scheduler.list";
     pub const HOST_SCHEDULER_CREATE: &str = "host/scheduler.create";
     pub const HOST_SCHEDULER_DELETE: &str = "host/scheduler.delete";
+    pub const HOST_COMMAND_REGISTER: &str = "host/command.register";
+    pub const HOST_COMMAND_REMOVE: &str = "host/command.remove";
+    pub const HOST_COMMAND_LIST: &str = "host/command.list";
+    pub const HOST_AGENT_REGISTER: &str = "host/agent.register";
+    pub const HOST_AGENT_REMOVE: &str = "host/agent.remove";
+    pub const HOST_AGENT_LIST: &str = "host/agent.list";
 }

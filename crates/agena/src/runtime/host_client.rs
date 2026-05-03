@@ -14,20 +14,23 @@ use crate::message::{
     UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
-    AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostCallbackContext,
-    HostClient, HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostPlanEntry, HostPlanGetRequest,
-    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
-    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
-    current_host_callback_context,
+    AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostAgentDescriptor,
+    HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
+    HostAgentRemoveResponse, HostCallbackContext, HostClient, HostCommandDescriptor,
+    HostCommandListResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
+    HostCommandRemoveResponse, HostLspDiagnostic, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer, HostPlanEntry,
+    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest,
+    HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest,
+    HostStorageListResponse, HostStorageSetRequest, HostWorktreeEntry, HostWorktreeListResponse,
+    LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
+    SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -40,7 +43,11 @@ use crate::tool::{EntrySource, MonitorError, MonitorReadParams, MonitorStartPara
 /// Build a `HostClient` impl for a runtime; use [`NoopHostClient`] when no
 /// runtime is available (e.g. before bootstrap completes).
 pub fn host_client_for(runtime: AgenaRuntime) -> Arc<dyn HostClient> {
-    Arc::new(RuntimeHostClient { runtime })
+    Arc::new(RuntimeHostClient {
+        runtime,
+        commands: crate::commands::CustomCommandRegistry::empty(),
+        agents: crate::agents::SubagentRegistry::empty(),
+    })
 }
 
 pub fn noop_host_client() -> Arc<dyn HostClient> {
@@ -49,6 +56,8 @@ pub fn noop_host_client() -> Arc<dyn HostClient> {
 
 struct RuntimeHostClient {
     runtime: AgenaRuntime,
+    commands: crate::commands::CustomCommandRegistry,
+    agents: crate::agents::SubagentRegistry,
 }
 
 impl RuntimeHostClient {
@@ -936,6 +945,137 @@ impl HostClient for RuntimeHostClient {
             .map_err(|err| PluginError::invalid_params(format!("invalid scheduler id: {err}")))?;
         let removed = scheduler.remove(id).await;
         Ok(HostSchedulerDeleteResponse { removed })
+    }
+
+    async fn command_register(&self, req: HostCommandRegisterRequest) -> Result<(), PluginError> {
+        if req.command.name.trim().is_empty() {
+            return Err(PluginError::invalid_params(
+                "command.name must not be empty",
+            ));
+        }
+        let scope = command_scope_from_str(req.command.scope.as_str());
+        let command = crate::commands::CustomCommand {
+            name: req.command.name.clone(),
+            frontmatter: crate::commands::CommandFrontmatter {
+                description: req.command.description,
+                argument_hint: None,
+                allowed_tools: req.command.allowed_tools,
+                model: req.command.model,
+                aliases: req.command.aliases,
+            },
+            body: req.command.body,
+            source_path: None,
+            scope,
+        };
+        self.commands.register_runtime(command);
+        Ok(())
+    }
+
+    async fn command_remove(
+        &self,
+        req: HostCommandRemoveRequest,
+    ) -> Result<HostCommandRemoveResponse, PluginError> {
+        let removed = self.commands.remove_runtime(&req.name);
+        Ok(HostCommandRemoveResponse { removed })
+    }
+
+    async fn command_list(&self) -> Result<HostCommandListResponse, PluginError> {
+        let commands = self
+            .commands
+            .list()
+            .into_iter()
+            .map(command_to_descriptor)
+            .collect();
+        Ok(HostCommandListResponse { commands })
+    }
+
+    async fn agent_register(&self, req: HostAgentRegisterRequest) -> Result<(), PluginError> {
+        if req.agent.name.trim().is_empty() {
+            return Err(PluginError::invalid_params("agent.name must not be empty"));
+        }
+        let scope = agent_scope_from_str(req.agent.scope.as_str());
+        let profile = crate::agents::AgentProfile {
+            name: req.agent.name.clone(),
+            frontmatter: crate::agents::AgentFrontmatter {
+                description: req.agent.description,
+                allowed_tools: req.agent.allowed_tools,
+                model: req.agent.model,
+                aliases: req.agent.aliases,
+            },
+            prompt: req.agent.prompt,
+            source_path: None,
+            scope,
+        };
+        self.agents.register_runtime(profile);
+        Ok(())
+    }
+
+    async fn agent_remove(
+        &self,
+        req: HostAgentRemoveRequest,
+    ) -> Result<HostAgentRemoveResponse, PluginError> {
+        let removed = self.agents.remove_runtime(&req.name);
+        Ok(HostAgentRemoveResponse { removed })
+    }
+
+    async fn agent_list(&self) -> Result<HostAgentListResponse, PluginError> {
+        let agents = self
+            .agents
+            .list()
+            .into_iter()
+            .map(agent_to_descriptor)
+            .collect();
+        Ok(HostAgentListResponse { agents })
+    }
+}
+
+fn command_scope_from_str(scope: &str) -> crate::commands::CommandScope {
+    match scope {
+        "project" => crate::commands::CommandScope::Project,
+        "user" => crate::commands::CommandScope::User,
+        _ => crate::commands::CommandScope::Builtin,
+    }
+}
+
+fn command_to_descriptor(cmd: crate::commands::CustomCommand) -> HostCommandDescriptor {
+    HostCommandDescriptor {
+        name: cmd.name,
+        description: cmd.frontmatter.description,
+        allowed_tools: cmd.frontmatter.allowed_tools,
+        model: cmd.frontmatter.model,
+        aliases: cmd.frontmatter.aliases,
+        body: cmd.body,
+        scope: match cmd.scope {
+            crate::commands::CommandScope::Project => "project",
+            crate::commands::CommandScope::User => "user",
+            crate::commands::CommandScope::Builtin => "builtin",
+        }
+        .to_string(),
+    }
+}
+
+fn agent_scope_from_str(scope: &str) -> crate::agents::AgentScope {
+    match scope {
+        "project" => crate::agents::AgentScope::Project,
+        "user" => crate::agents::AgentScope::User,
+        _ => crate::agents::AgentScope::Builtin,
+    }
+}
+
+fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostAgentDescriptor {
+    HostAgentDescriptor {
+        name: profile.name,
+        description: profile.frontmatter.description,
+        allowed_tools: profile.frontmatter.allowed_tools,
+        model: profile.frontmatter.model,
+        aliases: profile.frontmatter.aliases,
+        prompt: profile.prompt,
+        scope: match profile.scope {
+            crate::agents::AgentScope::Project => "project",
+            crate::agents::AgentScope::User => "user",
+            crate::agents::AgentScope::Builtin => "builtin",
+        }
+        .to_string(),
     }
 }
 

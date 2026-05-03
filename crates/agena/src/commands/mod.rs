@@ -22,7 +22,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -77,6 +79,11 @@ pub type CommandResult<T> = Result<T, CommandError>;
 
 #[derive(Debug, Clone, Default)]
 pub struct CustomCommandRegistry {
+    inner: Arc<RwLock<CommandRegistryInner>>,
+}
+
+#[derive(Debug, Default)]
+struct CommandRegistryInner {
     by_name: BTreeMap<String, CustomCommand>,
 }
 
@@ -89,77 +96,62 @@ impl CustomCommandRegistry {
     /// `.agena/commands/` ancestors) and `user_root` (typically
     /// `~/.agena/commands`). Project entries win on name collisions.
     pub fn discover(workspace_root: &Path, user_root: Option<&Path>) -> Self {
-        let mut registry = Self::default();
-        if let Some(user) = user_root {
-            registry.load_dir(user, CommandScope::User);
-        }
-        for dir in collect_project_command_dirs(workspace_root) {
-            registry.load_dir(&dir, CommandScope::Project);
-        }
+        let registry = Self::default();
+        registry.reload_disk(workspace_root, user_root);
         registry
     }
 
-    fn load_dir(&mut self, dir: &Path, scope: CommandScope) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("md") {
-                continue;
-            }
-            let stem = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) if !s.is_empty() => s.to_string(),
-                _ => continue,
-            };
-            match CustomCommand::from_path(&path, &stem, scope) {
-                Ok(cmd) => {
-                    self.insert(cmd, scope);
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        target: "agena::commands",
-                        "skipping command `{}`: {err}",
-                        path.display()
-                    );
-                }
-            }
+    pub fn reload_disk(&self, workspace_root: &Path, user_root: Option<&Path>) {
+        let mut inner = self.inner.write();
+        inner.by_name.clear();
+        if let Some(user) = user_root {
+            load_dir(&mut inner.by_name, user, CommandScope::User);
+        }
+        for dir in collect_project_command_dirs(workspace_root) {
+            load_dir(&mut inner.by_name, &dir, CommandScope::Project);
         }
     }
 
-    fn insert(&mut self, command: CustomCommand, scope: CommandScope) {
-        let candidate_keys = std::iter::once(command.name.clone())
-            .chain(command.frontmatter.aliases.iter().cloned())
-            .collect::<Vec<_>>();
-        for key in candidate_keys {
-            match self.by_name.get(&key) {
-                Some(existing) => {
-                    if scope_priority(scope) >= scope_priority(existing.scope) {
-                        self.by_name.insert(key, command.clone());
-                    }
-                }
-                None => {
-                    self.by_name.insert(key, command.clone());
-                }
-            }
+    /// Register a runtime command (typically by a plugin). Uses
+    /// [`CommandScope::Builtin`] when caller does not specify, but plugins
+    /// may pass `Project`/`User` to mirror disk priority.
+    pub fn register_runtime(&self, command: CustomCommand) {
+        let mut inner = self.inner.write();
+        let scope = command.scope;
+        upsert(&mut inner.by_name, command, scope);
+    }
+
+    pub fn remove_runtime(&self, name: &str) -> bool {
+        let mut inner = self.inner.write();
+        let removed = inner.by_name.remove(name).is_some();
+        // Also drop any aliases pointing at the same command.
+        let to_drop: Vec<String> = inner
+            .by_name
+            .iter()
+            .filter(|(_, cmd)| cmd.name == name)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in to_drop {
+            inner.by_name.remove(&key);
         }
+        removed
     }
 
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.by_name.keys().map(String::as_str)
+    pub fn names(&self) -> Vec<String> {
+        self.inner.read().by_name.keys().cloned().collect()
     }
 
-    pub fn list(&self) -> Vec<&CustomCommand> {
-        let mut seen: BTreeMap<String, &CustomCommand> = BTreeMap::new();
-        for cmd in self.by_name.values() {
-            seen.entry(cmd.name.clone()).or_insert(cmd);
+    pub fn list(&self) -> Vec<CustomCommand> {
+        let inner = self.inner.read();
+        let mut seen: BTreeMap<String, CustomCommand> = BTreeMap::new();
+        for cmd in inner.by_name.values() {
+            seen.entry(cmd.name.clone()).or_insert_with(|| cmd.clone());
         }
         seen.into_values().collect()
     }
 
-    pub fn get(&self, name: &str) -> Option<&CustomCommand> {
-        self.by_name.get(name)
+    pub fn get(&self, name: &str) -> Option<CustomCommand> {
+        self.inner.read().by_name.get(name).cloned()
     }
 
     /// Render a command into the prompt the LLM should see.
@@ -178,6 +170,57 @@ impl CustomCommandRegistry {
             scope: cmd.scope,
             source_path: cmd.source_path.clone(),
         })
+    }
+}
+
+fn load_dir(by_name: &mut BTreeMap<String, CustomCommand>, dir: &Path, scope: CommandScope) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => continue,
+        };
+        match CustomCommand::from_path(&path, &stem, scope) {
+            Ok(cmd) => {
+                upsert(by_name, cmd, scope);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena::commands",
+                    "skipping command `{}`: {err}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+fn upsert(
+    by_name: &mut BTreeMap<String, CustomCommand>,
+    command: CustomCommand,
+    scope: CommandScope,
+) {
+    let candidate_keys = std::iter::once(command.name.clone())
+        .chain(command.frontmatter.aliases.iter().cloned())
+        .collect::<Vec<_>>();
+    for key in candidate_keys {
+        match by_name.get(&key) {
+            Some(existing) => {
+                if scope_priority(scope) >= scope_priority(existing.scope) {
+                    by_name.insert(key, command.clone());
+                }
+            }
+            None => {
+                by_name.insert(key, command.clone());
+            }
+        }
     }
 }
 

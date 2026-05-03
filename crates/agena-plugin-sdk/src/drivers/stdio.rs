@@ -20,11 +20,13 @@ use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
 use crate::host_api::{
-    AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostClient,
-    HostEntryListResponse, HostEntryMutationResponse, HostEntryRegisterRequest,
-    HostEntryRemoveRequest, HostEntryUpdateRequest, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostPlanGetRequest,
-    HostPlanGetResponse, HostPlanListResponse, HostPluginStatusGetRequest,
+    AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostAgentListResponse,
+    HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostClient,
+    HostCommandListResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
+    HostCommandRemoveResponse, HostEntryListResponse, HostEntryMutationResponse,
+    HostEntryRegisterRequest, HostEntryRemoveRequest, HostEntryUpdateRequest,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
@@ -682,6 +684,80 @@ impl HostClient for StdioHostClient {
             method::HOST_SCHEDULER_DELETE,
             serde_json::json!({
                 "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn command_register(&self, req: HostCommandRegisterRequest) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_COMMAND_REGISTER,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn command_remove(
+        &self,
+        req: HostCommandRemoveRequest,
+    ) -> crate::error::Result<HostCommandRemoveResponse> {
+        self.call(
+            method::HOST_COMMAND_REMOVE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn command_list(&self) -> crate::error::Result<HostCommandListResponse> {
+        self.call(
+            method::HOST_COMMAND_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn agent_register(&self, req: HostAgentRegisterRequest) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_AGENT_REGISTER,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn agent_remove(
+        &self,
+        req: HostAgentRemoveRequest,
+    ) -> crate::error::Result<HostAgentRemoveResponse> {
+        self.call(
+            method::HOST_AGENT_REMOVE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn agent_list(&self) -> crate::error::Result<HostAgentListResponse> {
+        self.call(
+            method::HOST_AGENT_LIST,
+            serde_json::json!({
                 "context": crate::host_api::current_host_callback_context(),
             }),
         )

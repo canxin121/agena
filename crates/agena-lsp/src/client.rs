@@ -94,6 +94,16 @@ impl LspClient {
             .unwrap_or_default()
     }
 
+    /// Snapshot every cached `(uri, diagnostics)` pair as plain strings. Used
+    /// by read-only observability surfaces such as the `agena.lsp` plugin.
+    pub fn diagnostics_snapshot(&self) -> Vec<(String, Vec<Diagnostic>)> {
+        self.inner
+            .diagnostics
+            .iter()
+            .map(|entry| (entry.key().as_str().to_string(), entry.value().clone()))
+            .collect()
+    }
+
     pub fn server_info(&self) -> Option<Arc<InitializeResult>> {
         self.inner.initialized.load_full()
     }

@@ -56,7 +56,7 @@ use crate::plugin::{
         PlanModePolicy as SdkPlanModePolicy, ShellEnvInput as PluginShellEnvInput,
     },
 };
-use crate::plugins::bundled::{builtin as builtins, mcp, skills};
+use crate::plugins::bundled::{builtin as builtins, lsp as bundled_lsp, mcp, skills};
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
@@ -97,6 +97,14 @@ pub fn skills_plugin_id() -> &'static str {
 
 pub fn new_skills_plugin() -> impl crate::plugin::sdk::Plugin {
     skills::SkillsPlugin::new()
+}
+
+pub fn lsp_plugin_id() -> &'static str {
+    bundled_lsp::LSP_PLUGIN_ID
+}
+
+pub fn new_lsp_plugin() -> impl crate::plugin::sdk::Plugin {
+    bundled_lsp::LspPlugin::new()
 }
 
 pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {

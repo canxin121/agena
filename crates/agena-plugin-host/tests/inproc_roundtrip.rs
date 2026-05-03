@@ -571,3 +571,41 @@ async fn plugin_status_capability_returns_loaded_plugin() {
         .expect("plugin.status.get on missing plugin should succeed");
     assert!(missing.get("status").is_none_or(|v| v.is_null()));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lsp_calls_require_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_LSP_LIST_SERVERS,
+            json!({}),
+        )
+        .await
+        .expect_err("lsp.list_servers should require LspRegistry");
+    assert!(err.message.contains("LspRegistry"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lsp_capability_unlocks_dispatch() {
+    let host = host_with_capability_plugin(vec![HostCapability::LspRegistry]).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_LSP_LIST_SERVERS,
+            json!({}),
+        )
+        .await
+        .expect_err("default lsp_list_servers should reach trait fallback");
+    assert!(!err.message.contains("LspRegistry"));
+}

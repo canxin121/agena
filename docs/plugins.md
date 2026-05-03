@@ -178,6 +178,7 @@ Available callbacks include:
 | `storage_get`, `storage_set`, `storage_delete`, `storage_list` / `host/storage.*` | `PluginStorage` |
 | `secret_get`, `secret_set`, `secret_delete`, `secret_list` / `host/secret.*` | `PluginSecrets` |
 | `plugin_status_list`, `plugin_status_get` / `host/plugin.status.*` | `PluginStatus` |
+| `lsp_list_servers`, `lsp_list_diagnostics` / `host/lsp.list_*` | `LspRegistry` |
 
 For stdio / HTTP plugins, callbacks travel back over the same JSON-RPC wire
 (stdio multiplexed on stdin/stdout, HTTP via `POST /plugin-rpc/{plugin_id}`
@@ -231,6 +232,16 @@ recent `last_exit_code`, the `last_restart_at_ms` timestamp, and the
 report `running` with the process-specific fields left empty. The status
 registry is in-memory and session-scoped — restart counts reset when the host
 is rebuilt.
+
+## LSP read-only registry
+
+The first-party `agena.lsp` plugin exposes two read-only entries —
+`lsp_servers` and `lsp_diagnostics` — backed by the `host/lsp.list_*`
+callbacks (gated by `HostCapability::LspRegistry`). They surface the
+configured LSP fleet and any cached diagnostics without forcing a full
+indexing pass. Hover, definition, references, and other write/interactive
+flows still live in the built-in tools and will be plugin-ized in a future
+phase along with commands, plan/worktree/monitor/scheduler, and agents.
 
 ## Config schema
 

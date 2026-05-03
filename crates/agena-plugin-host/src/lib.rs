@@ -7,6 +7,7 @@ pub mod error;
 pub mod host;
 pub mod loader;
 pub mod manifest_io;
+pub mod quota;
 pub mod registry;
 pub mod status;
 pub mod transport;

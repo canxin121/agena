@@ -121,6 +121,8 @@ async fn http_transport_round_trip_via_plugin_host() {
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
         })
         .build()
         .await

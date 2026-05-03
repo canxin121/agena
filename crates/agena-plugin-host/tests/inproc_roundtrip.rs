@@ -248,6 +248,8 @@ async fn static_plugin_round_trips_every_hook() {
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
         })
         .register_static("test", TestPlugin)
         .build()
@@ -922,4 +924,65 @@ async fn per_entry_capability_scope_isolates_entries() {
     .expect_err("quiet entry must be denied");
     assert_eq!(err.code, PluginErrorCode::HostUnavailable);
     assert!(err.message.contains("entry `quiet`"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quota_burst_then_throttles() {
+    use agena_plugin_host::quota::QuotaConfig;
+
+    let mut list = BTreeMap::new();
+    list.insert(
+        "capability-plugin".to_string(),
+        PluginEntry::Static {
+            options: serde_json::Value::Null,
+            timeouts: Default::default(),
+        },
+    );
+    let mut quotas = BTreeMap::new();
+    quotas.insert(
+        "capability-plugin".to_string(),
+        QuotaConfig {
+            rate_per_sec: 1,
+            burst: 2,
+            max_concurrent: 0,
+        },
+    );
+    let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
+        .with_config(PluginsConfig {
+            list,
+            quotas,
+            ..Default::default()
+        })
+        .register_static(
+            "capability-plugin",
+            CapabilityPlugin::new([HostCapability::ReadConfig]),
+        )
+        .build()
+        .await
+        .expect("host builds");
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    for _ in 0..2 {
+        host.host_handle()
+            .handle_call_for_plugin(
+                "capability-plugin",
+                agena_plugin_sdk::rpc::method::HOST_CONFIG_READ,
+                json!({ "path": null }),
+            )
+            .await
+            .expect("within burst");
+    }
+    let err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_CONFIG_READ,
+            json!({ "path": null }),
+        )
+        .await
+        .expect_err("third call must throttle");
+    assert_eq!(err.code, PluginErrorCode::Generic);
+    assert!(err.message.contains("rate exceeded"));
 }

@@ -5,6 +5,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+pub use crate::quota::QuotaConfig;
+
 /// Top-level `[plugins]` config block, parsed from agena's config layer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginsConfig {
@@ -14,6 +16,14 @@ pub struct PluginsConfig {
     pub timeouts: TimeoutsConfig,
     #[serde(default)]
     pub list: BTreeMap<String, PluginEntry>,
+    /// Global default quota applied to plugins without their own
+    /// `[plugins.list.<id>.quota]`. Defaults to unlimited.
+    #[serde(default, skip_serializing_if = "QuotaConfig::is_unlimited_ref")]
+    pub default_quota: QuotaConfig,
+    /// Optional per-plugin overrides, keyed by plugin id. A plugin without
+    /// an entry here uses `default_quota`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub quotas: BTreeMap<String, QuotaConfig>,
     /// `key_id -> hex-encoded ed25519 public key`. Cdylib entries with a
     /// `signature` field reference one of these keys.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -26,6 +36,8 @@ impl Default for PluginsConfig {
             enabled: true,
             timeouts: TimeoutsConfig::default(),
             list: BTreeMap::new(),
+            default_quota: QuotaConfig::default(),
+            quotas: BTreeMap::new(),
             trusted_keys: BTreeMap::new(),
         }
     }

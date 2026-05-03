@@ -272,6 +272,8 @@ pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Pl
         timeouts: Default::default(),
         list,
         trusted_keys: Default::default(),
+        default_quota: Default::default(),
+        quotas: Default::default(),
     };
     mcp::block_on(async move {
         PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION"))
@@ -2074,6 +2076,8 @@ mod tests {
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
         };
         test_plugin_runtime().block_on(async {
             PluginHostBuilder::new(root, "test")
@@ -2129,6 +2133,8 @@ mod tests {
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
         };
         test_plugin_runtime().block_on(async {
             PluginHostBuilder::new(root, "test")

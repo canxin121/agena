@@ -48,6 +48,8 @@ async fn streaming_emulation_yields_one_chunk() {
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
         })
         .register_static("streamy", StreamingPlugin)
         .build()

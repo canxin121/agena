@@ -392,6 +392,7 @@ impl RawConfig {
             runtime,
             permission,
             plugins,
+            plugin_storage: crate::config::types::PluginStorageConfig::default(),
             memory,
             mcp,
             lsp,

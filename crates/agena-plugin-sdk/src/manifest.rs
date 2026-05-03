@@ -135,6 +135,8 @@ pub enum HostCapability {
     SkillsManager,
     LspRegistry,
     EntryRegistry,
+    PluginStorage,
+    PluginSecrets,
 }
 
 /// Single declarative path extraction rule. `jsonpath` is a subset:

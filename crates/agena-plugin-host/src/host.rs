@@ -22,9 +22,12 @@ use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription,
     HostCallbackContext, HostClient, HostEntryDescriptor, HostEntryListResponse,
     HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
-    HostEntryUpdateRequest, HostSkillGetRequest, HostSkillGetResponse, LogLevel, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostEntryUpdateRequest, HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse,
+    HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, LogLevel,
+    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -1834,6 +1837,126 @@ impl HostHandle {
                 serde_json::to_value(&response)
                     .map_err(|e| PluginError::invalid_params(e.to_string()))
             }
+            method::HOST_STORAGE_GET => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::PluginStorage,
+                )
+                .await?;
+                let p: HostStorageGetParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.storage_get(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_STORAGE_SET => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::PluginStorage,
+                )
+                .await?;
+                let p: HostStorageSetParams = parse(params)?;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.storage_set(p.request),
+                )
+                .await?;
+                Ok(serde_json::Value::Object(Default::default()))
+            }
+            method::HOST_STORAGE_DELETE => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::PluginStorage,
+                )
+                .await?;
+                let p: HostStorageDeleteParams = parse(params)?;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.storage_delete(p.request),
+                )
+                .await?;
+                Ok(serde_json::Value::Object(Default::default()))
+            }
+            method::HOST_STORAGE_LIST => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::PluginStorage,
+                )
+                .await?;
+                let p: HostStorageListParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.storage_list(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_SECRET_GET => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::PluginSecrets,
+                )
+                .await?;
+                let p: HostSecretGetParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.secret_get(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_SECRET_SET => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::PluginSecrets,
+                )
+                .await?;
+                let p: HostSecretSetParams = parse(params)?;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.secret_set(p.request),
+                )
+                .await?;
+                Ok(serde_json::Value::Object(Default::default()))
+            }
+            method::HOST_SECRET_DELETE => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::PluginSecrets,
+                )
+                .await?;
+                let p: HostSecretDeleteParams = parse(params)?;
+                host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.secret_delete(p.request),
+                )
+                .await?;
+                Ok(serde_json::Value::Object(Default::default()))
+            }
+            method::HOST_SECRET_LIST => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::PluginSecrets,
+                )
+                .await?;
+                let p: HostSecretListParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.secret_list(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
             other => Err(PluginError::not_implemented(other)),
         }
     }
@@ -2023,6 +2146,62 @@ struct HostEntryUpdateParams {
 struct HostEntryRemoveParams {
     request: HostEntryRemoveRequest,
     #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostStorageGetParams {
+    request: HostStorageGetRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostStorageSetParams {
+    request: HostStorageSetRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostStorageDeleteParams {
+    request: HostStorageDeleteRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostStorageListParams {
+    #[serde(default)]
+    request: HostStorageListRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostSecretGetParams {
+    request: HostSecretGetRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostSecretSetParams {
+    request: HostSecretSetRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostSecretDeleteParams {
+    request: HostSecretDeleteRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostSecretListParams {
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -2248,6 +2427,71 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_ENTRY_LIST, HostCapability::EntryRegistry)
             .await?;
         self.handle.entry_list_response()
+    }
+
+    async fn storage_get(
+        &self,
+        req: HostStorageGetRequest,
+    ) -> crate::sdk::Result<HostStorageGetResponse> {
+        self.require_capability(method::HOST_STORAGE_GET, HostCapability::PluginStorage)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.storage_get(req)).await
+    }
+
+    async fn storage_set(&self, req: HostStorageSetRequest) -> crate::sdk::Result<()> {
+        self.require_capability(method::HOST_STORAGE_SET, HostCapability::PluginStorage)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.storage_set(req)).await
+    }
+
+    async fn storage_delete(&self, req: HostStorageDeleteRequest) -> crate::sdk::Result<()> {
+        self.require_capability(method::HOST_STORAGE_DELETE, HostCapability::PluginStorage)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.storage_delete(req)).await
+    }
+
+    async fn storage_list(
+        &self,
+        req: HostStorageListRequest,
+    ) -> crate::sdk::Result<HostStorageListResponse> {
+        self.require_capability(method::HOST_STORAGE_LIST, HostCapability::PluginStorage)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.storage_list(req)).await
+    }
+
+    async fn secret_get(
+        &self,
+        req: HostSecretGetRequest,
+    ) -> crate::sdk::Result<HostSecretGetResponse> {
+        self.require_capability(method::HOST_SECRET_GET, HostCapability::PluginSecrets)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.secret_get(req)).await
+    }
+
+    async fn secret_set(&self, req: HostSecretSetRequest) -> crate::sdk::Result<()> {
+        self.require_capability(method::HOST_SECRET_SET, HostCapability::PluginSecrets)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.secret_set(req)).await
+    }
+
+    async fn secret_delete(&self, req: HostSecretDeleteRequest) -> crate::sdk::Result<()> {
+        self.require_capability(method::HOST_SECRET_DELETE, HostCapability::PluginSecrets)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.secret_delete(req)).await
+    }
+
+    async fn secret_list(&self) -> crate::sdk::Result<HostSecretListResponse> {
+        self.require_capability(method::HOST_SECRET_LIST, HostCapability::PluginSecrets)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.secret_list()).await
     }
 }
 

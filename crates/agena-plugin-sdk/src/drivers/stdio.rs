@@ -22,8 +22,11 @@ use crate::hooks::{
 use crate::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostClient,
     HostEntryListResponse, HostEntryMutationResponse, HostEntryRegisterRequest,
-    HostEntryRemoveRequest, HostEntryUpdateRequest, HostSkillGetRequest, HostSkillGetResponse,
-    LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    HostEntryRemoveRequest, HostEntryUpdateRequest, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
+    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, LogLevel,
+    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
     MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::plugin::Plugin;
@@ -451,6 +454,110 @@ impl HostClient for StdioHostClient {
     async fn entry_list(&self) -> crate::error::Result<HostEntryListResponse> {
         self.call(
             method::HOST_ENTRY_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn storage_get(
+        &self,
+        req: HostStorageGetRequest,
+    ) -> crate::error::Result<HostStorageGetResponse> {
+        self.call(
+            method::HOST_STORAGE_GET,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn storage_set(&self, req: HostStorageSetRequest) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_STORAGE_SET,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn storage_delete(&self, req: HostStorageDeleteRequest) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_STORAGE_DELETE,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn storage_list(
+        &self,
+        req: HostStorageListRequest,
+    ) -> crate::error::Result<HostStorageListResponse> {
+        self.call(
+            method::HOST_STORAGE_LIST,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn secret_get(
+        &self,
+        req: HostSecretGetRequest,
+    ) -> crate::error::Result<HostSecretGetResponse> {
+        self.call(
+            method::HOST_SECRET_GET,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn secret_set(&self, req: HostSecretSetRequest) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_SECRET_SET,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn secret_delete(&self, req: HostSecretDeleteRequest) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_SECRET_DELETE,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn secret_list(&self) -> crate::error::Result<HostSecretListResponse> {
+        self.call(
+            method::HOST_SECRET_LIST,
             serde_json::json!({
                 "context": crate::host_api::current_host_callback_context(),
             }),

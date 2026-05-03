@@ -173,4 +173,12 @@ pub mod method {
     pub const HOST_ENTRY_UPDATE: &str = "host/entry.update";
     pub const HOST_ENTRY_REMOVE: &str = "host/entry.remove";
     pub const HOST_ENTRY_LIST: &str = "host/entry.list";
+    pub const HOST_STORAGE_GET: &str = "host/storage.get";
+    pub const HOST_STORAGE_SET: &str = "host/storage.set";
+    pub const HOST_STORAGE_DELETE: &str = "host/storage.delete";
+    pub const HOST_STORAGE_LIST: &str = "host/storage.list";
+    pub const HOST_SECRET_GET: &str = "host/secret.get";
+    pub const HOST_SECRET_SET: &str = "host/secret.set";
+    pub const HOST_SECRET_DELETE: &str = "host/secret.delete";
+    pub const HOST_SECRET_LIST: &str = "host/secret.list";
 }

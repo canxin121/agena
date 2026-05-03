@@ -23,13 +23,16 @@ use crate::sdk::host_api::{
     HostCallbackContext, HostClient, HostEntryDescriptor, HostEntryListResponse,
     HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
     HostEntryUpdateRequest, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostPluginStatus, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSecretDeleteRequest,
-    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostLspListServersResponse, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse,
+    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -2044,6 +2047,76 @@ impl HostHandle {
                 .await?;
                 serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
             }
+            method::HOST_PLAN_LIST => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::PlanRegistry)
+                    .await?;
+                let p: HostPlanListParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.plan_list(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_PLAN_GET => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::PlanRegistry)
+                    .await?;
+                let p: HostPlanGetParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.plan_get(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_WORKTREE_LIST => {
+                self.require_capability(
+                    plugin_id.as_deref(),
+                    method,
+                    HostCapability::WorktreeRegistry,
+                )
+                .await?;
+                let p: HostWorktreeListParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.worktree_list(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_SCHEDULER_LIST => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::Scheduler)
+                    .await?;
+                let p: HostSchedulerListParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.scheduler_list(),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_SCHEDULER_CREATE => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::Scheduler)
+                    .await?;
+                let p: HostSchedulerCreateParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.scheduler_create(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
+            method::HOST_SCHEDULER_DELETE => {
+                self.require_capability(plugin_id.as_deref(), method, HostCapability::Scheduler)
+                    .await?;
+                let p: HostSchedulerDeleteParams = parse(params)?;
+                let out = host_api::with_host_callback_context(
+                    scoped_context(plugin_id, p.context),
+                    inner.scheduler_delete(p.request),
+                )
+                .await?;
+                serde_json::to_value(&out).map_err(|e| PluginError::invalid_params(e.to_string()))
+            }
             other => Err(PluginError::not_implemented(other)),
         }
     }
@@ -2341,6 +2414,45 @@ struct HostLspListServersParams {
 struct HostLspListDiagnosticsParams {
     #[serde(default)]
     request: HostLspListDiagnosticsRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostPlanListParams {
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostPlanGetParams {
+    request: HostPlanGetRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostWorktreeListParams {
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostSchedulerListParams {
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostSchedulerCreateParams {
+    request: HostSchedulerCreateRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostSchedulerDeleteParams {
+    request: HostSchedulerDeleteRequest,
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -2669,6 +2781,54 @@ impl HostClient for ScopedHostClient {
         .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.lsp_list_diagnostics(req)).await
+    }
+
+    async fn plan_list(&self) -> crate::sdk::Result<HostPlanListResponse> {
+        self.require_capability(method::HOST_PLAN_LIST, HostCapability::PlanRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.plan_list()).await
+    }
+
+    async fn plan_get(&self, req: HostPlanGetRequest) -> crate::sdk::Result<HostPlanGetResponse> {
+        self.require_capability(method::HOST_PLAN_GET, HostCapability::PlanRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.plan_get(req)).await
+    }
+
+    async fn worktree_list(&self) -> crate::sdk::Result<HostWorktreeListResponse> {
+        self.require_capability(method::HOST_WORKTREE_LIST, HostCapability::WorktreeRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.worktree_list()).await
+    }
+
+    async fn scheduler_list(&self) -> crate::sdk::Result<HostSchedulerListResponse> {
+        self.require_capability(method::HOST_SCHEDULER_LIST, HostCapability::Scheduler)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.scheduler_list()).await
+    }
+
+    async fn scheduler_create(
+        &self,
+        req: HostSchedulerCreateRequest,
+    ) -> crate::sdk::Result<HostSchedulerCreateResponse> {
+        self.require_capability(method::HOST_SCHEDULER_CREATE, HostCapability::Scheduler)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.scheduler_create(req)).await
+    }
+
+    async fn scheduler_delete(
+        &self,
+        req: HostSchedulerDeleteRequest,
+    ) -> crate::sdk::Result<HostSchedulerDeleteResponse> {
+        self.require_capability(method::HOST_SCHEDULER_DELETE, HostCapability::Scheduler)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.scheduler_delete(req)).await
     }
 }
 

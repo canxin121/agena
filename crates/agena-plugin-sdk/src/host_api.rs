@@ -184,6 +184,42 @@ pub trait HostClient: Send + Sync + 'static {
     ) -> Result<HostLspListDiagnosticsResponse> {
         Err(unavailable())
     }
+
+    /// Plan registry — list active plan sessions.
+    async fn plan_list(&self) -> Result<HostPlanListResponse> {
+        Err(unavailable())
+    }
+
+    /// Plan registry — read a plan by session id.
+    async fn plan_get(&self, _req: HostPlanGetRequest) -> Result<HostPlanGetResponse> {
+        Err(unavailable())
+    }
+
+    /// Worktree registry — list active worktrees.
+    async fn worktree_list(&self) -> Result<HostWorktreeListResponse> {
+        Err(unavailable())
+    }
+
+    /// Scheduler — list every queued/recurring job.
+    async fn scheduler_list(&self) -> Result<HostSchedulerListResponse> {
+        Err(unavailable())
+    }
+
+    /// Scheduler — register a new job (cron or one-shot).
+    async fn scheduler_create(
+        &self,
+        _req: HostSchedulerCreateRequest,
+    ) -> Result<HostSchedulerCreateResponse> {
+        Err(unavailable())
+    }
+
+    /// Scheduler — delete a job by id.
+    async fn scheduler_delete(
+        &self,
+        _req: HostSchedulerDeleteRequest,
+    ) -> Result<HostSchedulerDeleteResponse> {
+        Err(unavailable())
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -645,6 +681,107 @@ pub struct HostLspDiagnostic {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+}
+
+// ---------------- plan / worktree / scheduler ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostPlanListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<HostPlanEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostPlanEntry {
+    pub session_id: i64,
+    pub slug: String,
+    pub file_path: String,
+    pub started_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostPlanGetRequest {
+    pub session_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostPlanGetResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<HostPlanEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostWorktreeListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<HostWorktreeEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostWorktreeEntry {
+    pub session_id: i64,
+    pub path: String,
+    pub branch: String,
+    #[serde(default)]
+    pub created_here: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostSchedulerListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jobs: Vec<HostSchedulerJob>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSchedulerJob {
+    pub id: String,
+    pub kind: String,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cron_expression: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_fire_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_fired_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HostSchedulerCreateRequest {
+    Cron {
+        expression: String,
+        prompt: String,
+        #[serde(default)]
+        max_age_days: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner_session_id: Option<i64>,
+    },
+    Once {
+        at_ms: i64,
+        prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner_session_id: Option<i64>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSchedulerCreateResponse {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSchedulerDeleteRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostSchedulerDeleteResponse {
+    pub removed: bool,
 }
 
 fn default_true() -> bool {

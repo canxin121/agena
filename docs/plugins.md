@@ -179,6 +179,9 @@ Available callbacks include:
 | `secret_get`, `secret_set`, `secret_delete`, `secret_list` / `host/secret.*` | `PluginSecrets` |
 | `plugin_status_list`, `plugin_status_get` / `host/plugin.status.*` | `PluginStatus` |
 | `lsp_list_servers`, `lsp_list_diagnostics` / `host/lsp.list_*` | `LspRegistry` |
+| `plan_list`, `plan_get` / `host/plan.*` | `PlanRegistry` |
+| `worktree_list` / `host/worktree.list` | `WorktreeRegistry` |
+| `scheduler_list`, `scheduler_create`, `scheduler_delete` / `host/scheduler.*` | `Scheduler` |
 
 For stdio / HTTP plugins, callbacks travel back over the same JSON-RPC wire
 (stdio multiplexed on stdin/stdout, HTTP via `POST /plugin-rpc/{plugin_id}`

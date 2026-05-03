@@ -16,14 +16,18 @@ use crate::message::{
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostCallbackContext,
     HostClient, HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostPluginStatus, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSecretDeleteRequest,
-    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostLspListServersResponse, HostLspServer, HostPlanEntry, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
+    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -804,6 +808,155 @@ impl HostClient for RuntimeHostClient {
             }
         }
         Ok(HostLspListDiagnosticsResponse { entries })
+    }
+
+    async fn plan_list(&self) -> Result<HostPlanListResponse, PluginError> {
+        let executor = self.tool_executor()?;
+        let registry = executor
+            .plan_registry()
+            .ok_or_else(|| host_unavailable("plan registry is not enabled in this runtime"))?;
+        let entries: Vec<HostPlanEntry> = registry
+            .read()
+            .iter()
+            .map(|(session_id, plan)| HostPlanEntry {
+                session_id: *session_id,
+                slug: plan.slug.clone(),
+                file_path: plan.file_path.display().to_string(),
+                started_at_ms: plan.started_at.timestamp_millis(),
+            })
+            .collect();
+        Ok(HostPlanListResponse { entries })
+    }
+
+    async fn plan_get(&self, req: HostPlanGetRequest) -> Result<HostPlanGetResponse, PluginError> {
+        let executor = self.tool_executor()?;
+        let registry = executor
+            .plan_registry()
+            .ok_or_else(|| host_unavailable("plan registry is not enabled in this runtime"))?;
+        let plan = registry.read().get(&req.session_id).cloned();
+        let Some(plan) = plan else {
+            return Ok(HostPlanGetResponse::default());
+        };
+        let body = std::fs::read_to_string(&plan.file_path).ok();
+        Ok(HostPlanGetResponse {
+            entry: Some(HostPlanEntry {
+                session_id: req.session_id,
+                slug: plan.slug.clone(),
+                file_path: plan.file_path.display().to_string(),
+                started_at_ms: plan.started_at.timestamp_millis(),
+            }),
+            body,
+        })
+    }
+
+    async fn worktree_list(&self) -> Result<HostWorktreeListResponse, PluginError> {
+        let executor = self.tool_executor()?;
+        let registry = executor
+            .worktree_registry()
+            .ok_or_else(|| host_unavailable("worktree registry is not enabled in this runtime"))?;
+        let entries: Vec<HostWorktreeEntry> = crate::tool::worktree_list_active(registry)
+            .into_iter()
+            .map(|w| HostWorktreeEntry {
+                session_id: w.session_id,
+                path: w.path.display().to_string(),
+                branch: w.branch,
+                created_here: w.created_here,
+            })
+            .collect();
+        Ok(HostWorktreeListResponse { entries })
+    }
+
+    async fn scheduler_list(&self) -> Result<HostSchedulerListResponse, PluginError> {
+        let executor = self.tool_executor()?;
+        let scheduler = executor
+            .scheduler()
+            .cloned()
+            .ok_or_else(|| host_unavailable("scheduler is not enabled in this runtime"))?;
+        let jobs = scheduler.list().await;
+        let entries = jobs.into_iter().map(scheduler_job_to_sdk).collect();
+        Ok(HostSchedulerListResponse { jobs: entries })
+    }
+
+    async fn scheduler_create(
+        &self,
+        req: HostSchedulerCreateRequest,
+    ) -> Result<HostSchedulerCreateResponse, PluginError> {
+        let executor = self.tool_executor()?;
+        let scheduler = executor
+            .scheduler()
+            .cloned()
+            .ok_or_else(|| host_unavailable("scheduler is not enabled in this runtime"))?;
+        let job = match req {
+            HostSchedulerCreateRequest::Cron {
+                expression,
+                prompt,
+                max_age_days,
+                owner_session_id,
+            } => {
+                let mut job = agena_scheduler::ScheduledJob::new_cron(
+                    expression,
+                    prompt,
+                    max_age_days.unwrap_or(7),
+                )
+                .map_err(|err| PluginError::invalid_params(err.to_string()))?;
+                if let Some(session) = owner_session_id {
+                    job = job.with_owner(session);
+                }
+                job
+            }
+            HostSchedulerCreateRequest::Once {
+                at_ms,
+                prompt,
+                owner_session_id,
+            } => {
+                let at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(at_ms)
+                    .ok_or_else(|| PluginError::invalid_params("invalid at_ms"))?;
+                let mut job = agena_scheduler::ScheduledJob::new_once(at, prompt);
+                if let Some(session) = owner_session_id {
+                    job = job.with_owner(session);
+                }
+                job
+            }
+        };
+        let id = job.id;
+        scheduler.add(job).await;
+        Ok(HostSchedulerCreateResponse { id: id.to_string() })
+    }
+
+    async fn scheduler_delete(
+        &self,
+        req: HostSchedulerDeleteRequest,
+    ) -> Result<HostSchedulerDeleteResponse, PluginError> {
+        let executor = self.tool_executor()?;
+        let scheduler = executor
+            .scheduler()
+            .cloned()
+            .ok_or_else(|| host_unavailable("scheduler is not enabled in this runtime"))?;
+        let id = uuid::Uuid::parse_str(&req.id)
+            .map_err(|err| PluginError::invalid_params(format!("invalid scheduler id: {err}")))?;
+        let removed = scheduler.remove(id).await;
+        Ok(HostSchedulerDeleteResponse { removed })
+    }
+}
+
+fn scheduler_job_to_sdk(job: agena_scheduler::ScheduledJob) -> HostSchedulerJob {
+    let (kind, cron_expression, fire_at_ms) = match &job.kind {
+        agena_scheduler::JobKind::Cron { expression, .. } => {
+            ("cron".to_string(), Some(expression.clone()), None)
+        }
+        agena_scheduler::JobKind::Once { at } => {
+            ("once".to_string(), None, Some(at.timestamp_millis()))
+        }
+    };
+    HostSchedulerJob {
+        id: job.id.to_string(),
+        kind,
+        prompt: job.prompt.clone(),
+        cron_expression,
+        fire_at_ms,
+        owner_session_id: job.owner_session_id,
+        next_fire_at_ms: job.next_fire_at.map(|t| t.timestamp_millis()),
+        last_fired_at_ms: job.last_fired_at.map(|t| t.timestamp_millis()),
     }
 }
 

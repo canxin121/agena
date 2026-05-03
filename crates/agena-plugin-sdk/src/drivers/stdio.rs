@@ -23,13 +23,17 @@ use crate::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostClient,
     HostEntryListResponse, HostEntryMutationResponse, HostEntryRegisterRequest,
     HostEntryRemoveRequest, HostEntryUpdateRequest, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSecretDeleteRequest,
-    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSkillGetRequest, HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
+    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse,
+    ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -607,6 +611,75 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<HostLspListDiagnosticsResponse> {
         self.call(
             method::HOST_LSP_LIST_DIAGNOSTICS,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn plan_list(&self) -> crate::error::Result<HostPlanListResponse> {
+        self.call(
+            method::HOST_PLAN_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn plan_get(&self, req: HostPlanGetRequest) -> crate::error::Result<HostPlanGetResponse> {
+        self.call(
+            method::HOST_PLAN_GET,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn worktree_list(&self) -> crate::error::Result<HostWorktreeListResponse> {
+        self.call(
+            method::HOST_WORKTREE_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn scheduler_list(&self) -> crate::error::Result<HostSchedulerListResponse> {
+        self.call(
+            method::HOST_SCHEDULER_LIST,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn scheduler_create(
+        &self,
+        req: HostSchedulerCreateRequest,
+    ) -> crate::error::Result<HostSchedulerCreateResponse> {
+        self.call(
+            method::HOST_SCHEDULER_CREATE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn scheduler_delete(
+        &self,
+        req: HostSchedulerDeleteRequest,
+    ) -> crate::error::Result<HostSchedulerDeleteResponse> {
+        self.call(
+            method::HOST_SCHEDULER_DELETE,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),

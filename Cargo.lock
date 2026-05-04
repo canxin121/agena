@@ -402,6 +402,7 @@ dependencies = [
  "axum 0.7.9",
  "bitflags 2.11.0",
  "hyper 1.8.1",
+ "reqwest 0.13.2",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

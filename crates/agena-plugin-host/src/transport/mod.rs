@@ -47,6 +47,14 @@ pub trait PluginTransport: Send + Sync + 'static {
         Ok(None)
     }
 
+    async fn ingest_stream_event(
+        &self,
+        _method: &str,
+        _params: serde_json::Value,
+    ) -> Result<bool, TransportError> {
+        Ok(false)
+    }
+
     async fn close(&self) -> Result<(), TransportError> {
         Ok(())
     }

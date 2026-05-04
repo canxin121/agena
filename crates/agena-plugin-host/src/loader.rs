@@ -190,7 +190,7 @@ pub async fn load_entry(
         workspace_root: workspace_root.to_path_buf(),
         plugin_id: plugin_id.to_string(),
         host_callback_url: host_handle.callback_url(plugin_id),
-        host_callback_token: host_handle.callback_token(plugin_id),
+        host_callback_token: host_handle.callback_token(plugin_id).await,
         options: entry.options().clone(),
         protocol_version: crate::sdk::rpc::PROTOCOL_VERSION,
     };

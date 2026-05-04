@@ -14,7 +14,10 @@ use async_stream::stream;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{HeaderMap, header::IF_MATCH},
+    http::{
+        HeaderMap,
+        header::{AUTHORIZATION, IF_MATCH},
+    },
     response::sse::{Event, Sse},
     routing::{get, post},
 };
@@ -1182,22 +1185,51 @@ async fn delete_permission_rule(
     Ok(Json(state.service().delete_permission_rule(rule_id).await?))
 }
 
-/// Bidirectional callback endpoint for HTTP plugins. Plugins POST a
-/// JSON-RPC request here; we route it through the loaded plugin's
-/// `HostHandle` so they can call back into agena (log, publish events,
-/// ask permissions, invoke other tools).
-async fn plugin_rpc(
-    State(state): State<ApiState>,
-    Path(plugin_id): Path<String>,
-    Json(req): Json<agena::plugin::sdk::rpc::Request>,
-) -> Json<agena::plugin::sdk::rpc::Response> {
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(AUTHORIZATION)?.to_str().ok()?.trim();
+    let mut parts = raw.split_whitespace();
+    let scheme = parts.next()?;
+    let token = parts.next()?;
+    if !scheme.eq_ignore_ascii_case("bearer") || parts.next().is_some() {
+        return None;
+    }
+    Some(token.to_string())
+}
+
+fn callback_context_present(params: &serde_json::Value) -> bool {
+    params
+        .as_object()
+        .and_then(|object| object.get("context"))
+        .and_then(|value| {
+            serde_json::from_value::<agena::plugin::sdk::host_api::HostCallbackContext>(
+                value.clone(),
+            )
+            .ok()
+        })
+        .is_some()
+}
+
+async fn plugin_rpc_response(
+    host: Arc<agena::plugin::PluginHost>,
+    plugin_id: &str,
+    callback_token: Option<String>,
+    req: agena::plugin::sdk::rpc::Request,
+) -> Result<agena::plugin::sdk::rpc::Response, ApiError> {
     use agena::plugin::sdk::rpc::{ErrorObject, JsonRpcVersion, Response, ResponsePayload, codes};
 
-    let host = state.runtime().current_snapshot().plugin_manager();
-    let id = req.id.clone();
+    if !host
+        .host_handle()
+        .validate_callback_token(plugin_id, callback_token.as_deref())
+        .await
+    {
+        return Err(ApiError::unauthorized(
+            "invalid or missing plugin callback bearer token",
+        ));
+    }
 
-    if host.plugins().iter().all(|p| p.id != plugin_id) {
-        return Json(Response {
+    let id = req.id.clone();
+    if host.plugins().iter().all(|plugin| plugin.id != plugin_id) {
+        return Ok(Response {
             jsonrpc: JsonRpcVersion,
             id,
             payload: ResponsePayload::Err {
@@ -1210,15 +1242,24 @@ async fn plugin_rpc(
         });
     }
 
-    let handle = host.host_handle();
     let params = req.params.unwrap_or(serde_json::Value::Null);
-    match handle.handle_call(&req.method, params).await {
-        Ok(result) => Json(Response {
+    if !callback_context_present(&params) {
+        return Err(ApiError::bad_request(
+            "plugin callback request is missing callback context",
+        ));
+    }
+
+    let handle = host.host_handle();
+    match handle
+        .handle_call_for_plugin(plugin_id, &req.method, params)
+        .await
+    {
+        Ok(result) => Ok(Response {
             jsonrpc: JsonRpcVersion,
             id,
             payload: ResponsePayload::Ok { result },
         }),
-        Err(err) => Json(Response {
+        Err(err) => Ok(Response {
             jsonrpc: JsonRpcVersion,
             id,
             payload: ResponsePayload::Err {
@@ -1230,6 +1271,22 @@ async fn plugin_rpc(
             },
         }),
     }
+}
+
+/// Bidirectional callback endpoint for HTTP plugins. Plugins POST a
+/// JSON-RPC request here; we route it through the loaded plugin's
+/// `HostHandle` so they can call back into agena (log, publish events,
+/// ask permissions, invoke other tools).
+async fn plugin_rpc(
+    State(state): State<ApiState>,
+    Path(plugin_id): Path<String>,
+    headers: HeaderMap,
+    Json(req): Json<agena::plugin::sdk::rpc::Request>,
+) -> Result<Json<agena::plugin::sdk::rpc::Response>, ApiError> {
+    let host = state.runtime().current_snapshot().plugin_manager();
+    plugin_rpc_response(host, plugin_id.as_str(), bearer_token(&headers), req)
+        .await
+        .map(Json)
 }
 
 async fn resolve_run_options(
@@ -1530,6 +1587,7 @@ fn secret_preview(secret: &str) -> Option<String> {
 #[allow(dead_code)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         fs,
         path::Path,
         path::PathBuf,
@@ -1542,6 +1600,7 @@ mod tests {
     use axum::{
         body::{Body, to_bytes},
         http::{Method, Request, StatusCode},
+        response::IntoResponse,
     };
 
     use futures_util::{Stream, stream};
@@ -1563,6 +1622,16 @@ mod tests {
         },
         model::ModelId,
         permission::PermissionPolicy,
+        plugin::{
+            PluginEntry, PluginHostBuilder, PluginsConfig,
+            sdk::{
+                EventEnvelope, EventFilter, HookSubscription, HostCapability, PermissionAskInput,
+                PermissionDecision, Plugin, PluginEntryDecl, PluginError, PluginManifest,
+                ToolInvokeInput, ToolInvokeOutput,
+                host_api::{EventSubscription, HostClient, LogLevel},
+                rpc::{JsonRpcVersion, RequestId, ResponsePayload, method},
+            },
+        },
         provider::{
             CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
             ModelProvider, ProviderModel, ProviderRegistry,
@@ -2842,6 +2911,212 @@ mod tests {
 
         assert_eq!(status, StatusCode::CONFLICT, "unexpected body: {payload}");
         assert_eq!(payload["error"]["code"], json!("conflict"));
+    }
+
+    #[derive(Clone)]
+    struct CallbackScopePlugin;
+
+    #[async_trait]
+    impl Plugin for CallbackScopePlugin {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest::builder("callback-scope", "0.1.0")
+                .hooks(HookSubscription::TOOL_INVOKE)
+                .entry(
+                    PluginEntryDecl::new("loud", json!({}))
+                        .host_capability(HostCapability::ReadConfig),
+                )
+                .entry(PluginEntryDecl::new("quiet", json!({})))
+                .build()
+        }
+
+        async fn tool_invoke(
+            &self,
+            _input: ToolInvokeInput,
+        ) -> agena::plugin::sdk::Result<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text("ok"))
+        }
+    }
+
+    struct CallbackHostClient;
+
+    #[async_trait]
+    impl HostClient for CallbackHostClient {
+        async fn log(&self, _level: LogLevel, _message: String, _fields: Value) {}
+
+        async fn publish_event(&self, _env: EventEnvelope) -> agena::plugin::sdk::Result<()> {
+            Err(PluginError::new("host unavailable"))
+        }
+
+        async fn subscribe_events(
+            &self,
+            _filter: EventFilter,
+        ) -> agena::plugin::sdk::Result<EventSubscription> {
+            Err(PluginError::new("host unavailable"))
+        }
+
+        async fn ask_permission(
+            &self,
+            _req: PermissionAskInput,
+        ) -> agena::plugin::sdk::Result<PermissionDecision> {
+            Err(PluginError::new("host unavailable"))
+        }
+
+        async fn read_config(&self, _path: Option<String>) -> agena::plugin::sdk::Result<Value> {
+            Ok(json!({ "ok": true }))
+        }
+
+        async fn invoke_tool(
+            &self,
+            _tool: String,
+            _input: Value,
+        ) -> agena::plugin::sdk::Result<ToolInvokeOutput> {
+            Err(PluginError::new("host unavailable"))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plugin_rpc_requires_valid_bearer_token() {
+        let host = callback_test_host().await;
+        let token = host
+            .host_handle()
+            .callback_token("callback-scope")
+            .await
+            .expect("callback token should exist");
+
+        let missing = plugin_rpc_response(
+            host.clone(),
+            "callback-scope",
+            None,
+            callback_request(method::HOST_CONFIG_READ, "loud", json!({ "path": null })),
+        )
+        .await
+        .expect_err("missing token should be rejected");
+        assert_eq!(missing.into_response().status(), StatusCode::UNAUTHORIZED);
+
+        let wrong = plugin_rpc_response(
+            host,
+            "callback-scope",
+            Some(format!("{token}-wrong")),
+            callback_request(method::HOST_CONFIG_READ, "loud", json!({ "path": null })),
+        )
+        .await
+        .expect_err("wrong token should be rejected");
+        assert_eq!(wrong.into_response().status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plugin_rpc_rejects_missing_callback_context() {
+        let host = callback_test_host().await;
+        let token = host
+            .host_handle()
+            .callback_token("callback-scope")
+            .await
+            .expect("callback token should exist");
+
+        let err = plugin_rpc_response(
+            host,
+            "callback-scope",
+            Some(token),
+            agena::plugin::sdk::rpc::Request {
+                jsonrpc: JsonRpcVersion,
+                id: RequestId::Num(1),
+                method: method::HOST_CONFIG_READ.to_string(),
+                params: Some(json!({ "path": null })),
+            },
+        )
+        .await
+        .expect_err("missing callback context should be rejected");
+        assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plugin_rpc_restores_entry_scope_before_capability_checks() {
+        let host = callback_test_host().await;
+        let token = host
+            .host_handle()
+            .callback_token("callback-scope")
+            .await
+            .expect("callback token should exist");
+
+        let allowed = plugin_rpc_response(
+            host.clone(),
+            "callback-scope",
+            Some(token.clone()),
+            callback_request(method::HOST_CONFIG_READ, "loud", json!({ "path": null })),
+        )
+        .await
+        .expect("loud callback should succeed");
+        match allowed.payload {
+            ResponsePayload::Ok { result } => assert_eq!(result, json!({ "ok": true })),
+            other => panic!("expected successful callback response, got {other:?}"),
+        }
+
+        let denied = plugin_rpc_response(
+            host,
+            "callback-scope",
+            Some(token),
+            callback_request(method::HOST_CONFIG_READ, "quiet", json!({ "path": null })),
+        )
+        .await
+        .expect("quiet callback should return a JSON-RPC error payload");
+        match denied.payload {
+            ResponsePayload::Err { error } => {
+                assert!(error.message.contains("entry `quiet`"), "{error:?}");
+            }
+            other => panic!("expected denied callback response, got {other:?}"),
+        }
+    }
+
+    async fn callback_test_host() -> Arc<agena::plugin::PluginHost> {
+        let mut list = BTreeMap::new();
+        list.insert(
+            "callback-scope".to_string(),
+            PluginEntry::Static {
+                options: Value::Null,
+                timeouts: Default::default(),
+            },
+        );
+        let host =
+            PluginHostBuilder::new(std::env::current_dir().expect("cwd should exist"), "test")
+                .with_callback_base_url("http://127.0.0.1:9")
+                .with_config(PluginsConfig {
+                    enabled: true,
+                    list,
+                    ..Default::default()
+                })
+                .register_static("callback-scope", CallbackScopePlugin)
+                .build()
+                .await
+                .expect("callback test host should build");
+        host.host_handle()
+            .install_client(Arc::new(CallbackHostClient))
+            .await;
+        host
+    }
+
+    fn callback_request(
+        method_name: &str,
+        entry_name: &str,
+        mut params: Value,
+    ) -> agena::plugin::sdk::rpc::Request {
+        params
+            .as_object_mut()
+            .expect("callback params should be an object")
+            .insert(
+                "context".to_string(),
+                json!({
+                    "entry_name": entry_name,
+                    "session_id": 7,
+                    "call_id": 11,
+                    "workspace_root": "."
+                }),
+            );
+        agena::plugin::sdk::rpc::Request {
+            jsonrpc: JsonRpcVersion,
+            id: RequestId::Num(1),
+            method: method_name.to_string(),
+            params: Some(params),
+        }
     }
 
     async fn test_app() -> (Router, ApiState) {

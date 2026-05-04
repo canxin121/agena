@@ -32,6 +32,7 @@ pub use dto::{
     AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
     AuthProviderResource, HealthResponse, MessageListQuery, MessageResource, PartLoadMode,
     PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
+    PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
     ProviderModelsResponse, ProviderSummaryResource, RuntimeReloadResponse,
     RuntimeSessionCacheResource, RuntimeStatusResponse, RuntimeTaskResource,
     SessionContinueRequestBody, SessionCreateRequest, SessionEventListQuery,
@@ -92,6 +93,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/health", get(health))
         .route("/api/v1/runtime", get(get_runtime_status))
         .route("/api/v1/runtime/reload", post(reload_runtime))
+        .route("/api/v1/plugins", get(list_plugins))
+        .route("/api/v1/plugins/{plugin_id}", get(get_plugin))
+        .route("/api/v1/plugins/{plugin_id}/logs", get(list_plugin_logs))
         .route("/api/v1/auth/providers", get(list_auth_providers))
         .route(
             "/api/v1/auth/providers/openai/browser/start",
@@ -278,6 +282,52 @@ async fn reload_runtime(
         previous_generation: report.previous_generation,
         generation: report.generation,
         loaded_at: report.loaded_at,
+    }))
+}
+
+async fn list_plugins(
+    State(state): State<ApiState>,
+) -> Result<Json<PluginStatusListResponse>, ApiError> {
+    Ok(Json(PluginStatusListResponse {
+        entries: state
+            .runtime()
+            .current_snapshot()
+            .plugin_manager()
+            .plugin_statuses(),
+    }))
+}
+
+async fn get_plugin(
+    State(state): State<ApiState>,
+    Path(plugin_id): Path<String>,
+) -> Result<Json<PluginInspectResponse>, ApiError> {
+    let plugin = state
+        .runtime()
+        .current_snapshot()
+        .plugin_manager()
+        .plugin_inspect(plugin_id.as_str())
+        .ok_or_else(|| ApiError::not_found(format!("plugin not found: {plugin_id}")))?;
+    Ok(Json(PluginInspectResponse { plugin }))
+}
+
+async fn list_plugin_logs(
+    State(state): State<ApiState>,
+    Path(plugin_id): Path<String>,
+    Query(query): Query<PluginLogListQuery>,
+) -> Result<Json<PluginLogListResponse>, ApiError> {
+    let plugin_manager = state.runtime().current_snapshot().plugin_manager();
+    if plugin_manager.plugin_status(plugin_id.as_str()).is_none() {
+        return Err(ApiError::not_found(format!(
+            "plugin not found: {plugin_id}"
+        )));
+    }
+    Ok(Json(PluginLogListResponse {
+        plugin_id: plugin_id.clone(),
+        entries: plugin_manager.plugin_logs(
+            plugin_id.as_str(),
+            query.after_seq,
+            query.limit.unwrap_or(50),
+        ),
     }))
 }
 
@@ -1936,6 +1986,137 @@ mod tests {
         assert_eq!(reload_json["cause"], json!("manual"));
         assert_eq!(reload_json["previous_generation"], json!(before_generation));
         assert_eq!(reload_json["generation"], json!(before_generation + 1));
+    }
+
+    #[tokio::test]
+    async fn plugin_endpoints_surface_failed_inventory_and_retained_logs() {
+        let (app, state) = test_app().await;
+        let plugin_manager = state.runtime().current_snapshot().plugin_manager();
+        let status = agena::plugin::status::PluginStatus {
+            plugin_id: "broken.plugin".to_string(),
+            kind: "stdio",
+            state: agena::plugin::status::PluginRunState::Failed,
+            pid: None,
+            restart_count: 2,
+            last_exit_code: Some(17),
+            last_restart_at_ms: Some(1_700_000_000_000),
+            last_error: Some("spawn failed".to_string()),
+        };
+        plugin_manager.status_registry().set(status);
+        let first = plugin_manager.append_plugin_log(
+            "broken.plugin",
+            "error",
+            "host",
+            "load failed",
+            json!({"stage": "spawn"}),
+        );
+        plugin_manager.append_plugin_log(
+            "broken.plugin",
+            "warn",
+            "stderr",
+            "permission denied",
+            Value::Null,
+        );
+
+        let list = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/plugins")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(list.status(), StatusCode::OK);
+        let list_json = response_json(list).await;
+        assert!(
+            list_json["entries"]
+                .as_array()
+                .expect("entries should be an array")
+                .iter()
+                .any(|entry| {
+                    entry["plugin_id"] == json!("broken.plugin")
+                        && entry["state"] == json!("failed")
+                        && entry["kind"] == json!("stdio")
+                })
+        );
+
+        let inspect = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/plugins/broken.plugin")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(inspect.status(), StatusCode::OK);
+        let inspect_json = response_json(inspect).await;
+        assert_eq!(
+            inspect_json["plugin"]["status"]["plugin_id"],
+            json!("broken.plugin")
+        );
+        assert_eq!(
+            inspect_json["plugin"]["status"]["last_error"],
+            json!("spawn failed")
+        );
+        assert!(inspect_json["plugin"]["manifest"].is_null());
+
+        let logs = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/api/v1/plugins/broken.plugin/logs?after_seq={}&limit=1",
+                        first.seq
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(logs.status(), StatusCode::OK);
+        let logs_json = response_json(logs).await;
+        let entries = logs_json["entries"]
+            .as_array()
+            .expect("entries should be an array");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["source"], json!("stderr"));
+        assert_eq!(entries[0]["message"], json!("permission denied"));
+    }
+
+    #[tokio::test]
+    async fn plugin_endpoints_return_not_found_for_unknown_plugin() {
+        let (app, _state) = test_app().await;
+
+        let inspect = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/plugins/missing.plugin")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(inspect.status(), StatusCode::NOT_FOUND);
+
+        let logs = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/plugins/missing.plugin/logs")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(logs.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

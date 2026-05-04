@@ -75,6 +75,30 @@ pub struct RuntimeReloadResponse {
     pub loaded_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginStatusListResponse {
+    pub entries: Vec<agena::plugin::status::PluginStatus>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginInspectResponse {
+    pub plugin: agena::plugin::PluginInspect,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginLogListResponse {
+    pub plugin_id: String,
+    pub entries: Vec<agena::plugin::PluginLogEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PluginLogListQuery {
+    #[serde(default)]
+    pub after_seq: Option<u64>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthCredentialType {

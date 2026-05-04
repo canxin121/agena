@@ -138,6 +138,12 @@ pub struct PluginCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum PluginSubcommand {
+    /// Print runtime status for configured plugins, including failed loads.
+    Status(PluginStatusArgs),
+    /// Show detailed runtime and manifest information for one plugin.
+    Inspect(PluginInspectArgs),
+    /// Show recent retained logs for one plugin.
+    Logs(PluginLogsArgs),
     /// Install a plugin from a marketplace registry into the active config.
     Install(PluginInstallArgs),
     /// Remove a plugin previously installed via `agena plugin install`.
@@ -152,6 +158,36 @@ pub enum PluginSubcommand {
     Upgrade(PluginUpgradeArgs),
     /// Print plugins for which a newer version is available on their registry.
     Outdated,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PluginStatusArgs {
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PluginInspectArgs {
+    pub plugin_id: String,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PluginLogsArgs {
+    pub plugin_id: String,
+    #[arg(long, default_value_t = 50)]
+    pub limit: usize,
+    #[arg(long)]
+    pub after_seq: Option<u64>,
+    #[arg(long, value_enum, default_value_t = PluginLogOutputFormat::Text)]
+    pub format: PluginLogOutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PluginLogOutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -586,6 +622,22 @@ struct ProviderCapabilitiesOutput {
     metadata: ModelMetadata,
 }
 
+#[derive(Debug, Serialize)]
+struct PluginStatusOutput {
+    entries: Vec<crate::plugin::status::PluginStatus>,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginInspectOutput {
+    plugin: crate::plugin::PluginInspect,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginLogsOutput {
+    plugin_id: String,
+    entries: Vec<crate::plugin::PluginLogEntry>,
+}
+
 impl AgenaCli {
     pub async fn run(
         self,
@@ -608,7 +660,7 @@ impl AgenaCli {
             Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args),
             Some(AgenaCommand::McpServer(args)) => self.run_mcp_server(args).await,
             Some(AgenaCommand::Provider(command)) => self.run_provider(loader, command).await,
-            Some(AgenaCommand::Plugin(command)) => self.run_plugin(command),
+            Some(AgenaCommand::Plugin(command)) => self.run_plugin(command).await,
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
             Some(AgenaCommand::Review(args)) => self.run_review(args).await,
             Some(AgenaCommand::Serve(_command)) => Err(AppError::Config(
@@ -663,7 +715,7 @@ impl AgenaCli {
         Ok(())
     }
 
-    fn run_plugin(self, command: PluginCommand) -> Result<(), AppError> {
+    async fn run_plugin(self, command: PluginCommand) -> Result<(), AppError> {
         use agena_plugin_marketplace::{
             InstallRequest, MarketplaceCache, MarketplaceClient, RegistrySpec, default_cache_root,
         };
@@ -673,6 +725,65 @@ impl AgenaCli {
             MarketplaceClient::with_default_fetcher(cache, std::collections::BTreeMap::new());
 
         match command.command {
+            PluginSubcommand::Status(args) => {
+                let runtime = self.session_runtime().await?;
+                let output = PluginStatusOutput {
+                    entries: runtime
+                        .current_snapshot()
+                        .plugin_manager()
+                        .plugin_statuses(),
+                };
+                println!("{}", render_serialized(args.format, &output)?);
+                Ok(())
+            }
+            PluginSubcommand::Inspect(args) => {
+                let runtime = self.session_runtime().await?;
+                let plugin = runtime
+                    .current_snapshot()
+                    .plugin_manager()
+                    .plugin_inspect(args.plugin_id.as_str())
+                    .ok_or_else(|| {
+                        AppError::Config(format!("plugin not found: {}", args.plugin_id))
+                    })?;
+                println!(
+                    "{}",
+                    render_serialized(args.format, &PluginInspectOutput { plugin })?
+                );
+                Ok(())
+            }
+            PluginSubcommand::Logs(args) => {
+                let runtime = self.session_runtime().await?;
+                let plugin_manager = runtime.current_snapshot().plugin_manager();
+                if plugin_manager
+                    .plugin_status(args.plugin_id.as_str())
+                    .is_none()
+                {
+                    return Err(AppError::Config(format!(
+                        "plugin not found: {}",
+                        args.plugin_id
+                    )));
+                }
+                let output = PluginLogsOutput {
+                    plugin_id: args.plugin_id.clone(),
+                    entries: plugin_manager.plugin_logs(
+                        args.plugin_id.as_str(),
+                        args.after_seq,
+                        args.limit,
+                    ),
+                };
+                match args.format {
+                    PluginLogOutputFormat::Text => {
+                        println!("{}", format_plugin_logs_output(&output))
+                    }
+                    PluginLogOutputFormat::Json => println!(
+                        "{}",
+                        serde_json::to_string_pretty(&output).map_err(|err| AppError::Config(
+                            format!("failed to render json output: {err}")
+                        ))?
+                    ),
+                }
+                Ok(())
+            }
             PluginSubcommand::Install(args) => {
                 let registry_url = args.registry.ok_or_else(|| {
                     AppError::Config("agena plugin install requires --registry <url>".to_string())
@@ -2055,6 +2166,31 @@ fn format_debug_session_output(output: &DebugSessionOutput) -> String {
     rendered
 }
 
+fn format_plugin_logs_output(output: &PluginLogsOutput) -> String {
+    if output.entries.is_empty() {
+        return format!("plugin {} has no retained logs", output.plugin_id);
+    }
+    output
+        .entries
+        .iter()
+        .map(|entry| {
+            let timestamp = DateTime::<Utc>::from_timestamp_millis(entry.timestamp_ms)
+                .map(|ts| ts.to_rfc3339())
+                .unwrap_or_else(|| entry.timestamp_ms.to_string());
+            let mut line = format!(
+                "[{}] #{} {} {} {}",
+                timestamp, entry.seq, entry.level, entry.source, entry.message
+            );
+            if !entry.fields.is_null() {
+                line.push(' ');
+                line.push_str(&entry.fields.to_string());
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn review_prompt(base: &str) -> String {
     format!(
         "Review the current workspace changes against `{base}`. Focus on correctness, regressions, security issues, and missing tests. Report findings first, then concise remediation guidance."
@@ -2262,7 +2398,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::{config::ConfigEnvironment, provider::CapabilitySupport};
@@ -2639,6 +2775,65 @@ store_path = "{}"
         assert!(rendered.contains("session 7: debug me"));
         assert!(rendered.contains("[assistant #3 completed]"));
         assert!(rendered.contains("done"));
+    }
+
+    #[test]
+    fn format_plugin_logs_output_renders_entries_and_fields() {
+        let output = PluginLogsOutput {
+            plugin_id: "ops.plugin".to_string(),
+            entries: vec![crate::plugin::PluginLogEntry {
+                seq: 9,
+                timestamp_ms: 1_700_000_000_123,
+                plugin_id: "ops.plugin".to_string(),
+                level: "warn".to_string(),
+                source: "stderr".to_string(),
+                message: "request failed".to_string(),
+                fields: json!({"attempt": 2}),
+            }],
+        };
+
+        let rendered = format_plugin_logs_output(&output);
+
+        assert!(rendered.contains("#9 warn stderr request failed"));
+        assert!(rendered.contains("{\"attempt\":2}"));
+        assert!(rendered.starts_with("[2023-"));
+    }
+
+    #[test]
+    fn format_plugin_logs_output_handles_empty_logs() {
+        let output = PluginLogsOutput {
+            plugin_id: "ops.plugin".to_string(),
+            entries: Vec::new(),
+        };
+
+        assert_eq!(
+            format_plugin_logs_output(&output),
+            "plugin ops.plugin has no retained logs"
+        );
+    }
+
+    #[test]
+    fn plugin_status_output_serializes_failed_state() {
+        let output = PluginStatusOutput {
+            entries: vec![crate::plugin::status::PluginStatus {
+                plugin_id: "broken.plugin".to_string(),
+                kind: "stdio",
+                state: crate::plugin::status::PluginRunState::Failed,
+                pid: None,
+                restart_count: 2,
+                last_exit_code: Some(23),
+                last_restart_at_ms: Some(1_700_000_000_000),
+                last_error: Some("spawn failed".to_string()),
+            }],
+        };
+
+        let rendered = render_serialized(ConfigOutputFormat::Json, &output)
+            .expect("plugin status should serialize");
+        let value: Value = serde_json::from_str(rendered.as_str()).expect("output should be json");
+
+        assert_eq!(value["entries"][0]["plugin_id"], "broken.plugin");
+        assert_eq!(value["entries"][0]["state"], "failed");
+        assert_eq!(value["entries"][0]["kind"], "stdio");
     }
 
     #[tokio::test]

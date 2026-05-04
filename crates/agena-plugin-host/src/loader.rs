@@ -119,6 +119,7 @@ pub async fn load_entry(
                 env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             let host_handler = host_handle.host_handler_for(plugin_id.to_string());
             let status_sink = host_handle.status_registry();
+            let log_sink = host_handle.log_store();
             let t = StdioTransport::spawn_with_policy_and_status(
                 command,
                 args,
@@ -128,6 +129,7 @@ pub async fn load_entry(
                 restart.clone(),
                 Some(plugin_id.to_string()),
                 Some(status_sink),
+                Some(log_sink),
             )
             .await
             .map_err(|e| HostError::Load {

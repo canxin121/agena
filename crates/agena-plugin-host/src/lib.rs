@@ -6,6 +6,7 @@ pub mod dispatcher;
 pub mod error;
 pub mod host;
 pub mod loader;
+pub mod logs;
 pub mod manifest_io;
 pub mod quota;
 pub mod registry;
@@ -19,10 +20,11 @@ pub use config::{
 pub use error::{HostError, TransportError};
 pub use host::{
     LoadedPlugin, PluginEntryHandle, PluginEntryResolution, PluginHost, PluginHostBuilder,
-    ToolInvokeStream,
+    PluginInspect, ToolInvokeStream,
 };
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
+pub use logs::{PluginLogEntry, PluginLogStore};
 pub use registry::PluginEntryRegistry;
 pub use sdk::host_api::{HostStatuslineSegment, HostThemePalette};
 pub use sdk::{

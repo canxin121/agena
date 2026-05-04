@@ -139,7 +139,12 @@ pub async fn load_entry(
             Arc::new(t)
         }
         PluginEntry::Http { url, auth, .. } => {
-            let t = HttpTransport::new(url.clone(), auth.clone(), env_lookup);
+            let t = HttpTransport::new(
+                url.clone(),
+                auth.clone(),
+                env_lookup,
+                host_handle.callback_url(plugin_id).is_some(),
+            );
             Arc::new(t)
         }
         #[cfg(feature = "wasm")]

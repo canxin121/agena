@@ -50,7 +50,16 @@ impl<P: Plugin> PluginDispatcher<P> {
                     .await
                     .clone()
                     .unwrap_or_else(|| Arc::new(crate::host_api::NoopHostClient));
-                let outcome = plugin.init(ctx, host).await?;
+                let callback_context = crate::host_api::HostCallbackContext {
+                    plugin_id: Some(ctx.plugin_id.clone()),
+                    workspace_root: Some(ctx.workspace_root.to_string_lossy().to_string()),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                let outcome = crate::host_api::with_host_callback_context(
+                    callback_context,
+                    plugin.init(ctx, host),
+                )
+                .await?;
                 ok_json(&outcome)
             }
             method::META_SHUTDOWN => {

@@ -1789,6 +1789,22 @@ impl HostHandle {
             .insert(plugin_id.into(), transport);
     }
 
+    pub async fn ingest_stream_event_for_plugin(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<bool, PluginError> {
+        let transport = self.plugin_transports.read().await.get(plugin_id).cloned();
+        let Some(transport) = transport else {
+            return Ok(false);
+        };
+        transport
+            .ingest_stream_event(method, params)
+            .await
+            .map_err(transport_to_plugin_error)
+    }
+
     /// Read-only view of the current permission handler plugin id.
     pub async fn permission_handler(&self) -> Option<String> {
         self.permission_handler.read().await.clone()

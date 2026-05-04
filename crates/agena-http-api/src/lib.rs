@@ -1251,6 +1251,35 @@ async fn plugin_rpc_response(
 
     let handle = host.host_handle();
     match handle
+        .ingest_stream_event_for_plugin(plugin_id, &req.method, params.clone())
+        .await
+    {
+        Ok(true) => {
+            return Ok(Response {
+                jsonrpc: JsonRpcVersion,
+                id,
+                payload: ResponsePayload::Ok {
+                    result: serde_json::Value::Object(Default::default()),
+                },
+            });
+        }
+        Ok(false) => {}
+        Err(err) => {
+            return Ok(Response {
+                jsonrpc: JsonRpcVersion,
+                id,
+                payload: ResponsePayload::Err {
+                    error: ErrorObject {
+                        code: codes::PLUGIN_GENERIC,
+                        message: err.message.clone(),
+                        data: serde_json::to_value(&err).ok(),
+                    },
+                },
+            });
+        }
+    }
+
+    match handle
         .handle_call_for_plugin(plugin_id, &req.method, params)
         .await
     {

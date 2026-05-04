@@ -14,14 +14,18 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::config::{RestartMode, RestartPolicy};
 use crate::error::TransportError;
 use crate::logs::PluginLogStore;
 use crate::sdk::PluginError;
 use crate::sdk::rpc::{
-    ErrorObject, Frame, JsonRpcVersion, Notification, Request, RequestId, Response, ResponsePayload,
+    ErrorObject, Frame, JsonRpcVersion, Notification, Request, RequestId, Response,
+    ResponsePayload, method,
+};
+use crate::sdk::{
+    ToolInvokeInput, ToolInvokeStreamHandle, ToolStreamChunk, ToolStreamEnd, ToolStreamError,
 };
 use crate::status::StatusRegistry;
 use crate::transport::PluginTransport;
@@ -55,6 +59,8 @@ struct Inner {
     handles: Mutex<Option<ChildHandles>>,
     next_id: Mutex<i64>,
     pending: DashMap<RequestId, oneshot::Sender<Response>>,
+    active_streams: Mutex<HashMap<String, ActiveStreamState>>,
+    buffered_streams: Mutex<HashMap<String, Vec<BufferedStreamEvent>>>,
     host_handler: Mutex<Option<HostHandler>>,
     closed: std::sync::atomic::AtomicBool,
     restart_attempts: AtomicU32,
@@ -66,6 +72,18 @@ struct Inner {
 struct ChildHandles {
     child: Child,
     stdin: tokio::process::ChildStdin,
+}
+
+struct ActiveStreamState {
+    chunks: mpsc::Sender<ToolStreamChunk>,
+    end: oneshot::Sender<Result<ToolStreamEnd, PluginError>>,
+}
+
+#[derive(Debug)]
+enum BufferedStreamEvent {
+    Chunk(ToolStreamChunk),
+    End(ToolStreamEnd),
+    Error(ToolStreamError),
 }
 
 impl StdioTransport {
@@ -136,6 +154,8 @@ impl StdioTransport {
             handles: Mutex::new(None),
             next_id: Mutex::new(1),
             pending: DashMap::new(),
+            active_streams: Mutex::new(HashMap::new()),
+            buffered_streams: Mutex::new(HashMap::new()),
             host_handler: Mutex::new(host_handler),
             closed: std::sync::atomic::AtomicBool::new(false),
             restart_attempts: AtomicU32::new(0),
@@ -341,6 +361,8 @@ impl Inner {
                 });
             }
         }
+        self.fail_active_streams(PluginError::new("plugin disconnected"))
+            .await;
 
         let will_restart = matches!(
             self.restart_policy.policy,
@@ -430,7 +452,12 @@ impl Inner {
                     let _ = inner.write_frame(&body).await;
                 });
             }
-            Frame::Notification(_n) => {}
+            Frame::Notification(notif) => {
+                let inner = Arc::clone(self);
+                tokio::spawn(async move {
+                    inner.handle_notification(notif).await;
+                });
+            }
         }
     }
 
@@ -478,6 +505,122 @@ impl Inner {
             );
         }
     }
+
+    async fn handle_notification(self: Arc<Self>, notif: Notification) {
+        match notif.method.as_str() {
+            method::TOOL_STREAM_CHUNK => {
+                if let Some(chunk) = parse_notification::<ToolStreamChunk>(&notif) {
+                    self.deliver_stream_chunk(chunk).await;
+                }
+            }
+            method::TOOL_STREAM_END => {
+                if let Some(end) = parse_notification::<ToolStreamEnd>(&notif) {
+                    self.finish_stream(end.stream_id.clone(), Ok(end)).await;
+                }
+            }
+            method::TOOL_STREAM_ERROR => {
+                if let Some(err) = parse_notification::<ToolStreamError>(&notif) {
+                    self.finish_stream(err.stream_id.clone(), Err(err.error))
+                        .await;
+                }
+            }
+            _ => {
+                if let Some(handler) = self.host_handler.lock().await.clone() {
+                    let method = notif.method;
+                    let params = notif.params.unwrap_or(serde_json::Value::Null);
+                    let _ = handler(method, params).await;
+                }
+            }
+        }
+    }
+
+    async fn deliver_stream_chunk(&self, chunk: ToolStreamChunk) {
+        let stream_id = chunk.stream_id.clone();
+        let sender = {
+            let active = self.active_streams.lock().await;
+            active.get(&stream_id).map(|state| state.chunks.clone())
+        };
+        if let Some(sender) = sender {
+            let _ = sender.send(chunk).await;
+            return;
+        }
+        let mut buffered = self.buffered_streams.lock().await;
+        buffered
+            .entry(stream_id)
+            .or_default()
+            .push(BufferedStreamEvent::Chunk(chunk));
+    }
+
+    async fn finish_stream(&self, stream_id: String, result: Result<ToolStreamEnd, PluginError>) {
+        let state = {
+            let mut active = self.active_streams.lock().await;
+            active.remove(&stream_id)
+        };
+        if let Some(state) = state {
+            let _ = state.end.send(result);
+            return;
+        }
+        let event = match result {
+            Ok(end) => BufferedStreamEvent::End(end),
+            Err(error) => BufferedStreamEvent::Error(ToolStreamError {
+                stream_id: stream_id.clone(),
+                error,
+            }),
+        };
+        let mut buffered = self.buffered_streams.lock().await;
+        buffered.entry(stream_id).or_default().push(event);
+    }
+
+    async fn register_stream(
+        &self,
+        stream_id: String,
+        chunks: mpsc::Sender<ToolStreamChunk>,
+        end: oneshot::Sender<Result<ToolStreamEnd, PluginError>>,
+    ) {
+        {
+            let mut active = self.active_streams.lock().await;
+            active.insert(stream_id.clone(), ActiveStreamState { chunks, end });
+        }
+        self.drain_buffered_stream_events(stream_id).await;
+    }
+
+    async fn fail_active_streams(&self, error: PluginError) {
+        let active = {
+            let mut active = self.active_streams.lock().await;
+            active.drain().map(|(_, state)| state).collect::<Vec<_>>()
+        };
+        {
+            let mut buffered = self.buffered_streams.lock().await;
+            buffered.clear();
+        }
+        for state in active {
+            let _ = state.end.send(Err(error.clone()));
+        }
+    }
+
+    async fn drain_buffered_stream_events(&self, stream_id: String) {
+        let events = {
+            let mut buffered = self.buffered_streams.lock().await;
+            buffered.remove(&stream_id).unwrap_or_default()
+        };
+        for event in events {
+            match event {
+                BufferedStreamEvent::Chunk(chunk) => self.deliver_stream_chunk(chunk).await,
+                BufferedStreamEvent::End(end) => {
+                    self.finish_stream(stream_id.clone(), Ok(end)).await;
+                    break;
+                }
+                BufferedStreamEvent::Error(err) => {
+                    self.finish_stream(stream_id.clone(), Err(err.error)).await;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn parse_notification<T: serde::de::DeserializeOwned>(notif: &Notification) -> Option<T> {
+    serde_json::from_value(notif.params.clone().unwrap_or(serde_json::Value::Null)).ok()
 }
 
 fn exp_backoff(min: Duration, max: Duration, attempt: u32) -> Duration {
@@ -569,8 +712,63 @@ impl PluginTransport for StdioTransport {
         self.inner.write_frame(&body).await
     }
 
+    async fn invoke_stream(
+        &self,
+        input: ToolInvokeInput,
+    ) -> Result<Option<crate::transport::ToolStreamHandle>, TransportError> {
+        let id = self.inner.next_id().await;
+        let req_id = RequestId::Num(id);
+        let req = Request {
+            jsonrpc: JsonRpcVersion,
+            id: req_id.clone(),
+            method: method::HOOK_TOOL_INVOKE_STREAM.to_string(),
+            params: Some(serde_json::to_value(&input)?),
+        };
+        let body = serde_json::to_vec(&req)?;
+        let (tx, rx) = oneshot::channel();
+        self.inner.pending.insert(req_id.clone(), tx);
+        if let Err(e) = self.inner.write_frame(&body).await {
+            self.inner.pending.remove(&req_id);
+            return Err(e);
+        }
+        let resp = rx.await.map_err(|_| TransportError::Disconnected)?;
+        let handle: ToolInvokeStreamHandle = match resp.payload {
+            ResponsePayload::Ok { result } => {
+                serde_json::from_value(result).map_err(|e| TransportError::Rpc(e.to_string()))?
+            }
+            ResponsePayload::Err { error } => {
+                let pe: Option<PluginError> = error
+                    .data
+                    .as_ref()
+                    .and_then(|d| serde_json::from_value(d.clone()).ok());
+                let pe = pe.unwrap_or(PluginError {
+                    code: crate::sdk::PluginErrorCode::Generic,
+                    message: error.message,
+                    hook: None,
+                    plugin: None,
+                    data: error.data,
+                });
+                return Err(TransportError::Plugin(pe));
+            }
+        };
+
+        let (chunk_tx, chunk_rx) = mpsc::channel::<ToolStreamChunk>(64);
+        let (end_tx, end_rx) = oneshot::channel::<Result<ToolStreamEnd, PluginError>>();
+        self.inner
+            .register_stream(handle.stream_id.clone(), chunk_tx, end_tx)
+            .await;
+        Ok(Some(crate::transport::ToolStreamHandle {
+            stream_id: handle.stream_id,
+            chunks: chunk_rx,
+            end: end_rx,
+        }))
+    }
+
     async fn close(&self) -> Result<(), TransportError> {
         self.inner.closed.store(true, Ordering::SeqCst);
+        self.inner
+            .fail_active_streams(PluginError::new("plugin transport closed"))
+            .await;
         if let Some(mut h) = self.inner.handles.lock().await.take() {
             let _ = h.child.start_kill();
         }

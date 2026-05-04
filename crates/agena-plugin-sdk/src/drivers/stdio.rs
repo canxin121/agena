@@ -18,6 +18,7 @@ use crate::drivers::dispatch::PluginDispatcher;
 use crate::error::{PluginError, PluginErrorCode};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
+    ToolInvokeStreamHandle, ToolStreamError,
 };
 use crate::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostAgentListResponse,
@@ -120,6 +121,71 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                 tokio::spawn(async move {
                     let id = req.id.clone();
                     let params = req.params.unwrap_or(serde_json::Value::Null);
+                    if req.method == method::HOOK_TOOL_INVOKE_STREAM {
+                        match serde_json::from_value(params) {
+                            Ok(input) => {
+                                let mut handle = dispatcher.dispatch_stream(input);
+                                let stream_id = handle.stream_id.clone();
+                                send_response(
+                                    &tx,
+                                    Response {
+                                        jsonrpc: JsonRpcVersion,
+                                        id,
+                                        payload: ResponsePayload::Ok {
+                                            result: serde_json::to_value(ToolInvokeStreamHandle {
+                                                stream_id: stream_id.clone(),
+                                                title: None,
+                                            })
+                                            .expect("stream handle serialize"),
+                                        },
+                                    },
+                                );
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    while let Some(chunk) = handle.chunks.recv().await {
+                                        send_notification(&tx, method::TOOL_STREAM_CHUNK, &chunk);
+                                    }
+                                    match handle.end.await {
+                                        Ok(Ok(end)) => {
+                                            send_notification(&tx, method::TOOL_STREAM_END, &end);
+                                        }
+                                        Ok(Err(error)) => {
+                                            send_notification(
+                                                &tx,
+                                                method::TOOL_STREAM_ERROR,
+                                                &ToolStreamError { stream_id, error },
+                                            );
+                                        }
+                                        Err(_) => {
+                                            send_notification(
+                                                &tx,
+                                                method::TOOL_STREAM_ERROR,
+                                                &ToolStreamError {
+                                                    stream_id,
+                                                    error: PluginError::new(
+                                                        "stream terminated before sending final frame",
+                                                    ),
+                                                },
+                                            );
+                                        }
+                                    }
+                                });
+                            }
+                            Err(err) => send_response(
+                                &tx,
+                                Response {
+                                    jsonrpc: JsonRpcVersion,
+                                    id,
+                                    payload: ResponsePayload::Err {
+                                        error: error_object_from(PluginError::invalid_params(
+                                            err.to_string(),
+                                        )),
+                                    },
+                                },
+                            ),
+                        }
+                        return;
+                    }
                     let resp = match dispatcher.dispatch(&req.method, params).await {
                         Ok(v) => Response {
                             jsonrpc: JsonRpcVersion,
@@ -134,9 +200,7 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                             },
                         },
                     };
-                    if let Ok(body) = serde_json::to_vec(&resp) {
-                        let _ = tx.send(body);
-                    }
+                    send_response(&tx, resp);
                 });
             }
             Frame::Notification(notif) => {
@@ -157,6 +221,31 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                 }
             }
         }
+    }
+}
+
+fn send_response(tx: &mpsc::UnboundedSender<Vec<u8>>, response: Response) {
+    if let Ok(body) = serde_json::to_vec(&response) {
+        let _ = tx.send(body);
+    }
+}
+
+fn send_notification<T: serde::Serialize>(
+    tx: &mpsc::UnboundedSender<Vec<u8>>,
+    method_name: &str,
+    params: &T,
+) {
+    let params = match serde_json::to_value(params) {
+        Ok(params) => params,
+        Err(_) => return,
+    };
+    let notification = Notification {
+        jsonrpc: JsonRpcVersion,
+        method: method_name.to_string(),
+        params: Some(params),
+    };
+    if let Ok(body) = serde_json::to_vec(&notification) {
+        let _ = tx.send(body);
     }
 }
 

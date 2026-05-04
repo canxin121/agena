@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, oneshot};
 
 use crate::config::{RestartMode, RestartPolicy};
 use crate::error::TransportError;
+use crate::logs::PluginLogStore;
 use crate::sdk::PluginError;
 use crate::sdk::rpc::{
     ErrorObject, Frame, JsonRpcVersion, Notification, Request, RequestId, Response, ResponsePayload,
@@ -59,6 +60,7 @@ struct Inner {
     restart_attempts: AtomicU32,
     plugin_id: Option<String>,
     status_sink: Option<Arc<StatusRegistry>>,
+    log_sink: Option<Arc<PluginLogStore>>,
 }
 
 struct ChildHandles {
@@ -83,6 +85,7 @@ impl StdioTransport {
             RestartPolicy::default(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -104,6 +107,7 @@ impl StdioTransport {
             restart_policy,
             None,
             None,
+            None,
         )
         .await
     }
@@ -117,6 +121,7 @@ impl StdioTransport {
         restart_policy: RestartPolicy,
         plugin_id: Option<String>,
         status_sink: Option<Arc<StatusRegistry>>,
+        log_sink: Option<Arc<PluginLogStore>>,
     ) -> Result<Self, TransportError> {
         let spawn_spec = SpawnSpec {
             command: command.to_string(),
@@ -136,6 +141,7 @@ impl StdioTransport {
             restart_attempts: AtomicU32::new(0),
             plugin_id,
             status_sink,
+            log_sink,
         });
 
         Inner::spawn_child(&inner, false).await?;
@@ -174,6 +180,12 @@ impl Inner {
                 self.record_status(|sink, plugin_id| {
                     sink.record_spawn_failure(plugin_id, "restart budget exhausted");
                 });
+                self.record_log(
+                    "warn",
+                    "host",
+                    "restart budget exhausted",
+                    serde_json::Value::Null,
+                );
                 return Err(TransportError::Disconnected);
             }
             let min = self.restart_policy.min_backoff.0;
@@ -206,6 +218,12 @@ impl Inner {
                 self.record_status(|sink, plugin_id| {
                     sink.record_spawn_failure(plugin_id, message.clone());
                 });
+                self.record_log(
+                    "error",
+                    "host",
+                    format!("spawn failed: {message}"),
+                    serde_json::Value::Null,
+                );
                 return Err(err.into());
             }
         };
@@ -247,10 +265,22 @@ impl Inner {
 
         // stderr drain → tracing
         if let Some(stderr) = stderr {
+            let plugin_id = self.plugin_id.clone();
+            let log_sink = self.log_sink.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     tracing::info!(target: "agena_plugin_host::stdio_err", "{line}");
+                    if let (Some(sink), Some(plugin_id)) = (log_sink.as_ref(), plugin_id.as_deref())
+                    {
+                        sink.append(
+                            plugin_id,
+                            "info",
+                            "stderr",
+                            line.clone(),
+                            serde_json::Value::Null,
+                        );
+                    }
                 }
             });
         }
@@ -259,6 +289,19 @@ impl Inner {
         self.record_status(|sink, plugin_id| {
             sink.record_started(plugin_id, pid, is_restart);
         });
+        self.record_log(
+            "info",
+            "host",
+            if is_restart {
+                format!(
+                    "plugin started after restart (pid={})",
+                    pid.unwrap_or_default()
+                )
+            } else {
+                format!("plugin started (pid={})", pid.unwrap_or_default())
+            },
+            serde_json::Value::Null,
+        );
         Ok(())
     }
 
@@ -306,6 +349,26 @@ impl Inner {
         self.record_status(|sink, plugin_id| {
             sink.record_exit(plugin_id, will_restart, exit_code, None);
         });
+        self.record_log(
+            if will_restart { "warn" } else { "error" },
+            "host",
+            if will_restart {
+                format!(
+                    "plugin exited with code {}; scheduling restart",
+                    exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "<unknown>".into())
+                )
+            } else {
+                format!(
+                    "plugin exited with code {}",
+                    exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "<unknown>".into())
+                )
+            },
+            serde_json::Value::Null,
+        );
 
         match self.restart_policy.policy {
             RestartMode::Never => {}
@@ -395,6 +458,24 @@ impl Inner {
         if let (Some(sink), Some(plugin_id)) = (self.status_sink.as_ref(), self.plugin_id.as_ref())
         {
             mutate(sink.as_ref(), plugin_id.as_str());
+        }
+    }
+
+    fn record_log(
+        &self,
+        level: impl Into<String>,
+        source: impl Into<String>,
+        message: impl Into<String>,
+        fields: serde_json::Value,
+    ) {
+        if let (Some(sink), Some(plugin_id)) = (self.log_sink.as_ref(), self.plugin_id.as_ref()) {
+            sink.append(
+                plugin_id.clone(),
+                level.into(),
+                source.into(),
+                message.into(),
+                fields,
+            );
         }
     }
 }
@@ -496,6 +577,12 @@ impl PluginTransport for StdioTransport {
         self.inner.record_status(|sink, plugin_id| {
             sink.record_stopped(plugin_id);
         });
+        self.inner.record_log(
+            "info",
+            "host",
+            "plugin transport closed",
+            serde_json::Value::Null,
+        );
         Ok(())
     }
 }

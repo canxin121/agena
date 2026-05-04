@@ -1,6 +1,6 @@
 use std::{
     cmp::{max, min},
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     env, fs,
     ops::Range,
     path::{Path, PathBuf},
@@ -62,6 +62,7 @@ use crate::ui_text;
 
 const MESSAGE_PAGE_SIZE: u64 = 40;
 const TIMELINE_EVENT_LIMIT: u64 = 200;
+const PLUGIN_INSPECTOR_LOG_LIMIT: usize = 20;
 const UI_TICK_MS: u64 = 32;
 const REFRESH_INTERVAL_MS: u64 = 250;
 const DRAFT_PERSIST_INTERVAL_MS: u64 = 250;
@@ -337,6 +338,7 @@ enum Overlay {
     Confirm(ConfirmOverlay),
     Picker(PickerOverlay),
     Timeline(TimelineOverlay),
+    PluginInspector(PluginInspectorOverlay),
 }
 
 #[derive(Debug, Clone)]
@@ -404,6 +406,29 @@ struct TimelineItem {
     detail: String,
     search_text: String,
     copy_text: String,
+}
+
+#[derive(Debug, Clone)]
+struct PluginInspectorOverlay {
+    title: String,
+    prompt: String,
+    empty_message: String,
+    footer: String,
+    input: Editor,
+    all_items: Vec<PluginInspectorItem>,
+    items: Vec<PluginInspectorItem>,
+    selected: usize,
+}
+
+#[derive(Debug, Clone)]
+struct PluginInspectorItem {
+    plugin_id: String,
+    summary: String,
+    detail: String,
+    logs: String,
+    search_text: String,
+    copy_text: String,
+    state: agena::plugin::status::PluginRunState,
 }
 
 #[derive(Debug, Clone)]
@@ -1037,6 +1062,11 @@ impl App {
             return;
         }
 
+        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('P')) {
+            self.open_plugin_inspector_overlay("");
+            return;
+        }
+
         if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('[')) {
             self.open_parent_session();
             return;
@@ -1117,6 +1147,9 @@ impl App {
             Overlay::Confirm(dialog) => self.handle_confirm_overlay_key(key, dialog),
             Overlay::Picker(dialog) => self.handle_picker_overlay_key(key, dialog),
             Overlay::Timeline(dialog) => self.handle_timeline_overlay_key(key, dialog),
+            Overlay::PluginInspector(dialog) => {
+                self.handle_plugin_inspector_overlay_key(key, dialog)
+            }
         };
 
         if !close {
@@ -1423,6 +1456,78 @@ impl App {
         }
     }
 
+    fn handle_plugin_inspector_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut PluginInspectorOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.selected = dialog.selected.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !dialog.items.is_empty() {
+                    dialog.selected =
+                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
+                }
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.selected = dialog.selected.saturating_sub(10);
+                false
+            }
+            KeyCode::PageDown => {
+                if !dialog.items.is_empty() {
+                    dialog.selected =
+                        min(dialog.selected + 10, dialog.items.len().saturating_sub(1));
+                }
+                false
+            }
+            KeyCode::Home => {
+                dialog.selected = 0;
+                false
+            }
+            KeyCode::End => {
+                if !dialog.items.is_empty() {
+                    dialog.selected = dialog.items.len().saturating_sub(1);
+                }
+                false
+            }
+            KeyCode::Enter => false,
+            KeyCode::Tab => {
+                if let Some(item) = dialog.items.get(dialog.selected) {
+                    dialog.input.set_text(item.plugin_id.clone());
+                    Self::refresh_plugin_inspector_overlay(dialog);
+                }
+                false
+            }
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.reload_plugin_inspector_overlay(dialog);
+                false
+            }
+            KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(item) = dialog.items.get(dialog.selected) {
+                    match set_clipboard_text(item.copy_text.as_str()) {
+                        Ok(()) => self
+                            .flash_success(ui_text::t(&self.i18n, "flash-timeline-event-copied")),
+                        Err(error) => self.flash_error(self.i18n.text_args(
+                            "flash-clipboard-copy-failed",
+                            &crate::fl_args!("error" => error.to_string()),
+                        )),
+                    }
+                }
+                false
+            }
+            _ => {
+                dialog.input.handle_line_input_key(key);
+                Self::refresh_plugin_inspector_overlay(dialog);
+                false
+            }
+        }
+    }
+
     fn handle_paste(&mut self, text: String) {
         let backend = self.backend.clone();
         if let Some(overlay) = &mut self.overlay {
@@ -1454,6 +1559,11 @@ impl App {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_timeline_overlay(dialog);
+                }
+                Overlay::PluginInspector(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    Self::refresh_plugin_inspector_overlay(dialog);
                 }
                 Overlay::Confirm(_) => {}
                 Overlay::Permission(_) => {}
@@ -3194,6 +3304,21 @@ impl App {
         self.request_timeline(session_id, limit);
     }
 
+    fn open_plugin_inspector_overlay(&mut self, query: &str) {
+        let mut dialog = PluginInspectorOverlay {
+            title: ui_text::t(&self.i18n, "overlay-plugins-title"),
+            prompt: ui_text::t(&self.i18n, "overlay-plugins-prompt"),
+            empty_message: ui_text::t(&self.i18n, "overlay-plugins-empty"),
+            footer: ui_text::t(&self.i18n, "overlay-plugins-footer"),
+            input: Editor::from_text(query.to_string()),
+            all_items: Vec::new(),
+            items: Vec::new(),
+            selected: 0,
+        };
+        self.reload_plugin_inspector_overlay(&mut dialog);
+        self.overlay = Some(Overlay::PluginInspector(dialog));
+    }
+
     fn open_command_palette(&mut self) {
         let mut all_items = commands::COMMANDS
             .iter()
@@ -3493,6 +3618,34 @@ impl App {
     }
 
     fn refresh_timeline_overlay(dialog: &mut TimelineOverlay) {
+        let query = dialog.input.text().trim().to_ascii_lowercase();
+        dialog.items = dialog
+            .all_items
+            .iter()
+            .filter(|item| query.is_empty() || item.search_text.contains(query.as_str()))
+            .cloned()
+            .collect();
+        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+    }
+
+    fn reload_plugin_inspector_overlay(&self, dialog: &mut PluginInspectorOverlay) {
+        dialog.all_items = self
+            .backend
+            .plugin_statuses()
+            .into_iter()
+            .map(|status| {
+                let plugin_id = status.plugin_id.clone();
+                let inspect = self.backend.plugin_inspect(plugin_id.as_str());
+                let logs =
+                    self.backend
+                        .plugin_logs(plugin_id.as_str(), None, PLUGIN_INSPECTOR_LOG_LIMIT);
+                build_plugin_inspector_item(status, inspect, logs)
+            })
+            .collect();
+        Self::refresh_plugin_inspector_overlay(dialog);
+    }
+
+    fn refresh_plugin_inspector_overlay(dialog: &mut PluginInspectorOverlay) {
         let query = dialog.input.text().trim().to_ascii_lowercase();
         dialog.items = dialog
             .all_items
@@ -3834,6 +3987,7 @@ impl App {
             }
             CommandId::Rename => self.handle_rename_command(spec, args),
             CommandId::Timeline => self.handle_timeline_command(spec, args),
+            CommandId::Plugins => self.handle_plugins_command(spec, args),
             CommandId::Export => self.handle_export_command(args),
             CommandId::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
             CommandId::Continue => self.continue_current_session(),
@@ -4037,6 +4191,10 @@ impl App {
             }
         };
         self.open_timeline_overlay(limit);
+    }
+
+    fn handle_plugins_command(&mut self, _spec: &'static CommandSpec, args: &str) {
+        self.open_plugin_inspector_overlay(args.trim());
     }
 
     fn handle_export_command(&mut self, args: &str) {
@@ -4342,6 +4500,7 @@ impl App {
                 Overlay::UserInputReply(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
+                Overlay::PluginInspector(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::Confirm(_) => {}
                 Overlay::Permission(_) => {}
                 Overlay::Help => {}
@@ -5565,6 +5724,9 @@ impl App {
             Overlay::Timeline(dialog) => {
                 self.render_timeline_overlay(frame, area, dialog);
             }
+            Overlay::PluginInspector(dialog) => {
+                self.render_plugin_inspector_overlay(frame, area, dialog);
+            }
         }
     }
 
@@ -6032,6 +6194,142 @@ impl App {
                 )
                 .wrap(Wrap { trim: false }),
             content[1],
+        );
+
+        frame.render_widget(Paragraph::new(dialog.footer.clone()), rows[3]);
+        frame.set_cursor_position((
+            rows[1]
+                .x
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_x),
+            rows[1]
+                .y
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_y),
+        ));
+    }
+
+    fn render_plugin_inspector_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &PluginInspectorOverlay,
+    ) {
+        let area = centered_rect(area, 96, 28);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(format!(" {} ", dialog.title))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(3),
+                Constraint::Min(12),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+
+        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
+
+        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
+        frame.render_widget(
+            Paragraph::new(Text::from(input_view.lines.clone()))
+                .block(Block::default().borders(Borders::ALL)),
+            rows[1],
+        );
+
+        let content = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+            .split(rows[2]);
+        let right = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(content[1]);
+
+        let list_items = if dialog.items.is_empty() {
+            vec![ListItem::new(Line::from(Span::styled(
+                dialog.empty_message.clone(),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else {
+            dialog
+                .items
+                .iter()
+                .map(|item| {
+                    let style = match item.state {
+                        agena::plugin::status::PluginRunState::Running => {
+                            Style::default().fg(Color::Green)
+                        }
+                        agena::plugin::status::PluginRunState::Restarting => {
+                            Style::default().fg(Color::Yellow)
+                        }
+                        agena::plugin::status::PluginRunState::Failed => {
+                            Style::default().fg(Color::Red)
+                        }
+                        agena::plugin::status::PluginRunState::Stopped => {
+                            Style::default().fg(Color::DarkGray)
+                        }
+                    };
+                    ListItem::new(Line::from(Span::styled(item.summary.clone(), style)))
+                })
+                .collect::<Vec<_>>()
+        };
+        let list = List::new(list_items)
+            .block(
+                Block::default()
+                    .title(format!(
+                        " {} ",
+                        ui_text::t(&self.i18n, "overlay-plugins-list")
+                    ))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(Style::default().bg(Color::Rgb(32, 46, 64)))
+            .highlight_symbol(">> ");
+        let mut state = ListState::default();
+        state.select((!dialog.items.is_empty()).then_some(dialog.selected));
+        frame.render_stateful_widget(list, content[0], &mut state);
+
+        let detail = dialog
+            .items
+            .get(dialog.selected)
+            .map(|item| item.detail.clone())
+            .unwrap_or_else(|| dialog.empty_message.clone());
+        frame.render_widget(
+            Paragraph::new(detail)
+                .block(
+                    Block::default()
+                        .title(format!(
+                            " {} ",
+                            ui_text::t(&self.i18n, "overlay-plugins-detail")
+                        ))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            right[0],
+        );
+
+        let logs = dialog
+            .items
+            .get(dialog.selected)
+            .map(|item| item.logs.clone())
+            .unwrap_or_else(|| dialog.empty_message.clone());
+        frame.render_widget(
+            Paragraph::new(logs)
+                .block(
+                    Block::default()
+                        .title(format!(
+                            " {} ",
+                            ui_text::t(&self.i18n, "overlay-plugins-logs")
+                        ))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            right[1],
         );
 
         frame.render_widget(Paragraph::new(dialog.footer.clone()), rows[3]);
@@ -8200,6 +8498,167 @@ fn format_timestamp(timestamp: DateTime<Utc>) -> String {
         .to_string()
 }
 
+fn format_timestamp_ms(timestamp_ms: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
+        .map(format_timestamp)
+        .unwrap_or_else(|| timestamp_ms.to_string())
+}
+
+fn build_plugin_inspector_item(
+    status: agena::plugin::status::PluginStatus,
+    inspect: Option<agena::plugin::PluginInspect>,
+    logs: Vec<agena::plugin::PluginLogEntry>,
+) -> PluginInspectorItem {
+    let manifest = inspect.as_ref().and_then(|item| item.manifest.as_ref());
+    let summary = manifest.map_or_else(
+        || {
+            format!(
+                "{} [{}] {}",
+                status.plugin_id,
+                status.state.as_str(),
+                status.kind
+            )
+        },
+        |manifest| {
+            format!(
+                "{} [{}] {} — {}@{}",
+                status.plugin_id,
+                status.state.as_str(),
+                status.kind,
+                manifest.name,
+                manifest.version
+            )
+        },
+    );
+    let detail = format_plugin_inspector_detail(&status, manifest);
+    let logs_text = format_plugin_inspector_logs(logs.as_slice());
+    let copy_text = format!("{summary}\n\n{detail}\n\nRecent logs\n-----------\n{logs_text}");
+    let search_text = format!(
+        "{} {} {}",
+        summary.to_ascii_lowercase(),
+        detail.to_ascii_lowercase(),
+        logs_text.to_ascii_lowercase()
+    );
+
+    PluginInspectorItem {
+        plugin_id: status.plugin_id.clone(),
+        summary,
+        detail,
+        logs: logs_text,
+        search_text,
+        copy_text,
+        state: status.state,
+    }
+}
+
+fn format_plugin_inspector_detail(
+    status: &agena::plugin::status::PluginStatus,
+    manifest: Option<&agena::plugin::PluginManifest>,
+) -> String {
+    let mut lines = vec![
+        format!("plugin_id: {}", status.plugin_id),
+        format!("kind: {}", status.kind),
+        format!("state: {}", status.state.as_str()),
+        format!(
+            "pid: {}",
+            status
+                .pid
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        ),
+        format!("restart_count: {}", status.restart_count),
+        format!(
+            "last_exit_code: {}",
+            status
+                .last_exit_code
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        ),
+        format!(
+            "last_restart: {}",
+            status
+                .last_restart_at_ms
+                .map(format_timestamp_ms)
+                .unwrap_or_else(|| "-".to_string())
+        ),
+    ];
+    if let Some(error) = status.last_error.as_deref() {
+        lines.push(format!("last_error: {error}"));
+    }
+
+    lines.push(String::new());
+    match manifest {
+        Some(manifest) => {
+            lines.push(format!("manifest: {}@{}", manifest.name, manifest.version));
+            if let Some(description) = manifest.description.as_deref() {
+                lines.push(format!("description: {description}"));
+            }
+            if !manifest.authors.is_empty() {
+                lines.push(format!("authors: {}", manifest.authors.join(", ")));
+            }
+            if !manifest.transports.is_empty() {
+                lines.push(format!(
+                    "transports: {}",
+                    manifest
+                        .transports
+                        .iter()
+                        .map(|transport| format!("{transport:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            lines.push(format!("hooks: {:?}", manifest.hooks));
+            lines.push(format!("entries: {}", manifest.entries.len()));
+            for entry in manifest.entries.iter().take(5) {
+                lines.push(format!("  - {} ({:?})", entry.name, entry.behavior));
+            }
+            if manifest.entries.len() > 5 {
+                lines.push(format!("  - ... +{} more", manifest.entries.len() - 5));
+            }
+            let capabilities = manifest
+                .entries
+                .iter()
+                .flat_map(|entry| entry.host_capabilities.iter())
+                .map(|capability| format!("{capability:?}"))
+                .collect::<BTreeSet<_>>();
+            if !capabilities.is_empty() {
+                lines.push(format!(
+                    "capabilities: {}",
+                    capabilities.into_iter().collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+        None => lines.push("manifest: unavailable".to_string()),
+    }
+
+    lines.join("\n")
+}
+
+fn format_plugin_inspector_logs(entries: &[agena::plugin::PluginLogEntry]) -> String {
+    if entries.is_empty() {
+        return "No retained logs".to_string();
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let mut line = format!(
+                "[{}] #{} {} {} {}",
+                format_timestamp_ms(entry.timestamp_ms),
+                entry.seq,
+                entry.level,
+                entry.source,
+                entry.message
+            );
+            if !entry.fields.is_null() {
+                line.push(' ');
+                line.push_str(entry.fields.to_string().as_str());
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[allow(dead_code)]
 fn format_relative_time(timestamp: DateTime<Utc>) -> String {
     let now = Utc::now();
@@ -9593,6 +10052,7 @@ mod tests {
     };
     use agena_skills::SkillFrontmatter;
     use chrono::Utc;
+    use serde_json::json;
 
     #[test]
     fn derive_title_uses_first_non_empty_line() {
@@ -9680,6 +10140,74 @@ mod tests {
 
         assert_eq!(preview.text.lines().count(), TOOL_CARD_PREVIEW_LINES);
         assert_eq!(preview.omitted_lines, 3);
+    }
+
+    #[test]
+    fn plugin_inspector_item_includes_manifest_capabilities_and_logs() {
+        let status = agena::plugin::status::PluginStatus {
+            plugin_id: "ops.plugin".to_string(),
+            kind: "stdio",
+            state: agena::plugin::status::PluginRunState::Failed,
+            pid: None,
+            restart_count: 2,
+            last_exit_code: Some(7),
+            last_restart_at_ms: Some(1_700_000_000_000),
+            last_error: Some("permission denied".to_string()),
+        };
+        let manifest = agena::plugin::PluginManifest::builder("ops-plugin", "1.2.3")
+            .description("Operator surface")
+            .author("Agena")
+            .hooks(agena::plugin::HookSubscription::EVENT)
+            .entry(
+                agena::plugin::PluginEntryDecl::new("inspect", json!({"type": "object"}))
+                    .behavior(agena::plugin::EntryBehavior::Task)
+                    .host_capabilities([
+                        agena::plugin::sdk::HostCapability::PluginStatus,
+                        agena::plugin::sdk::HostCapability::ReadConfig,
+                    ]),
+            )
+            .entry(
+                agena::plugin::PluginEntryDecl::new("logs", json!({"type": "object"}))
+                    .host_capability(agena::plugin::sdk::HostCapability::PluginStatus),
+            )
+            .build();
+        let logs = vec![agena::plugin::PluginLogEntry {
+            seq: 9,
+            timestamp_ms: 1_700_000_000_123,
+            plugin_id: status.plugin_id.clone(),
+            level: "warn".to_string(),
+            source: "stderr".to_string(),
+            message: "request failed".to_string(),
+            fields: json!({"attempt": 2}),
+        }];
+
+        let item = build_plugin_inspector_item(
+            status.clone(),
+            Some(agena::plugin::PluginInspect {
+                status,
+                manifest: Some(manifest),
+            }),
+            logs,
+        );
+
+        assert!(item.summary.contains("ops-plugin@1.2.3"));
+        assert!(item.detail.contains("manifest: ops-plugin@1.2.3"));
+        assert!(item.detail.contains("last_error: permission denied"));
+        assert!(
+            item.detail
+                .contains("capabilities: PluginStatus, ReadConfig")
+        );
+        assert!(item.logs.contains("stderr request failed"));
+        assert!(item.logs.contains("{\"attempt\":2}"));
+        assert!(item.search_text.contains("permission denied"));
+        assert!(item.search_text.contains("request failed"));
+        assert!(item.copy_text.contains("Recent logs"));
+        assert_eq!(item.state, agena::plugin::status::PluginRunState::Failed);
+    }
+
+    #[test]
+    fn plugin_inspector_logs_empty_state_is_readable() {
+        assert_eq!(format_plugin_inspector_logs(&[]), "No retained logs");
     }
 
     #[test]

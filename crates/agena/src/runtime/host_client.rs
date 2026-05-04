@@ -333,6 +333,19 @@ impl HostClient for RuntimeHostClient {
                 tracing::error!(target: "plugin", ?fields, "{message}");
             }
         }
+        let plugin_id = current_host_callback_context()
+            .and_then(|context| context.plugin_id)
+            .unwrap_or_else(|| "<unknown>".into());
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .append_plugin_log(
+                plugin_id,
+                format!("{level:?}").to_lowercase(),
+                "plugin",
+                message,
+                fields,
+            );
     }
 
     async fn publish_event(&self, env: EventEnvelope) -> Result<(), PluginError> {

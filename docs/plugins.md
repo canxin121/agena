@@ -234,13 +234,51 @@ values are never enumerated. Keep secret names short and stable.
 
 Plugins that declare `HostCapability::PluginStatus` can call
 `plugin_status_list / plugin_status_get` to observe the daemon state of every
-loaded plugin: `running`, `restarting`, `failed`, or `stopped`. For stdio
+configured plugin: `running`, `restarting`, `failed`, or `stopped`. For stdio
 plugins the host also reports `pid`, accumulated `restart_count`, the most
 recent `last_exit_code`, the `last_restart_at_ms` timestamp, and the
 `last_error` message. Non-process transports (`static`/`cdylib`/`http`/`wasm`)
-report `running` with the process-specific fields left empty. The status
-registry is in-memory and session-scoped — restart counts reset when the host
-is rebuilt.
+report `running` with the process-specific fields left empty. Failed loads stay
+in the inventory with `state = failed`, so operator surfaces can diagnose
+broken configs instead of silently dropping them. The status registry is
+in-memory and session-scoped — restart counts reset when the host is rebuilt.
+
+## Operator surfaces and retained logs
+
+Agena keeps a bounded in-memory log history per plugin. The retained log stream
+merges three sources:
+
+- plugin-originated `host/log` messages
+- stdio plugin `stderr`
+- host lifecycle events such as load failures, exits, and restart decisions
+
+Retention is process-local and non-persistent: restarting the host clears the
+history.
+
+Operator-facing surfaces:
+
+```bash
+agena plugin status --format json
+agena plugin inspect my-plugin --format json
+agena plugin logs my-plugin --limit 50
+```
+
+- `agena plugin status` lists the configured plugin inventory, including failed
+  entries.
+- `agena plugin inspect <plugin_id>` returns runtime status plus manifest
+  summary when available.
+- `agena plugin logs <plugin_id>` prints retained logs as text or JSON. Use
+  `--after-seq <n>` for incremental reads.
+
+HTTP API parity:
+
+- `GET /api/v1/plugins`
+- `GET /api/v1/plugins/{plugin_id}`
+- `GET /api/v1/plugins/{plugin_id}/logs?after_seq=<n>&limit=<n>`
+
+The TUI exposes the same data through the Plugin Inspector overlay: press `P`
+from a non-composer pane or run `/plugins [query]` from the composer to filter
+plugins by id, state, manifest metadata, capabilities, or recent logs.
 
 ## LSP read-only registry
 

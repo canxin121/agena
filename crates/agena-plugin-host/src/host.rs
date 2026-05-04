@@ -9,12 +9,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::config::{PluginEntry, PluginsConfig, TimeoutsConfig};
 use crate::dispatcher::{self, call_with_timeout};
 use crate::error::{HostError, TransportError};
 use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
+use crate::logs::{PluginLogEntry, PluginLogStore};
 use crate::registry::{
     PluginEntry as RegistryPluginEntry, PluginEntryRegistry, effective_host_capabilities,
 };
@@ -175,6 +176,13 @@ pub struct PluginEntryResolution {
     pub decl: PluginEntryDecl,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginInspect {
+    pub status: crate::status::PluginStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<PluginManifest>,
+}
+
 /// Live handle to an in-flight tool stream. Consume `chunks` for incremental
 /// output; once the stream closes (sender dropped), inspect `end` for the
 /// final aggregated result.
@@ -202,6 +210,7 @@ pub struct PluginHost {
     plugins_by_id: HashMap<String, Arc<LoadedPlugin>>,
     entries: Arc<RwLock<PluginEntryRegistry>>,
     statuses: Arc<crate::status::StatusRegistry>,
+    logs: Arc<PluginLogStore>,
     timeouts: TimeoutsConfig,
     /// Dedicated runtime used to block_on async transport calls when invoked
     /// from sync code.
@@ -220,17 +229,20 @@ impl PluginHost {
     pub fn new_empty() -> Arc<Self> {
         let entries = Arc::new(RwLock::new(PluginEntryRegistry::new(Vec::<String>::new())));
         let statuses = Arc::new(crate::status::StatusRegistry::new());
+        let logs = Arc::new(PluginLogStore::default());
         let host_handle = Arc::new(HostHandle::new_with_components(
             Arc::new(NoopHostClient),
             Arc::clone(&entries),
             Arc::new(RwLock::new(HashMap::new())),
             Arc::clone(&statuses),
+            Arc::clone(&logs),
         ));
         Arc::new(Self {
             plugins: Vec::new(),
             plugins_by_id: HashMap::new(),
             entries,
             statuses,
+            logs,
             timeouts: TimeoutsConfig::default(),
             runtime: None,
             runtime_handle: None,
@@ -301,6 +313,39 @@ impl PluginHost {
 
     pub fn plugin_statuses(&self) -> Vec<crate::status::PluginStatus> {
         self.statuses.list()
+    }
+
+    pub fn log_store(&self) -> Arc<PluginLogStore> {
+        Arc::clone(&self.logs)
+    }
+
+    pub fn append_plugin_log(
+        &self,
+        plugin_id: impl Into<String>,
+        level: impl Into<String>,
+        source: impl Into<String>,
+        message: impl Into<String>,
+        fields: serde_json::Value,
+    ) -> PluginLogEntry {
+        self.logs.append(plugin_id, level, source, message, fields)
+    }
+
+    pub fn plugin_logs(
+        &self,
+        plugin_id: &str,
+        after_seq: Option<u64>,
+        limit: usize,
+    ) -> Vec<PluginLogEntry> {
+        self.logs.list(plugin_id, after_seq, limit)
+    }
+
+    pub fn plugin_inspect(&self, plugin_id: &str) -> Option<PluginInspect> {
+        let status = self.plugin_status(plugin_id)?;
+        let manifest = self
+            .plugins_by_id
+            .get(plugin_id)
+            .map(|plugin| plugin.manifest.clone());
+        Some(PluginInspect { status, manifest })
     }
 
     fn block_on<F>(&self, fut: F) -> F::Output
@@ -1450,11 +1495,17 @@ impl PluginHostBuilder {
         let plugin_indices: Arc<RwLock<HashMap<String, usize>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let statuses_shared = Arc::new(crate::status::StatusRegistry::new());
+        let logs_shared = self
+            .previous
+            .as_ref()
+            .map(|previous| previous.log_store())
+            .unwrap_or_else(|| Arc::new(PluginLogStore::default()));
         let mut handle = HostHandle::new_with_components(
             host_inner,
             Arc::clone(&entries_shared),
             Arc::clone(&plugin_indices),
             Arc::clone(&statuses_shared),
+            Arc::clone(&logs_shared),
         );
         if let Some(url) = self.callback_base_url.clone() {
             handle = handle.with_callback_base_url(url);
@@ -1492,6 +1543,10 @@ impl PluginHostBuilder {
             .unwrap_or_default();
 
         for (idx, (id, entry)) in entries.into_iter().enumerate() {
+            statuses_shared.set(crate::status::PluginStatus::initial(
+                id.clone(),
+                entry.kind_str(),
+            ));
             // Hot-reload: if a previous host had this id with a byte-identical
             // entry, reuse the transport (no respawn).
             if let Some(prev_entry) = self.previous_entries.get(&id)
@@ -1536,11 +1591,13 @@ impl PluginHostBuilder {
                         crate::registry::per_entry_host_capabilities(&reused.manifest.entries),
                     )
                     .await;
-                let status_kind = reused.kind;
-                statuses_shared.set(crate::status::PluginStatus::initial(
-                    reused.id.clone(),
-                    status_kind,
-                ));
+                if let Some(previous_status) = self
+                    .previous
+                    .as_ref()
+                    .and_then(|previous| previous.plugin_status(&reused.id))
+                {
+                    statuses_shared.set(previous_status);
+                }
                 by_id.insert(reused.id.clone(), Arc::clone(&reused));
                 host_handle
                     .register_plugin_transport(reused.id.clone(), reused.transport())
@@ -1591,6 +1648,15 @@ impl PluginHostBuilder {
                     loaded.push(plugin);
                 }
                 Err(err) => {
+                    let message = err.to_string();
+                    statuses_shared.record_spawn_failure(&id, message.clone());
+                    logs_shared.append(
+                        id.clone(),
+                        "error",
+                        "host",
+                        format!("failed to load plugin: {message}"),
+                        serde_json::Value::Null,
+                    );
                     tracing::warn!(
                         target: "agena_plugin_host",
                         plugin = %id,
@@ -1605,6 +1671,7 @@ impl PluginHostBuilder {
             plugins_by_id: by_id,
             entries: entries_shared,
             statuses: statuses_shared,
+            logs: logs_shared,
             timeouts: self.config.timeouts,
             runtime: None,
             runtime_handle: tokio::runtime::Handle::try_current().ok(),
@@ -1638,6 +1705,7 @@ pub struct HostHandle {
     entries: Arc<RwLock<PluginEntryRegistry>>,
     plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
     statuses: Arc<crate::status::StatusRegistry>,
+    logs: Arc<PluginLogStore>,
     statusline: Arc<RwLock<std::collections::BTreeMap<(String, String), HostStatuslineSegment>>>,
     themes: Arc<RwLock<std::collections::BTreeMap<String, HostThemePalette>>>,
     quotas: Arc<crate::quota::QuotaRegistry>,
@@ -1671,6 +1739,7 @@ impl HostHandle {
             entries,
             plugin_indices,
             Arc::new(crate::status::StatusRegistry::new()),
+            Arc::new(PluginLogStore::default()),
         )
     }
 
@@ -1679,6 +1748,7 @@ impl HostHandle {
         entries: Arc<RwLock<PluginEntryRegistry>>,
         plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
         statuses: Arc<crate::status::StatusRegistry>,
+        logs: Arc<PluginLogStore>,
     ) -> Self {
         Self {
             inner: tokio::sync::RwLock::new(inner),
@@ -1689,6 +1759,7 @@ impl HostHandle {
             entries,
             plugin_indices,
             statuses,
+            logs,
             statusline: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             themes: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             quotas: Arc::new(crate::quota::QuotaRegistry::default()),
@@ -1725,6 +1796,30 @@ impl HostHandle {
 
     pub fn status_registry(&self) -> Arc<crate::status::StatusRegistry> {
         Arc::clone(&self.statuses)
+    }
+
+    pub fn log_store(&self) -> Arc<PluginLogStore> {
+        Arc::clone(&self.logs)
+    }
+
+    pub fn append_plugin_log(
+        &self,
+        plugin_id: impl Into<String>,
+        level: impl Into<String>,
+        source: impl Into<String>,
+        message: impl Into<String>,
+        fields: serde_json::Value,
+    ) -> PluginLogEntry {
+        self.logs.append(plugin_id, level, source, message, fields)
+    }
+
+    pub fn plugin_logs(
+        &self,
+        plugin_id: &str,
+        after_seq: Option<u64>,
+        limit: usize,
+    ) -> Vec<PluginLogEntry> {
+        self.logs.list(plugin_id, after_seq, limit)
     }
 
     pub fn with_callback_base_url(mut self, url: String) -> Self {
@@ -3677,3 +3772,67 @@ impl HostClient for ScopedHostClient {
 /// inside `HostHandle` until agena wires its own.
 #[allow(dead_code)]
 pub struct HostHandleClient;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::status::{PluginRunState, PluginStatus};
+    use serde_json::json;
+
+    #[test]
+    fn plugin_inspect_surfaces_status_without_loaded_manifest() {
+        let host = PluginHost::new_empty();
+        host.status_registry().set(PluginStatus {
+            plugin_id: "broken.plugin".to_string(),
+            kind: "stdio",
+            state: PluginRunState::Failed,
+            pid: None,
+            restart_count: 3,
+            last_exit_code: Some(17),
+            last_restart_at_ms: Some(1_700_000_000_000),
+            last_error: Some("spawn failed".to_string()),
+        });
+
+        let inspect = host
+            .plugin_inspect("broken.plugin")
+            .expect("plugin inspect should exist");
+
+        assert_eq!(inspect.status.plugin_id, "broken.plugin");
+        assert_eq!(inspect.status.state, PluginRunState::Failed);
+        assert_eq!(inspect.status.kind, "stdio");
+        assert!(inspect.manifest.is_none());
+    }
+
+    #[test]
+    fn plugin_logs_filter_by_sequence_and_limit() {
+        let host = PluginHost::new_empty();
+        let first = host.append_plugin_log(
+            "broken.plugin",
+            "error",
+            "host",
+            "load failed",
+            json!({"stage": "spawn"}),
+        );
+        let second = host.append_plugin_log(
+            "broken.plugin",
+            "warn",
+            "stderr",
+            "permission denied",
+            serde_json::Value::Null,
+        );
+        host.append_plugin_log(
+            "other.plugin",
+            "info",
+            "plugin",
+            "ignored",
+            serde_json::Value::Null,
+        );
+
+        let listed = host.plugin_logs("broken.plugin", Some(first.seq), 1);
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].seq, second.seq);
+        assert_eq!(listed[0].source, "stderr");
+        assert_eq!(listed[0].message, "permission denied");
+    }
+}

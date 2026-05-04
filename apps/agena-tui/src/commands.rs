@@ -11,6 +11,7 @@ pub enum CommandId {
     Find,
     Rename,
     Timeline,
+    Plugins,
     Export,
     Pager,
     Continue,
@@ -142,6 +143,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["events"],
         arguments: "[limit]",
         summary_key: "command-timeline-summary",
+    },
+    CommandSpec {
+        id: CommandId::Plugins,
+        name: "plugins",
+        aliases: &["plugin"],
+        arguments: "[query]",
+        summary_key: "command-plugins-summary",
     },
     CommandSpec {
         id: CommandId::Export,
@@ -416,6 +424,13 @@ mod tests {
         let parsed = parse_command("/events 80").expect("timeline command should parse");
         assert_eq!(parsed.spec.id, CommandId::Timeline);
         assert_eq!(parsed.args, "80");
+    }
+
+    #[test]
+    fn parse_command_supports_plugin_inspector_command() {
+        let parsed = parse_command("/plugin failed").expect("plugin command should parse");
+        assert_eq!(parsed.spec.id, CommandId::Plugins);
+        assert_eq!(parsed.args, "failed");
     }
 
     #[test]

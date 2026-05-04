@@ -693,6 +693,32 @@ impl Backend {
             .theme_palettes()
     }
 
+    pub fn plugin_statuses(&self) -> Vec<agena::plugin::status::PluginStatus> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .plugin_statuses()
+    }
+
+    pub fn plugin_inspect(&self, plugin_id: &str) -> Option<agena::plugin::PluginInspect> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .plugin_inspect(plugin_id)
+    }
+
+    pub fn plugin_logs(
+        &self,
+        plugin_id: &str,
+        after_seq: Option<u64>,
+        limit: usize,
+    ) -> Vec<agena::plugin::PluginLogEntry> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .plugin_logs(plugin_id, after_seq, limit)
+    }
+
     pub fn resolve_model_target(&self, target: &str, model: Option<&str>) -> Result<ModelRef> {
         self.runtime
             .current_snapshot()

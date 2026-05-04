@@ -24,8 +24,9 @@ use crate::sdk::host_api::{
     HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostCallbackContext, HostClient, HostCommandListResponse,
     HostCommandRegisterRequest, HostCommandRemoveRequest, HostCommandRemoveResponse,
-    HostEntryDescriptor, HostEntryListResponse, HostEntryMutationResponse,
-    HostEntryRegisterRequest, HostEntryRemoveRequest, HostEntryUpdateRequest, HostHookEntry,
+    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostEntryDescriptor, HostEntryListResponse,
+    HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
+    HostEntryUpdateRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostHookEntry,
     HostHookListResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
     HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPlanGetRequest,
@@ -39,9 +40,9 @@ use crate::sdk::host_api::{
     HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
     HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
     HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
-    SpawnSubtaskResponse, ToolDescriptor,
+    HostTodoWriteRequest, HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -2250,6 +2251,80 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
+                    method::HOST_TODO_WRITE => {
+                        let p: HostTodoWriteParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.todo_write(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_PLAN_ENTER => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::PlanRegistry,
+                        )
+                        .await?;
+                        let p: HostEnterPlanModeParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.enter_plan_mode(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_PLAN_EXIT => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::PlanRegistry,
+                        )
+                        .await?;
+                        let p: HostExitPlanModeParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.exit_plan_mode(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_WORKTREE_ENTER => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::WorktreeRegistry,
+                        )
+                        .await?;
+                        let p: HostEnterWorktreeParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.enter_worktree(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_WORKTREE_EXIT => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::WorktreeRegistry,
+                        )
+                        .await?;
+                        let p: HostExitWorktreeParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.exit_worktree(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
                     method::HOST_BUILTIN_EXECUTE => {
                         let p: HostBuiltinExecuteParams = parse(params)?;
                         let out = host_api::with_host_callback_context(
@@ -3154,6 +3229,44 @@ struct HostListToolsParams {
 }
 
 #[derive(serde::Deserialize)]
+struct HostTodoWriteParams {
+    request: HostTodoWriteRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostEnterPlanModeParams {
+    #[serde(default)]
+    request: HostEnterPlanModeRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostExitPlanModeParams {
+    #[serde(default)]
+    request: HostExitPlanModeRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostEnterWorktreeParams {
+    #[serde(default)]
+    request: HostEnterWorktreeRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostExitWorktreeParams {
+    request: HostExitWorktreeRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
 struct HostBuiltinExecuteParams {
     request: BuiltinToolRequest,
     #[serde(default)]
@@ -3473,10 +3586,9 @@ struct ScopedHostClient {
 
 impl ScopedHostClient {
     fn context(&self) -> HostCallbackContext {
-        HostCallbackContext {
-            plugin_id: Some(self.plugin_id.clone()),
-            ..HostCallbackContext::default()
-        }
+        let mut context = host_api::current_host_callback_context().unwrap_or_default();
+        context.plugin_id = Some(self.plugin_id.clone());
+        context
     }
 
     async fn require_capability(
@@ -3577,6 +3689,54 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.list_tools()).await
+    }
+
+    async fn todo_write(&self, req: HostTodoWriteRequest) -> crate::sdk::Result<ToolInvokeOutput> {
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.todo_write(req)).await
+    }
+
+    async fn enter_plan_mode(
+        &self,
+        req: HostEnterPlanModeRequest,
+    ) -> crate::sdk::Result<ToolInvokeOutput> {
+        self.require_capability(method::HOST_PLAN_ENTER, HostCapability::PlanRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.enter_plan_mode(req)).await
+    }
+
+    async fn exit_plan_mode(
+        &self,
+        req: HostExitPlanModeRequest,
+    ) -> crate::sdk::Result<ToolInvokeOutput> {
+        self.require_capability(method::HOST_PLAN_EXIT, HostCapability::PlanRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.exit_plan_mode(req)).await
+    }
+
+    async fn enter_worktree(
+        &self,
+        req: HostEnterWorktreeRequest,
+    ) -> crate::sdk::Result<ToolInvokeOutput> {
+        self.require_capability(
+            method::HOST_WORKTREE_ENTER,
+            HostCapability::WorktreeRegistry,
+        )
+        .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.enter_worktree(req)).await
+    }
+
+    async fn exit_worktree(
+        &self,
+        req: HostExitWorktreeRequest,
+    ) -> crate::sdk::Result<ToolInvokeOutput> {
+        self.require_capability(method::HOST_WORKTREE_EXIT, HostCapability::WorktreeRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.exit_worktree(req)).await
     }
 
     async fn execute_builtin_tool(

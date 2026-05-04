@@ -10,17 +10,19 @@ use crate::event::Scope;
 use async_trait::async_trait;
 
 use crate::message::{
-    AskUserToolInput, MonitorStatus, MonitorStream, TaskSubagentType, UserInputOption,
-    UserInputQuestion,
+    AskUserToolInput, BuiltinToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
+    ExitPlanModeToolInput, ExitWorktreeToolInput, MonitorStatus, MonitorStream, TaskSubagentType,
+    TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, UserInputOption, UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostAgentDescriptor,
     HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostCallbackContext, HostClient, HostCommandDescriptor,
     HostCommandListResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
-    HostCommandRemoveResponse, HostLspDiagnostic, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostCommandRemoveResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
+    HostExitPlanModeRequest, HostExitWorktreeRequest, HostLspDiagnostic,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostMcpServerSpec, HostPlanEntry, HostPlanGetRequest,
     HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
@@ -29,10 +31,10 @@ use crate::plugin::sdk::host_api::{
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
     HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
     HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
-    current_host_callback_context,
+    HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostWorktreeEntry,
+    HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -41,6 +43,7 @@ use crate::plugin::{
 use crate::plugins::storage::{PluginSecretStore, PluginStorage, PluginStorageError};
 use crate::runtime::AgenaRuntime;
 use crate::tool::{EntrySource, MonitorError, MonitorReadParams, MonitorStartParams};
+use crate::{entry::BuiltinExecutionContext, plugins::bundled::builtin::builtin_to_invoke_output};
 
 /// Build a `HostClient` impl for a runtime; use [`NoopHostClient`] when no
 /// runtime is available (e.g. before bootstrap completes).
@@ -313,6 +316,41 @@ fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInput, PluginEr
     })
 }
 
+fn todo_item_from_host(item: HostTodoItem) -> TodoItem {
+    TodoItem {
+        content: item.content,
+        status: match item.status {
+            HostTodoStatus::Pending => TodoStatus::Pending,
+            HostTodoStatus::InProgress => TodoStatus::InProgress,
+            HostTodoStatus::Completed => TodoStatus::Completed,
+            HostTodoStatus::Cancelled => TodoStatus::Cancelled,
+        },
+        priority: match item.priority {
+            HostTodoPriority::High => TodoPriority::High,
+            HostTodoPriority::Medium => TodoPriority::Medium,
+            HostTodoPriority::Low => TodoPriority::Low,
+        },
+    }
+}
+
+fn workflow_builtin_output(
+    executor: &crate::tool::ToolExecutor,
+    input: BuiltinToolInput,
+    session_id: Option<i64>,
+    call_id: Option<i64>,
+) -> Result<ToolInvokeOutput, PluginError> {
+    let execution = crate::entry::orchestrator::execute_builtin(
+        &executor,
+        &input,
+        BuiltinExecutionContext {
+            session_id,
+            call_id,
+        },
+    )
+    .map_err(|err| PluginError::new(err.to_string()))?;
+    Ok(builtin_to_invoke_output(execution))
+}
+
 #[async_trait]
 impl HostClient for RuntimeHostClient {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
@@ -553,6 +591,81 @@ impl HostClient for RuntimeHostClient {
             .into_iter()
             .map(render_tool_descriptor)
             .collect())
+    }
+
+    async fn todo_write(&self, req: HostTodoWriteRequest) -> Result<ToolInvokeOutput, PluginError> {
+        let executor = self.tool_executor()?;
+        let context = self.callback_context()?;
+        workflow_builtin_output(
+            &executor,
+            BuiltinToolInput::TodoWrite(TodoWriteToolInput {
+                items: req.items.into_iter().map(todo_item_from_host).collect(),
+            }),
+            context.session_id.filter(|id| *id >= 0),
+            context.call_id.filter(|id| *id >= 0),
+        )
+    }
+
+    async fn enter_plan_mode(
+        &self,
+        _req: HostEnterPlanModeRequest,
+    ) -> Result<ToolInvokeOutput, PluginError> {
+        let executor = self.tool_executor()?;
+        let context = self.callback_context()?;
+        workflow_builtin_output(
+            &executor,
+            BuiltinToolInput::EnterPlanMode(EnterPlanModeToolInput::default()),
+            context.session_id.filter(|id| *id >= 0),
+            context.call_id.filter(|id| *id >= 0),
+        )
+    }
+
+    async fn exit_plan_mode(
+        &self,
+        _req: HostExitPlanModeRequest,
+    ) -> Result<ToolInvokeOutput, PluginError> {
+        let executor = self.tool_executor()?;
+        let context = self.callback_context()?;
+        workflow_builtin_output(
+            &executor,
+            BuiltinToolInput::ExitPlanMode(ExitPlanModeToolInput::default()),
+            context.session_id.filter(|id| *id >= 0),
+            context.call_id.filter(|id| *id >= 0),
+        )
+    }
+
+    async fn enter_worktree(
+        &self,
+        req: HostEnterWorktreeRequest,
+    ) -> Result<ToolInvokeOutput, PluginError> {
+        let executor = self.tool_executor()?;
+        let context = self.callback_context()?;
+        workflow_builtin_output(
+            &executor,
+            BuiltinToolInput::EnterWorktree(EnterWorktreeToolInput {
+                name: req.name,
+                path: req.path,
+            }),
+            context.session_id.filter(|id| *id >= 0),
+            context.call_id.filter(|id| *id >= 0),
+        )
+    }
+
+    async fn exit_worktree(
+        &self,
+        req: HostExitWorktreeRequest,
+    ) -> Result<ToolInvokeOutput, PluginError> {
+        let executor = self.tool_executor()?;
+        let context = self.callback_context()?;
+        workflow_builtin_output(
+            &executor,
+            BuiltinToolInput::ExitWorktree(ExitWorktreeToolInput {
+                action: req.action,
+                discard_changes: req.discard_changes,
+            }),
+            context.session_id.filter(|id| *id >= 0),
+            context.call_id.filter(|id| *id >= 0),
+        )
     }
 
     async fn execute_builtin_tool(

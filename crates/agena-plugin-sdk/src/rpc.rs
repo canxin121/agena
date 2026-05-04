@@ -165,6 +165,11 @@ pub mod method {
     pub const HOST_ASK_USER: &str = "host/ask_user";
     pub const HOST_SUBTASK_SPAWN: &str = "host/subtask.spawn";
     pub const HOST_TOOL_LIST: &str = "host/tool.list";
+    pub const HOST_TODO_WRITE: &str = "host/todo.write";
+    pub const HOST_PLAN_ENTER: &str = "host/plan.enter";
+    pub const HOST_PLAN_EXIT: &str = "host/plan.exit";
+    pub const HOST_WORKTREE_ENTER: &str = "host/worktree.enter";
+    pub const HOST_WORKTREE_EXIT: &str = "host/worktree.exit";
     pub const HOST_BUILTIN_EXECUTE: &str = "host/builtin.execute";
     pub const HOST_SKILL_GET: &str = "host/skill.get";
     pub const HOST_MONITOR_START: &str = "host/monitor.start";

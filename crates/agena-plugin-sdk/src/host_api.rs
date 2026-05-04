@@ -58,6 +58,31 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Replace the session todo list with a short execution plan.
+    async fn todo_write(&self, _req: HostTodoWriteRequest) -> Result<ToolInvokeOutput> {
+        Err(unavailable())
+    }
+
+    /// Enter plan mode for the current session.
+    async fn enter_plan_mode(&self, _req: HostEnterPlanModeRequest) -> Result<ToolInvokeOutput> {
+        Err(unavailable())
+    }
+
+    /// Exit plan mode for the current session.
+    async fn exit_plan_mode(&self, _req: HostExitPlanModeRequest) -> Result<ToolInvokeOutput> {
+        Err(unavailable())
+    }
+
+    /// Enter a git worktree for the current session.
+    async fn enter_worktree(&self, _req: HostEnterWorktreeRequest) -> Result<ToolInvokeOutput> {
+        Err(unavailable())
+    }
+
+    /// Exit the current session's git worktree.
+    async fn exit_worktree(&self, _req: HostExitWorktreeRequest) -> Result<ToolInvokeOutput> {
+        Err(unavailable())
+    }
+
     /// Execute a host-owned built-in adapter. This is reserved for the in-process
     /// built-ins plugin and should not be exposed to arbitrary plugins.
     async fn execute_builtin_tool(&self, _req: BuiltinToolRequest) -> Result<ToolInvokeOutput> {
@@ -469,6 +494,57 @@ pub struct BuiltinToolRequest {
     pub tool_name: String,
     #[serde(default)]
     pub input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostTodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostTodoPriority {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostTodoItem {
+    pub content: String,
+    pub status: HostTodoStatus,
+    pub priority: HostTodoPriority,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostTodoWriteRequest {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<HostTodoItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostEnterPlanModeRequest {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostExitPlanModeRequest {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostEnterWorktreeRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostExitWorktreeRequest {
+    pub action: String,
+    #[serde(default)]
+    pub discard_changes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -13,6 +13,7 @@ impl Plugin for EchoPlugin {
             .hooks(
                 HookSubscription::INIT
                     | HookSubscription::TOOL_INVOKE
+                    | HookSubscription::TOOL_INVOKE_STREAM
                     | HookSubscription::SHELL_ENV
                     | HookSubscription::CHAT_PARAMS,
             )
@@ -21,7 +22,8 @@ impl Plugin for EchoPlugin {
                     "echo",
                     json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}),
                 )
-                .description("Echo via stdio."),
+                .description("Echo via stdio.")
+                .streaming(EntryStreamingMode::Streaming),
             )
             .build()
     }
@@ -36,6 +38,29 @@ impl Plugin for EchoPlugin {
         Ok(ToolInvokeOutput::text(format!("stdio-echo: {text}")))
     }
 
+    async fn tool_invoke_stream(
+        &self,
+        input: ToolInvokeInput,
+        sink: ToolStreamSink,
+    ) -> Result<ToolStreamEnd> {
+        let text = input
+            .input
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        sink.text("stdio-").await;
+        sink.text(format!("echo: {text}")).await;
+        Ok(ToolStreamEnd {
+            stream_id: sink.stream_id().to_string(),
+            title: String::new(),
+            output_text: format!("stdio-echo: {text}"),
+            payload: None,
+            metadata: Default::default(),
+            attachments: Vec::new(),
+        })
+    }
+
     async fn shell_env(&self, _: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
         Ok(Some(ShellEnvPatch::set("AGENA_STDIO_PLUGIN", "1")))
     }
@@ -45,7 +70,7 @@ impl Plugin for EchoPlugin {
         _: ChatParamsInput,
     ) -> Result<Option<ChatParamsPatch>> {
         Ok(Some(ChatParamsPatch {
-            params: json!({ "stop": ["\nHuman:"] }),
+            params: Some(json!({ "stop": ["\nHuman:"] })),
         }))
     }
 }

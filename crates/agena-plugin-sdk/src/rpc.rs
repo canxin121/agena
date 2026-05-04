@@ -129,6 +129,8 @@ pub mod method {
     pub const TOOL_STREAM_CHUNK: &str = "tool.stream.chunk";
     /// Notification: plugin → host, terminal frame in a stream.
     pub const TOOL_STREAM_END: &str = "tool.stream.end";
+    /// Notification: plugin → host, stream finished with an error.
+    pub const TOOL_STREAM_ERROR: &str = "tool.stream.error";
     pub const HOOK_CHAT_MESSAGE: &str = "hooks/chat.message";
     pub const HOOK_CHAT_PARAMS: &str = "hooks/chat.params";
     pub const HOOK_CHAT_HEADERS: &str = "hooks/chat.headers";

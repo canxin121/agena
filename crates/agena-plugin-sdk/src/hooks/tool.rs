@@ -211,3 +211,10 @@ pub struct ToolStreamEnd {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentItem>,
 }
+
+/// Terminal error marker for `hooks/tool.invoke.stream`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolStreamError {
+    pub stream_id: String,
+    pub error: crate::PluginError,
+}

@@ -25,7 +25,7 @@ fn stdio_binary_path() -> Option<PathBuf> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn stdio_echo_plugin_loads_and_invokes() {
+async fn stdio_echo_plugin_loads_invokes_and_streams() {
     let Some(path) = stdio_binary_path() else {
         eprintln!("skip: examples/echo_plugin_stdio has not been built");
         return;
@@ -74,6 +74,36 @@ async fn stdio_echo_plugin_loads_and_invokes() {
         )
         .expect("invoke");
     assert_eq!(out.output_text, "stdio-echo: hi");
+
+    let mut stream = host
+        .invoke_tool_stream(
+            &resolved.handle,
+            ToolInvokeInput {
+                tool_name: "echo".into(),
+                session_id: 7,
+                call_id: 12,
+                workspace_root: ".".into(),
+                input: json!({ "text": "stream" }),
+            },
+        )
+        .await
+        .expect("stream invoke");
+    let mut deltas = Vec::new();
+    while let Some(chunk) = stream.chunks.recv().await {
+        if let Some(delta) = chunk.text_delta {
+            deltas.push(delta);
+        }
+    }
+    assert_eq!(
+        deltas,
+        vec!["stdio-".to_string(), "echo: stream".to_string()]
+    );
+    let end = stream
+        .end
+        .await
+        .expect("stream end channel")
+        .expect("stream result");
+    assert_eq!(end.output_text, "stdio-echo: stream");
 
     // shell_env round-trip via stdio
     let patch = host

@@ -16,13 +16,13 @@ use agena::{
         UserInputRequest,
     },
     model::ModelRef,
-    permission::{PermissionAction, PermissionReplyKind, PermissionRequest},
+    permission::{PermissionAction, PermissionMode, PermissionReplyKind, PermissionRequest},
     provider::ProviderModel,
     role::Role,
 };
 use agena_http_api::{
-    MessageResource, PaginatedResponse, ProviderSummaryResource, SessionExecutionResource,
-    SessionResource, SessionRunOptionsRequest,
+    MessageResource, PaginatedResponse, PermissionRuleResource, ProviderSummaryResource,
+    SessionExecutionResource, SessionResource, SessionRunOptionsRequest,
 };
 use agena_skills::Skill;
 use anyhow::Result;
@@ -321,6 +321,7 @@ enum UiAction {
     EditComposerExternally,
     AttachClipboardImage,
     ExportTranscript { path: Option<PathBuf> },
+    OpenPath { path: PathBuf },
     PageTranscript,
 }
 
@@ -332,6 +333,7 @@ enum Overlay {
     SessionSearch(LineInputOverlay),
     TranscriptSearch(LineInputOverlay),
     SessionRename(LineInputOverlay),
+    PermissionRuleEdit(PermissionRuleEditOverlay),
     FileAttach(FileAttachOverlay),
     Permission(PermissionOverlay),
     UserInputReply(UserInputOverlay),
@@ -346,6 +348,15 @@ struct LineInputOverlay {
     title: String,
     prompt: String,
     input: Editor,
+}
+
+#[derive(Debug, Clone)]
+struct PermissionRuleEditOverlay {
+    rule_id: Option<i64>,
+    title: String,
+    prompt: String,
+    input: Editor,
+    return_query: String,
 }
 
 #[derive(Debug, Clone)]
@@ -376,6 +387,15 @@ enum ConfirmAction {
         session_id: i64,
         message_id: i64,
         target: String,
+    },
+    DeletePermissionRule {
+        rule_id: i64,
+        action_key: String,
+        return_query: String,
+    },
+    ExitWorktree {
+        session_id: i64,
+        discard_changes: bool,
     },
 }
 
@@ -460,6 +480,9 @@ enum PickerValue {
     Model(ModelRef),
     Session(i64),
     Message(i64),
+    PermissionRuleCreate,
+    PermissionRule(PermissionRuleResource),
+    Inspector,
 }
 
 #[derive(Debug, Clone)]
@@ -497,6 +520,8 @@ enum PickerKind {
     ChildSessions {
         parent_session_id: i64,
     },
+    PermissionRules,
+    Inspector,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1141,6 +1166,7 @@ impl App {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
             }
             Overlay::SessionRename(dialog) => self.handle_session_rename_overlay_key(key, dialog),
+            Overlay::PermissionRuleEdit(dialog) => self.handle_permission_rule_edit_overlay_key(key, dialog),
             Overlay::FileAttach(dialog) => self.handle_file_attach_overlay_key(key, dialog),
             Overlay::Permission(dialog) => self.handle_permission_overlay_key(key, dialog),
             Overlay::UserInputReply(dialog) => self.handle_user_input_overlay_key(key, dialog),
@@ -1317,6 +1343,64 @@ impl App {
         }
     }
 
+    fn handle_permission_rule_edit_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut PermissionRuleEditOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Enter => {
+                dialog.input.flush_all_pending_input();
+                let (action_key, mode) = match parse_permission_rule_input(dialog.input.text()) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        self.flash_warning(error);
+                        return false;
+                    }
+                };
+
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        let result = match dialog.rule_id {
+                            Some(rule_id) => handle.block_on(self.backend.replace_permission_rule(
+                                rule_id,
+                                action_key,
+                                mode,
+                            )),
+                            None => handle.block_on(self.backend.create_permission_rule(
+                                action_key,
+                                mode,
+                            )),
+                        };
+                        match result {
+                            Ok(rule) => {
+                                self.flash_success(self.i18n.text_args(
+                                    "flash-permission-rule-saved",
+                                    &crate::fl_args!("name" => rule.action_key.clone()),
+                                ));
+                                self.open_permission_rule_picker(dialog.return_query.as_str());
+                                true
+                            }
+                            Err(error) => {
+                                self.flash_error(error.to_string());
+                                false
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.flash_error(error.to_string());
+                        false
+                    }
+                }
+            }
+            _ => {
+                dialog.input.handle_line_input_key(key);
+                false
+            }
+        }
+    }
+
     fn handle_file_attach_overlay_key(
         &mut self,
         key: KeyEvent,
@@ -1384,10 +1468,38 @@ impl App {
                 }
                 false
             }
+            KeyCode::Char('n') if matches!(dialog.kind, PickerKind::PermissionRules) => {
+                self.open_permission_rule_editor(None, dialog.input.text());
+                true
+            }
+            KeyCode::Char('d') if matches!(dialog.kind, PickerKind::PermissionRules) => {
+                let Some(item) = dialog.items.get(dialog.selected).cloned() else {
+                    return false;
+                };
+                if let PickerValue::PermissionRule(rule) = item.value {
+                    self.open_delete_permission_rule_confirm(&rule, dialog.input.text());
+                    true
+                } else {
+                    false
+                }
+            }
             KeyCode::Enter => {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
+                if matches!(dialog.kind, PickerKind::PermissionRules) {
+                    match item.value {
+                        PickerValue::PermissionRuleCreate => {
+                            self.open_permission_rule_editor(None, dialog.input.text());
+                            return true;
+                        }
+                        PickerValue::PermissionRule(rule) => {
+                            self.open_permission_rule_editor(Some(&rule), dialog.input.text());
+                            return true;
+                        }
+                        _ => {}
+                    }
+                }
                 self.handle_picker_selection(dialog.kind.clone(), item);
                 true
             }
@@ -1535,6 +1647,10 @@ impl App {
                 Overlay::SessionSearch(dialog)
                 | Overlay::TranscriptSearch(dialog)
                 | Overlay::SessionRename(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                }
+                Overlay::PermissionRuleEdit(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                 }
@@ -2154,18 +2270,35 @@ impl App {
         }
     }
 
+    fn handle_session_execution_updated(
+        &mut self,
+        session_id: i64,
+        execution: SessionExecutionResource,
+        refresh: bool,
+    ) {
+        self.transcript.submitting = false;
+        self.submitting_session_ids.remove(&session_id);
+        if self.transcript.session_id == Some(session_id) {
+            self.transcript.apply_execution(execution);
+        }
+        if refresh {
+            self.request_refresh(session_id, true);
+        }
+        self.request_sessions(false);
+    }
+
     fn handle_session_continued(
         &mut self,
         session_id: i64,
         result: UiResult<SessionExecutionResource>,
     ) {
-        self.transcript.submitting = false;
         match result {
-            Ok(execution) => {
-                self.transcript.apply_execution(execution);
-                self.request_refresh(session_id, true);
+            Ok(execution) => self.handle_session_execution_updated(session_id, execution, true),
+            Err(error) => {
+                self.transcript.submitting = false;
+                self.submitting_session_ids.remove(&session_id);
+                self.flash_error(error);
             }
-            Err(error) => self.flash_error(error),
         }
     }
 
@@ -2211,17 +2344,19 @@ impl App {
         label: String,
         result: UiResult<SessionExecutionResource>,
     ) {
-        self.transcript.submitting = false;
         match result {
             Ok(execution) => {
-                self.transcript.apply_execution(execution);
-                self.request_refresh(session_id, true);
+                self.handle_session_execution_updated(session_id, execution, true);
                 self.flash_success(self.i18n.text_args(
                     "flash-permission-reply-sent",
                     &crate::fl_args!("label" => label),
                 ));
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => {
+                self.transcript.submitting = false;
+                self.submitting_session_ids.remove(&session_id);
+                self.flash_error(error);
+            }
         }
     }
 
@@ -2230,14 +2365,16 @@ impl App {
         session_id: i64,
         result: UiResult<SessionExecutionResource>,
     ) {
-        self.transcript.submitting = false;
         match result {
             Ok(execution) => {
-                self.transcript.apply_execution(execution);
-                self.request_refresh(session_id, true);
+                self.handle_session_execution_updated(session_id, execution, true);
                 self.flash_success(ui_text::t(&self.i18n, "flash-user-input-reply-sent"));
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => {
+                self.transcript.submitting = false;
+                self.submitting_session_ids.remove(&session_id);
+                self.flash_error(error);
+            }
         }
     }
 
@@ -2518,18 +2655,11 @@ impl App {
         target: String,
         result: UiResult<SessionExecutionResource>,
     ) {
-        if self.transcript.session_id == Some(session_id) {
-            self.transcript.submitting = false;
-        }
-
         match result {
             Ok(execution) => {
-                if self.transcript.session_id == Some(session_id) {
-                    self.transcript.apply_execution(execution);
-                }
+                self.handle_session_execution_updated(session_id, execution, false);
                 self.request_session_state(session_id);
                 self.request_messages(session_id, MessageLoadMode::Replace);
-                self.request_sessions(false);
                 self.request_lineage(session_id);
                 self.focus = Focus::Transcript;
                 self.flash_success(self.i18n.text_args(
@@ -2537,7 +2667,13 @@ impl App {
                     &crate::fl_args!("target" => target),
                 ));
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => {
+                if self.transcript.session_id == Some(session_id) {
+                    self.transcript.submitting = false;
+                }
+                self.submitting_session_ids.remove(&session_id);
+                self.flash_error(error);
+            }
         }
     }
 
@@ -3191,7 +3327,7 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        if self.transcript.submitting {
+        if self.session_is_busy(session_id) {
             self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
             return;
         }
@@ -3319,6 +3455,127 @@ impl App {
         self.overlay = Some(Overlay::PluginInspector(dialog));
     }
 
+    fn open_inspector_picker(&mut self, title: String, prompt: String, query: &str, rows: Vec<crate::backend::InspectorRow>) {
+        let mut overlay = PickerOverlay {
+            title,
+            prompt,
+            empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
+            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
+            input: Editor::from_text(query.to_string()),
+            all_items: rows
+                .into_iter()
+                .map(|row| PickerItem {
+                    label: row.label,
+                    detail: row.detail,
+                    value: PickerValue::Inspector,
+                })
+                .collect(),
+            items: Vec::new(),
+            selected: 0,
+            loading: false,
+            kind: PickerKind::Inspector,
+        };
+        Self::refresh_picker_overlay(&mut overlay);
+        self.overlay = Some(Overlay::Picker(overlay));
+    }
+
+    fn open_permission_rule_picker(&mut self, query: &str) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => match handle.block_on(self.backend.list_permission_rules()) {
+                Ok(rules) => {
+                    let mut all_items = vec![PickerItem {
+                        label: ui_text::t(&self.i18n, "permission-rule-create-label"),
+                        detail: ui_text::t(&self.i18n, "permission-rule-create-detail"),
+                        value: PickerValue::PermissionRuleCreate,
+                    }];
+                    all_items.extend(rules.into_iter().map(|rule| PickerItem {
+                        label: rule.action_key.clone(),
+                        detail: format!("mode={:?} updated={}", rule.mode, rule.updated_at),
+                        value: PickerValue::PermissionRule(rule),
+                    }));
+                    let mut overlay = PickerOverlay {
+                        title: ui_text::t(&self.i18n, "overlay-permission-rules-title"),
+                        prompt: ui_text::t(&self.i18n, "overlay-permission-rules-prompt"),
+                        empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
+                        footer: ui_text::t(&self.i18n, "overlay-permission-rules-footer"),
+                        input: Editor::from_text(query.to_string()),
+                        all_items,
+                        items: Vec::new(),
+                        selected: 0,
+                        loading: false,
+                        kind: PickerKind::PermissionRules,
+                    };
+                    Self::refresh_picker_overlay(&mut overlay);
+                    self.overlay = Some(Overlay::Picker(overlay));
+                }
+                Err(error) => self.flash_error(error.to_string()),
+            },
+            Err(error) => self.flash_error(error.to_string()),
+        }
+    }
+
+    fn open_permission_rule_editor(
+        &mut self,
+        rule: Option<&PermissionRuleResource>,
+        return_query: &str,
+    ) {
+        let (rule_id, title, input) = match rule {
+            Some(rule) => (
+                Some(rule.id),
+                ui_text::t(&self.i18n, "overlay-permission-rule-edit-title"),
+                Editor::from_text(format!("{} {}", rule.action_key, permission_mode_name(rule.mode))),
+            ),
+            None => (
+                None,
+                ui_text::t(&self.i18n, "overlay-permission-rule-create-title"),
+                Editor::default(),
+            ),
+        };
+        self.overlay = Some(Overlay::PermissionRuleEdit(PermissionRuleEditOverlay {
+            rule_id,
+            title,
+            prompt: ui_text::t(&self.i18n, "overlay-permission-rule-prompt"),
+            input,
+            return_query: return_query.to_string(),
+        }));
+    }
+
+    fn open_delete_permission_rule_confirm(
+        &mut self,
+        rule: &PermissionRuleResource,
+        return_query: &str,
+    ) {
+        self.overlay = Some(Overlay::Confirm(ConfirmOverlay {
+            title: ui_text::t(&self.i18n, "overlay-permission-rule-delete-title"),
+            body_lines: vec![self.i18n.text_args(
+                "overlay-permission-rule-delete-body",
+                &crate::fl_args!("name" => rule.action_key.clone()),
+            )],
+            footer: ui_text::t(&self.i18n, "overlay-confirm-footer"),
+            action: ConfirmAction::DeletePermissionRule {
+                rule_id: rule.id,
+                action_key: rule.action_key.clone(),
+                return_query: return_query.to_string(),
+            },
+        }));
+    }
+
+    fn open_worktree_remove_confirm(&mut self, session_id: i64, discard_changes: bool) {
+        let mut body_lines = vec![ui_text::t(&self.i18n, "overlay-worktree-remove-body")];
+        if discard_changes {
+            body_lines.push(ui_text::t(&self.i18n, "overlay-worktree-remove-force"));
+        }
+        self.overlay = Some(Overlay::Confirm(ConfirmOverlay {
+            title: ui_text::t(&self.i18n, "overlay-worktree-remove-title"),
+            body_lines,
+            footer: ui_text::t(&self.i18n, "overlay-confirm-footer"),
+            action: ConfirmAction::ExitWorktree {
+                session_id,
+                discard_changes,
+            },
+        }));
+    }
+
     fn open_command_palette(&mut self) {
         let mut all_items = commands::COMMANDS
             .iter()
@@ -3398,7 +3655,7 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        if self.transcript.submitting {
+        if self.session_is_busy(session_id) {
             self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
             return;
         }
@@ -3746,6 +4003,13 @@ impl App {
                 );
                 self.focus = Focus::Transcript;
             }
+            (PickerKind::PermissionRules, PickerValue::PermissionRuleCreate) => {
+                self.open_permission_rule_editor(None, "");
+            }
+            (PickerKind::PermissionRules, PickerValue::PermissionRule(rule)) => {
+                self.open_permission_rule_editor(Some(&rule), "");
+            }
+            (PickerKind::Inspector, PickerValue::Inspector) => {}
             _ => {}
         }
     }
@@ -3815,6 +4079,11 @@ impl App {
                 .session_id
                 .or_else(|| self.sessions.current_selected_id())
         }
+    }
+
+    fn session_is_busy(&self, session_id: i64) -> bool {
+        self.submitting_session_ids.contains(&session_id)
+            || (self.transcript.session_id == Some(session_id) && self.transcript.submitting)
     }
 
     fn current_or_selected_session_title(&self) -> Option<String> {
@@ -3895,6 +4164,15 @@ impl App {
             parts.push(format!("#{session_id}"));
         }
 
+        if let Some(theme) = self.plugin_theme.as_ref() {
+            parts.push(format!("theme={}", theme.id));
+        }
+
+        let plugin_segments = self.backend.plugin_statusline_segments();
+        if !plugin_segments.is_empty() {
+            parts.push(format!("statusline+{}", plugin_segments.len()));
+        }
+
         if let Some(session) = self.current_or_selected_session_summary() {
             if let Some(parent_id) = session.parent_id {
                 parts.push(self.i18n.text_args(
@@ -3947,6 +4225,36 @@ impl App {
                 message_id,
                 target,
             } => self.request_session_rewind(session_id, message_id, target),
+            ConfirmAction::DeletePermissionRule {
+                rule_id,
+                action_key,
+                return_query,
+            } => match tokio::runtime::Handle::try_current() {
+                Ok(handle) => match handle.block_on(self.backend.delete_permission_rule(rule_id)) {
+                    Ok(_) => {
+                        self.flash_success(self.i18n.text_args(
+                            "flash-permission-rule-deleted",
+                            &crate::fl_args!("name" => action_key),
+                        ));
+                        self.open_permission_rule_picker(return_query.as_str());
+                    }
+                    Err(error) => self.flash_error(error.to_string()),
+                },
+                Err(error) => self.flash_error(error.to_string()),
+            },
+            ConfirmAction::ExitWorktree {
+                session_id,
+                discard_changes,
+            } => match self
+                .backend
+                .exit_worktree(session_id, "remove".to_string(), discard_changes)
+            {
+                Ok(agena::message::BuiltinToolOutput::ExitWorktree { action, path }) => {
+                    self.flash_success(format!("worktree {action}: {path}"));
+                }
+                Ok(_) => self.flash_success("worktree exited".to_string()),
+                Err(error) => self.flash_error(error.to_string()),
+            },
         }
     }
 
@@ -3988,7 +4296,20 @@ impl App {
             CommandId::Rename => self.handle_rename_command(spec, args),
             CommandId::Timeline => self.handle_timeline_command(spec, args),
             CommandId::Plugins => self.handle_plugins_command(spec, args),
+            CommandId::Mcp => self.handle_mcp_command(args),
+            CommandId::Lsp => self.handle_lsp_command(args),
+            CommandId::Skills => self.handle_skills_command(args),
+            CommandId::Runtime => self.handle_runtime_command(args),
+            CommandId::Cost => self.handle_cost_command(),
+            CommandId::Review => self.handle_review_command(args),
+            CommandId::Permissions => self.handle_permissions_command(args),
+            CommandId::Config => self.handle_config_command(args),
+            CommandId::Worktree => self.handle_worktree_command(args),
+            CommandId::Git => self.handle_git_command(args),
+            CommandId::Commit => self.handle_commit_command(args),
+            CommandId::Pr => self.handle_pr_command(args),
             CommandId::Export => self.handle_export_command(args),
+            CommandId::Memory => self.handle_memory_command(spec, args),
             CommandId::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
             CommandId::Continue => self.continue_current_session(),
             CommandId::UserInput => self.open_user_input_overlay(),
@@ -4197,6 +4518,239 @@ impl App {
         self.open_plugin_inspector_overlay(args.trim());
     }
 
+    fn handle_mcp_command(&mut self, args: &str) {
+        self.open_inspector_picker(
+            "MCP".to_string(),
+            "Inspect configured MCP servers".to_string(),
+            args.trim(),
+            self.backend.mcp_inspector_rows(),
+        );
+    }
+
+    fn handle_lsp_command(&mut self, args: &str) {
+        self.open_inspector_picker(
+            "LSP".to_string(),
+            "Inspect configured LSP servers".to_string(),
+            args.trim(),
+            self.backend.lsp_inspector_rows(),
+        );
+    }
+
+    fn handle_skills_command(&mut self, args: &str) {
+        self.open_inspector_picker(
+            "Skills".to_string(),
+            "Inspect discovered skills".to_string(),
+            args.trim(),
+            self.backend.skills_inspector_rows(),
+        );
+    }
+
+    fn handle_runtime_command(&mut self, args: &str) {
+        self.open_inspector_picker(
+            "Runtime".to_string(),
+            "Inspect runtime summary".to_string(),
+            args.trim(),
+            self.backend.runtime_inspector_rows(),
+        );
+    }
+
+    fn handle_cost_command(&mut self) {
+        let Some(session_id) = self.current_or_selected_session_id() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => match handle.block_on(self.backend.session_cost_inspector_rows(session_id)) {
+                Ok(rows) => self.open_inspector_picker(
+                    format!("Cost [#{}]", session_id),
+                    "Inspect session usage and cost".to_string(),
+                    "",
+                    rows,
+                ),
+                Err(error) => self.flash_error(error.to_string()),
+            },
+            Err(error) => self.flash_error(error.to_string()),
+        }
+    }
+
+    fn handle_review_command(&mut self, args: &str) {
+        let Some(command) = self
+            .user_commands
+            .iter()
+            .find(|command| command.frontmatter.name == "review")
+            .cloned()
+        else {
+            self.flash_error("review command is not available".to_string());
+            return;
+        };
+        self.execute_user_command(command, args);
+    }
+
+    fn handle_permissions_command(&mut self, args: &str) {
+        self.open_permission_rule_picker(args.trim());
+    }
+
+    fn handle_config_command(&mut self, args: &str) {
+        self.open_inspector_picker(
+            "Config".to_string(),
+            "Inspect resolved config".to_string(),
+            args.trim(),
+            self.backend.config_inspector_rows(),
+        );
+    }
+
+    fn handle_worktree_command(&mut self, args: &str) {
+        let trimmed = args.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("list") {
+            self.open_inspector_picker(
+                "Worktree".to_string(),
+                "Inspect active and managed worktrees".to_string(),
+                "",
+                self.backend.worktree_inspector_rows(),
+            );
+            return;
+        }
+
+        let Some(session_id) = self.current_or_selected_session_id() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        let (action, rest) = split_command_args_once(trimmed).unwrap_or((trimmed, ""));
+        match action.to_ascii_lowercase().as_str() {
+            "enter" => {
+                let argument = rest.trim();
+                let result = if argument.is_empty() {
+                    self.backend.enter_worktree(session_id, None, None)
+                } else {
+                    self.backend
+                        .enter_worktree(session_id, Some(argument.to_string()), None)
+                };
+                match result {
+                    Ok(agena::message::BuiltinToolOutput::EnterWorktree { path, branch }) => {
+                        self.flash_success(format!("worktree ready: {path} ({branch})"));
+                    }
+                    Ok(_) => self.flash_success("worktree entered".to_string()),
+                    Err(error) => self.flash_error(error.to_string()),
+                }
+            }
+            "attach" => {
+                let path = rest.trim();
+                if path.is_empty() {
+                    self.flash_warning(self.i18n.text_args(
+                        "flash-command-usage",
+                        &crate::fl_args!("usage" => "/worktree attach <path>"),
+                    ));
+                    return;
+                }
+                match self
+                    .backend
+                    .enter_worktree(session_id, None, Some(path.to_string()))
+                {
+                    Ok(agena::message::BuiltinToolOutput::EnterWorktree { path, branch }) => {
+                        self.flash_success(format!("worktree attached: {path} ({branch})"));
+                    }
+                    Ok(_) => self.flash_success("worktree attached".to_string()),
+                    Err(error) => self.flash_error(error.to_string()),
+                }
+            }
+            "exit" | "leave" => {
+                let exit_args = rest.trim();
+                let (mode, extra) = split_command_args_once(exit_args).unwrap_or((exit_args, ""));
+                match mode.to_ascii_lowercase().as_str() {
+                    "" | "keep" => match self.backend.exit_worktree(session_id, "keep".to_string(), false) {
+                        Ok(agena::message::BuiltinToolOutput::ExitWorktree { action, path }) => {
+                            self.flash_success(format!("worktree {action}: {path}"));
+                        }
+                        Ok(_) => self.flash_success("worktree exited".to_string()),
+                        Err(error) => self.flash_error(error.to_string()),
+                    },
+                    "remove" => {
+                        let discard_changes =
+                            matches!(extra.trim().to_ascii_lowercase().as_str(), "force" | "discard");
+                        self.open_worktree_remove_confirm(session_id, discard_changes);
+                    }
+                    _ => {
+                        self.flash_warning(self.i18n.text_args(
+                            "flash-command-usage",
+                            &crate::fl_args!("usage" => "/worktree exit [keep|remove [force]]"),
+                        ));
+                        return;
+                    }
+                };
+            }
+            _ => self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => "/worktree [list|enter [name]|attach <path>|exit [keep|remove [force]]]"),
+            )),
+        }
+    }
+
+    fn handle_git_command(&mut self, args: &str) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => match handle.block_on(self.backend.git_inspector_rows()) {
+                Ok(rows) => self.open_inspector_picker(
+                    "Git".to_string(),
+                    "Inspect git branch, diff, and worktree status".to_string(),
+                    args.trim(),
+                    rows,
+                ),
+                Err(error) => self.flash_error(error.to_string()),
+            },
+            Err(error) => self.flash_error(error.to_string()),
+        }
+    }
+
+    fn handle_commit_command(&mut self, args: &str) {
+        let message = args.trim();
+        if message.is_empty() {
+            self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => "/commit <message>"),
+            ));
+            return;
+        }
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => match handle.block_on(self.backend.create_commit(message.to_string())) {
+                Ok((commit, summary)) => {
+                    self.flash_success(format!("commit created: {} {}", &commit[..commit.len().min(12)], summary));
+                }
+                Err(error) => self.flash_error(error.to_string()),
+            },
+            Err(error) => self.flash_error(error.to_string()),
+        }
+    }
+
+    fn handle_pr_command(&mut self, args: &str) {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => "/pr <title> [--body <text>] [--base <branch>] [--head <branch>]"),
+            ));
+            return;
+        }
+
+        let (title, body, base, head) = match parse_pr_command_args(trimmed) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                self.flash_warning(self.i18n.text_args(
+                    "flash-command-usage",
+                    &crate::fl_args!("usage" => "/pr <title> [--body <text>] [--base <branch>] [--head <branch>]"),
+                ));
+                return;
+            }
+        };
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => match handle.block_on(self.backend.create_pr(title, body, base, head)) {
+                Ok(url) => self.flash_success(format!("pull request created: {url}")),
+                Err(error) => self.flash_error(error.to_string()),
+            },
+            Err(error) => self.flash_error(error.to_string()),
+        }
+    }
+
     fn handle_export_command(&mut self, args: &str) {
         let requested_path = non_empty_owned(args.to_string()).map(|value| {
             self.backend
@@ -4205,6 +4759,50 @@ impl App {
         self.pending_ui_action = Some(UiAction::ExportTranscript {
             path: requested_path,
         });
+    }
+
+    fn handle_memory_command(&mut self, spec: &'static CommandSpec, args: &str) {
+        let trimmed = args.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("list") {
+            match self.backend.memory_index_path() {
+                Ok(path) => self.pending_ui_action = Some(UiAction::OpenPath { path }),
+                Err(error) => self.flash_error(error.to_string()),
+            }
+            return;
+        }
+
+        let (action, rest) = split_command_args_once(trimmed).unwrap_or((trimmed, ""));
+        let action = action.to_ascii_lowercase();
+        match action.as_str() {
+            "list" if rest.is_empty() => match self.backend.memory_index_path() {
+                Ok(path) => self.pending_ui_action = Some(UiAction::OpenPath { path }),
+                Err(error) => self.flash_error(error.to_string()),
+            },
+            "edit" | "open" => {
+                let result = if rest.is_empty() {
+                    self.backend.memory_index_path()
+                } else {
+                    self.backend.memory_entry_path(rest)
+                };
+                match result {
+                    Ok(path) => self.pending_ui_action = Some(UiAction::OpenPath { path }),
+                    Err(error) => self.flash_error(error.to_string()),
+                }
+            }
+            "forget" | "rm" | "remove" | "delete" if !rest.is_empty() => {
+                match self.backend.forget_memory(rest) {
+                    Ok(()) => self.flash_success(
+                        self.i18n
+                            .text_args("flash-memory-forgotten", &crate::fl_args!("name" => rest)),
+                    ),
+                    Err(error) => self.flash_error(error.to_string()),
+                }
+            }
+            _ => self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => spec.invocation()),
+            )),
+        }
     }
 
     fn handle_sessions_command(&mut self, spec: &'static CommandSpec, args: &str) {
@@ -4439,13 +5037,29 @@ impl App {
     }
 
     fn current_runtime_status_summary(&self) -> String {
-        let summary = self
+        let mut parts = vec![self
             .run_options
             .summary()
-            .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default"));
+            .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default"))];
+        parts.push(format!(
+            "queue_key={} submit_key={}",
+            self.keybindings.queue.len(),
+            self.keybindings.submit.len()
+        ));
+        parts.push(format!(
+            "statusline={}",
+            if self.backend.plugin_statusline_segments().is_empty() {
+                "default"
+            } else {
+                "plugin"
+            }
+        ));
+        if let Some(theme) = self.plugin_theme.as_ref() {
+            parts.push(format!("theme={}", theme.id));
+        }
         self.i18n.text_args(
             "flash-runtime-status",
-            &crate::fl_args!("summary" => summary),
+            &crate::fl_args!("summary" => parts.join(" | ")),
         )
     }
 
@@ -4494,6 +5108,9 @@ impl App {
                 Overlay::SessionSearch(dialog)
                 | Overlay::TranscriptSearch(dialog)
                 | Overlay::SessionRename(dialog) => {
+                    dialog.input.flush_pending_input_if_due(now);
+                }
+                Overlay::PermissionRuleEdit(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
                 }
                 Overlay::FileAttach(dialog) => dialog.input.flush_pending_input_if_due(now),
@@ -4872,6 +5489,7 @@ impl App {
             UiAction::ExportTranscript { path } => {
                 self.export_transcript_to_editor(terminal, path.as_deref())
             }
+            UiAction::OpenPath { path } => self.open_path_in_editor(terminal, path.as_path()),
             UiAction::PageTranscript => self.page_transcript(terminal),
         }
     }
@@ -4895,6 +5513,24 @@ impl App {
                 "flash-external-editor-failed",
                 &crate::fl_args!("error" => error.to_string()),
             )),
+        }
+        Ok(())
+    }
+
+    fn open_path_in_editor<B: RatatuiBackend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        path: &Path,
+    ) -> Result<()> {
+        terminal.flush()?;
+        terminal::suspend_stdio_terminal()?;
+        let result = open_path(path);
+        terminal::resume_terminal(terminal)?;
+        if let Err(error) = result {
+            self.flash_error(self.i18n.text_args(
+                "flash-external-editor-failed",
+                &crate::fl_args!("error" => error.to_string()),
+            ));
         }
         Ok(())
     }
@@ -5706,6 +6342,9 @@ impl App {
             | Overlay::SessionRename(dialog) => {
                 self.render_line_overlay(frame, area, dialog);
             }
+            Overlay::PermissionRuleEdit(dialog) => {
+                self.render_permission_rule_edit_overlay(frame, area, dialog);
+            }
             Overlay::FileAttach(dialog) => {
                 self.render_file_attach_overlay(frame, area, dialog);
             }
@@ -5763,6 +6402,20 @@ impl App {
             rows[1].x.saturating_add(view.cursor_x),
             rows[1].y.saturating_add(view.cursor_y),
         ));
+    }
+
+    fn render_permission_rule_edit_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &PermissionRuleEditOverlay,
+    ) {
+        let line = LineInputOverlay {
+            title: dialog.title.clone(),
+            prompt: dialog.prompt.clone(),
+            input: dialog.input.clone(),
+        };
+        self.render_line_overlay(frame, area, &line);
     }
 
     fn render_file_attach_overlay(
@@ -9990,6 +10643,84 @@ fn non_empty_owned(value: String) -> Option<String> {
     }
 }
 
+fn permission_mode_name(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Allow => "allow",
+        PermissionMode::Ask => "ask",
+        PermissionMode::Deny => "deny",
+    }
+}
+
+fn parse_permission_rule_input(input: &str) -> std::result::Result<(String, PermissionMode), String> {
+    let tokens = shlex::split(input).ok_or_else(|| "invalid shell-style arguments".to_string())?;
+    if tokens.len() != 2 {
+        return Err("expected: <action_key> <allow|ask|deny>".to_string());
+    }
+    let mode = match tokens[1].to_ascii_lowercase().as_str() {
+        "allow" => PermissionMode::Allow,
+        "ask" => PermissionMode::Ask,
+        "deny" => PermissionMode::Deny,
+        _ => return Err("permission mode must be allow, ask, or deny".to_string()),
+    };
+    Ok((tokens[0].clone(), mode))
+}
+
+fn parse_pr_command_args(
+    args: &str,
+) -> Result<(String, Option<String>, Option<String>, Option<String>)> {
+    let tokens = shlex::split(args).ok_or_else(|| anyhow::anyhow!("invalid shell-style arguments"))?;
+    let mut title_parts = Vec::new();
+    let mut body = None;
+    let mut base = None;
+    let mut head = None;
+    let mut index = 0;
+    let mut parsing_options = false;
+
+    while index < tokens.len() {
+        let token = tokens[index].as_str();
+        match token {
+            "--body" => {
+                parsing_options = true;
+                index += 1;
+                let value = tokens
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("missing value for --body"))?;
+                body = Some(value.clone());
+            }
+            "--base" => {
+                parsing_options = true;
+                index += 1;
+                let value = tokens
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("missing value for --base"))?;
+                base = Some(value.clone());
+            }
+            "--head" => {
+                parsing_options = true;
+                index += 1;
+                let value = tokens
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("missing value for --head"))?;
+                head = Some(value.clone());
+            }
+            _ if token.starts_with("--") => {
+                return Err(anyhow::anyhow!("unknown /pr option: {token}"));
+            }
+            _ if parsing_options => {
+                return Err(anyhow::anyhow!("unexpected positional argument: {token}"));
+            }
+            _ => title_parts.push(tokens[index].clone()),
+        }
+        index += 1;
+    }
+
+    if title_parts.is_empty() {
+        return Err(anyhow::anyhow!("pull request title is required"));
+    }
+
+    Ok((title_parts.join(" "), body, base, head))
+}
+
 fn split_command_args_once(value: &str) -> Option<(&str, &str)> {
     let mut parts = value.splitn(2, char::is_whitespace);
     let first = parts.next()?.trim();
@@ -10119,6 +10850,39 @@ mod tests {
         .expect("reply should parse");
         assert_eq!(answers["lang"], vec!["Rust"]);
         assert_eq!(answers["libs"], vec!["ratatui", "crossterm"]);
+    }
+
+    #[test]
+    fn parse_pr_command_args_supports_title_and_options() {
+        let (title, body, base, head) = parse_pr_command_args(
+            "ship feature --body 'details here' --base main --head feature/branch",
+        )
+        .expect("/pr args should parse");
+        assert_eq!(title, "ship feature");
+        assert_eq!(body.as_deref(), Some("details here"));
+        assert_eq!(base.as_deref(), Some("main"));
+        assert_eq!(head.as_deref(), Some("feature/branch"));
+    }
+
+    #[test]
+    fn parse_pr_command_args_requires_title_before_options() {
+        let error = parse_pr_command_args("--base main").expect_err("title should be required");
+        assert!(error.to_string().contains("title"));
+    }
+
+    #[test]
+    fn parse_permission_rule_input_supports_action_key_and_mode() {
+        let (action_key, mode) =
+            parse_permission_rule_input("git allow").expect("permission rule input should parse");
+        assert_eq!(action_key, "git");
+        assert_eq!(mode, PermissionMode::Allow);
+    }
+
+    #[test]
+    fn parse_permission_rule_input_rejects_invalid_mode() {
+        let error =
+            parse_permission_rule_input("git maybe").expect_err("invalid mode should fail");
+        assert!(error.contains("allow, ask, or deny"));
     }
 
     #[test]

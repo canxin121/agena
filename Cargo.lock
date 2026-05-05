@@ -229,6 +229,7 @@ name = "agena-http-api"
 version = "0.1.0"
 dependencies = [
  "agena",
+ "agena-scheduler",
  "async-stream",
  "async-trait",
  "axum 0.8.8",

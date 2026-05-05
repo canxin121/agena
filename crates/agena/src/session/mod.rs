@@ -22,7 +22,8 @@ pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
     SessionManager, SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest,
-    SessionRunOptions, SessionUserInputReplyRequest, SessionUserTurnRequest,
+    SessionRunOptions, SessionSubtaskRequest, SessionSubtaskResponse,
+    SessionUserInputReplyRequest, SessionUserTurnRequest,
 };
 #[allow(unused_imports)]
 pub(crate) use model::{
@@ -31,7 +32,7 @@ pub(crate) use model::{
 };
 pub use model::{
     PlanState, PromptTokenRuntime, PromptTokenUsageSnapshot, PromptWindowRuntime,
-    ProviderPromptAnchor, Session, SessionListRequest, SessionRuntimeState, SessionRuntimeStatus,
-    SessionStatus, SessionSummary,
+    ProviderPromptAnchor, Session, SessionExecutionContext, SessionListRequest,
+    SessionRuntimeState, SessionRuntimeStatus, SessionStatus, SessionSummary,
 };
 pub use processor::SessionProcessor;

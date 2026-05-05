@@ -570,6 +570,7 @@ impl Plugin for BuiltinPlugin {
                 Some(session_id)
             },
             call_id: if call_id < 0 { None } else { Some(call_id) },
+            session_context: None,
         };
         let execution = orchestrator::execute_builtin(&executor, &builtin, context)
             .map_err(|err| PluginError::new(format!("{}: {err}", tool_name)))?;
@@ -805,6 +806,7 @@ mod tests {
                     name,
                     body_chars: 42,
                     allowed_tools: vec!["read".to_string()],
+                    model: None,
                 },
                 ToolExecutionView::simple("Skill demo", "loaded skill"),
             )))
@@ -1002,10 +1004,12 @@ mod tests {
                 name,
                 body_chars,
                 allowed_tools,
+                model,
             } => {
                 assert_eq!(name, "demo");
                 assert_eq!(body_chars, 42);
                 assert_eq!(allowed_tools, vec!["read".to_string()]);
+                assert!(model.is_none());
             }
             other => panic!("unexpected output: {other:?}"),
         }

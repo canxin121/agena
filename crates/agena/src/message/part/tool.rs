@@ -729,6 +729,8 @@ pub enum BuiltinToolOutput {
         name: String,
         body_chars: usize,
         allowed_tools: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     EnterWorktree {
         path: String,

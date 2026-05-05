@@ -215,7 +215,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
     let agena_api = agena_http_api::router(ApiState::new(runtime.clone(), db)).layer(
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
-    let agena_api_v2 = agena_api_server::router(ApiV2State::new(runtime.clone())).layer(
+    let agena_api_v2 = agena_api_server::transport_router(ApiV2State::new(runtime.clone())).layer(
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
 

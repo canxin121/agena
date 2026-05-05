@@ -2,7 +2,6 @@
 //! todo_write, ask_user, enter_plan_mode, exit_plan_mode, enter_worktree,
 //! exit_worktree).
 
-use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -401,6 +400,8 @@ fn entries() -> Vec<PluginEntryDecl> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::plugin::sdk::host_api::{
         EventSubscription, HostEnterPlanModeRequest, HostEnterWorktreeRequest,

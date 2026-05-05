@@ -28,9 +28,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::plugin::sdk::{
     AgentStopInput, AgentStopPatch, HookSubscription, HostClient, InitContext, InitOutcome,
-    PermissionAskDecision, PermissionAskInput, Plugin, PluginManifest, Result as SdkResult,
-    SessionEndInput, SessionStartInput, SessionStartPatch, ToolAfterInput, ToolAfterPatch,
-    ToolBeforeInput, ToolBeforePatch, ToolFailureInput, UserPromptSubmitInput,
+    NotificationInput, PermissionAskDecision, PermissionAskInput, Plugin, PluginManifest,
+    Result as SdkResult, SessionEndInput, SessionStartInput, SessionStartPatch, ToolAfterInput,
+    ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolFailureInput, UserPromptSubmitInput,
     UserPromptSubmitPatch,
 };
 
@@ -148,9 +148,7 @@ impl ShellHookPlugin {
                 HookEvent::AgentStop => HookSubscription::AGENT_STOP,
                 HookEvent::SessionStart => HookSubscription::SESSION_START,
                 HookEvent::SessionEnd => HookSubscription::SESSION_END,
-                HookEvent::Notification => {
-                    HookSubscription::AGENT_STOP | HookSubscription::PERMISSION_ASK
-                }
+                HookEvent::Notification => HookSubscription::NOTIFICATION,
             };
         }
         subs
@@ -171,7 +169,7 @@ impl ShellHookPlugin {
     fn run_notification_hooks(
         &self,
         kind: &str,
-        session_id: i64,
+        session_id: Option<i64>,
         title: &str,
         message: &str,
         payload: &serde_json::Value,
@@ -186,7 +184,9 @@ impl ShellHookPlugin {
         env.insert("AGENA_NOTIFICATION_KIND".into(), kind.to_string());
         env.insert("AGENA_NOTIFICATION_TITLE".into(), title.to_string());
         env.insert("AGENA_NOTIFICATION_MESSAGE".into(), message.to_string());
-        env.insert("AGENA_SESSION_ID".into(), session_id.to_string());
+        if let Some(session_id) = session_id {
+            env.insert("AGENA_SESSION_ID".into(), session_id.to_string());
+        }
         for hook in hooks {
             let _ = hook.run::<serde_json::Value>(&env, payload);
         }
@@ -304,7 +304,7 @@ impl Plugin for ShellHookPlugin {
         if merged.continue_with_message.is_none() {
             self.run_notification_hooks(
                 "agent_stop",
-                input.session_id,
+                Some(input.session_id),
                 "Agena turn completed",
                 input
                     .last_assistant_message
@@ -329,12 +329,23 @@ impl Plugin for ShellHookPlugin {
         let payload = serde_json::to_value(&input).unwrap_or(serde_json::Value::Null);
         self.run_notification_hooks(
             "permission_request",
-            input.session_id,
+            Some(input.session_id),
             "Agena needs permission",
             input.action.as_str(),
             &payload,
         );
         Ok(None)
+    }
+
+    async fn notification(&self, input: NotificationInput) -> SdkResult<()> {
+        self.run_notification_hooks(
+            input.kind.as_str(),
+            input.session_id,
+            input.title.as_str(),
+            input.message.as_str(),
+            &input.payload,
+        );
+        Ok(())
     }
 
     async fn session_start(
@@ -725,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn notification_hook_subscribes_to_agent_stop_and_permission_ask() {
+    fn notification_hook_subscribes_to_notification() {
         let plugin = ShellHookPlugin::new(HooksConfig::new(vec![HookEntry {
             event: HookEvent::Notification,
             command: Some("true".to_string()),
@@ -736,8 +747,7 @@ mod tests {
 
         let subs = plugin.subscriptions();
 
-        assert!(subs.contains(HookSubscription::AGENT_STOP));
-        assert!(subs.contains(HookSubscription::PERMISSION_ASK));
+        assert!(subs.contains(HookSubscription::NOTIFICATION));
     }
 
     #[test]
@@ -800,6 +810,28 @@ mod tests {
             .expect("patch present");
         assert_eq!(patch.additional_context.as_deref(), Some("injected"));
         assert!(patch.prompt.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notification_hook_runs_real_command() {
+        use tokio::runtime::Runtime;
+        let rt = Runtime::new().unwrap();
+        let plugin = ShellHookPlugin::new(HooksConfig::new(vec![HookEntry {
+            event: HookEvent::Notification,
+            command: Some(r#"test \"$AGENA_NOTIFICATION_KIND\" = \"scheduled_job\" && test \"$AGENA_NOTIFICATION_TITLE\" = \"Scheduled job failed\""#.to_string()),
+            url: None,
+            matcher: HookMatcher::default(),
+            timeout_ms: Some(2_000),
+        }]));
+        rt.block_on(plugin.notification(NotificationInput {
+            kind: "scheduled_job".to_string(),
+            session_id: Some(7),
+            title: "Scheduled job failed".to_string(),
+            message: "boom".to_string(),
+            payload: serde_json::json!({"job_id": "123"}),
+        }))
+        .expect("hook ok");
     }
 
     #[cfg(unix)]

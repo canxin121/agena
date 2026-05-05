@@ -14,6 +14,44 @@ export type StudioHealth = {
   sessionRuntimeAvailable: boolean
 }
 
+export type RuntimeSkill = {
+  name: string
+  description: string
+  aliases: string[]
+  source_path?: string | null
+}
+
+export type ScheduledJobRunResource = {
+  triggered_at: string
+  finished_at: string
+  status: 'submitted' | 'skipped' | 'failed' | string
+  session_id?: number | null
+  error_message?: string | null
+}
+
+export type ScheduledJobResource = {
+  id: string
+  kind: 'cron' | 'once' | string
+  expression?: string | null
+  at?: string | null
+  prompt: string
+  owner_session_id?: number | null
+  next_fire_at?: string | null
+  last_fired_at?: string | null
+  last_run?: ScheduledJobRunResource | null
+}
+
+export type SessionAutomationResource = {
+  job_count: number
+  latest_job?: ScheduledJobResource | null
+}
+
+export type RuntimeAutomationResource = {
+  enabled: boolean
+  job_count: number
+  recent_jobs: ScheduledJobResource[]
+}
+
 export type RuntimeStatus = {
   generation: number
   loaded_at: string
@@ -34,6 +72,70 @@ export type RuntimeStatus = {
     enabled: boolean
     interval_secs: number
   }
+  session_cache?: {
+    max_sessions: number
+    ttl_secs: number
+    max_bytes: number
+    entry_count: number
+    total_bytes: number
+    hits: number
+    misses: number
+    inserts: number
+    evictions: number
+  } | null
+  automation: RuntimeAutomationResource
+  operator: {
+    mcp: {
+      server_count: number
+      tool_count: number
+      servers: Array<{
+        name: string
+        tool_count: number
+      }>
+    }
+    lsp: {
+      server_count: number
+      diagnostics_count: number
+      files_with_diagnostics: number
+      servers: Array<{
+        name: string
+        command: string
+        file_extensions: string[]
+        root_markers: string[]
+      }>
+    }
+    skills: {
+      skill_count: number
+      command_count: number
+      skills: RuntimeSkill[]
+      commands: RuntimeSkill[]
+    }
+  }
+}
+
+export type PluginStatus = {
+  plugin_id: string
+  kind: string
+  state: string
+  pid?: number | null
+  restart_count: number
+  last_exit_code?: number | null
+  last_restart_at_ms?: number | null
+  last_error?: string | null
+}
+
+export type PluginInspect = {
+  status: PluginStatus
+  manifest?: Record<string, unknown> | null
+}
+
+export type PluginLogEntry = {
+  seq: number
+  plugin_id: string
+  level: string
+  target?: string | null
+  message: string
+  timestamp_ms: number
 }
 
 export type RuntimeReloadResponse = {
@@ -169,6 +271,7 @@ export type SessionExecutionResource = {
   blocked: boolean
   run_state: 'idle' | 'awaiting_model' | string
   latest_event_seq?: number | null
+  automation?: SessionAutomationResource | null
   pending_permission_requests: PermissionRequest[]
   pending_user_input_requests: UserInputRequest[]
 }
@@ -310,6 +413,23 @@ export async function reloadRuntime(): Promise<RuntimeReloadResponse> {
   return await apiJson<RuntimeReloadResponse>('/api/v1/runtime/reload', {
     method: 'POST',
   })
+}
+
+export async function listPlugins(): Promise<PluginStatus[]> {
+  const response = await apiJson<{ entries: PluginStatus[] }>('/api/v1/plugins')
+  return response.entries ?? []
+}
+
+export async function getPlugin(pluginId: string): Promise<PluginInspect> {
+  const response = await apiJson<{ plugin: PluginInspect }>(`/api/v1/plugins/${encodeURIComponent(pluginId)}`)
+  return response.plugin
+}
+
+export async function listPluginLogs(pluginId: string, limit = 50): Promise<PluginLogEntry[]> {
+  const response = await apiJson<{ entries: PluginLogEntry[] }>(
+    `/api/v1/plugins/${encodeURIComponent(pluginId)}/logs?limit=${encodeURIComponent(String(limit))}`,
+  )
+  return response.entries ?? []
 }
 
 export async function listProviders(): Promise<ProviderSummary[]> {

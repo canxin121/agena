@@ -83,6 +83,8 @@ struct RuntimeServices {
     auth_store: RuntimeAuthStore,
     session_manager: Option<Arc<SessionManager>>,
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
+    skills_manager: Option<Arc<agena_skills::SkillsManager>>,
+    lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     /// Lives for as long as this snapshot does; aborts the event bridge
     /// task when the snapshot is dropped.
     _event_bridge: Option<Arc<EventBridgeGuard>>,
@@ -127,6 +129,8 @@ impl RuntimeServices {
         auth_store: RuntimeAuthStore,
         session_manager: Option<Arc<SessionManager>>,
         mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
+        skills_manager: Option<Arc<agena_skills::SkillsManager>>,
+        lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
         event_bridge: Option<Arc<EventBridgeGuard>>,
         plugin_shutdown: Option<Arc<PluginShutdownGuard>>,
     ) -> Self {
@@ -136,6 +140,8 @@ impl RuntimeServices {
             auth_store,
             session_manager,
             mcp_manager,
+            skills_manager,
+            lsp_registry,
             _event_bridge: event_bridge,
             _plugin_shutdown: plugin_shutdown,
         }
@@ -266,12 +272,22 @@ impl RuntimeSnapshot {
         }
         let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
         let reusing_session_manager = existing_session_manager.is_some();
+        let skills_manager = agena_skills::SkillsManager::build(Some(workspace_root))
+            .ok()
+            .map(Arc::new);
+        let lsp_registry = if resolution.config.lsp.servers.is_empty() {
+            None
+        } else {
+            Some(build_lsp_registry(workspace_root, &resolution.config.lsp))
+        };
         let session_manager = database.as_ref().map(|db| {
             build_or_reconfigure_session_manager(
                 existing_session_manager,
                 db,
                 Arc::clone(&providers),
                 Arc::clone(&plugins),
+                skills_manager.clone(),
+                lsp_registry.clone(),
                 workspace_root,
                 &resolution,
             )
@@ -304,6 +320,8 @@ impl RuntimeSnapshot {
             auth_store,
             session_manager,
             mcp_manager,
+            skills_manager,
+            lsp_registry,
             event_bridge,
             plugin_shutdown,
         );
@@ -336,6 +354,14 @@ impl RuntimeSnapshot {
 
     pub fn mcp_manager(&self) -> Option<Arc<agena_mcp_client::McpConnectionManager>> {
         self.services.mcp_manager.clone()
+    }
+
+    pub fn skills_manager(&self) -> Option<Arc<agena_skills::SkillsManager>> {
+        self.services.skills_manager.clone()
+    }
+
+    pub fn lsp_registry(&self) -> Option<Arc<agena_lsp::LspRegistry>> {
+        self.services.lsp_registry.clone()
     }
 
     pub async fn list_provider_models(
@@ -437,19 +463,49 @@ fn build_or_reconfigure_session_manager(
     db: &Arc<DatabaseConnection>,
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginHost>,
+    skills_manager: Option<Arc<agena_skills::SkillsManager>>,
+    lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
 ) -> Arc<SessionManager> {
     let processor = build_session_processor(providers, Arc::clone(&plugins));
-    let executor = build_tool_executor(plugins, workspace_root, resolution);
     let config = session_manager_config(resolution);
 
     if let Some(manager) = existing {
+        let executor = build_tool_executor(
+            plugins,
+            skills_manager,
+            lsp_registry,
+            workspace_root,
+            resolution,
+            Some(Arc::clone(&manager)),
+        );
         manager.reconfigure(processor, executor, config);
         return manager;
     }
 
-    Arc::new(SessionManager::new(db.as_ref().clone(), processor, executor).with_config(config))
+    let bootstrap_executor = build_tool_executor(
+        Arc::clone(&plugins),
+        skills_manager.clone(),
+        lsp_registry.clone(),
+        workspace_root,
+        resolution,
+        None,
+    );
+    let manager = Arc::new(
+        SessionManager::new(db.as_ref().clone(), processor.clone(), bootstrap_executor)
+            .with_config(config.clone()),
+    );
+    let executor = build_tool_executor(
+        plugins,
+        skills_manager,
+        lsp_registry,
+        workspace_root,
+        resolution,
+        Some(Arc::clone(&manager)),
+    );
+    manager.reconfigure(processor, executor, config);
+    manager
 }
 
 fn build_session_processor(
@@ -462,8 +518,11 @@ fn build_session_processor(
 
 fn build_tool_executor(
     plugins: Arc<PluginHost>,
+    skills_manager: Option<Arc<agena_skills::SkillsManager>>,
+    lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
+    session_manager: Option<Arc<SessionManager>>,
 ) -> ToolExecutor {
     let tool_policy = match resolution.config.tool_permission_policy() {
         Ok(policy) => policy,
@@ -496,15 +555,17 @@ fn build_tool_executor(
         .with_plugin_manager(plugins)
         .with_web_search_backend(resolution.config.web.search.resolve())
         .with_plan_registry(crate::tool::plan_registry_for_executor())
-        .with_worktree_registry(worktree_registry)
-        .with_scheduler(build_scheduler());
+        .with_worktree_registry(worktree_registry);
 
-    if let Ok(mgr) = agena_skills::SkillsManager::build(Some(workspace_root)) {
-        executor = executor.with_skills_manager(Arc::new(mgr));
+    if let Some(manager) = session_manager {
+        executor = executor.with_scheduler(build_scheduler(manager));
     }
 
-    if !resolution.config.lsp.servers.is_empty() {
-        let registry = build_lsp_registry(workspace_root, &resolution.config.lsp);
+    if let Some(mgr) = skills_manager {
+        executor = executor.with_skills_manager(mgr);
+    }
+
+    if let Some(registry) = lsp_registry {
         executor = executor.with_lsp_registry(registry);
     }
 
@@ -702,25 +763,118 @@ fn push_watch_path(paths: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
-/// Build a process-wide cron scheduler.  The sink is a `tracing` logger
-/// — the SessionManager bridge that actually re-injects fired prompts is
-/// expected to be wired up in a follow-up commit.
-fn build_scheduler() -> Arc<agena_scheduler::Scheduler> {
+/// Build a process-wide cron scheduler backed by the active SessionManager.
+fn build_scheduler(session_manager: Arc<SessionManager>) -> Arc<agena_scheduler::Scheduler> {
     use std::time::Duration;
-    struct LogSink;
-    #[async_trait::async_trait]
-    impl agena_scheduler::JobSink for LogSink {
-        async fn deliver(&self, job: &agena_scheduler::ScheduledJob) {
-            tracing::info!(
-                target: "agena::scheduler",
-                job_id = %job.id,
-                prompt = %job.prompt,
-                "scheduled job fired (no SessionManager bridge yet — prompt logged only)"
+
+    struct SessionSink {
+        session_manager: Arc<SessionManager>,
+    }
+
+    impl SessionSink {
+        fn notify_job_result(
+            &self,
+            job: &agena_scheduler::ScheduledJob,
+            result: &agena_scheduler::JobDeliveryResult,
+        ) {
+            let status = match result.status {
+                agena_scheduler::JobRunStatus::Submitted => "submitted",
+                agena_scheduler::JobRunStatus::Skipped => "skipped",
+                agena_scheduler::JobRunStatus::Failed => "failed",
+            };
+            let title = format!("Scheduled job {status}");
+            let message = result
+                .error_message
+                .clone()
+                .unwrap_or_else(|| job.prompt.clone());
+            let payload = serde_json::json!({
+                "job_id": job.id,
+                "prompt": job.prompt,
+                "owner_session_id": job.owner_session_id,
+                "status": status,
+                "error_message": result.error_message,
+                "next_fire_at": job.next_fire_at,
+                "last_fired_at": job.last_fired_at,
+            });
+            self.session_manager.tool_executor().broadcast_notification(
+                "scheduled_job",
+                result.session_id.or(job.owner_session_id),
+                title,
+                message,
+                payload,
             );
         }
     }
-    let sched =
-        agena_scheduler::scheduler::build_in_memory(Arc::new(LogSink), Duration::from_secs(10));
+
+    #[async_trait::async_trait]
+    impl agena_scheduler::JobSink for SessionSink {
+        async fn deliver(&self, job: &agena_scheduler::ScheduledJob) -> agena_scheduler::JobDeliveryResult {
+            let result = if let Some(session_id) = job.owner_session_id {
+                if self.session_manager.is_turn_active(session_id).await {
+                    agena_scheduler::JobDeliveryResult::skipped(
+                        Some(session_id),
+                        "session already has an active turn",
+                    )
+                } else {
+                    let session = match self.session_manager.get_session(session_id).await {
+                        Ok(session) => session,
+                        Err(err) => {
+                            let result = agena_scheduler::JobDeliveryResult::failed(
+                                Some(session_id),
+                                err.to_string(),
+                            );
+                            self.notify_job_result(job, &result);
+                            return result;
+                        }
+                    };
+
+                    if session.blocked() {
+                        agena_scheduler::JobDeliveryResult::skipped(
+                            Some(session_id),
+                            "session is blocked on permission or user input",
+                        )
+                    } else {
+                        let options = match self.session_manager.resolve_scheduled_run_options(session_id).await {
+                            Ok(options) => options,
+                            Err(err) => {
+                                let result = agena_scheduler::JobDeliveryResult::failed(
+                                    Some(session_id),
+                                    err.to_string(),
+                                );
+                                self.notify_job_result(job, &result);
+                                return result;
+                            }
+                        };
+
+                        match self
+                            .session_manager
+                            .submit_user_turn(crate::session::SessionUserTurnRequest {
+                                session_id,
+                                options,
+                                parts: vec![crate::message::PartContent::text(job.prompt.clone())],
+                            })
+                            .await
+                        {
+                            Ok(_) => agena_scheduler::JobDeliveryResult::submitted(Some(session_id)),
+                            Err(err) => agena_scheduler::JobDeliveryResult::failed(
+                                Some(session_id),
+                                err.to_string(),
+                            ),
+                        }
+                    }
+                }
+            } else {
+                agena_scheduler::JobDeliveryResult::failed(None, "scheduled job has no owner_session_id")
+            };
+            self.notify_job_result(job, &result);
+            result
+        }
+    }
+
+    let sched = agena_scheduler::scheduler::build_in_memory(
+        Arc::new(SessionSink { session_manager }),
+        Duration::from_secs(10),
+    );
     sched.start();
     sched
 }

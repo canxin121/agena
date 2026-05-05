@@ -51,9 +51,10 @@ use crate::sdk::{
     ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EntryDefinitionInput, EntryDefinitionPatch,
-    EventEnvelope, EventFilter, HookSubscription, HostCapability, PermissionAskDecision,
-    PermissionAskInput, PermissionDecision, PluginEntryDecl, PluginError, PluginErrorCode,
-    PluginManifest, PostTurnInput, PreTurnInput, ProviderListInput, ProviderListPatch,
+    EventEnvelope, EventFilter, HookSubscription, HostCapability, NotificationInput,
+    PermissionAskDecision, PermissionAskInput, PermissionDecision, PluginEntryDecl, PluginError,
+    PluginErrorCode, PluginManifest, PostTurnInput, PreTurnInput, ProviderListInput,
+    ProviderListPatch,
     SessionCompactedInput, SessionCompactingInput, SessionCompactingPatch, SessionEndInput,
     SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput,
     ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolFailureInput, ToolInvokeInput,
@@ -813,6 +814,28 @@ impl PluginHost {
         input: PermissionAskInput,
     ) -> Result<Option<PermissionDecision>, PluginError> {
         self.block_on(self.dispatch_permission_ask(input))
+    }
+
+    pub async fn broadcast_notification(&self, input: NotificationInput) {
+        let timeout = Duration::from_secs(5);
+        for plugin in &self.plugins {
+            if !plugin.subscribes(HookSubscription::NOTIFICATION) {
+                continue;
+            }
+            let input = input.clone();
+            let plugin = plugin.clone();
+            tokio::spawn(async move {
+                let params = match serde_json::to_value(&input) {
+                    Ok(v) => v,
+                    Err(_) => return,
+                };
+                let _ = tokio::time::timeout(
+                    timeout,
+                    plugin.transport.notify(method::HOOK_NOTIFICATION, params),
+                )
+                .await;
+            });
+        }
     }
 
     pub async fn dispatch_command_before(

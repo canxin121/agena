@@ -14,14 +14,18 @@ use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
 pub(super) fn execute_create(
     executor: &ToolExecutor,
     input: &CronCreateToolInput,
+    session_id: Option<i64>,
 ) -> Result<BuiltinExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
-    let job = ScheduledJob::new_cron(
+    let mut job = ScheduledJob::new_cron(
         input.expression.trim(),
         input.prompt.trim(),
         input.max_age_days,
     )
     .map_err(|e| ToolError::Plugin(format!("cron_create: {e}")))?;
+    if let Some(session_id) = session_id {
+        job = job.with_owner(session_id);
+    }
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339());
     super::mcp::block_on(async move { scheduler.add(job).await });
@@ -95,10 +99,14 @@ pub(super) fn execute_delete(
 pub(super) fn execute_wakeup(
     executor: &ToolExecutor,
     input: &ScheduleWakeupToolInput,
+    session_id: Option<i64>,
 ) -> Result<BuiltinExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
     let when = chrono::Utc::now() + chrono::Duration::seconds(input.delay_seconds as i64);
-    let job = ScheduledJob::new_once(when, input.prompt.trim());
+    let mut job = ScheduledJob::new_once(when, input.prompt.trim());
+    if let Some(session_id) = session_id {
+        job = job.with_owner(session_id);
+    }
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339()).unwrap_or_default();
     super::mcp::block_on(async move { scheduler.add(job).await });

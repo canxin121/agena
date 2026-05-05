@@ -33,11 +33,14 @@ pub use dto::{
     AuthCopilotDevicePollRequest, AuthCopilotDeviceStartRequest, AuthCredentialType,
     AuthDeviceStartResource, AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest,
     AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
-    AuthProviderResource, HealthResponse, MessageListQuery, MessageResource, PartLoadMode,
+    AuthProviderResource, GitStatusResource, HealthResponse, MessageListQuery, MessageResource, PartLoadMode,
     PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
     PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
-    ProviderModelsResponse, ProviderSummaryResource, RuntimeReloadResponse,
-    RuntimeSessionCacheResource, RuntimeStatusResponse, RuntimeTaskResource,
+    ProviderModelsResponse, ProviderSummaryResource, RuntimeAutomationResource, RuntimeLspResource,
+    RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
+    RuntimeOperatorResource, RuntimeReloadResponse, RuntimeSessionCacheResource,
+    RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
+    ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
     SessionContinueRequestBody, SessionCreateRequest, SessionEventListQuery,
     SessionEventStreamQuery, SessionExecutionResource, SessionListQuery,
     SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionResource,
@@ -48,6 +51,7 @@ pub use dto::{
 pub use error::ApiError;
 pub use pagination::{PageInfo, PaginatedResponse};
 pub use service::ApiService;
+use service::{list_scheduled_jobs, scheduled_job_resource, sort_jobs_for_display};
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -96,6 +100,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/health", get(health))
         .route("/api/v1/runtime", get(get_runtime_status))
         .route("/api/v1/runtime/reload", post(reload_runtime))
+        .route("/api/v1/git", get(get_git_status))
         .route("/api/v1/plugins", get(list_plugins))
         .route("/api/v1/plugins/{plugin_id}", get(get_plugin))
         .route("/api/v1/plugins/{plugin_id}/logs", get(list_plugin_logs))
@@ -273,7 +278,7 @@ async fn health(State(state): State<ApiState>) -> Json<HealthResponse> {
 async fn get_runtime_status(
     State(state): State<ApiState>,
 ) -> Result<Json<RuntimeStatusResponse>, ApiError> {
-    Ok(Json(runtime_status_response(&state)))
+    Ok(Json(runtime_status_response(&state).await))
 }
 
 async fn reload_runtime(
@@ -286,6 +291,10 @@ async fn reload_runtime(
         generation: report.generation,
         loaded_at: report.loaded_at,
     }))
+}
+
+async fn get_git_status(State(state): State<ApiState>) -> Result<Json<GitStatusResource>, ApiError> {
+    Ok(Json(state.service().git_status(state.runtime()).await?))
 }
 
 async fn list_plugins(
@@ -1388,7 +1397,7 @@ fn sse_error_event(message: impl Into<String>) -> Event {
     Event::default().event("error").data(message.into())
 }
 
-fn runtime_status_response(state: &ApiState) -> RuntimeStatusResponse {
+async fn runtime_status_response(state: &ApiState) -> RuntimeStatusResponse {
     let snapshot = state.runtime().current_snapshot();
     let resolution = snapshot.config_resolution();
     let mut provider_ids = snapshot.provider_registry().provider_ids();
@@ -1407,6 +1416,125 @@ fn runtime_status_response(state: &ApiState) -> RuntimeStatusResponse {
             evictions: stats.evictions,
         }
     });
+
+    let mcp = if let Some(manager) = snapshot.mcp_manager() {
+        let runtime = tokio::runtime::Handle::current();
+        let mut servers = runtime.block_on(manager.server_names());
+        servers.sort();
+        let all_tools = runtime.block_on(manager.all_tools());
+        let mut tool_counts = HashMap::<String, usize>::new();
+        for (server_name, _) in &all_tools {
+            *tool_counts.entry(server_name.clone()).or_default() += 1;
+        }
+        RuntimeMcpResource {
+            server_count: servers.len(),
+            tool_count: all_tools.len(),
+            servers: servers
+                .into_iter()
+                .map(|name| RuntimeMcpServerResource {
+                    tool_count: tool_counts.get(&name).copied().unwrap_or(0),
+                    name,
+                })
+                .collect(),
+        }
+    } else {
+        RuntimeMcpResource {
+            server_count: 0,
+            tool_count: 0,
+            servers: Vec::new(),
+        }
+    };
+
+    let lsp = if let Some(registry) = snapshot.lsp_registry() {
+        let runtime = tokio::runtime::Handle::current();
+        let mut servers = runtime.block_on(registry.server_specs());
+        servers.sort_by(|left, right| left.name.cmp(&right.name));
+        let diagnostics = runtime.block_on(registry.collect_diagnostics());
+        let diagnostics_count = diagnostics.iter().map(|(_, entries)| entries.len()).sum();
+        RuntimeLspResource {
+            server_count: servers.len(),
+            diagnostics_count,
+            files_with_diagnostics: diagnostics.len(),
+            servers: servers
+                .into_iter()
+                .map(|server| RuntimeLspServerResource {
+                    name: server.name,
+                    command: server.command,
+                    file_extensions: server.file_extensions,
+                    root_markers: server.root_markers,
+                })
+                .collect(),
+        }
+    } else {
+        RuntimeLspResource {
+            server_count: 0,
+            diagnostics_count: 0,
+            files_with_diagnostics: 0,
+            servers: Vec::new(),
+        }
+    };
+
+    let skills = if let Some(manager) = snapshot.skills_manager() {
+        let mut skills = manager.list();
+        skills.sort_by(|left, right| left.frontmatter.name.cmp(&right.frontmatter.name));
+        let mut commands = manager.list_commands();
+        commands.sort_by(|left, right| left.frontmatter.name.cmp(&right.frontmatter.name));
+        RuntimeSkillsResource {
+            skill_count: skills.len(),
+            command_count: commands.len(),
+            skills: skills
+                .into_iter()
+                .map(|skill| RuntimeSkillResource {
+                    name: skill.frontmatter.name,
+                    description: skill.frontmatter.description,
+                    aliases: skill.frontmatter.aliases,
+                    source_path: skill
+                        .source_path
+                        .as_ref()
+                        .map(|path: &std::path::PathBuf| path.display().to_string()),
+                })
+                .collect(),
+            commands: commands
+                .into_iter()
+                .map(|skill| RuntimeSkillResource {
+                    name: skill.frontmatter.name,
+                    description: skill.frontmatter.description,
+                    aliases: skill.frontmatter.aliases,
+                    source_path: skill
+                        .source_path
+                        .as_ref()
+                        .map(|path: &std::path::PathBuf| path.display().to_string()),
+                })
+                .collect(),
+        }
+    } else {
+        RuntimeSkillsResource {
+            skill_count: 0,
+            command_count: 0,
+            skills: Vec::new(),
+            commands: Vec::new(),
+        }
+    };
+
+    let automation = if let Some(manager) = snapshot.session_manager() {
+        let mut jobs = list_scheduled_jobs(&manager).await;
+        sort_jobs_for_display(&mut jobs);
+        RuntimeAutomationResource {
+            enabled: manager.tool_executor().scheduler().is_some(),
+            job_count: jobs.len(),
+            recent_jobs: jobs
+                .into_iter()
+                .take(10)
+                .map(scheduled_job_resource)
+                .collect(),
+        }
+    } else {
+        RuntimeAutomationResource {
+            enabled: false,
+            job_count: 0,
+            recent_jobs: Vec::new(),
+        }
+    };
 
     RuntimeStatusResponse {
         generation: snapshot.generation(),
@@ -1438,6 +1566,8 @@ fn runtime_status_response(state: &ApiState) -> RuntimeStatusResponse {
             interval_secs: snapshot.janitor_interval().as_secs(),
         },
         session_cache,
+        automation,
+        operator: RuntimeOperatorResource { mcp, lsp, skills },
     }
 }
 

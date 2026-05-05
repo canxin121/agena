@@ -17,7 +17,6 @@ pub(crate) mod read;
 pub(crate) mod result;
 pub(crate) mod shell;
 pub(crate) mod skill;
-pub(crate) mod subtask;
 pub(crate) mod task;
 pub(crate) mod todo_write;
 pub(crate) mod tool_search;
@@ -71,10 +70,6 @@ pub use monitor::{
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
 pub use result::{BuiltinExecution, ToolExecutionView, ToolInvocationExecution};
 pub use shell::{ExecutionPolicy, ShellError, ShellOutput, ShellRequest};
-pub use subtask::{
-    InMemorySubtaskSessionManager, SubtaskSession, SubtaskSessionError, SubtaskSessionManager,
-    SubtaskSessionRequest,
-};
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 pub use worktree::{
     ActiveWorktree, ManagedWorktree, WorktreeRegistry, list_active as worktree_list_active,
@@ -213,6 +208,31 @@ impl crate::plugin::sdk::host_api::HostClient for BuiltinsHostClient {
         )))
     }
 
+    async fn todo_write(
+        &self,
+        req: crate::plugin::sdk::host_api::HostTodoWriteRequest,
+    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
+        let context =
+            crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
+        let session_id = context.session_id.unwrap_or(-1);
+        let call_id = context.call_id.unwrap_or(-1);
+        let executor = builtins::current_executor_lookup(session_id, call_id, "todo_write")
+            .ok_or_else(|| {
+                crate::plugin::PluginError::new(
+                    "offline builtins host: no executor in scope for todo_write",
+                )
+            })?;
+        executor
+            .execute_builtin_payload_for_host(
+                "todo_write",
+                serde_json::to_value(req)
+                    .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?,
+                Some(session_id).filter(|id| *id >= 0),
+                Some(call_id).filter(|id| *id >= 0),
+            )
+            .map_err(|err| crate::plugin::PluginError::new(err.to_string()))
+    }
+
     async fn execute_builtin_tool(
         &self,
         req: crate::plugin::sdk::host_api::BuiltinToolRequest,
@@ -324,10 +344,11 @@ enum PermissionExecutionMode {
     Bypassed,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct BuiltinExecutionContext {
     pub session_id: Option<i64>,
     pub call_id: Option<i64>,
+    pub session_context: Option<crate::session::SessionExecutionContext>,
 }
 
 static SYNTHETIC_BUILTIN_CALL_ID: AtomicI64 = AtomicI64::new(-1);
@@ -378,7 +399,6 @@ pub struct ToolExecutor {
     workspace_root: PathBuf,
     agent: Agent,
     model_id: Option<String>,
-    subtask_manager: Arc<dyn SubtaskSessionManager>,
     monitor_registry: Option<Arc<dyn MonitorService>>,
     truncator: ToolOutputTruncator,
     sandbox_policy: ExecutionPolicy,
@@ -406,7 +426,6 @@ impl ToolExecutor {
             workspace_root: workspace_root.into(),
             agent,
             model_id: None,
-            subtask_manager: Arc::new(InMemorySubtaskSessionManager::new()),
             monitor_registry: monitor::default_registry(),
             truncator: ToolOutputTruncator::default(),
             sandbox_policy,
@@ -419,11 +438,6 @@ impl ToolExecutor {
             lsp_registry: None,
             permission_mode: PermissionExecutionMode::Enforced,
         }
-    }
-
-    pub fn with_subtask_manager(mut self, manager: Arc<dyn SubtaskSessionManager>) -> Self {
-        self.subtask_manager = manager;
-        self
     }
 
     pub fn with_monitor_registry(mut self, registry: Arc<dyn MonitorService>) -> Self {
@@ -564,16 +578,32 @@ impl ToolExecutor {
         &self.workspace_root
     }
 
+    pub fn for_session_context(
+        &self,
+        session_context: &crate::session::SessionExecutionContext,
+    ) -> Self {
+        let mut scoped = self.clone();
+        if let Some(root) = session_context.effective_workspace_root.as_ref() {
+            scoped.workspace_root = root.clone();
+        }
+        if !session_context.allowed_tools.is_empty() {
+            scoped.agent = scoped
+                .agent
+                .clone()
+                .with_allowed_tools(session_context.allowed_tools.iter().map(String::as_str));
+        }
+        if let Some(model_id) = session_context.model_id.as_ref() {
+            scoped.model_id = Some(model_id.clone());
+        }
+        scoped
+    }
+
     pub fn agent(&self) -> &Agent {
         &self.agent
     }
 
     pub fn sandbox_policy(&self) -> &ExecutionPolicy {
         &self.sandbox_policy
-    }
-
-    pub fn subtask_manager(&self) -> &Arc<dyn SubtaskSessionManager> {
-        &self.subtask_manager
     }
 
     pub fn monitor_registry(&self) -> Option<&Arc<dyn MonitorService>> {
@@ -907,6 +937,22 @@ impl ToolExecutor {
         self.execute_builtin_detailed_with_context(input, BuiltinExecutionContext::default())
     }
 
+    pub fn execute_builtin_output_for_session(
+        &self,
+        input: &BuiltinToolInput,
+        session_id: i64,
+    ) -> Result<BuiltinToolOutput, ToolError> {
+        self.execute_builtin_detailed_with_context(
+            input,
+            BuiltinExecutionContext {
+                session_id: Some(session_id),
+                call_id: None,
+                session_context: None,
+            },
+        )
+        .map(|execution| execution.output)
+    }
+
     pub(crate) fn execute_builtin_payload_for_host(
         &self,
         tool_name: &str,
@@ -923,6 +969,7 @@ impl ToolExecutor {
             BuiltinExecutionContext {
                 session_id,
                 call_id,
+                session_context: None,
             },
         )?;
         Ok(builtins::builtin_to_invoke_output(
@@ -935,10 +982,15 @@ impl ToolExecutor {
         input: &BuiltinToolInput,
         context: BuiltinExecutionContext,
     ) -> Result<BuiltinExecution, ToolError> {
-        self.ensure_builtin_enabled(input)?;
+        let scoped_executor = context
+            .session_context
+            .as_ref()
+            .map(|session_context| self.for_session_context(session_context))
+            .unwrap_or_else(|| self.clone());
+        scoped_executor.ensure_builtin_enabled(input)?;
 
-        if self.permission_mode == PermissionExecutionMode::Enforced {
-            match self.agent.authorize_builtin_tool(input) {
+        if scoped_executor.permission_mode == PermissionExecutionMode::Enforced {
+            match scoped_executor.agent.authorize_builtin_tool(input) {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
                 PermissionDecision::Deny { reason } => {
@@ -947,8 +999,8 @@ impl ToolExecutor {
             }
         }
 
-        let execution = self.dispatch_builtin_via_plugin_host(input, context)?;
-        Ok(self.truncator.apply(execution))
+        let execution = scoped_executor.dispatch_builtin_via_plugin_host(input, context)?;
+        Ok(scoped_executor.truncator.apply(execution))
     }
 
     fn dispatch_builtin_via_plugin_host(
@@ -968,6 +1020,10 @@ impl ToolExecutor {
         let call_id = context
             .call_id
             .unwrap_or_else(|| SYNTHETIC_BUILTIN_CALL_ID.fetch_sub(1, Ordering::Relaxed));
+        let workspace_root = self
+            .effective_workspace_root(context.session_context.as_ref())
+            .to_string_lossy()
+            .to_string();
         let response =
             builtins::with_executor(self, session_id, call_id, tool_name.clone(), || {
                 self.plugins.invoke_tool(
@@ -976,7 +1032,7 @@ impl ToolExecutor {
                         tool_name: tool_name.clone(),
                         session_id,
                         call_id,
-                        workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                        workspace_root: workspace_root.clone(),
                         input: payload_value,
                     },
                 )
@@ -1175,6 +1231,7 @@ impl ToolExecutor {
                     BuiltinExecutionContext {
                         session_id: Some(session_id),
                         call_id: Some(call_id),
+                        session_context: None,
                     },
                 )?
                 .into();
@@ -1391,13 +1448,44 @@ impl ToolExecutor {
         });
     }
 
+    pub fn broadcast_notification(
+        &self,
+        kind: impl Into<String>,
+        session_id: Option<i64>,
+        title: impl Into<String>,
+        message: impl Into<String>,
+        payload: serde_json::Value,
+    ) {
+        if self.plugins.is_empty() {
+            return;
+        }
+        let plugins = Arc::clone(&self.plugins);
+        let input = crate::plugin::NotificationInput {
+            kind: kind.into(),
+            session_id,
+            title: title.into(),
+            message: message.into(),
+            payload,
+        };
+        tokio::spawn(async move {
+            plugins.broadcast_notification(input).await;
+        });
+    }
+
     pub(crate) fn resolve_target_path(&self, raw_path: &str) -> PathBuf {
+        self.resolve_target_path_with_context(raw_path, None)
+    }
+
+    pub(crate) fn resolve_target_path_with_context(
+        &self,
+        raw_path: &str,
+        session_context: Option<&crate::session::SessionExecutionContext>,
+    ) -> PathBuf {
         let candidate = PathBuf::from(raw_path);
         if candidate.is_absolute() {
-            candidate
-        } else {
-            self.workspace_root.join(candidate)
+            return candidate;
         }
+        self.effective_workspace_root(session_context).join(candidate)
     }
 
     pub(crate) fn execute_shell_command(
@@ -1407,8 +1495,26 @@ impl ToolExecutor {
         shell::execute(request, self.sandbox_policy()).map_err(ToolError::from)
     }
 
+    pub(crate) fn effective_workspace_root<'a>(
+        &'a self,
+        session_context: Option<&'a crate::session::SessionExecutionContext>,
+    ) -> &'a Path {
+        session_context
+            .and_then(|context| context.effective_workspace_root.as_deref())
+            .unwrap_or(self.workspace_root())
+    }
+
     pub(crate) fn display_path(&self, path: &Path) -> String {
-        if let Ok(relative) = path.strip_prefix(&self.workspace_root) {
+        self.display_path_with_context(path, None)
+    }
+
+    pub(crate) fn display_path_with_context(
+        &self,
+        path: &Path,
+        session_context: Option<&crate::session::SessionExecutionContext>,
+    ) -> String {
+        let workspace_root = self.effective_workspace_root(session_context);
+        if let Ok(relative) = path.strip_prefix(&workspace_root) {
             let normalized = normalize_path_for_display(relative);
             if normalized.is_empty() {
                 return ".".to_string();
@@ -1854,6 +1960,26 @@ mod tests {
                 read_only: false,
                 plugin_id: None,
             }])
+        }
+
+        async fn todo_write(
+            &self,
+            req: crate::plugin::sdk::host_api::HostTodoWriteRequest,
+        ) -> SdkResult<ToolInvokeOutput> {
+            let context =
+                crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
+            let session_id = context.session_id.unwrap_or(-1);
+            let call_id = context.call_id.unwrap_or(-1);
+            let executor = builtins::current_executor_for_test(session_id, call_id, "todo_write")
+                .ok_or_else(|| PluginError::new("test host: no executor available for todo_write"))?;
+            executor
+                .execute_builtin_payload_for_host(
+                    "todo_write",
+                    serde_json::to_value(req).map_err(|err| PluginError::new(err.to_string()))?,
+                    Some(session_id).filter(|id| *id >= 0),
+                    Some(call_id).filter(|id| *id >= 0),
+                )
+                .map_err(|err| PluginError::new(err.to_string()))
         }
 
         async fn execute_builtin_tool(

@@ -12,7 +12,20 @@ pub enum CommandId {
     Rename,
     Timeline,
     Plugins,
+    Mcp,
+    Lsp,
+    Skills,
+    Runtime,
+    Cost,
+    Review,
+    Permissions,
+    Config,
+    Worktree,
+    Git,
+    Commit,
+    Pr,
     Export,
+    Memory,
     Pager,
     Continue,
     UserInput,
@@ -152,11 +165,102 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-plugins-summary",
     },
     CommandSpec {
+        id: CommandId::Mcp,
+        name: "mcp",
+        aliases: &[],
+        arguments: "[query]",
+        summary_key: "command-mcp-summary",
+    },
+    CommandSpec {
+        id: CommandId::Lsp,
+        name: "lsp",
+        aliases: &[],
+        arguments: "[query]",
+        summary_key: "command-lsp-summary",
+    },
+    CommandSpec {
+        id: CommandId::Skills,
+        name: "skills",
+        aliases: &["skill"],
+        arguments: "[query]",
+        summary_key: "command-skills-summary",
+    },
+    CommandSpec {
+        id: CommandId::Runtime,
+        name: "runtime",
+        aliases: &["operator"],
+        arguments: "[query]",
+        summary_key: "command-runtime-summary",
+    },
+    CommandSpec {
+        id: CommandId::Cost,
+        name: "cost",
+        aliases: &["usage"],
+        arguments: "",
+        summary_key: "command-cost-summary",
+    },
+    CommandSpec {
+        id: CommandId::Review,
+        name: "review",
+        aliases: &[],
+        arguments: "[focus]",
+        summary_key: "command-review-summary",
+    },
+    CommandSpec {
+        id: CommandId::Permissions,
+        name: "permissions",
+        aliases: &["perm"],
+        arguments: "[query]",
+        summary_key: "command-permissions-summary",
+    },
+    CommandSpec {
+        id: CommandId::Config,
+        name: "config",
+        aliases: &[],
+        arguments: "[query]",
+        summary_key: "command-config-summary",
+    },
+    CommandSpec {
+        id: CommandId::Worktree,
+        name: "worktree",
+        aliases: &["wt"],
+        arguments: "[query]",
+        summary_key: "command-worktree-summary",
+    },
+    CommandSpec {
+        id: CommandId::Git,
+        name: "git",
+        aliases: &["repo"],
+        arguments: "[query]",
+        summary_key: "command-git-summary",
+    },
+    CommandSpec {
+        id: CommandId::Commit,
+        name: "commit",
+        aliases: &[],
+        arguments: "<message>",
+        summary_key: "command-commit-summary",
+    },
+    CommandSpec {
+        id: CommandId::Pr,
+        name: "pr",
+        aliases: &[],
+        arguments: "<title> [--body <text>] [--base <branch>] [--head <branch>]",
+        summary_key: "command-pr-summary",
+    },
+    CommandSpec {
         id: CommandId::Export,
         name: "export",
         aliases: &["save"],
         arguments: "[path]",
         summary_key: "command-export-summary",
+    },
+    CommandSpec {
+        id: CommandId::Memory,
+        name: "memory",
+        aliases: &["mem"],
+        arguments: "[list|edit [name]|forget <name>]",
+        summary_key: "command-memory-summary",
     },
     CommandSpec {
         id: CommandId::Pager,
@@ -431,6 +535,33 @@ mod tests {
         let parsed = parse_command("/plugin failed").expect("plugin command should parse");
         assert_eq!(parsed.spec.id, CommandId::Plugins);
         assert_eq!(parsed.args, "failed");
+    }
+
+    #[test]
+    fn parse_command_supports_runtime_operator_commands() {
+        assert_eq!(parse_command("/mcp").expect("mcp command should parse").spec.id, CommandId::Mcp);
+        assert_eq!(parse_command("/lsp").expect("lsp command should parse").spec.id, CommandId::Lsp);
+        assert_eq!(parse_command("/skill search").expect("skills command should parse").spec.id, CommandId::Skills);
+        assert_eq!(parse_command("/operator").expect("runtime command should parse").spec.id, CommandId::Runtime);
+    }
+
+    #[test]
+    fn parse_command_supports_workflow_commands() {
+        assert_eq!(parse_command("/cost").expect("cost command should parse").spec.id, CommandId::Cost);
+        assert_eq!(parse_command("/review auth flow").expect("review command should parse").spec.id, CommandId::Review);
+        assert_eq!(parse_command("/perm").expect("permissions command should parse").spec.id, CommandId::Permissions);
+        assert_eq!(parse_command("/config").expect("config command should parse").spec.id, CommandId::Config);
+        assert_eq!(parse_command("/wt").expect("worktree command should parse").spec.id, CommandId::Worktree);
+        assert_eq!(parse_command("/repo").expect("git command should parse").spec.id, CommandId::Git);
+        assert_eq!(parse_command("/commit ship it").expect("commit command should parse").spec.id, CommandId::Commit);
+        assert_eq!(parse_command("/pr ship it").expect("pr command should parse").spec.id, CommandId::Pr);
+    }
+
+    #[test]
+    fn parse_command_supports_memory_command() {
+        let parsed = parse_command("/mem forget user_role").expect("memory command should parse");
+        assert_eq!(parsed.spec.id, CommandId::Memory);
+        assert_eq!(parsed.args, "forget user_role");
     }
 
     #[test]

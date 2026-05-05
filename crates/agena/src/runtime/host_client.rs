@@ -345,6 +345,7 @@ fn workflow_builtin_output(
         BuiltinExecutionContext {
             session_id,
             call_id,
+            session_context: None,
         },
     )
     .map_err(|err| PluginError::new(err.to_string()))?;
@@ -539,45 +540,47 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: SpawnSubtaskRequest,
     ) -> Result<SpawnSubtaskResponse, PluginError> {
+        let (parent_session_id, _) = self.callback_session_and_call()?;
         let executor = self.tool_executor()?;
         let subagent_type = parse_subagent_type(req.subagent_type.as_str())?;
         let prompt = subagent_type.apply_prompt_guidance(&req.prompt);
-        let session = executor
-            .subtask_manager()
-            .create_or_resume(crate::tool::SubtaskSessionRequest {
-                requested_task_id: req.task_id.clone(),
+        let response = self
+            .session_manager()?
+            .spawn_subtask(crate::session::SessionSubtaskRequest {
+                parent_session_id,
                 description: req.description.clone(),
                 prompt,
                 subagent_type,
+                task_id: req.task_id.clone(),
                 command: req.command.clone(),
+                requested_model: req.model.clone(),
             })
+            .await
             .map_err(|err| PluginError::new(err.to_string()))?;
 
+        let session = response.session;
         let mut metadata = BTreeMap::new();
-        metadata.insert("session_id".to_string(), session.session_id.clone());
-        metadata.insert(
-            "subagent_type".to_string(),
-            session.subagent_type.to_string(),
-        );
+        metadata.insert("session_id".to_string(), session.id.to_string());
+        metadata.insert("subagent_type".to_string(), subagent_type.to_string());
         if let Some(model) = req.model {
             metadata.insert("requested_model".to_string(), model);
         }
-        if let Some(model_provider_id) = session.model_provider_id.clone() {
+        if let Some(model_provider_id) = response.model_provider_id.clone() {
             metadata.insert("model_provider_id".to_string(), model_provider_id);
         }
-        if let Some(model_id) = session.model_id.clone() {
+        if let Some(model_id) = response.model_id.clone() {
             metadata.insert("model_id".to_string(), model_id);
         }
-        if let Some(command) = session.command.clone() {
+        if let Some(command) = req.command.clone() {
             metadata.insert("command".to_string(), command);
         }
-        metadata.insert("description".to_string(), session.description.clone());
+        metadata.insert("description".to_string(), req.description.clone());
 
         Ok(SpawnSubtaskResponse {
             final_text: format!(
                 "Created/resumed subtask session {} for profile '{}' in workspace {}.",
-                session.session_id,
-                session.subagent_type,
+                session.id,
+                subagent_type,
                 executor.display_path(executor.workspace_root())
             ),
             metadata,
@@ -705,6 +708,7 @@ impl HostClient for RuntimeHostClient {
             name: skill.frontmatter.name.clone(),
             body: skill.body.clone(),
             allowed_tools: skill.frontmatter.allowed_tools.clone(),
+            model: skill.frontmatter.model.clone(),
         })
     }
 

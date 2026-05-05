@@ -44,6 +44,7 @@ pub(super) fn execute(
         name: skill.frontmatter.name.clone(),
         body_chars: body.chars().count(),
         allowed_tools: skill.frontmatter.allowed_tools.clone(),
+        model: skill.frontmatter.model.clone(),
     };
     Ok(BuiltinExecution::new(output, view))
 }

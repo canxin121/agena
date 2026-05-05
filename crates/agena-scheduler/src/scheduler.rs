@@ -58,8 +58,9 @@ impl Scheduler {
         loop {
             let due = self.collect_due().await;
             for mut job in due {
-                self.sink.deliver(&job).await;
                 let now = Utc::now();
+                let result = self.sink.deliver(&job).await;
+                job.record_delivery(now, result);
                 match job.advance(now) {
                     Ok(JobOutcome::Continued) => {
                         self.store.replace(job.id, job).await;

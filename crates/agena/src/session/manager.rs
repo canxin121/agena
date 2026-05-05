@@ -13,11 +13,13 @@ use crate::AppError;
 use crate::event::{ErrorInfo, EventKind, RunFailedEvent, RunStartedEvent};
 use crate::message::{
     AttachmentItem, BuiltinToolOutput, ExecutionStatus, FileChangePart, Message, MessageMetadata,
-    MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart, TimeRange,
-    TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock,
-    UserInputReply, UserInputReplyKind, UserInputRequest, UserInputRequestPart,
+    MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart,
+    TaskSubagentType, TimeRange, TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation,
+    ToolOutput, ToolResultBlock, UserInputReply, UserInputReplyKind, UserInputRequest,
+    UserInputRequestPart,
 };
 use crate::model::ModelRef;
+use std::path::PathBuf;
 use crate::permission::{
     PermissionAction, PermissionDecision, PermissionMode, PermissionReply, PermissionReplyKind,
     PermissionRequest, decide_from_mode,
@@ -160,6 +162,24 @@ pub struct SessionUserInputReplyRequest {
     pub reply: UserInputReply,
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionSubtaskRequest {
+    pub parent_session_id: i64,
+    pub description: String,
+    pub prompt: String,
+    pub subagent_type: TaskSubagentType,
+    pub task_id: Option<String>,
+    pub command: Option<String>,
+    pub requested_model: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSubtaskResponse {
+    pub session: Session,
+    pub model_provider_id: Option<String>,
+    pub model_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PromptTurnBudget {
     max_prompt_chars: usize,
@@ -174,6 +194,7 @@ struct ResolvedPendingTool {
     call_id: i64,
     invocation: ToolInvocation,
     lifecycle: TimeRange,
+    session_runtime: crate::session::SessionRuntimeState,
 }
 
 struct PendingHostUserInput {
@@ -446,6 +467,53 @@ impl SessionManager {
             .await
     }
 
+    pub async fn is_turn_active(&self, session_id: i64) -> bool {
+        self.turn_registry.is_active(session_id).await
+    }
+
+    pub async fn resolve_scheduled_run_options(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionRunOptions, AppError> {
+        let session = self.get_session(session_id).await?;
+        if let Some(model) = infer_session_model(&session)? {
+            return self.apply_execution_context_to_run_options(
+                &session,
+                SessionRunOptions {
+                    model,
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+            );
+        }
+
+        let provider_registry = self.execution_state().processor.provider_registry().clone();
+        let provider_ids = provider_registry.provider_ids();
+        if provider_ids.len() != 1 {
+            return Err(AppError::Internal(
+                "model is required when the session has no previous model and multiple providers are configured"
+                    .to_string(),
+            ));
+        }
+        let provider_id = provider_ids
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::Internal("no providers configured for scheduled run".to_string()))?;
+        let provider = provider_registry.get(provider_id.as_str()).ok_or_else(|| {
+            AppError::Internal(format!("provider not found for scheduled run: {provider_id}"))
+        })?;
+        self.apply_execution_context_to_run_options(
+            &session,
+            SessionRunOptions {
+                model: ModelRef::new(provider_id, provider.default_model().to_string()),
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+            },
+        )
+    }
+
     pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
         self.store.list_workspace_session_ids().await
     }
@@ -662,13 +730,71 @@ impl SessionManager {
             .store
             .load_session(request.session_id, state.cache_policy())
             .await?;
+        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
         let result = self
-            .run_until_stable(session, &request.options, state, control.clone(), steer_rx)
+            .run_until_stable(session, &options, state, control.clone(), steer_rx)
             .await;
         self.turn_registry
             .unregister_if_matches(session_id, &control)
             .await;
         result
+    }
+
+    pub async fn spawn_subtask(
+        &self,
+        request: SessionSubtaskRequest,
+    ) -> Result<SessionSubtaskResponse, AppError> {
+        let state = self.execution_state();
+        let parent = self
+            .store
+            .load_session(request.parent_session_id, state.cache_policy())
+            .await?;
+
+        if let Some(existing) = self
+            .find_child_session_for_task(request.parent_session_id, request.task_id.as_deref())
+            .await?
+        {
+            let options = self.subtask_run_options(&existing, &parent, request.requested_model.as_deref())?;
+            let session = self
+                .continue_session(SessionContinueRequest {
+                    session_id: existing.id,
+                    options: options.clone(),
+                })
+                .await?;
+            return Ok(SessionSubtaskResponse {
+                model_provider_id: Some(options.model.provider_id.to_string()),
+                model_id: Some(options.model.model_id.to_string()),
+                session,
+            });
+        }
+
+        let mut child = self
+            .create_session(SessionCreateRequest {
+                title: request.description.clone(),
+                parent_session_id: Some(request.parent_session_id),
+            })
+            .await?;
+        child.runtime.execution.agent_profile = Some(request.subagent_type.to_string());
+        child.runtime.execution.system_prompt_override = Some(request.prompt.clone());
+        child.runtime.execution.task_id = request.task_id.clone();
+        child = self
+            .persist_session_changes(child, Vec::new(), Vec::new(), None, state.clone())
+            .await?;
+
+        let options = self.subtask_run_options(&child, &parent, request.requested_model.as_deref())?;
+        let session = self
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: child.id,
+                options: options.clone(),
+                parts: vec![PartContent::text(request.prompt)],
+            })
+            .await?;
+
+        Ok(SessionSubtaskResponse {
+            model_provider_id: Some(options.model.provider_id.to_string()),
+            model_id: Some(options.model.model_id.to_string()),
+            session,
+        })
     }
 
     pub async fn fork_session(&self, request: SessionForkRequest) -> Result<Session, AppError> {
@@ -1127,7 +1253,8 @@ impl SessionManager {
 
         loop {
             let active_messages = prompt_window::active_prompt_messages(&session);
-            let tools = state.tool_executor.available_tools_for_messages_and_loaded(
+            let scoped_executor = state.tool_executor.for_session_context(&session.runtime.execution);
+            let tools = scoped_executor.available_tools_for_messages_and_loaded(
                 active_messages.as_slice(),
                 session.runtime.loaded_deferred_tools(),
             );
@@ -1550,7 +1677,8 @@ impl SessionManager {
         active_messages: &[Message],
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let tools = state.tool_executor.available_tools_for_messages_and_loaded(
+        let scoped_executor = state.tool_executor.for_session_context(&session.runtime.execution);
+        let tools = scoped_executor.available_tools_for_messages_and_loaded(
             active_messages,
             session.runtime.loaded_deferred_tools(),
         );
@@ -1755,8 +1883,8 @@ impl SessionManager {
     ) -> Result<Option<ResolvedPendingTool>, AppError> {
         let before_prepare = session.clone();
         let mut resolved = resolve_pending_tool(session, pending_tool)?;
-        let prepared = state
-            .tool_executor
+        let scoped_executor = state.tool_executor.for_session_context(&session.runtime.execution);
+        let prepared = scoped_executor
             .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
             .map_err(tool_error_to_app_error)?;
         if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
@@ -1785,21 +1913,16 @@ impl SessionManager {
             }));
         }
 
-        state
-            .tool_executor
+        scoped_executor
             .enforce_plan_mode_for(&resolved.invocation, session.id)
             .map_err(tool_error_to_app_error)?;
 
-        if !state
-            .tool_executor
-            .is_concurrency_safe_invocation(&resolved.invocation)
-        {
+        if !scoped_executor.is_concurrency_safe_invocation(&resolved.invocation) {
             *session = before_prepare;
             return Ok(None);
         }
 
-        for check in state
-            .tool_executor
+        for check in scoped_executor
             .collect_permission_checks_for_invocation(&resolved.invocation)
             .map_err(tool_error_to_app_error)?
         {
@@ -1824,8 +1947,9 @@ impl SessionManager {
         let mut handles = Vec::with_capacity(pending_tools.len());
         for pending_tool in pending_tools {
             let executor = state.tool_executor.clone();
+            let scoped_executor = executor.for_session_context(&pending_tool.session_runtime.execution);
             handles.push(tokio::task::spawn_blocking(move || {
-                executor.execute_invocation_detailed(
+                scoped_executor.execute_invocation_detailed(
                     &pending_tool.invocation,
                     session_id,
                     pending_tool.call_id,
@@ -1849,8 +1973,8 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let mut resolved = resolve_pending_tool(&session, &pending_tool)?;
-        let prepared = state
-            .tool_executor
+        let scoped_executor = state.tool_executor.for_session_context(&session.runtime.execution);
+        let prepared = scoped_executor
             .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
             .map_err(tool_error_to_app_error)?;
         let mut session_changed = false;
@@ -1883,13 +2007,11 @@ impl SessionManager {
 
         // Plan-mode guardrail: refuse mutating tools while the session
         // is in plan mode.
-        state
-            .tool_executor
+        scoped_executor
             .enforce_plan_mode_for(&resolved.invocation, session.id)
             .map_err(tool_error_to_app_error)?;
 
-        for check in state
-            .tool_executor
+        for check in scoped_executor
             .collect_permission_checks_for_invocation(&resolved.invocation)
             .map_err(tool_error_to_app_error)?
         {
@@ -2214,6 +2336,7 @@ impl SessionManager {
         if let Some(BuiltinToolOutput::ToolSearch { loaded_tools, .. }) = tool_output.as_builtin() {
             session.runtime.record_loaded_deferred_tools(&loaded_tools);
         }
+        self.apply_tool_success_execution_context(&mut session, &execution);
 
         {
             let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
@@ -2380,6 +2503,65 @@ impl SessionManager {
             .await
     }
 
+    fn apply_execution_context_to_run_options(
+        &self,
+        session: &Session,
+        mut options: SessionRunOptions,
+    ) -> Result<SessionRunOptions, AppError> {
+        if let Some((provider_id, model_id)) = session.runtime.model_override() {
+            options.model = ModelRef::try_new(provider_id, model_id).map_err(|error| {
+                AppError::Internal(format!(
+                    "session {} contains invalid execution model override: {error}",
+                    session.id
+                ))
+            })?;
+        }
+        if let Some(system) = session.runtime.execution.system_prompt_override.as_ref() {
+            options.system = Some(system.clone());
+        }
+        Ok(options)
+    }
+
+    fn apply_tool_success_execution_context(
+        &self,
+        session: &mut Session,
+        execution: &ToolInvocationExecution,
+    ) {
+        let Some(output) = execution.output.as_builtin() else {
+            return;
+        };
+        match output {
+            BuiltinToolOutput::SkillRun {
+                name,
+                allowed_tools,
+                model,
+                ..
+            } => {
+                session.runtime.execution.active_skill_name = Some(name.clone());
+                session.runtime.execution.system_prompt_override = Some(execution.view.output_text.clone());
+                session.runtime.set_allowed_tools(allowed_tools.clone());
+                if let Some(model_id) = model.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+                    let provider_id = session
+                        .runtime
+                        .execution
+                        .model_provider_id
+                        .clone()
+                        .or_else(|| infer_session_model(session).ok().flatten().map(|model| model.provider_id.to_string()));
+                    session.runtime.set_model_override(provider_id, Some(model_id.to_string()));
+                }
+            }
+            BuiltinToolOutput::EnterWorktree { path, .. } => {
+                session
+                    .runtime
+                    .set_effective_workspace_root(Some(PathBuf::from(path)));
+            }
+            BuiltinToolOutput::ExitWorktree { .. } => {
+                session.runtime.set_effective_workspace_root(None);
+            }
+            _ => {}
+        }
+    }
+
     async fn persist_run_failed_event(
         &self,
         session_id: i64,
@@ -2402,6 +2584,59 @@ impl SessionManager {
             .persist_session_changes(session, Vec::new(), vec![event], None, state)
             .await?;
         Ok(())
+    }
+
+    async fn find_child_session_for_task(
+        &self,
+        parent_session_id: i64,
+        task_id: Option<&str>,
+    ) -> Result<Option<Session>, AppError> {
+        let Some(task_id) = task_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(None);
+        };
+        let summaries = self
+            .list_session_summaries(SessionListRequest {
+                offset: 0,
+                limit: None,
+            })
+            .await?;
+        let state = self.execution_state();
+        for child_id in summaries
+            .into_iter()
+            .filter(|summary| summary.parent_id == Some(parent_session_id))
+            .map(|summary| summary.id)
+        {
+            let session = self.store.load_session(child_id, state.cache_policy()).await?;
+            if session.runtime.execution.task_id.as_deref() == Some(task_id) {
+                return Ok(Some(session));
+            }
+        }
+        Ok(None)
+    }
+
+    fn subtask_run_options(
+        &self,
+        child: &Session,
+        parent: &Session,
+        requested_model: Option<&str>,
+    ) -> Result<SessionRunOptions, AppError> {
+        let requested_model = requested_model.map(str::trim).filter(|value| !value.is_empty());
+        let inherited = infer_session_model(child)?.or_else(|| infer_session_model(parent).ok().flatten());
+        let base_model = inherited.ok_or_else(|| {
+            AppError::Internal(
+                "subtask requires a parent or child session model before it can run".to_string(),
+            )
+        })?;
+        let model = match requested_model {
+            Some(model_id) => ModelRef::new(base_model.provider_id.to_string(), model_id.to_string()),
+            None => base_model,
+        };
+        Ok(SessionRunOptions {
+            model,
+            system: child.runtime.execution.system_prompt_override.clone(),
+            temperature: None,
+            max_output_tokens: None,
+        })
     }
 
     /// Drain every pending steer message (non-blocking) and append each as
@@ -2457,7 +2692,10 @@ impl SessionManager {
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
     ) -> Result<ToolInvocationExecution, ToolError> {
-        state.tool_executor.execute_invocation_detailed(
+        let scoped_executor = state
+            .tool_executor
+            .for_session_context(&pending_tool.session_runtime.execution);
+        scoped_executor.execute_invocation_detailed(
             &pending_tool.invocation,
             session_id,
             pending_tool.call_id,
@@ -2470,18 +2708,42 @@ impl SessionManager {
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
     ) -> Result<ToolInvocationExecution, ToolError> {
-        state
+        let scoped_executor = state
             .tool_executor
-            .execute_invocation_detailed_bypassing_permissions(
-                &pending_tool.invocation,
-                session_id,
-                pending_tool.call_id,
-            )
+            .for_session_context(&pending_tool.session_runtime.execution);
+        scoped_executor.execute_invocation_detailed_bypassing_permissions(
+            &pending_tool.invocation,
+            session_id,
+            pending_tool.call_id,
+        )
     }
 
     fn execution_state(&self) -> Arc<SessionManagerState> {
         self.execution.load_full()
     }
+}
+
+fn infer_session_model(session: &Session) -> Result<Option<ModelRef>, AppError> {
+    let mut sorted: Vec<&Message> = session.messages.iter().collect();
+    sorted.sort_by(|a, b| {
+        (b.created_at.timestamp_millis(), b.id).cmp(&(a.created_at.timestamp_millis(), a.id))
+    });
+    for message in sorted {
+        let provider_id = message.metadata.model_provider_id.trim();
+        let model_id = message.metadata.model_id.trim();
+        if provider_id.is_empty() || model_id.is_empty() {
+            continue;
+        }
+        return ModelRef::try_new(provider_id, model_id)
+            .map(Some)
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "session {} contains invalid persisted model metadata: {error}",
+                    session.id
+                ))
+            });
+    }
+    Ok(None)
 }
 
 fn turn_control_to_app_error(err: TurnControlError) -> AppError {
@@ -2564,6 +2826,7 @@ fn resolve_pending_tool(
         call_id,
         invocation: invocation.clone(),
         lifecycle: lifecycle.clone(),
+        session_runtime: session.runtime.clone(),
     })
 }
 
@@ -3005,6 +3268,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::agent::Agent;
+    use crate::entry::BuiltinExecution;
     use crate::db::init_schema;
     use crate::event::EventKind;
     use crate::message::{
@@ -4430,6 +4694,187 @@ mod tests {
             .expect("list paged session summaries");
         assert_eq!(paged.len(), 1);
         assert_eq!(paged[0].id, sibling.id);
+    }
+
+    #[tokio::test]
+    async fn spawn_subtask_reuses_real_child_session_for_same_task_id() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let parent = service
+            .create_session(SessionCreateRequest {
+                title: "parent".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create parent session");
+        let _ = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: parent.id,
+                options: run_options(),
+                parts: vec![PartContent::text("parent context")],
+            })
+            .await
+            .expect("seed parent turn");
+
+        let first = service
+            .spawn_subtask(SessionSubtaskRequest {
+                parent_session_id: parent.id,
+                description: "inspect".to_string(),
+                prompt: TaskSubagentType::Explore.apply_prompt_guidance("look around"),
+                subagent_type: TaskSubagentType::Explore,
+                task_id: Some("task-1".to_string()),
+                command: None,
+                requested_model: None,
+            })
+            .await
+            .expect("spawn first subtask");
+
+        let second = service
+            .spawn_subtask(SessionSubtaskRequest {
+                parent_session_id: parent.id,
+                description: "inspect again".to_string(),
+                prompt: TaskSubagentType::Explore.apply_prompt_guidance("look around again"),
+                subagent_type: TaskSubagentType::Explore,
+                task_id: Some("task-1".to_string()),
+                command: None,
+                requested_model: None,
+            })
+            .await
+            .expect("resume existing subtask");
+
+        assert_eq!(first.session.parent_id, Some(parent.id));
+        assert_eq!(second.session.id, first.session.id);
+        assert_eq!(second.session.runtime.execution.task_id.as_deref(), Some("task-1"));
+
+        let summaries = service
+            .list_session_summaries(SessionListRequest::default())
+            .await
+            .expect("list session summaries");
+        let child_count = summaries
+            .iter()
+            .filter(|summary| summary.parent_id == Some(parent.id))
+            .count();
+        assert_eq!(child_count, 1);
+    }
+
+    #[tokio::test]
+    async fn apply_tool_success_persists_skill_execution_context() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let mut session = service
+            .create_session(SessionCreateRequest {
+                title: "skill".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        session.runtime.execution.model_provider_id = Some("scripted".to_string());
+
+        let execution: ToolInvocationExecution = BuiltinExecution::new(
+            BuiltinToolOutput::SkillRun {
+                name: "demo".to_string(),
+                body_chars: 12,
+                allowed_tools: vec!["read".to_string(), "grep".to_string()],
+                model: Some("claude-sonnet-4-6".to_string()),
+            },
+            crate::entry::ToolExecutionView::simple(
+                "skill_run: demo",
+                "Follow these instructions.",
+            ),
+        )
+        .into();
+
+        service.apply_tool_success_execution_context(&mut session, &execution);
+
+        assert_eq!(session.runtime.execution.active_skill_name.as_deref(), Some("demo"));
+        assert_eq!(session.runtime.execution.system_prompt_override.as_deref(), Some("Follow these instructions."));
+        assert_eq!(session.runtime.allowed_tools(), &["grep".to_string(), "read".to_string()]);
+        assert_eq!(session.runtime.model_override(), Some(("scripted", "claude-sonnet-4-6")));
+    }
+
+    #[tokio::test]
+    async fn apply_tool_success_updates_worktree_root() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let mut session = service
+            .create_session(SessionCreateRequest {
+                title: "worktree".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let entered: ToolInvocationExecution = BuiltinExecution::new(
+            BuiltinToolOutput::EnterWorktree {
+                path: "/tmp/worktree".to_string(),
+                branch: "agena/demo".to_string(),
+            },
+            crate::entry::ToolExecutionView::simple("enter_worktree", "entered"),
+        )
+        .into();
+        service.apply_tool_success_execution_context(&mut session, &entered);
+        assert_eq!(
+            session.runtime.effective_workspace_root().map(|path| path.to_string_lossy().to_string()),
+            Some("/tmp/worktree".to_string())
+        );
+
+        let exited: ToolInvocationExecution = BuiltinExecution::new(
+            BuiltinToolOutput::ExitWorktree {
+                action: "keep".to_string(),
+                path: "/tmp/worktree".to_string(),
+            },
+            crate::entry::ToolExecutionView::simple("exit_worktree", "exited"),
+        )
+        .into();
+        service.apply_tool_success_execution_context(&mut session, &exited);
+        assert!(session.runtime.effective_workspace_root().is_none());
+    }
+
+    #[tokio::test]
+    async fn continue_session_prefers_execution_context_model_override() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let mut session = service
+            .create_session(SessionCreateRequest {
+                title: "override".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        session.runtime.set_model_override(
+            Some("scripted".to_string()),
+            Some("claude-sonnet-4-6".to_string()),
+        );
+
+        let options = service
+            .apply_execution_context_to_run_options(&session, run_options())
+            .expect("apply execution context");
+        assert_eq!(options.model.provider_id.as_ref(), "scripted");
+        assert_eq!(options.model.model_id.as_ref(), "claude-sonnet-4-6");
     }
 
     #[tokio::test]

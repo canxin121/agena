@@ -1,7 +1,9 @@
 use std::{
+    collections::{BTreeMap, HashSet},
     fs,
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicI64, Ordering},
@@ -26,6 +28,7 @@ use agena_mcp_server::{McpServerBackend, McpServerError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde::Serialize;
 
 use crate::{
@@ -34,7 +37,9 @@ use crate::{
         ConfigEnvironment, ConfigLoader, ConfigModeName, ConfigOutputFormat, ConfigOverride,
         LoadConfigRequest, ProcessEnvironment,
     },
+    db::{entities, init_schema},
     error::AppError,
+    memory::{MemoryStore, MemoryType},
     message::{
         ApplyPatchToolInput, BuiltinToolInput, PartContent, StructuredObject, ToolInvocation,
     },
@@ -85,19 +90,26 @@ pub enum AgenaCommand {
     Completion(CompletionArgs),
     Config(ConfigCommand),
     Continue(ContinueArgs),
+    Commit(CommitArgs),
+    Pr(PrArgs),
     Debug(DebugCommand),
     Diagnostics(DiagnosticsArgs),
     Exec(ExecArgs),
     Fork(ForkArgs),
+    Cost(CostArgs),
+    Git(GitArgs),
     Login(LoginArgs),
+    Memory(MemoryCommand),
     Logout(LogoutArgs),
     McpServer(McpServerArgs),
+    Permissions(PermissionsArgs),
     Provider(ProviderCommand),
     Plugin(PluginCommand),
     Resume(ResumeArgs),
     Review(ReviewArgs),
     Serve(ServeCommand),
     Sessions(SessionsCommand),
+    Worktree(WorktreeArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -125,9 +137,64 @@ pub struct DiagnosticsArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct CostArgs {
+    pub session_id: Option<i64>,
+    #[arg(long)]
+    pub last: bool,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CommitArgs {
+    pub message: String,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PrArgs {
+    pub title: String,
+    #[arg(long)]
+    pub body: Option<String>,
+    #[arg(long)]
+    pub base: Option<String>,
+    #[arg(long)]
+    pub head: Option<String>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PermissionsArgs {
+    #[arg(long)]
+    pub search: Option<String>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct WorktreeArgs {
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct GitArgs {
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct ProviderCommand {
     #[command(subcommand)]
     pub command: Option<ProviderSubcommand>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MemoryCommand {
+    #[command(subcommand)]
+    pub command: Option<MemorySubcommand>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -312,6 +379,13 @@ pub enum ProviderSubcommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+pub enum MemorySubcommand {
+    List(MemoryListArgs),
+    Forget(MemoryForgetArgs),
+    Edit(MemoryEditArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
 pub enum SessionsSubcommand {
     List(SessionListArgs),
 }
@@ -346,14 +420,47 @@ pub struct LogoutArgs {
     pub provider_id: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SessionListView {
+    All,
+    Roots,
+    Subtree,
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct SessionListArgs {
     #[arg(long, default_value_t = 20)]
     pub limit: u64,
     #[arg(long, default_value_t = 0)]
     pub offset: u64,
+    #[arg(long, value_enum, default_value_t = SessionListView::All)]
+    pub view: SessionListView,
+    #[arg(long)]
+    pub anchor_session_id: Option<i64>,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
     pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MemoryListArgs {
+    #[arg(long = "workspace", alias = "cwd")]
+    pub workspace: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MemoryForgetArgs {
+    #[arg(long = "workspace", alias = "cwd")]
+    pub workspace: Option<PathBuf>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MemoryEditArgs {
+    #[arg(long = "workspace", alias = "cwd")]
+    pub workspace: Option<PathBuf>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -513,6 +620,23 @@ struct SessionForkOutput {
 }
 
 #[derive(Debug, Serialize)]
+struct MemoryListOutput {
+    dir: String,
+    count: usize,
+    entries: Vec<MemorySummaryOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct MemorySummaryOutput {
+    file_name: String,
+    name: String,
+    description: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    memory_type: Option<String>,
+    path: String,
+}
+
+#[derive(Debug, Serialize)]
 struct ApplyOutput {
     title: String,
     output_text: String,
@@ -548,6 +672,100 @@ struct DiagnosticsOutput {
     config: DiagnosticsConfigOutput,
     telemetry: DiagnosticsTelemetryOutput,
     environment: DiagnosticsEnvironmentOutput,
+}
+
+#[derive(Debug, Serialize)]
+struct CostOutput {
+    session: SessionDetail,
+    summary: crate::session::SessionCostSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct PermissionRuleOutput {
+    id: i64,
+    action_key: String,
+    mode: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct PermissionsOutput {
+    count: usize,
+    rules: Vec<PermissionRuleOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct ActiveWorktreeOutput {
+    session_id: i64,
+    path: String,
+    branch: String,
+    created_here: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ManagedWorktreeOutput {
+    path: String,
+    session_id: Option<i64>,
+    branch: Option<String>,
+    registered_with_git: bool,
+    stale: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct WorktreeOutput {
+    workspace_root: String,
+    active: Vec<ActiveWorktreeOutput>,
+    managed: Vec<ManagedWorktreeOutput>,
+}
+
+#[derive(Debug, Clone)]
+struct GitPreflight {
+    git_available: bool,
+    repo: bool,
+    gh_available: bool,
+    branch: Option<String>,
+    upstream: Option<String>,
+    ahead: Option<u64>,
+    behind: Option<u64>,
+    staged_files: u64,
+    unstaged_files: u64,
+    untracked_files: u64,
+    changed_files: u64,
+    clean: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct GitOutput {
+    workspace_root: String,
+    git_available: bool,
+    repo: bool,
+    gh_available: bool,
+    branch: Option<String>,
+    upstream: Option<String>,
+    ahead: Option<u64>,
+    behind: Option<u64>,
+    staged_files: u64,
+    unstaged_files: u64,
+    untracked_files: u64,
+    changed_files: u64,
+    clean: bool,
+    worktree_active_sessions: u64,
+    worktree_managed_dirs: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct CommitOutput {
+    workspace_root: String,
+    commit: String,
+    summary: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PrOutput {
+    workspace_root: String,
+    branch: String,
+    url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -652,13 +870,19 @@ impl AgenaCli {
             Some(AgenaCommand::Completion(args)) => self.run_completion(args),
             Some(AgenaCommand::Config(command)) => self.run_config(loader, command),
             Some(AgenaCommand::Continue(args)) => self.run_continue(args).await,
+            Some(AgenaCommand::Commit(args)) => self.run_commit(args).await,
+            Some(AgenaCommand::Pr(args)) => self.run_pr(args).await,
             Some(AgenaCommand::Debug(command)) => self.run_debug(command).await,
             Some(AgenaCommand::Diagnostics(args)) => self.run_diagnostics(loader, args),
             Some(AgenaCommand::Exec(args)) => self.run_exec(args).await,
             Some(AgenaCommand::Fork(args)) => self.run_fork(args).await,
+            Some(AgenaCommand::Cost(args)) => self.run_cost(args).await,
+            Some(AgenaCommand::Git(args)) => self.run_git(args).await,
             Some(AgenaCommand::Login(args)) => self.run_login(loader, args).await,
             Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args),
+            Some(AgenaCommand::Memory(command)) => self.run_memory(command),
             Some(AgenaCommand::McpServer(args)) => self.run_mcp_server(args).await,
+            Some(AgenaCommand::Permissions(args)) => self.run_permissions(args).await,
             Some(AgenaCommand::Provider(command)) => self.run_provider(loader, command).await,
             Some(AgenaCommand::Plugin(command)) => self.run_plugin(command).await,
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
@@ -667,6 +891,7 @@ impl AgenaCli {
                 "the HTTP server moved to the `apps/agena-http-api-server` app; run `cargo run -p agena-http-api-server -- --help` from the repository root".to_owned(),
             )),
             Some(AgenaCommand::Sessions(command)) => self.run_sessions(command).await,
+            Some(AgenaCommand::Worktree(args)) => self.run_worktree(args).await,
             None => self.run_default(loader, tracing_reload_handle).await,
         }
     }
@@ -1148,6 +1373,12 @@ impl AgenaCli {
         Ok(())
     }
 
+    fn run_memory(self, command: MemoryCommand) -> Result<(), AppError> {
+        let output = self.render_memory_command(command)?;
+        println!("{output}");
+        Ok(())
+    }
+
     async fn run_sessions(self, command: SessionsCommand) -> Result<(), AppError> {
         let output = self.render_sessions_command(command).await?;
         println!("{output}");
@@ -1168,6 +1399,42 @@ impl AgenaCli {
 
     fn run_completion(self, args: CompletionArgs) -> Result<(), AppError> {
         print!("{}", render_completion_command(args)?);
+        Ok(())
+    }
+
+    async fn run_cost(self, args: CostArgs) -> Result<(), AppError> {
+        let output = self.render_cost_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
+    async fn run_permissions(self, args: PermissionsArgs) -> Result<(), AppError> {
+        let output = self.render_permissions_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
+    async fn run_worktree(self, args: WorktreeArgs) -> Result<(), AppError> {
+        let output = self.render_worktree_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
+    async fn run_git(self, args: GitArgs) -> Result<(), AppError> {
+        let output = self.render_git_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
+    async fn run_commit(self, args: CommitArgs) -> Result<(), AppError> {
+        let output = self.render_commit_command(args)?;
+        println!("{output}");
+        Ok(())
+    }
+
+    async fn run_pr(self, args: PrArgs) -> Result<(), AppError> {
+        let output = self.render_pr_command(args)?;
+        println!("{output}");
         Ok(())
     }
 
@@ -1329,6 +1596,59 @@ impl AgenaCli {
         }
     }
 
+    fn render_memory_command(&self, command: MemoryCommand) -> Result<String, AppError> {
+        match command
+            .command
+            .unwrap_or(MemorySubcommand::List(MemoryListArgs {
+                workspace: None,
+                format: ConfigOutputFormat::Toml,
+            })) {
+            MemorySubcommand::List(args) => {
+                let store = self.memory_store_for_workspace(args.workspace.as_ref())?;
+                let entries = store
+                    .list()
+                    .map_err(|error| AppError::Config(error.to_string()))?;
+                let entries = entries
+                    .into_iter()
+                    .map(|entry| MemorySummaryOutput {
+                        file_name: entry.file_name.clone(),
+                        name: memory_entry_name(&entry),
+                        description: entry.frontmatter.description.clone(),
+                        memory_type: memory_type_label(entry.frontmatter.r#type),
+                        path: entry.path.display().to_string(),
+                    })
+                    .collect::<Vec<_>>();
+                render_serialized(
+                    args.format,
+                    &MemoryListOutput {
+                        dir: store.dir().display().to_string(),
+                        count: entries.len(),
+                        entries,
+                    },
+                )
+            }
+            MemorySubcommand::Forget(args) => {
+                self.memory_store_for_workspace(args.workspace.as_ref())?
+                    .forget(args.name.as_str())
+                    .map_err(|error| AppError::Config(error.to_string()))?;
+                Ok(format!("forgot memory: {}", args.name))
+            }
+            MemorySubcommand::Edit(args) => {
+                let store = self.memory_store_for_workspace(args.workspace.as_ref())?;
+                let path = match args.name.as_deref() {
+                    Some(name) => {
+                        store
+                            .get(name)
+                            .map_err(|error| AppError::Config(error.to_string()))?
+                            .path
+                    }
+                    None => ensure_memory_index_path(&store)?,
+                };
+                Ok(path.display().to_string())
+            }
+        }
+    }
+
     async fn render_sessions_command(&self, command: SessionsCommand) -> Result<String, AppError> {
         let runtime = self.session_runtime().await?;
         let manager = runtime
@@ -1339,15 +1659,15 @@ impl AgenaCli {
             .unwrap_or(SessionsSubcommand::List(SessionListArgs {
                 limit: 20,
                 offset: 0,
+                view: SessionListView::All,
+                anchor_session_id: None,
                 format: ConfigOutputFormat::Toml,
             })) {
             SessionsSubcommand::List(args) => {
-                let sessions = manager
-                    .list_session_summaries(SessionListRequest {
-                        offset: args.offset,
-                        limit: Some(args.limit),
-                    })
-                    .await?;
+                let sessions = list_all_session_summaries(manager.as_ref()).await?;
+                let sessions =
+                    filter_session_summaries_by_view(sessions, args.view, args.anchor_session_id)?;
+                let sessions = paginate_session_summaries(sessions, args.offset, args.limit);
                 render_serialized(args.format, &SessionListOutput { sessions })
             }
         }
@@ -1365,6 +1685,230 @@ impl AgenaCli {
             args.format,
             &SessionOutput {
                 session: session_detail(&session, latest_event_seq),
+            },
+        )
+    }
+
+    async fn render_cost_command(&self, args: CostArgs) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
+        let session = manager.get_session(session_id).await?;
+        let latest_event_seq = latest_event_seq(&manager, session.id).await?;
+        let output = CostOutput {
+            session: session_detail(&session, latest_event_seq),
+            summary: crate::session::cost::summarize(&session.messages),
+        };
+        render_serialized(args.format, &output)
+    }
+
+    async fn render_permissions_command(&self, args: PermissionsArgs) -> Result<String, AppError> {
+        let storage = StorageConfig {
+            database_url: self.database_url.clone(),
+            database_path: self.database_path.clone(),
+        };
+        let database_url = storage.resolve_url()?;
+        StorageConfig::ensure_parent(database_url.as_str())?;
+        let db = sea_orm::Database::connect(database_url.as_str()).await?;
+        init_schema(&db).await?;
+
+        let mut query = entities::permission_rule::Entity::find()
+            .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
+            .order_by_desc(entities::permission_rule::Column::Id);
+        if let Some(search) = args.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            query = query.filter(entities::permission_rule::Column::ActionKey.like(format!("%{search}%")));
+        }
+        let rows = query.all(&db).await?;
+        let rules = rows
+            .into_iter()
+            .map(|row| {
+                Ok(PermissionRuleOutput {
+                    id: row.id,
+                    action_key: row.action_key,
+                    mode: row.mode,
+                    created_at: DateTime::<Utc>::from_timestamp_millis(row.created_at_ms)
+                        .ok_or_else(|| AppError::Internal(format!("invalid permission rule created_at_ms: {}", row.created_at_ms)))?,
+                    updated_at: DateTime::<Utc>::from_timestamp_millis(row.updated_at_ms)
+                        .ok_or_else(|| AppError::Internal(format!("invalid permission rule updated_at_ms: {}", row.updated_at_ms)))?,
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+        render_serialized(
+            args.format,
+            &PermissionsOutput {
+                count: rules.len(),
+                rules,
+            },
+        )
+    }
+
+    async fn render_worktree_command(&self, args: WorktreeArgs) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        let executor = manager.tool_executor();
+        let registry = executor
+            .worktree_registry()
+            .ok_or_else(|| AppError::Config("worktree registry is not enabled in this runtime".to_owned()))?;
+        let active = crate::tool::worktree_list_active(registry)
+            .into_iter()
+            .map(|entry| ActiveWorktreeOutput {
+                session_id: entry.session_id,
+                path: entry.path.display().to_string(),
+                branch: entry.branch,
+                created_here: entry.created_here,
+            })
+            .collect::<Vec<_>>();
+        let managed = crate::tool::worktree_list_managed(runtime.workspace_root(), registry)
+            .into_iter()
+            .map(|entry| {
+                let stale = entry.is_stale();
+                ManagedWorktreeOutput {
+                    path: entry.path.display().to_string(),
+                    session_id: entry.session_id,
+                    branch: entry.branch,
+                    registered_with_git: entry.registered_with_git,
+                    stale,
+                }
+            })
+            .collect::<Vec<_>>();
+        render_serialized(
+            args.format,
+            &WorktreeOutput {
+                workspace_root: runtime.workspace_root().display().to_string(),
+                active,
+                managed,
+            },
+        )
+    }
+
+    async fn render_git_command(&self, args: GitArgs) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let workspace_root = runtime.workspace_root().to_path_buf();
+        let preflight = collect_git_preflight(&workspace_root)?;
+
+        let (worktree_active_sessions, worktree_managed_dirs) = match runtime.session_manager() {
+            Some(manager) => {
+                let executor = manager.tool_executor();
+                match executor.worktree_registry() {
+                    Some(registry) => (
+                        crate::tool::worktree_list_active(registry).len() as u64,
+                        crate::tool::worktree_list_managed(runtime.workspace_root(), registry).len() as u64,
+                    ),
+                    None => (0, 0),
+                }
+            }
+            None => (0, 0),
+        };
+
+        render_serialized(
+            args.format,
+            &GitOutput {
+                workspace_root: workspace_root.display().to_string(),
+                git_available: preflight.git_available,
+                repo: preflight.repo,
+                gh_available: preflight.gh_available,
+                branch: preflight.branch,
+                upstream: preflight.upstream,
+                ahead: preflight.ahead,
+                behind: preflight.behind,
+                staged_files: preflight.staged_files,
+                unstaged_files: preflight.unstaged_files,
+                untracked_files: preflight.untracked_files,
+                changed_files: preflight.changed_files,
+                clean: preflight.clean,
+                worktree_active_sessions,
+                worktree_managed_dirs,
+            },
+        )
+    }
+
+    fn render_commit_command(&self, args: CommitArgs) -> Result<String, AppError> {
+        let workspace_root = self.resolve_workspace_root(None)?;
+        let preflight = collect_git_preflight(&workspace_root)?;
+        if !preflight.git_available {
+            return Err(AppError::Config("git is not available in PATH".to_owned()));
+        }
+        if !preflight.repo {
+            return Err(AppError::Config(format!(
+                "not a git repository: {}",
+                workspace_root.display()
+            )));
+        }
+        if preflight.staged_files == 0 {
+            return Err(AppError::Config("no staged changes to commit".to_owned()));
+        }
+        let output = Command::new("git")
+            .args(["commit", "-m", args.message.as_str()])
+            .current_dir(&workspace_root)
+            .output()?;
+        if !output.status.success() {
+            return Err(AppError::Config(format!(
+                "git commit failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let commit = git_output(&workspace_root, ["rev-parse", "HEAD"])?;
+        let summary = git_output(&workspace_root, ["log", "-1", "--pretty=%s"])?;
+        render_serialized(
+            args.format,
+            &CommitOutput {
+                workspace_root: workspace_root.display().to_string(),
+                commit,
+                summary,
+            },
+        )
+    }
+
+    fn render_pr_command(&self, args: PrArgs) -> Result<String, AppError> {
+        let workspace_root = self.resolve_workspace_root(None)?;
+        let preflight = collect_git_preflight(&workspace_root)?;
+        if !preflight.git_available {
+            return Err(AppError::Config("git is not available in PATH".to_owned()));
+        }
+        if !preflight.gh_available {
+            return Err(AppError::Config("gh is not available in PATH".to_owned()));
+        }
+        if !preflight.repo {
+            return Err(AppError::Config(format!(
+                "not a git repository: {}",
+                workspace_root.display()
+            )));
+        }
+        let branch = args
+            .head
+            .clone()
+            .or(preflight.branch.clone())
+            .ok_or_else(|| AppError::Config("could not determine current branch".to_owned()))?;
+
+        let mut command = Command::new("gh");
+        command.arg("pr").arg("create").arg("--title").arg(args.title);
+        command.arg("--body").arg(args.body.unwrap_or_default());
+        if let Some(base) = args.base {
+            command.arg("--base").arg(base);
+        }
+        if let Some(head) = args.head {
+            command.arg("--head").arg(head);
+        }
+        command.current_dir(&workspace_root);
+
+        let output = command.output()?;
+        if !output.status.success() {
+            return Err(AppError::Config(format!(
+                "gh pr create failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        render_serialized(
+            args.format,
+            &PrOutput {
+                workspace_root: workspace_root.display().to_string(),
+                branch,
+                url,
             },
         )
     }
@@ -1607,6 +2151,23 @@ impl AgenaCli {
             builder = builder.with_workspace_root(workspace.clone());
         }
         builder.build().await
+    }
+
+    fn memory_store_for_workspace(
+        &self,
+        workspace: Option<&PathBuf>,
+    ) -> Result<MemoryStore, AppError> {
+        Ok(MemoryStore::for_workspace(
+            self.resolve_workspace_root(workspace)?.as_path(),
+        ))
+    }
+
+    fn resolve_workspace_root(&self, workspace: Option<&PathBuf>) -> Result<PathBuf, AppError> {
+        workspace
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(std::env::current_dir)
+            .map_err(AppError::from)
     }
 
     fn auth_manager<E>(
@@ -2114,6 +2675,27 @@ fn mcp_tool_invocation(
     })
 }
 
+fn ensure_memory_index_path(store: &MemoryStore) -> Result<PathBuf, AppError> {
+    store.ensure_exists()?;
+    let path = store.dir().join("MEMORY.md");
+    if !path.exists() {
+        fs::write(&path, "")?;
+    }
+    Ok(path)
+}
+
+fn memory_entry_name(entry: &crate::memory::MemoryEntry) -> String {
+    if entry.frontmatter.name.trim().is_empty() {
+        entry.file_name.trim_end_matches(".md").to_string()
+    } else {
+        entry.frontmatter.name.clone()
+    }
+}
+
+fn memory_type_label(memory_type: Option<MemoryType>) -> Option<String> {
+    memory_type.map(|value| value.label().to_string())
+}
+
 fn render_completion_command(args: CompletionArgs) -> Result<String, AppError> {
     let mut command = AgenaCli::command();
     let mut buffer = Vec::new();
@@ -2230,6 +2812,174 @@ fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
 
 fn normalize_login_provider(provider_id: &str) -> String {
     provider_id.trim_end_matches('/').to_owned()
+}
+
+async fn list_all_session_summaries(
+    manager: &crate::session::SessionManager,
+) -> Result<Vec<SessionSummary>, AppError> {
+    let mut offset = 0_u64;
+    let page_size = 200_u64;
+    let mut sessions = Vec::new();
+    loop {
+        let page = manager
+            .list_session_summaries(SessionListRequest {
+                offset,
+                limit: Some(page_size),
+            })
+            .await?;
+        let count = page.len() as u64;
+        sessions.extend(page);
+        if count < page_size {
+            break;
+        }
+        offset = offset.saturating_add(count);
+    }
+    Ok(sessions)
+}
+
+fn filter_session_summaries_by_view(
+    sessions: Vec<SessionSummary>,
+    view: SessionListView,
+    anchor_session_id: Option<i64>,
+) -> Result<Vec<SessionSummary>, AppError> {
+    match view {
+        SessionListView::Roots => {
+            let mut roots = sessions
+                .into_iter()
+                .filter(|session| session.parent_id.is_none())
+                .collect::<Vec<_>>();
+            roots.sort_by(session_summary_sort_recent);
+            Ok(roots)
+        }
+        SessionListView::All => render_session_summary_tree(sessions, None),
+        SessionListView::Subtree => {
+            let anchor_session_id = anchor_session_id.ok_or_else(|| {
+                AppError::Config("subtree view requires --anchor-session-id <id>".to_owned())
+            })?;
+            render_session_summary_tree(sessions, Some(anchor_session_id))
+        }
+    }
+}
+
+fn render_session_summary_tree(
+    sessions: Vec<SessionSummary>,
+    anchor_session_id: Option<i64>,
+) -> Result<Vec<SessionSummary>, AppError> {
+    let by_id = sessions
+        .into_iter()
+        .map(|session| (session.id, session))
+        .collect::<BTreeMap<_, _>>();
+    let mut children = BTreeMap::<Option<i64>, Vec<i64>>::new();
+    for session in by_id.values() {
+        let parent_id = session
+            .parent_id
+            .filter(|parent_id| by_id.contains_key(parent_id));
+        children.entry(parent_id).or_default().push(session.id);
+    }
+    for child_ids in children.values_mut() {
+        child_ids.sort_by(|left, right| session_summary_sort_recent(&by_id[left], &by_id[right]));
+    }
+
+    let root_ids = match anchor_session_id {
+        Some(anchor_id) => vec![resolve_session_summary_root(anchor_id, &by_id)?],
+        None => children.get(&None).cloned().unwrap_or_default(),
+    };
+    let kept_ids = match anchor_session_id {
+        Some(root_id) => collect_session_summary_subtree_ids(
+            resolve_session_summary_root(root_id, &by_id)?,
+            &children,
+        ),
+        None => by_id.keys().copied().collect::<HashSet<_>>(),
+    };
+    let mut out = Vec::new();
+    for root_id in root_ids {
+        append_session_summary_subtree(root_id, &children, &by_id, &kept_ids, &mut out);
+    }
+    Ok(out)
+}
+
+fn resolve_session_summary_root(
+    session_id: i64,
+    by_id: &BTreeMap<i64, SessionSummary>,
+) -> Result<i64, AppError> {
+    let mut current = session_id;
+    let mut seen = HashSet::new();
+    loop {
+        let session = by_id.get(&current).ok_or_else(|| {
+            AppError::Config(format!("session not found for subtree view: {session_id}"))
+        })?;
+        let Some(parent_id) = session.parent_id else {
+            return Ok(current);
+        };
+        if !seen.insert(current) {
+            return Err(AppError::Internal(format!(
+                "cycle detected while resolving session subtree root for {session_id}"
+            )));
+        }
+        if !by_id.contains_key(&parent_id) {
+            return Ok(current);
+        }
+        current = parent_id;
+    }
+}
+
+fn collect_session_summary_subtree_ids(
+    root_id: i64,
+    children: &BTreeMap<Option<i64>, Vec<i64>>,
+) -> HashSet<i64> {
+    let mut kept = HashSet::new();
+    let mut stack = vec![root_id];
+    while let Some(session_id) = stack.pop() {
+        if !kept.insert(session_id) {
+            continue;
+        }
+        if let Some(child_ids) = children.get(&Some(session_id)) {
+            stack.extend(child_ids.iter().copied());
+        }
+    }
+    kept
+}
+
+fn append_session_summary_subtree(
+    session_id: i64,
+    children: &BTreeMap<Option<i64>, Vec<i64>>,
+    by_id: &BTreeMap<i64, SessionSummary>,
+    kept_ids: &HashSet<i64>,
+    out: &mut Vec<SessionSummary>,
+) {
+    if !kept_ids.contains(&session_id) {
+        return;
+    }
+    if let Some(session) = by_id.get(&session_id) {
+        out.push(session.clone());
+    }
+    if let Some(child_ids) = children.get(&Some(session_id)) {
+        for child_id in child_ids {
+            append_session_summary_subtree(*child_id, children, by_id, kept_ids, out);
+        }
+    }
+}
+
+fn session_summary_sort_recent(
+    left: &SessionSummary,
+    right: &SessionSummary,
+) -> std::cmp::Ordering {
+    right
+        .updated_at
+        .cmp(&left.updated_at)
+        .then_with(|| right.id.cmp(&left.id))
+}
+
+fn paginate_session_summaries(
+    sessions: Vec<SessionSummary>,
+    offset: u64,
+    limit: u64,
+) -> Vec<SessionSummary> {
+    sessions
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect()
 }
 
 async fn selected_session_id(
@@ -2362,6 +3112,151 @@ fn title_from_prompt(prompt: &str) -> String {
     } else {
         truncated
     }
+}
+
+fn command_available(command: &str) -> bool {
+    Command::new(command)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(workspace_root)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn git_output<const N: usize>(workspace_root: &Path, args: [&str; N]) -> Result<String, AppError> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(workspace_root)
+        .output()?;
+    if !output.status.success() {
+        return Err(AppError::Config(format!(
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn collect_git_preflight(workspace_root: &Path) -> Result<GitPreflight, AppError> {
+    let git_available = command_available("git");
+    let gh_available = command_available("gh");
+    if !git_available {
+        return Ok(GitPreflight {
+            git_available,
+            repo: false,
+            gh_available,
+            branch: None,
+            upstream: None,
+            ahead: None,
+            behind: None,
+            staged_files: 0,
+            unstaged_files: 0,
+            untracked_files: 0,
+            changed_files: 0,
+            clean: true,
+        });
+    }
+
+    let repo = git_success(workspace_root, ["rev-parse", "--is-inside-work-tree"]);
+    if !repo {
+        return Ok(GitPreflight {
+            git_available,
+            repo,
+            gh_available,
+            branch: None,
+            upstream: None,
+            ahead: None,
+            behind: None,
+            staged_files: 0,
+            unstaged_files: 0,
+            untracked_files: 0,
+            changed_files: 0,
+            clean: true,
+        });
+    }
+
+    let branch = non_empty_string(git_output(workspace_root, ["branch", "--show-current"])?);
+    let upstream = git_output(
+        workspace_root,
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+    )
+    .ok()
+    .and_then(non_empty_string);
+    let (ahead, behind) = parse_ahead_behind(
+        upstream
+            .as_ref()
+            .and_then(|_| {
+                git_output(workspace_root, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+                    .ok()
+            })
+            .as_deref(),
+    );
+    let status = git_output(workspace_root, ["status", "--porcelain"])?;
+    let (staged_files, unstaged_files, untracked_files, changed_files) =
+        summarize_git_status(status.as_str());
+
+    Ok(GitPreflight {
+        git_available,
+        repo,
+        gh_available,
+        branch,
+        upstream,
+        ahead,
+        behind,
+        staged_files,
+        unstaged_files,
+        untracked_files,
+        changed_files,
+        clean: changed_files == 0,
+    })
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn parse_ahead_behind(value: Option<&str>) -> (Option<u64>, Option<u64>) {
+    let Some(value) = value else {
+        return (None, None);
+    };
+    let mut parts = value.split_whitespace();
+    let behind = parts.next().and_then(|part| part.parse::<u64>().ok());
+    let ahead = parts.next().and_then(|part| part.parse::<u64>().ok());
+    (ahead, behind)
+}
+
+fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
+    let mut staged = 0_u64;
+    let mut unstaged = 0_u64;
+    let mut untracked = 0_u64;
+    let mut changed = 0_u64;
+
+    for line in status.lines().filter(|line| !line.is_empty()) {
+        changed += 1;
+        let bytes = line.as_bytes();
+        let x = bytes.first().copied().unwrap_or(b' ');
+        let y = bytes.get(1).copied().unwrap_or(b' ');
+        if x == b'?' && y == b'?' {
+            untracked += 1;
+            continue;
+        }
+        if x != b' ' {
+            staged += 1;
+        }
+        if y != b' ' {
+            unstaged += 1;
+        }
+    }
+
+    (staged, unstaged, untracked, changed)
 }
 
 fn session_storage_error() -> AppError {
@@ -2586,6 +3481,8 @@ store_path = "{}"
                 command: Some(SessionsSubcommand::List(SessionListArgs {
                     limit: 10,
                     offset: 0,
+                    view: SessionListView::All,
+                    anchor_session_id: None,
                     format: ConfigOutputFormat::Json,
                 })),
             })
@@ -2606,6 +3503,185 @@ store_path = "{}"
             serde_json::from_str(resume_output.as_str()).expect("resume should be json");
         assert_eq!(resumed["session"]["id"], created.id);
         assert_eq!(resumed["session"]["title"], "cli session");
+    }
+
+    #[tokio::test]
+    async fn sessions_list_supports_roots_and_subtree_views() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("agena-cli-session-view-{suffix}.db"));
+        let cli = AgenaCli {
+            config: None,
+            mode: None,
+            overrides: Vec::new(),
+            database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
+            database_path: None,
+            command: None,
+        };
+        let runtime = cli.session_runtime().await.expect("runtime should build");
+        let manager = runtime
+            .session_manager()
+            .expect("session manager should be available");
+        let root = manager
+            .create_session(crate::session::SessionCreateRequest {
+                title: "root".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("root should be created");
+        let child = manager
+            .create_session(crate::session::SessionCreateRequest {
+                title: "child".to_owned(),
+                parent_session_id: Some(root.id),
+            })
+            .await
+            .expect("child should be created");
+        let other = manager
+            .create_session(crate::session::SessionCreateRequest {
+                title: "other".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("other root should be created");
+
+        let roots_output = cli
+            .render_sessions_command(SessionsCommand {
+                command: Some(SessionsSubcommand::List(SessionListArgs {
+                    limit: 20,
+                    offset: 0,
+                    view: SessionListView::Roots,
+                    anchor_session_id: None,
+                    format: ConfigOutputFormat::Json,
+                })),
+            })
+            .await
+            .expect("roots view should render");
+        let roots: Value =
+            serde_json::from_str(roots_output.as_str()).expect("roots should be json");
+        let root_ids = roots["sessions"]
+            .as_array()
+            .expect("sessions should be array")
+            .iter()
+            .map(|item| item["id"].as_i64().expect("id should be i64"))
+            .collect::<Vec<_>>();
+        assert!(root_ids.contains(&root.id));
+        assert!(root_ids.contains(&other.id));
+        assert!(!root_ids.contains(&child.id));
+
+        let subtree_output = cli
+            .render_sessions_command(SessionsCommand {
+                command: Some(SessionsSubcommand::List(SessionListArgs {
+                    limit: 20,
+                    offset: 0,
+                    view: SessionListView::Subtree,
+                    anchor_session_id: Some(child.id),
+                    format: ConfigOutputFormat::Json,
+                })),
+            })
+            .await
+            .expect("subtree view should render");
+        let subtree: Value =
+            serde_json::from_str(subtree_output.as_str()).expect("subtree should be json");
+        let subtree_ids = subtree["sessions"]
+            .as_array()
+            .expect("sessions should be array")
+            .iter()
+            .map(|item| item["id"].as_i64().expect("id should be i64"))
+            .collect::<Vec<_>>();
+        assert!(subtree_ids.contains(&root.id));
+        assert!(subtree_ids.contains(&child.id));
+        assert!(!subtree_ids.contains(&other.id));
+        assert_eq!(subtree_ids.first().copied(), Some(root.id));
+    }
+
+    #[test]
+    fn memory_command_parses_workspace_alias() {
+        let cli =
+            AgenaCli::parse_from(["agena", "memory", "list", "--cwd", ".", "--format", "json"]);
+        let Some(AgenaCommand::Memory(MemoryCommand {
+            command: Some(MemorySubcommand::List(args)),
+        })) = cli.command
+        else {
+            panic!("expected memory list command");
+        };
+        assert_eq!(args.workspace, Some(PathBuf::from(".")));
+        assert_eq!(args.format, ConfigOutputFormat::Json);
+    }
+
+    #[test]
+    fn memory_commands_render_list_edit_and_forget() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!("agena-cli-memory-{suffix}"));
+        fs::create_dir_all(&workspace).expect("workspace should be created");
+        let store = MemoryStore::for_workspace(&workspace);
+        store
+            .save(crate::memory::NewMemory {
+                name: "user_role".to_string(),
+                description: "who they are".to_string(),
+                memory_type: Some(MemoryType::User),
+                body: "user is a data scientist".to_string(),
+                index_line: Some("- [User role](user_role.md) — who they are".to_string()),
+            })
+            .expect("memory should be saved");
+
+        let cli = AgenaCli {
+            config: None,
+            mode: None,
+            overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
+            command: None,
+        };
+
+        let list_output = cli
+            .render_memory_command(MemoryCommand {
+                command: Some(MemorySubcommand::List(MemoryListArgs {
+                    workspace: Some(workspace.clone()),
+                    format: ConfigOutputFormat::Json,
+                })),
+            })
+            .expect("memory list should render");
+        let list: Value = serde_json::from_str(list_output.as_str()).expect("list should be json");
+        assert_eq!(list["count"], 1);
+        assert_eq!(list["entries"][0]["name"], "user_role");
+        assert_eq!(list["entries"][0]["type"], "user");
+
+        let edit_output = cli
+            .render_memory_command(MemoryCommand {
+                command: Some(MemorySubcommand::Edit(MemoryEditArgs {
+                    workspace: Some(workspace.clone()),
+                    name: Some("user_role".to_string()),
+                })),
+            })
+            .expect("memory edit should resolve entry path");
+        assert!(edit_output.ends_with("user_role.md"));
+
+        let index_output = cli
+            .render_memory_command(MemoryCommand {
+                command: Some(MemorySubcommand::Edit(MemoryEditArgs {
+                    workspace: Some(workspace.clone()),
+                    name: None,
+                })),
+            })
+            .expect("memory edit should resolve index path");
+        assert!(index_output.ends_with("MEMORY.md"));
+        assert!(PathBuf::from(index_output.clone()).exists());
+
+        let forget_output = cli
+            .render_memory_command(MemoryCommand {
+                command: Some(MemorySubcommand::Forget(MemoryForgetArgs {
+                    workspace: Some(workspace.clone()),
+                    name: "user_role".to_string(),
+                })),
+            })
+            .expect("memory forget should succeed");
+        assert_eq!(forget_output, "forgot memory: user_role");
+        assert!(!store.dir().join("user_role.md").exists());
     }
 
     #[test]
@@ -2707,6 +3783,176 @@ store_path = "{}"
             panic!("expected mcp-server command");
         };
         assert_eq!(args.workspace, Some(PathBuf::from(".")));
+    }
+
+    #[test]
+    fn workflow_commands_parse() {
+        let cost = AgenaCli::parse_from(["agena", "cost", "--last", "--format", "json"]);
+        let Some(AgenaCommand::Cost(args)) = cost.command else {
+            panic!("expected cost command");
+        };
+        assert!(args.last);
+        assert_eq!(args.format, ConfigOutputFormat::Json);
+
+        let permissions =
+            AgenaCli::parse_from(["agena", "permissions", "--search", "bash", "--format", "json"]);
+        let Some(AgenaCommand::Permissions(args)) = permissions.command else {
+            panic!("expected permissions command");
+        };
+        assert_eq!(args.search.as_deref(), Some("bash"));
+        assert_eq!(args.format, ConfigOutputFormat::Json);
+
+        let worktree = AgenaCli::parse_from(["agena", "worktree", "--format", "json"]);
+        let Some(AgenaCommand::Worktree(args)) = worktree.command else {
+            panic!("expected worktree command");
+        };
+        assert_eq!(args.format, ConfigOutputFormat::Json);
+
+        let git = AgenaCli::parse_from(["agena", "git", "--format", "json"]);
+        let Some(AgenaCommand::Git(args)) = git.command else {
+            panic!("expected git command");
+        };
+        assert_eq!(args.format, ConfigOutputFormat::Json);
+
+        let commit = AgenaCli::parse_from(["agena", "commit", "ship it", "--format", "json"]);
+        let Some(AgenaCommand::Commit(args)) = commit.command else {
+            panic!("expected commit command");
+        };
+        assert_eq!(args.message, "ship it");
+        assert_eq!(args.format, ConfigOutputFormat::Json);
+
+        let pr = AgenaCli::parse_from([
+            "agena",
+            "pr",
+            "ship feature",
+            "--body",
+            "details",
+            "--base",
+            "main",
+            "--head",
+            "feature",
+            "--format",
+            "json",
+        ]);
+        let Some(AgenaCommand::Pr(args)) = pr.command else {
+            panic!("expected pr command");
+        };
+        assert_eq!(args.title, "ship feature");
+        assert_eq!(args.body.as_deref(), Some("details"));
+        assert_eq!(args.base.as_deref(), Some("main"));
+        assert_eq!(args.head.as_deref(), Some("feature"));
+        assert_eq!(args.format, ConfigOutputFormat::Json);
+    }
+
+    #[tokio::test]
+    async fn cost_command_renders_session_summary() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("agena-cli-cost-{suffix}.db"));
+        let cli = AgenaCli {
+            config: None,
+            mode: None,
+            overrides: Vec::new(),
+            database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
+            database_path: None,
+            command: None,
+        };
+        let runtime = cli.session_runtime().await.expect("runtime should build");
+        let manager = runtime
+            .session_manager()
+            .expect("session manager should be available");
+        let created = manager
+            .create_session(crate::session::SessionCreateRequest {
+                title: "cost session".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let output = cli
+            .render_cost_command(CostArgs {
+                session_id: Some(created.id),
+                last: false,
+                format: ConfigOutputFormat::Json,
+            })
+            .await
+            .expect("cost command should render");
+        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
+        assert_eq!(value["session"]["id"], created.id);
+        assert_eq!(value["summary"]["turns"], 0);
+        assert_eq!(value["summary"]["input_tokens"], 0);
+        assert_eq!(value["summary"]["by_model"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn permissions_command_renders_rules() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("agena-cli-perm-{suffix}.db"));
+        let cli = AgenaCli {
+            config: None,
+            mode: None,
+            overrides: Vec::new(),
+            database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
+            database_path: None,
+            command: None,
+        };
+        let storage = StorageConfig {
+            database_url: cli.database_url.clone(),
+            database_path: cli.database_path.clone(),
+        };
+        let database_url = storage.resolve_url().expect("db url should resolve");
+        StorageConfig::ensure_parent(database_url.as_str()).expect("parent should exist");
+        let db = sea_orm::Database::connect(database_url.as_str())
+            .await
+            .expect("db should connect");
+        init_schema(&db).await.expect("schema should init");
+        crate::db::crud::permission_rule::upsert_rule(&db, "bash", crate::permission::PermissionMode::Allow)
+            .await
+            .expect("rule should upsert");
+
+        let output = cli
+            .render_permissions_command(PermissionsArgs {
+                search: Some("bash".to_owned()),
+                format: ConfigOutputFormat::Json,
+            })
+            .await
+            .expect("permissions command should render");
+        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
+        assert_eq!(value["count"], 1);
+        assert_eq!(value["rules"][0]["action_key"], "bash");
+        assert_eq!(value["rules"][0]["mode"], "allow");
+    }
+
+    #[test]
+    fn worktree_output_serializes_registry_shape() {
+        let output = WorktreeOutput {
+            workspace_root: "/tmp/workspace".to_owned(),
+            active: vec![ActiveWorktreeOutput {
+                session_id: 7,
+                path: "/tmp/workspace/.agena/worktrees/managed".to_owned(),
+                branch: "agena/managed".to_owned(),
+                created_here: true,
+            }],
+            managed: vec![ManagedWorktreeOutput {
+                path: "/tmp/workspace/.agena/worktrees/managed".to_owned(),
+                session_id: Some(7),
+                branch: Some("agena/managed".to_owned()),
+                registered_with_git: false,
+                stale: false,
+            }],
+        };
+
+        let rendered = render_serialized(ConfigOutputFormat::Json, &output)
+            .expect("worktree output should serialize");
+        let value: Value = serde_json::from_str(rendered.as_str()).expect("output should be json");
+        assert_eq!(value["active"][0]["session_id"], 7);
+        assert_eq!(value["active"][0]["branch"], "agena/managed");
+        assert_eq!(value["managed"][0]["branch"], "agena/managed");
     }
 
     #[test]

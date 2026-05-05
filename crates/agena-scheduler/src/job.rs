@@ -19,6 +19,60 @@ pub enum JobKind {
     Once { at: DateTime<Utc> },
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobRunStatus {
+    Submitted,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobRunRecord {
+    pub triggered_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub status: JobRunStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobDeliveryResult {
+    pub status: JobRunStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+impl JobDeliveryResult {
+    pub fn submitted(session_id: Option<i64>) -> Self {
+        Self {
+            status: JobRunStatus::Submitted,
+            session_id,
+            error_message: None,
+        }
+    }
+
+    pub fn skipped(session_id: Option<i64>, reason: impl Into<String>) -> Self {
+        Self {
+            status: JobRunStatus::Skipped,
+            session_id,
+            error_message: Some(reason.into()),
+        }
+    }
+
+    pub fn failed(session_id: Option<i64>, error: impl Into<String>) -> Self {
+        Self {
+            status: JobRunStatus::Failed,
+            session_id,
+            error_message: Some(error.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledJob {
     pub id: Uuid,
@@ -31,6 +85,8 @@ pub struct ScheduledJob {
     pub created_at: DateTime<Utc>,
     pub last_fired_at: Option<DateTime<Utc>>,
     pub next_fire_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<JobRunRecord>,
     /// Free-form metadata (e.g. label, source).
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
@@ -56,6 +112,7 @@ impl ScheduledJob {
             created_at: now,
             last_fired_at: None,
             next_fire_at: Some(next),
+            last_run: None,
             metadata: serde_json::Map::new(),
         })
     }
@@ -69,6 +126,7 @@ impl ScheduledJob {
             created_at: Utc::now(),
             last_fired_at: None,
             next_fire_at: Some(at),
+            last_run: None,
             metadata: serde_json::Map::new(),
         }
     }
@@ -107,6 +165,16 @@ impl ScheduledJob {
     pub fn due(&self, now: DateTime<Utc>) -> bool {
         matches!(self.next_fire_at, Some(t) if t <= now)
     }
+
+    pub fn record_delivery(&mut self, triggered_at: DateTime<Utc>, result: JobDeliveryResult) {
+        self.last_run = Some(JobRunRecord {
+            triggered_at,
+            finished_at: Utc::now(),
+            status: result.status,
+            session_id: result.session_id,
+            error_message: result.error_message,
+        });
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,7 +187,7 @@ pub enum JobOutcome {
 /// prompt into the appropriate session.
 #[async_trait::async_trait]
 pub trait JobSink: Send + Sync {
-    async fn deliver(&self, job: &ScheduledJob);
+    async fn deliver(&self, job: &ScheduledJob) -> JobDeliveryResult;
 }
 
 fn compute_next_fire(expression: &str, after: DateTime<Utc>) -> SchedulerResult<DateTime<Utc>> {

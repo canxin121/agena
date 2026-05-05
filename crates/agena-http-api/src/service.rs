@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fs, io,
     path::{Path, PathBuf},
+    process::Command,
     sync::Arc,
 };
 
@@ -31,12 +32,13 @@ use agena::{
 
 use super::{
     dto::{
-        MessageListQuery, MessageResource, PartLoadMode, PermissionRuleListQuery,
-        PermissionRuleResource, PermissionRuleWriteRequest, SessionCreateRequest,
-        SessionEventListQuery, SessionExecutionResource, SessionReplaceRequest, SessionResource,
-        SessionRunOptionsRequest, SessionRunState, WorkspaceFileKind, WorkspaceFileNode,
-        WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
-        WorkspaceResolveRequest, WorkspaceResource, WorkspaceWriteRequest,
+        GitStatusResource, MessageListQuery, MessageResource, PartLoadMode,
+        PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest, ScheduledJobResource,
+        ScheduledJobRunResource, SessionAutomationResource, SessionCreateRequest, SessionEventListQuery,
+        SessionExecutionResource, SessionReplaceRequest, SessionResource, SessionRunOptionsRequest,
+        SessionRunState, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
+        WorkspaceFileTreeResource, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource,
+        WorkspaceWriteRequest,
     },
     error::ApiError,
     pagination::{
@@ -774,6 +776,109 @@ impl ApiService {
         Ok(resource)
     }
 
+    pub async fn git_status(&self, runtime: &agena::runtime::AgenaRuntime) -> ApiResult<GitStatusResource> {
+        let workspace_root = runtime.workspace_root().to_path_buf();
+        let git_available = command_available("git");
+        let gh_available = command_available("gh");
+
+        let Some(manager) = runtime.session_manager() else {
+            return Ok(GitStatusResource {
+                workspace_root: workspace_root.display().to_string(),
+                git_available,
+                repo: false,
+                gh_available,
+                branch: None,
+                upstream: None,
+                ahead: None,
+                behind: None,
+                staged_files: 0,
+                unstaged_files: 0,
+                untracked_files: 0,
+                changed_files: 0,
+                clean: true,
+                worktree_active_sessions: 0,
+                worktree_managed_dirs: 0,
+            });
+        };
+
+        let executor = manager.tool_executor();
+        let (worktree_active_sessions, worktree_managed_dirs) = match executor.worktree_registry() {
+            Some(registry) => (
+                agena::tool::worktree_list_active(registry).len() as u64,
+                agena::tool::worktree_list_managed(&workspace_root, registry).len() as u64,
+            ),
+            None => (0, 0),
+        };
+
+        if !git_available {
+            return Ok(GitStatusResource {
+                workspace_root: workspace_root.display().to_string(),
+                git_available,
+                repo: false,
+                gh_available,
+                branch: None,
+                upstream: None,
+                ahead: None,
+                behind: None,
+                staged_files: 0,
+                unstaged_files: 0,
+                untracked_files: 0,
+                changed_files: 0,
+                clean: true,
+                worktree_active_sessions,
+                worktree_managed_dirs,
+            });
+        }
+
+        let repo = git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]);
+        if !repo {
+            return Ok(GitStatusResource {
+                workspace_root: workspace_root.display().to_string(),
+                git_available,
+                repo,
+                gh_available,
+                branch: None,
+                upstream: None,
+                ahead: None,
+                behind: None,
+                staged_files: 0,
+                unstaged_files: 0,
+                untracked_files: 0,
+                changed_files: 0,
+                clean: true,
+                worktree_active_sessions,
+                worktree_managed_dirs,
+            });
+        }
+
+        let branch = git_output(&workspace_root, ["branch", "--show-current"])?;
+        let upstream = git_output(&workspace_root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+            .ok()
+            .and_then(|value| non_empty(Some(value.as_str())).map(ToOwned::to_owned));
+        let ahead_behind = upstream.as_ref().and_then(|_| git_output(&workspace_root, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]).ok());
+        let (ahead, behind) = parse_ahead_behind(ahead_behind.as_deref());
+        let status = git_output(&workspace_root, ["status", "--porcelain"])?;
+        let (staged_files, unstaged_files, untracked_files, changed_files) = summarize_git_status(status.as_str());
+
+        Ok(GitStatusResource {
+            workspace_root: workspace_root.display().to_string(),
+            git_available,
+            repo,
+            gh_available,
+            branch: non_empty(Some(branch.as_str())).map(ToOwned::to_owned),
+            upstream,
+            ahead,
+            behind,
+            staged_files,
+            unstaged_files,
+            untracked_files,
+            changed_files,
+            clean: changed_files == 0,
+            worktree_active_sessions,
+            worktree_managed_dirs,
+        })
+    }
+
     pub async fn assert_session_version(
         &self,
         session_id: i64,
@@ -876,11 +981,14 @@ impl ApiService {
             ApiError::internal("session disappeared while loading execution state")
         })?;
 
+        let scheduler_jobs = list_scheduled_jobs(manager).await;
+
         Ok(SessionExecutionResource {
             session: session_resource,
             blocked: session.blocked(),
             run_state: SessionRunState::from(session.status()),
             latest_event_seq: self.latest_session_event_seq(manager, session.id).await?,
+            automation: session_automation_resource(&scheduler_jobs, session.id),
             pending_permission_requests: pending_permission_requests(session),
             pending_user_input_requests: pending_user_input_requests(session),
         })
@@ -1308,6 +1416,73 @@ fn permission_mode_to_string(mode: PermissionMode) -> String {
     }
 }
 
+fn command_available(command: &str) -> bool {
+    Command::new(command)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(workspace_root)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn git_output<const N: usize>(workspace_root: &Path, args: [&str; N]) -> ApiResult<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(workspace_root)
+        .output()
+        .map_err(|error| ApiError::internal(format!("failed to execute git {:?}: {}", args, error)))?;
+    if !output.status.success() {
+        return Err(ApiError::internal(format!(
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn parse_ahead_behind(value: Option<&str>) -> (Option<u64>, Option<u64>) {
+    let Some(value) = value else {
+        return (None, None);
+    };
+    let mut parts = value.split_whitespace();
+    let behind = parts.next().and_then(|part| part.parse::<u64>().ok());
+    let ahead = parts.next().and_then(|part| part.parse::<u64>().ok());
+    (ahead, behind)
+}
+
+fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
+    let mut staged = 0_u64;
+    let mut unstaged = 0_u64;
+    let mut untracked = 0_u64;
+    let mut changed = 0_u64;
+
+    for line in status.lines().filter(|line| !line.is_empty()) {
+        changed += 1;
+        let bytes = line.as_bytes();
+        let x = bytes.first().copied().unwrap_or(b' ');
+        let y = bytes.get(1).copied().unwrap_or(b' ');
+        if x == b'?' && y == b'?' {
+            untracked += 1;
+            continue;
+        }
+        if x != b' ' {
+            staged += 1;
+        }
+        if y != b' ' {
+            unstaged += 1;
+        }
+    }
+
+    (staged, unstaged, untracked, changed)
+}
+
 fn permission_mode_from_string(value: &str) -> ApiResult<PermissionMode> {
     match value {
         "allow" => Ok(PermissionMode::Allow),
@@ -1382,6 +1557,73 @@ fn default_model_from_registry(provider_registry: &ProviderRegistry) -> Option<M
     ))
 }
 
+pub(crate) async fn list_scheduled_jobs(manager: &SessionManager) -> Vec<agena_scheduler::ScheduledJob> {
+    let executor = manager.tool_executor();
+    let Some(scheduler) = executor.scheduler().cloned() else {
+        return Vec::new();
+    };
+    scheduler.list().await
+}
+
+fn session_automation_resource(
+    jobs: &[agena_scheduler::ScheduledJob],
+    session_id: i64,
+) -> Option<SessionAutomationResource> {
+    let mut jobs = jobs
+        .iter()
+        .filter(|job| job.owner_session_id == Some(session_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if jobs.is_empty() {
+        return None;
+    }
+    sort_jobs_for_display(&mut jobs);
+    Some(SessionAutomationResource {
+        job_count: jobs.len(),
+        latest_job: jobs.into_iter().next().map(scheduled_job_resource),
+    })
+}
+
+pub(crate) fn sort_jobs_for_display(jobs: &mut [agena_scheduler::ScheduledJob]) {
+    jobs.sort_by(|left, right| {
+        let left_last_run = left.last_run.as_ref().map(|run| run.triggered_at.timestamp_millis());
+        let right_last_run = right.last_run.as_ref().map(|run| run.triggered_at.timestamp_millis());
+        right_last_run
+            .cmp(&left_last_run)
+            .then_with(|| left.next_fire_at.cmp(&right.next_fire_at))
+            .then_with(|| left.created_at.cmp(&right.created_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+pub(crate) fn scheduled_job_resource(job: agena_scheduler::ScheduledJob) -> ScheduledJobResource {
+    let (kind, expression, at) = match job.kind {
+        agena_scheduler::JobKind::Cron { expression, .. } => ("cron".to_string(), Some(expression), None),
+        agena_scheduler::JobKind::Once { at } => ("once".to_string(), None, Some(at)),
+    };
+    ScheduledJobResource {
+        id: job.id.to_string(),
+        kind,
+        expression,
+        at,
+        prompt: job.prompt,
+        owner_session_id: job.owner_session_id,
+        next_fire_at: job.next_fire_at,
+        last_fired_at: job.last_fired_at,
+        last_run: job.last_run.map(scheduled_job_run_resource),
+    }
+}
+
+fn scheduled_job_run_resource(run: agena_scheduler::JobRunRecord) -> ScheduledJobRunResource {
+    ScheduledJobRunResource {
+        triggered_at: run.triggered_at,
+        finished_at: run.finished_at,
+        status: run.status,
+        session_id: run.session_id,
+        error_message: run.error_message,
+    }
+}
+
 fn pending_permission_requests(session: &Session) -> Vec<agena::permission::PermissionRequest> {
     session
         .messages
@@ -1420,4 +1662,22 @@ fn pending_user_input_requests(session: &Session) -> Vec<UserInputRequest> {
             reply.is_none().then_some(request.clone())
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ahead_behind_interprets_git_rev_list_counts() {
+        assert_eq!(parse_ahead_behind(Some("0\t0")), (Some(0), Some(0)));
+        assert_eq!(parse_ahead_behind(Some("2 5")), (Some(5), Some(2)));
+        assert_eq!(parse_ahead_behind(None), (None, None));
+    }
+
+    #[test]
+    fn summarize_git_status_counts_porcelain_entries() {
+        let status = "M  staged.txt\n M unstaged.txt\nMM both.txt\n?? new.txt\n";
+        assert_eq!(summarize_git_status(status), (2, 2, 1, 4));
+    }
 }

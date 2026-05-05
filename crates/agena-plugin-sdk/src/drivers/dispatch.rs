@@ -164,6 +164,11 @@ impl<P: Plugin> PluginDispatcher<P> {
                 let i: PermissionAskInput = serde_json::from_value(params)?;
                 ok_json(&plugin.permission_ask(i).await?)
             }
+            method::HOOK_NOTIFICATION => {
+                let i: NotificationInput = serde_json::from_value(params)?;
+                plugin.notification(i).await?;
+                Ok(Value::Object(Default::default()))
+            }
             method::HOOK_COMMAND_BEFORE => {
                 let i: CommandBeforeInput = serde_json::from_value(params)?;
                 ok_json(&plugin.command_execute_before(i).await?)

@@ -773,6 +773,20 @@ onBeforeUnmount(() => {
                 sessionState?.blocked ? 'true' : 'false'
               }}
             </div>
+            <template v-if="sessionState?.automation">
+              <div class="muted">automation_jobs={{ sessionState.automation.job_count }}</div>
+              <div v-if="sessionState.automation.latest_job?.last_run" class="muted">
+                automation_status={{ sessionState.automation.latest_job.last_run.status }} · triggered {{
+                  formatMessageTime(sessionState.automation.latest_job.last_run.triggered_at)
+                }}
+              </div>
+              <div v-else-if="sessionState.automation.latest_job?.next_fire_at" class="muted">
+                next_automation={{ formatMessageTime(sessionState.automation.latest_job.next_fire_at) }}
+              </div>
+              <div v-if="sessionState.automation.latest_job?.last_run?.error_message" class="muted">
+                automation_error={{ sessionState.automation.latest_job.last_run.error_message }}
+              </div>
+            </template>
           </div>
           <p v-else class="muted">Pick or create a session to start chatting.</p>
         </section>

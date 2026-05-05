@@ -81,6 +81,7 @@ impl Plugin for SkillsPlugin {
             name: skill.name.clone(),
             body_chars: body.chars().count(),
             allowed_tools: skill.allowed_tools,
+            model: skill.model,
         };
         let view = ToolExecutionView::simple(format!("skill_run: {}", skill.name), body);
         Ok(crate::plugins::bundled::builtin::builtin_to_invoke_output(
@@ -155,6 +156,7 @@ mod tests {
                 name: "demo".to_string(),
                 body: "Follow these instructions.".to_string(),
                 allowed_tools: vec!["read".to_string()],
+                model: Some("claude-sonnet-4-6".to_string()),
             })
         }
     }
@@ -202,10 +204,12 @@ mod tests {
                 name,
                 body_chars,
                 allowed_tools,
+                model,
             } => {
                 assert_eq!(name, "demo");
                 assert_eq!(body_chars, output.output_text.chars().count());
                 assert_eq!(allowed_tools, vec!["read".to_string()]);
+                assert_eq!(model.as_deref(), Some("claude-sonnet-4-6"));
             }
             other => panic!("unexpected output: {other:?}"),
         }

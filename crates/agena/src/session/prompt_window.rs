@@ -1558,6 +1558,7 @@ mod tests {
             .into_iter()
             .collect(),
             loaded_deferred_tools: Vec::new(),
+            execution: Default::default(),
             plan: None,
         };
 
@@ -1710,6 +1711,7 @@ mod tests {
             .into_iter()
             .collect(),
             loaded_deferred_tools: Vec::new(),
+            execution: Default::default(),
             plan: None,
         };
 
@@ -2449,6 +2451,7 @@ mod tests {
             .into_iter()
             .collect(),
             loaded_deferred_tools: Vec::new(),
+            execution: Default::default(),
             plan: None,
         };
 

@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use sea_orm::FromJsonQueryResult;
@@ -287,12 +287,47 @@ pub struct SessionRuntimeState {
     pub provider_anchors: BTreeMap<String, ProviderPromptAnchor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loaded_deferred_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "SessionExecutionContext::is_empty")]
+    pub execution: SessionExecutionContext,
     /// When `Some`, the session is in plan mode: writes/mutating tools
     /// are blocked, the LLM is expected to draft its plan into the
     /// referenced file, and `ExitPlanMode` then asks the user to approve
     /// it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<PlanState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+pub struct SessionExecutionContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_skill_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_workspace_root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
+
+impl SessionExecutionContext {
+    pub fn is_empty(&self) -> bool {
+        self.agent_profile.is_none()
+            && self.active_skill_name.is_none()
+            && self.system_prompt_override.is_none()
+            && self.allowed_tools.is_empty()
+            && self.model_provider_id.is_none()
+            && self.model_id.is_none()
+            && self.effective_workspace_root.is_none()
+            && self.task_id.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,6 +342,46 @@ pub struct PlanState {
 impl SessionRuntimeState {
     pub fn provider_anchor_key(provider_id: &str, model_id: &str) -> String {
         format!("{provider_id}/{model_id}")
+    }
+
+    pub fn effective_workspace_root(&self) -> Option<&Path> {
+        self.execution.effective_workspace_root.as_deref()
+    }
+
+    pub fn set_effective_workspace_root(&mut self, path: Option<PathBuf>) {
+        self.execution.effective_workspace_root = path;
+    }
+
+    pub fn allowed_tools(&self) -> &[String] {
+        self.execution.allowed_tools.as_slice()
+    }
+
+    pub fn set_allowed_tools(&mut self, allowed_tools: Vec<String>) {
+        let mut deduped = allowed_tools
+            .into_iter()
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        deduped.sort();
+        self.execution.allowed_tools = deduped;
+    }
+
+    pub fn model_override(&self) -> Option<(&str, &str)> {
+        Some((
+            self.execution.model_provider_id.as_deref()?,
+            self.execution.model_id.as_deref()?,
+        ))
+    }
+
+    pub fn set_model_override(
+        &mut self,
+        provider_id: Option<String>,
+        model_id: Option<String>,
+    ) {
+        self.execution.model_provider_id = provider_id.filter(|value| !value.trim().is_empty());
+        self.execution.model_id = model_id.filter(|value| !value.trim().is_empty());
     }
 
     pub fn provider_anchor(

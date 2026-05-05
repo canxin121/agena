@@ -138,6 +138,7 @@ pub mod method {
     pub const HOOK_AUTH: &str = "hooks/auth";
     pub const HOOK_PROVIDER_LIST: &str = "hooks/provider.list";
     pub const HOOK_PERMISSION_ASK: &str = "hooks/permission.ask";
+    pub const HOOK_NOTIFICATION: &str = "hooks/notification";
     pub const HOOK_COMMAND_BEFORE: &str = "hooks/command.execute.before";
     pub const HOOK_SHELL_ENV: &str = "hooks/shell.env";
     pub const HOOK_CONFIG: &str = "hooks/config";

@@ -80,3 +80,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/events/stream", get(sse::handler))
         .with_state(state)
 }
+
+/// Build the streaming-only transport router for hosts that already mount
+/// overlapping REST endpoints via another API surface.
+pub fn transport_router(state: AppState) -> Router {
+    Router::new()
+        .route("/api/v1/ws", get(ws::handler))
+        .route("/api/v1/events/stream", get(sse::handler))
+        .with_state(state)
+}

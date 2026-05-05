@@ -558,6 +558,8 @@ pub struct HostSkillGetResponse {
     pub body: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 // ---------------- monitor ----------------

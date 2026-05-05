@@ -86,6 +86,10 @@ impl SessionProcessor {
         self
     }
 
+    pub(crate) fn provider_registry(&self) -> &Arc<ProviderRegistry> {
+        &self.provider_registry
+    }
+
     /// Apply the `chat.params` plugin hook chain to a [`CompletionRequest`]
     /// before sending it to the provider.
     async fn apply_chat_params_hook(

@@ -85,10 +85,14 @@ pub(crate) fn execute_builtin(
         BuiltinToolInput::ExitWorktree(payload) => {
             worktree::execute_exit(executor, payload, context.session_id)
         }
-        BuiltinToolInput::CronCreate(payload) => cron::execute_create(executor, payload),
+        BuiltinToolInput::CronCreate(payload) => {
+            cron::execute_create(executor, payload, context.session_id)
+        }
         BuiltinToolInput::CronList(payload) => cron::execute_list(executor, payload),
         BuiltinToolInput::CronDelete(payload) => cron::execute_delete(executor, payload),
-        BuiltinToolInput::ScheduleWakeup(payload) => cron::execute_wakeup(executor, payload),
+        BuiltinToolInput::ScheduleWakeup(payload) => {
+            cron::execute_wakeup(executor, payload, context.session_id)
+        }
         BuiltinToolInput::LspDefinition(payload) => lsp::execute_definition(executor, payload),
         BuiltinToolInput::LspReferences(payload) => lsp::execute_references(executor, payload),
         BuiltinToolInput::LspHover(payload) => lsp::execute_hover(executor, payload),

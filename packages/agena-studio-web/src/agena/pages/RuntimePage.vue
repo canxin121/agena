@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 import {
   createPermissionRule,
   deletePermissionRule,
   deleteProviderCredential,
   fetchRuntimeStatus,
+  getPlugin,
   listAuthProviders,
   listPermissionRules,
+  listPluginLogs,
+  listPlugins,
   listProviders,
   refreshProviderCredential,
   reloadRuntime,
@@ -16,15 +19,37 @@ import {
   type AuthProvider,
   type PermissionMode,
   type PermissionRuleResource,
+  type PluginInspect,
+  type PluginLogEntry,
+  type PluginStatus,
   type ProviderSummary,
+  type RuntimeSkill,
   type RuntimeStatus,
 } from '@/agena/lib/agenaApi'
+import { buildOperatorCards, pickNextPluginId } from './runtimePageModel'
 
+type RuntimeTab = 'overview' | 'plugins' | 'mcp' | 'lsp' | 'skills' | 'operator'
+
+const tabs: Array<{ id: RuntimeTab; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'plugins', label: 'Plugins' },
+  { id: 'mcp', label: 'MCP' },
+  { id: 'lsp', label: 'LSP' },
+  { id: 'skills', label: 'Skills' },
+  { id: 'operator', label: 'Operator' },
+]
+
+const activeTab = ref<RuntimeTab>('overview')
 const runtime = ref<RuntimeStatus | null>(null)
 const providers = ref<ProviderSummary[]>([])
 const authProviders = ref<AuthProvider[]>([])
 const permissionRules = ref<PermissionRuleResource[]>([])
+const plugins = ref<PluginStatus[]>([])
+const selectedPluginId = ref('')
+const selectedPlugin = ref<PluginInspect | null>(null)
+const pluginLogs = ref<PluginLogEntry[]>([])
 const loading = ref(false)
+const pluginLoading = ref(false)
 const actionError = ref('')
 const actionMessage = ref('')
 const drafts = reactive<Record<string, string>>({})
@@ -35,24 +60,60 @@ const permissionDraft = reactive<{ actionKey: string; mode: PermissionMode }>({
 })
 const editingPermissionRuleId = ref<number | null>(null)
 
+const operatorCards = computed(() => buildOperatorCards(runtime.value))
+
+const skillCommands = computed<RuntimeSkill[]>(() => runtime.value?.operator.skills.commands ?? [])
+const discoveredSkills = computed<RuntimeSkill[]>(() => runtime.value?.operator.skills.skills ?? [])
+
 async function load() {
   loading.value = true
   actionError.value = ''
   try {
-    const [runtimeData, providerData, authData, permissionRuleData] = await Promise.all([
+    const [runtimeData, providerData, authData, permissionRuleData, pluginData] = await Promise.all([
       fetchRuntimeStatus(),
       listProviders(),
       listAuthProviders(),
       listPermissionRules(permissionSearch.value),
+      listPlugins(),
     ])
     runtime.value = runtimeData
     providers.value = providerData
     authProviders.value = authData
     permissionRules.value = permissionRuleData
+    plugins.value = pluginData
+
+    const nextPluginId = pickNextPluginId(selectedPluginId.value, pluginData)
+    selectedPluginId.value = nextPluginId
+    if (nextPluginId) {
+      await loadPluginDetails(nextPluginId)
+    } else {
+      selectedPlugin.value = null
+      pluginLogs.value = []
+    }
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : String(err)
   } finally {
     loading.value = false
+  }
+}
+
+async function loadPluginDetails(pluginId: string) {
+  if (!pluginId) {
+    selectedPlugin.value = null
+    pluginLogs.value = []
+    return
+  }
+  pluginLoading.value = true
+  actionError.value = ''
+  try {
+    const [plugin, logs] = await Promise.all([getPlugin(pluginId), listPluginLogs(pluginId, 50)])
+    selectedPluginId.value = pluginId
+    selectedPlugin.value = plugin
+    pluginLogs.value = logs
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    pluginLoading.value = false
   }
 }
 
@@ -165,8 +226,8 @@ onMounted(() => {
   <section class="page">
     <header class="page-header">
       <div>
-        <h1 class="page-title">Settings</h1>
-        <p class="page-description">Inspect runtime state and manage providers, auth, and permission rules.</p>
+        <h1 class="page-title">Runtime</h1>
+        <p class="page-description">Inspect runtime state, plugins, MCP, LSP, skills, providers, auth, and permission rules.</p>
       </div>
       <div class="button-row">
         <button class="button ghost" :disabled="loading" @click="load">Refresh</button>
@@ -177,139 +238,362 @@ onMounted(() => {
     <div v-if="actionError" class="notice">{{ actionError }}</div>
     <div v-else-if="actionMessage" class="notice">{{ actionMessage }}</div>
 
-    <div class="grid two">
-      <section class="card">
-        <h3>Runtime Snapshot</h3>
-        <div v-if="runtime" class="stack">
-          <div><strong>Generation:</strong> {{ runtime.generation }}</div>
-          <div><strong>Loaded At:</strong> {{ runtime.loaded_at }}</div>
-          <div><strong>Workspace Root:</strong> <span class="mono">{{ runtime.workspace_root }}</span></div>
-          <div><strong>Config Path:</strong> <span class="mono">{{ runtime.config_path }}</span></div>
-          <div><strong>Active Mode:</strong> {{ runtime.active_mode || 'default' }}</div>
-          <div><strong>Providers:</strong> {{ runtime.provider_ids.join(', ') || 'none' }}</div>
-          <div><strong>Plugin Count:</strong> {{ runtime.plugin_count }}</div>
-          <div><strong>Session Runtime:</strong> {{ runtime.session_runtime_available ? 'enabled' : 'disabled' }}</div>
-        </div>
-        <p v-else class="muted">Loading runtime snapshot…</p>
-      </section>
-
-      <section class="card">
-        <h3>Provider Defaults</h3>
-        <div v-if="providers.length" class="list">
-          <div v-for="provider in providers" :key="provider.provider_id" class="list-item">
-            <div><strong>{{ provider.provider_id }}</strong></div>
-            <div class="muted">Default model: {{ provider.default_model }}</div>
-            <div class="muted mono">{{ provider.default_model_ref }}</div>
-          </div>
-        </div>
-        <p v-else class="muted">No providers loaded.</p>
-      </section>
+    <div class="button-row" style="margin-bottom: 16px; flex-wrap: wrap">
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        class="button"
+        :class="{ primary: activeTab === tab.id }"
+        @click="activeTab = tab.id"
+      >
+        {{ tab.label }}
+      </button>
     </div>
 
-    <div class="grid two">
-      <section class="card">
-        <h3>Credentials</h3>
-        <div v-if="authProviders.length" class="list">
-          <div v-for="provider in authProviders" :key="provider.provider_id" class="list-item">
-            <div class="page-header" style="align-items: flex-start">
-              <div>
-                <div><strong>{{ provider.provider_id }}</strong></div>
-                <div class="muted">
-                  configured={{ provider.configured ? 'yes' : 'no' }}, credential={{
-                    provider.credential_present ? 'present' : 'missing'
-                  }}
+    <template v-if="activeTab === 'overview'">
+      <div class="grid three">
+        <section v-for="card in operatorCards" :key="card.label" class="card">
+          <div class="muted">{{ card.label }}</div>
+          <div style="font-size: 1.5rem; font-weight: 600">{{ card.value }}</div>
+        </section>
+      </div>
+
+      <div class="grid two" style="margin-top: 16px">
+        <section class="card">
+          <h3>Runtime Snapshot</h3>
+          <div v-if="runtime" class="stack">
+            <div><strong>Generation:</strong> {{ runtime.generation }}</div>
+            <div><strong>Loaded At:</strong> {{ runtime.loaded_at }}</div>
+            <div><strong>Workspace Root:</strong> <span class="mono">{{ runtime.workspace_root }}</span></div>
+            <div><strong>Config Path:</strong> <span class="mono">{{ runtime.config_path }}</span></div>
+            <div><strong>Config Found:</strong> {{ runtime.config_found ? 'yes' : 'no' }}</div>
+            <div><strong>Active Mode:</strong> {{ runtime.active_mode || 'default' }}</div>
+            <div><strong>Auth Store:</strong> <span class="mono">{{ runtime.auth_store_path }}</span></div>
+            <div><strong>Providers:</strong> {{ runtime.provider_ids.join(', ') || 'none' }}</div>
+            <div><strong>Session Runtime:</strong> {{ runtime.session_runtime_available ? 'enabled' : 'disabled' }}</div>
+            <div><strong>Automation:</strong> {{ runtime.automation.enabled ? 'enabled' : 'disabled' }}</div>
+            <div><strong>Scheduled Jobs:</strong> {{ runtime.automation.job_count }}</div>
+          </div>
+          <p v-else class="muted">Loading runtime snapshot…</p>
+        </section>
+
+        <section class="card">
+          <h3>Maintenance</h3>
+          <div v-if="runtime" class="stack">
+            <div><strong>Reload:</strong> {{ runtime.reload.enabled ? 'enabled' : 'disabled' }} ({{ runtime.reload.interval_secs }}s)</div>
+            <div><strong>Janitor:</strong> {{ runtime.janitor.enabled ? 'enabled' : 'disabled' }} ({{ runtime.janitor.interval_secs }}s)</div>
+            <div><strong>Watch Paths:</strong></div>
+            <div v-if="runtime.watch_paths.length" class="list">
+              <div v-for="path in runtime.watch_paths" :key="path" class="list-item mono">{{ path }}</div>
+            </div>
+            <div v-else class="muted">No watch paths configured.</div>
+          </div>
+          <p v-else class="muted">Loading maintenance state…</p>
+        </section>
+      </div>
+
+      <div class="grid two" style="margin-top: 16px">
+        <section class="card">
+          <h3>Recent Automation</h3>
+          <div v-if="runtime?.automation.recent_jobs.length" class="list">
+            <div v-for="job in runtime.automation.recent_jobs" :key="job.id" class="list-item">
+              <div class="page-header" style="align-items: flex-start">
+                <div>
+                  <div><strong>{{ job.kind }}</strong> <span class="muted mono">{{ job.id }}</span></div>
+                  <div class="muted">session {{ job.owner_session_id ?? 'n/a' }}</div>
+                  <div v-if="job.last_run" class="muted">
+                    {{ job.last_run.status }} · triggered {{ job.last_run.triggered_at }}
+                  </div>
+                  <div v-else-if="job.next_fire_at" class="muted">next {{ job.next_fire_at }}</div>
+                  <div v-if="job.last_run?.error_message" class="muted">{{ job.last_run.error_message }}</div>
                 </div>
-                <div v-if="provider.key_preview" class="muted mono">{{ provider.key_preview }}</div>
-                <div v-if="provider.expires_at" class="muted">expires {{ provider.expires_at }}</div>
+                <span class="badge">{{ job.expression || job.at || 'scheduled' }}</span>
               </div>
-              <span class="badge">{{ provider.credential_type || 'unknown' }}</span>
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`api-key-${provider.provider_id}`">API Key</label>
-              <input
-                :id="`api-key-${provider.provider_id}`"
-                v-model="drafts[provider.provider_id]"
-                class="input mono"
-                type="password"
-                placeholder="sk-..."
-              />
-            </div>
-
-            <div class="button-row" style="margin-top: 12px">
-              <button class="button primary" @click="saveApiKey(provider.provider_id)">Save API Key</button>
-              <button class="button" @click="refreshCredential(provider.provider_id)">Refresh</button>
-              <button class="button danger" @click="clearCredential(provider.provider_id)">Delete</button>
             </div>
           </div>
-        </div>
-        <p v-else class="muted">No auth-capable providers were exposed by the runtime.</p>
-      </section>
+          <p v-else class="muted">No scheduled jobs visible yet.</p>
+        </section>
 
-      <section class="card">
-        <div class="page-header" style="align-items: flex-start">
-          <div>
-            <h3>Permission Rules</h3>
-            <p class="muted">Persist allow / ask / deny decisions by action key.</p>
+        <section class="card">
+          <h3>Provider Defaults</h3>
+          <div v-if="providers.length" class="list">
+            <div v-for="provider in providers" :key="provider.provider_id" class="list-item">
+              <div><strong>{{ provider.provider_id }}</strong></div>
+              <div class="muted">Default model: {{ provider.default_model }}</div>
+              <div class="muted mono">{{ provider.default_model_ref }}</div>
+            </div>
           </div>
-          <button class="button ghost" :disabled="loading" @click="load">Refresh</button>
-        </div>
+          <p v-else class="muted">No providers loaded.</p>
+        </section>
 
-        <div class="field">
-          <label class="label" for="permission-search">Search</label>
-          <input
-            id="permission-search"
-            v-model="permissionSearch"
-            class="input mono"
-            placeholder="Bash:ls"
-            @keyup.enter="load"
-          />
-        </div>
+        <section class="card">
+          <h3>Session Cache</h3>
+          <div v-if="runtime?.session_cache" class="stack">
+            <div><strong>Entries:</strong> {{ runtime.session_cache.entry_count }}</div>
+            <div><strong>Total Bytes:</strong> {{ runtime.session_cache.total_bytes }}</div>
+            <div><strong>Hits / Misses:</strong> {{ runtime.session_cache.hits }} / {{ runtime.session_cache.misses }}</div>
+            <div><strong>Inserts / Evictions:</strong> {{ runtime.session_cache.inserts }} / {{ runtime.session_cache.evictions }}</div>
+            <div><strong>TTL:</strong> {{ runtime.session_cache.ttl_secs }}s</div>
+            <div><strong>Max Sessions:</strong> {{ runtime.session_cache.max_sessions }}</div>
+          </div>
+          <p v-else class="muted">Session cache is not available.</p>
+        </section>
+      </div>
 
-        <div class="grid two" style="margin-top: 12px">
+      <div class="grid two" style="margin-top: 16px">
+        <section class="card">
+          <h3>Credentials</h3>
+          <div v-if="authProviders.length" class="list">
+            <div v-for="provider in authProviders" :key="provider.provider_id" class="list-item">
+              <div class="page-header" style="align-items: flex-start">
+                <div>
+                  <div><strong>{{ provider.provider_id }}</strong></div>
+                  <div class="muted">
+                    configured={{ provider.configured ? 'yes' : 'no' }}, credential={{
+                      provider.credential_present ? 'present' : 'missing'
+                    }}
+                  </div>
+                  <div v-if="provider.key_preview" class="muted mono">{{ provider.key_preview }}</div>
+                  <div v-if="provider.expires_at" class="muted">expires {{ provider.expires_at }}</div>
+                </div>
+                <span class="badge">{{ provider.credential_type || 'unknown' }}</span>
+              </div>
+
+              <div class="field" style="margin-top: 12px">
+                <label class="label" :for="`api-key-${provider.provider_id}`">API Key</label>
+                <input
+                  :id="`api-key-${provider.provider_id}`"
+                  v-model="drafts[provider.provider_id]"
+                  class="input mono"
+                  type="password"
+                  placeholder="sk-..."
+                />
+              </div>
+
+              <div class="button-row" style="margin-top: 12px">
+                <button class="button primary" @click="saveApiKey(provider.provider_id)">Save API Key</button>
+                <button class="button" @click="refreshCredential(provider.provider_id)">Refresh</button>
+                <button class="button danger" @click="clearCredential(provider.provider_id)">Delete</button>
+              </div>
+            </div>
+          </div>
+          <p v-else class="muted">No auth-capable providers were exposed by the runtime.</p>
+        </section>
+
+        <section class="card">
+          <div class="page-header" style="align-items: flex-start">
+            <div>
+              <h3>Permission Rules</h3>
+              <p class="muted">Persist allow / ask / deny decisions by action key.</p>
+            </div>
+            <button class="button ghost" :disabled="loading" @click="load">Refresh</button>
+          </div>
+
           <div class="field">
-            <label class="label" for="permission-action-key">Action Key</label>
+            <label class="label" for="permission-search">Search</label>
             <input
-              id="permission-action-key"
-              v-model="permissionDraft.actionKey"
+              id="permission-search"
+              v-model="permissionSearch"
               class="input mono"
-              placeholder="Tool:action"
+              placeholder="Bash:ls"
+              @keyup.enter="load"
             />
           </div>
-          <div class="field">
-            <label class="label" for="permission-mode">Mode</label>
-            <select id="permission-mode" v-model="permissionDraft.mode" class="select">
-              <option value="allow">allow</option>
-              <option value="ask">ask</option>
-              <option value="deny">deny</option>
-            </select>
+
+          <div class="grid two" style="margin-top: 12px">
+            <div class="field">
+              <label class="label" for="permission-action-key">Action Key</label>
+              <input
+                id="permission-action-key"
+                v-model="permissionDraft.actionKey"
+                class="input mono"
+                placeholder="Tool:action"
+              />
+            </div>
+            <div class="field">
+              <label class="label" for="permission-mode">Mode</label>
+              <select id="permission-mode" v-model="permissionDraft.mode" class="select">
+                <option value="allow">allow</option>
+                <option value="ask">ask</option>
+                <option value="deny">deny</option>
+              </select>
+            </div>
           </div>
-        </div>
 
-        <div class="button-row" style="margin-top: 12px">
-          <button class="button primary" @click="savePermissionRule">
-            {{ editingPermissionRuleId ? 'Update Rule' : 'Create Rule' }}
-          </button>
-          <button class="button" @click="resetPermissionDraft">Reset</button>
-        </div>
+          <div class="button-row" style="margin-top: 12px">
+            <button class="button primary" @click="savePermissionRule">
+              {{ editingPermissionRuleId ? 'Update Rule' : 'Create Rule' }}
+            </button>
+            <button class="button" @click="resetPermissionDraft">Reset</button>
+          </div>
 
-        <div v-if="permissionRules.length" class="list" style="margin-top: 12px">
-          <div v-for="rule in permissionRules" :key="rule.id" class="list-item">
-            <div class="page-header" style="align-items: flex-start">
-              <div>
-                <strong class="mono">{{ rule.action_key }}</strong>
-                <div class="muted">updated {{ rule.updated_at }}</div>
+          <div v-if="permissionRules.length" class="list" style="margin-top: 12px">
+            <div v-for="rule in permissionRules" :key="rule.id" class="list-item">
+              <div class="page-header" style="align-items: flex-start">
+                <div>
+                  <strong class="mono">{{ rule.action_key }}</strong>
+                  <div class="muted">updated {{ rule.updated_at }}</div>
+                </div>
+                <span class="badge">{{ rule.mode }}</span>
               </div>
-              <span class="badge">{{ rule.mode }}</span>
-            </div>
-            <div class="button-row" style="margin-top: 10px">
-              <button class="button" @click="editPermissionRule(rule)">Edit</button>
-              <button class="button danger" @click="removePermissionRule(rule)">Delete</button>
+              <div class="button-row" style="margin-top: 10px">
+                <button class="button" @click="editPermissionRule(rule)">Edit</button>
+                <button class="button danger" @click="removePermissionRule(rule)">Delete</button>
+              </div>
             </div>
           </div>
+          <p v-else class="muted" style="margin-top: 12px">No permission rules found.</p>
+        </section>
+      </div>
+    </template>
+
+    <template v-else-if="activeTab === 'plugins'">
+      <div class="grid two">
+        <section class="card">
+          <h3>Plugins</h3>
+          <div v-if="plugins.length" class="list">
+            <button
+              v-for="plugin in plugins"
+              :key="plugin.plugin_id"
+              class="list-item"
+              style="width: 100%; text-align: left"
+              @click="loadPluginDetails(plugin.plugin_id)"
+            >
+              <div class="page-header" style="align-items: flex-start">
+                <div>
+                  <div><strong>{{ plugin.plugin_id }}</strong></div>
+                  <div class="muted">{{ plugin.kind }} · {{ plugin.state }}</div>
+                  <div v-if="plugin.last_error" class="muted">{{ plugin.last_error }}</div>
+                </div>
+                <span class="badge">restarts {{ plugin.restart_count }}</span>
+              </div>
+            </button>
+          </div>
+          <p v-else class="muted">No configured plugins.</p>
+        </section>
+
+        <section class="card">
+          <h3>Plugin Detail</h3>
+          <div v-if="selectedPlugin" class="stack">
+            <div><strong>ID:</strong> {{ selectedPlugin.status.plugin_id }}</div>
+            <div><strong>Kind:</strong> {{ selectedPlugin.status.kind }}</div>
+            <div><strong>State:</strong> {{ selectedPlugin.status.state }}</div>
+            <div><strong>PID:</strong> {{ selectedPlugin.status.pid ?? 'n/a' }}</div>
+            <div><strong>Last Exit:</strong> {{ selectedPlugin.status.last_exit_code ?? 'n/a' }}</div>
+            <div><strong>Manifest:</strong></div>
+            <pre class="mono" style="white-space: pre-wrap">{{ JSON.stringify(selectedPlugin.manifest ?? {}, null, 2) }}</pre>
+            <div><strong>Recent Logs:</strong></div>
+            <div v-if="pluginLogs.length" class="list">
+              <div v-for="entry in pluginLogs" :key="entry.seq" class="list-item">
+                <div class="page-header" style="align-items: flex-start">
+                  <strong>#{{ entry.seq }}</strong>
+                  <span class="badge">{{ entry.level }}</span>
+                </div>
+                <div class="muted">{{ entry.message }}</div>
+              </div>
+            </div>
+            <div v-else class="muted">No retained logs.</div>
+          </div>
+          <p v-else-if="pluginLoading" class="muted">Loading plugin detail…</p>
+          <p v-else class="muted">Select a plugin to inspect.</p>
+        </section>
+      </div>
+    </template>
+
+    <template v-else-if="activeTab === 'mcp'">
+      <section class="card">
+        <h3>MCP Servers</h3>
+        <div v-if="runtime" class="stack">
+          <div><strong>Server Count:</strong> {{ runtime.operator.mcp.server_count }}</div>
+          <div><strong>Tool Count:</strong> {{ runtime.operator.mcp.tool_count }}</div>
+          <div v-if="runtime.operator.mcp.servers.length" class="list">
+            <div v-for="server in runtime.operator.mcp.servers" :key="server.name" class="list-item">
+              <div><strong>{{ server.name }}</strong></div>
+              <div class="muted">tools {{ server.tool_count }}</div>
+            </div>
+          </div>
+          <div v-else class="muted">No MCP servers connected.</div>
         </div>
-        <p v-else class="muted" style="margin-top: 12px">No permission rules found.</p>
       </section>
-    </div>
+    </template>
+
+    <template v-else-if="activeTab === 'lsp'">
+      <section class="card">
+        <h3>LSP Fleet</h3>
+        <div v-if="runtime" class="stack">
+          <div><strong>Server Count:</strong> {{ runtime.operator.lsp.server_count }}</div>
+          <div><strong>Diagnostics:</strong> {{ runtime.operator.lsp.diagnostics_count }}</div>
+          <div><strong>Files With Diagnostics:</strong> {{ runtime.operator.lsp.files_with_diagnostics }}</div>
+          <div v-if="runtime.operator.lsp.servers.length" class="list">
+            <div v-for="server in runtime.operator.lsp.servers" :key="server.name" class="list-item">
+              <div><strong>{{ server.name }}</strong></div>
+              <div class="muted mono">{{ server.command }}</div>
+              <div class="muted">extensions: {{ server.file_extensions.join(', ') || 'all' }}</div>
+              <div class="muted">root markers: {{ server.root_markers.join(', ') || 'workspace root' }}</div>
+            </div>
+          </div>
+          <div v-else class="muted">No LSP servers configured.</div>
+        </div>
+      </section>
+    </template>
+
+    <template v-else-if="activeTab === 'skills'">
+      <div class="grid two">
+        <section class="card">
+          <h3>Skills</h3>
+          <div v-if="discoveredSkills.length" class="list">
+            <div v-for="skill in discoveredSkills" :key="skill.name" class="list-item">
+              <div><strong>{{ skill.name }}</strong></div>
+              <div class="muted">{{ skill.description || 'No description' }}</div>
+              <div v-if="skill.aliases.length" class="muted">aliases: {{ skill.aliases.join(', ') }}</div>
+              <div v-if="skill.source_path" class="muted mono">{{ skill.source_path }}</div>
+            </div>
+          </div>
+          <p v-else class="muted">No skills discovered.</p>
+        </section>
+
+        <section class="card">
+          <h3>Commands</h3>
+          <div v-if="skillCommands.length" class="list">
+            <div v-for="skill in skillCommands" :key="skill.name" class="list-item">
+              <div><strong>{{ skill.name }}</strong></div>
+              <div class="muted">{{ skill.description || 'No description' }}</div>
+              <div v-if="skill.aliases.length" class="muted">aliases: {{ skill.aliases.join(', ') }}</div>
+              <div v-if="skill.source_path" class="muted mono">{{ skill.source_path }}</div>
+            </div>
+          </div>
+          <p v-else class="muted">No commands discovered.</p>
+        </section>
+      </div>
+    </template>
+
+    <template v-else-if="activeTab === 'operator'">
+      <div class="grid three">
+        <section class="card">
+          <h3>Runtime</h3>
+          <div v-if="runtime" class="stack">
+            <div><strong>Config Found:</strong> {{ runtime.config_found ? 'yes' : 'no' }}</div>
+            <div><strong>Session Runtime:</strong> {{ runtime.session_runtime_available ? 'enabled' : 'disabled' }}</div>
+            <div><strong>Watch Paths:</strong> {{ runtime.watch_paths.length }}</div>
+          </div>
+        </section>
+        <section class="card">
+          <h3>MCP</h3>
+          <div v-if="runtime" class="stack">
+            <div><strong>Servers:</strong> {{ runtime.operator.mcp.server_count }}</div>
+            <div><strong>Tools:</strong> {{ runtime.operator.mcp.tool_count }}</div>
+          </div>
+        </section>
+        <section class="card">
+          <h3>LSP + Skills</h3>
+          <div v-if="runtime" class="stack">
+            <div><strong>LSP Servers:</strong> {{ runtime.operator.lsp.server_count }}</div>
+            <div><strong>Diagnostics:</strong> {{ runtime.operator.lsp.diagnostics_count }}</div>
+            <div><strong>Skills:</strong> {{ runtime.operator.skills.skill_count }}</div>
+            <div><strong>Commands:</strong> {{ runtime.operator.skills.command_count }}</div>
+          </div>
+        </section>
+      </div>
+    </template>
   </section>
 </template>

@@ -196,6 +196,7 @@ bitflags::bitflags! {
         const CHAT_MESSAGES_TRANSFORM   = 1 << 26;
         const PRE_TURN                  = 1 << 27;
         const POST_TURN                 = 1 << 28;
+        const NOTIFICATION              = 1 << 29;
     }
 }
 
@@ -254,6 +255,7 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("auth", HookSubscription::AUTH),
     ("provider.list", HookSubscription::PROVIDER_LIST),
     ("permission.ask", HookSubscription::PERMISSION_ASK),
+    ("notification", HookSubscription::NOTIFICATION),
     ("command.execute.before", HookSubscription::COMMAND_BEFORE),
     ("command.execute.after", HookSubscription::COMMAND_AFTER),
     ("shell.env", HookSubscription::SHELL_ENV),

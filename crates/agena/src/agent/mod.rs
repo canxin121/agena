@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::message::BuiltinToolInput;
-use crate::permission::{AccessKind, PermissionDecision, PermissionPolicy, ToolPermissionPolicy};
+use crate::permission::{
+    AccessKind, PermissionDecision, PermissionMode, PermissionPolicy, ToolPermissionPolicy,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +44,24 @@ impl Agent {
     }
 
     pub fn with_tool_policy(mut self, tool_policy: ToolPermissionPolicy) -> Self {
+        self.tool_policy = tool_policy;
+        self
+    }
+
+    pub fn with_allowed_tools<I, S>(mut self, allowed_tools: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut tool_policy = ToolPermissionPolicy::new(PermissionMode::Deny)
+            .with_execution_mode(self.tool_policy.execution_mode());
+        for tool_name in allowed_tools {
+            let name = tool_name.as_ref().trim();
+            if name.is_empty() {
+                continue;
+            }
+            tool_policy = tool_policy.with_tool_mode(name.to_string(), PermissionMode::Allow);
+        }
         self.tool_policy = tool_policy;
         self
     }

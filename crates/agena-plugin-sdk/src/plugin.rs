@@ -164,6 +164,11 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
+    // -------- notification --------
+    async fn notification(&self, _input: NotificationInput) -> Result<()> {
+        Ok(())
+    }
+
     // -------- command & shell --------
     async fn command_execute_before(
         &self,

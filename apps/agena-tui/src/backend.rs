@@ -2,27 +2,34 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
+    process::Command,
     sync::{Arc, OnceLock},
 };
 
 use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
 use agena::{
     event::{DomainEvent, EventKind},
-    message::{AttachmentItem, AttachmentKind, AttachmentSource, PartContent, UserInputReply},
+    memory::MemoryStore,
+    message::{
+        AttachmentItem, AttachmentKind, AttachmentSource, BuiltinToolInput, BuiltinToolOutput,
+        EnterWorktreeToolInput, ExitWorktreeToolInput, PartContent, UserInputReply,
+    },
     model::ModelRef,
-    permission::{PermissionReply, PermissionReplyKind},
+    permission::{PermissionMode, PermissionReply, PermissionReplyKind},
     provider::ProviderModel,
     runtime::AgenaRuntime,
     session::{
         SessionContinueRequest, SessionPermissionReplyRequest, SessionRewindRequest,
         SessionUserInputReplyRequest, SessionUserTurnRequest,
     },
+    tool,
 };
 use agena_http_api::{
-    ApiError, ApiService, MessageListQuery, MessageResource, PaginatedResponse, PartLoadMode,
-    ProviderSummaryResource, SessionCreateRequest, SessionEventListQuery, SessionExecutionResource,
-    SessionListQuery, SessionReplaceRequest, SessionResource, SessionRunOptionsRequest,
-    WorkspaceResolveRequest,
+    ApiError, ApiService, GitStatusResource, MessageListQuery, MessageResource,
+    PaginatedResponse, PartLoadMode, PermissionRuleListQuery, PermissionRuleResource,
+    PermissionRuleWriteRequest, ProviderSummaryResource, SessionCreateRequest, SessionEventListQuery,
+    SessionExecutionResource, SessionListQuery, SessionReplaceRequest, SessionResource,
+    SessionRunOptionsRequest, WorkspaceResolveRequest,
 };
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -39,6 +46,12 @@ pub struct SessionRefresh {
     pub event_count: usize,
     pub execution: Option<SessionExecutionResource>,
     pub latest_messages: Option<PaginatedResponse<MessageResource>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InspectorRow {
+    pub label: String,
+    pub detail: String,
 }
 
 /// Push notification emitted by the unified bus for the active session.
@@ -497,6 +510,32 @@ impl Backend {
         }
     }
 
+    pub fn memory_index_path(&self) -> Result<PathBuf> {
+        let store = self.memory_store();
+        store
+            .ensure_exists()
+            .context("failed to create memory directory")?;
+        let path = store.dir().join("MEMORY.md");
+        if !path.exists() {
+            fs::write(&path, "")
+                .with_context(|| format!("failed to create memory index {}", path.display()))?;
+        }
+        Ok(path)
+    }
+
+    pub fn memory_entry_path(&self, name: &str) -> Result<PathBuf> {
+        self.memory_store()
+            .get(name)
+            .with_context(|| format!("failed to load memory `{name}`"))
+            .map(|entry| entry.path)
+    }
+
+    pub fn forget_memory(&self, name: &str) -> Result<()> {
+        self.memory_store()
+            .forget(name)
+            .with_context(|| format!("failed to forget memory `{name}`"))
+    }
+
     pub fn search_workspace_files(&self, query: &str, limit: usize) -> Result<Vec<PathBuf>> {
         if limit == 0 {
             return Ok(Vec::new());
@@ -719,6 +758,462 @@ impl Backend {
             .plugin_logs(plugin_id, after_seq, limit)
     }
 
+    pub fn runtime_inspector_rows(&self) -> Vec<InspectorRow> {
+        let snapshot = self.runtime.current_snapshot();
+        let resolution = snapshot.config_resolution();
+        let mut rows = vec![
+            InspectorRow {
+                label: "generation".to_string(),
+                detail: snapshot.generation().to_string(),
+            },
+            InspectorRow {
+                label: "workspace_root".to_string(),
+                detail: self.workspace_root.display().to_string(),
+            },
+            InspectorRow {
+                label: "config_path".to_string(),
+                detail: resolution.meta.config_path.display().to_string(),
+            },
+            InspectorRow {
+                label: "providers".to_string(),
+                detail: snapshot.provider_registry().provider_ids().join(", "),
+            },
+            InspectorRow {
+                label: "plugins".to_string(),
+                detail: snapshot.plugin_manager().plugins().len().to_string(),
+            },
+            InspectorRow {
+                label: "watch_paths".to_string(),
+                detail: snapshot
+                    .watch_paths()
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            },
+        ];
+        if let Some(manager) = snapshot.session_manager() {
+            let stats = manager.cache_stats();
+            rows.push(InspectorRow {
+                label: "session_cache".to_string(),
+                detail: format!(
+                    "entries={} hits={} misses={} evictions={}",
+                    stats.entry_count, stats.hits, stats.misses, stats.evictions
+                ),
+            });
+        }
+        rows
+    }
+
+    pub fn mcp_inspector_rows(&self) -> Vec<InspectorRow> {
+        let snapshot = self.runtime.current_snapshot();
+        let mut rows = snapshot
+            .config_resolution()
+            .config
+            .mcp
+            .servers
+            .iter()
+            .map(|(name, config)| InspectorRow {
+                label: name.clone(),
+                detail: match config {
+                    agena::config::McpServerConfig::Stdio { command, args, .. } => {
+                        format!("stdio {} {}", command, args.join(" "))
+                    }
+                    agena::config::McpServerConfig::Http { url, mode, .. } => {
+                        format!("http {} {:?}", url, mode)
+                    }
+                },
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.label.cmp(&right.label));
+        rows
+    }
+
+    pub fn lsp_inspector_rows(&self) -> Vec<InspectorRow> {
+        let snapshot = self.runtime.current_snapshot();
+        let mut rows = snapshot
+            .config_resolution()
+            .config
+            .lsp
+            .servers
+            .iter()
+            .map(|(name, config)| InspectorRow {
+                label: name.clone(),
+                detail: format!(
+                    "{} | ext={} | roots={}",
+                    config.command,
+                    if config.file_extensions.is_empty() {
+                        "all".to_string()
+                    } else {
+                        config.file_extensions.join(",")
+                    },
+                    if config.root_markers.is_empty() {
+                        "workspace".to_string()
+                    } else {
+                        config.root_markers.join(",")
+                    }
+                ),
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.label.cmp(&right.label));
+        rows
+    }
+
+    pub fn skills_inspector_rows(&self) -> Vec<InspectorRow> {
+        let Some(manager) = self.runtime.current_snapshot().skills_manager() else {
+            return Vec::new();
+        };
+        let mut rows = manager
+            .list()
+            .into_iter()
+            .map(|skill| InspectorRow {
+                label: skill.frontmatter.name,
+                detail: format!(
+                    "{}{}",
+                    skill.frontmatter.description,
+                    skill
+                        .source_path
+                        .as_ref()
+                        .map(|path| format!(" | {}", path.display()))
+                        .unwrap_or_default()
+                ),
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.label.cmp(&right.label));
+        rows
+    }
+
+    pub async fn session_cost_inspector_rows(&self, session_id: i64) -> Result<Vec<InspectorRow>> {
+        let session = self.session_manager()?.get_session(session_id).await?;
+        let summary = agena::session::cost::summarize(&session.messages);
+        let mut rows = vec![
+            InspectorRow {
+                label: "summary".to_string(),
+                detail: summary.one_line(),
+            },
+            InspectorRow {
+                label: "turns".to_string(),
+                detail: summary.turns.to_string(),
+            },
+            InspectorRow {
+                label: "input_tokens".to_string(),
+                detail: summary.input_tokens.to_string(),
+            },
+            InspectorRow {
+                label: "output_tokens".to_string(),
+                detail: summary.output_tokens.to_string(),
+            },
+            InspectorRow {
+                label: "reasoning_tokens".to_string(),
+                detail: summary.reasoning_tokens.to_string(),
+            },
+            InspectorRow {
+                label: "cache_write_tokens".to_string(),
+                detail: summary.cache_write_tokens.to_string(),
+            },
+            InspectorRow {
+                label: "cache_read_tokens".to_string(),
+                detail: summary.cache_read_tokens.to_string(),
+            },
+            InspectorRow {
+                label: "total_cost_usd".to_string(),
+                detail: format!("{:.4}", summary.total_cost_usd),
+            },
+        ];
+        rows.extend(summary.by_model.into_iter().map(|entry| InspectorRow {
+            label: format!("{}/{}", entry.provider_id, entry.model_id),
+            detail: format!(
+                "turns={} in={} out={} reasoning={} cost=${:.4}",
+                entry.turns,
+                entry.input_tokens,
+                entry.output_tokens,
+                entry.reasoning_tokens,
+                entry.total_cost_usd
+            ),
+        }));
+        Ok(rows)
+    }
+
+    pub async fn list_permission_rules(&self) -> Result<Vec<PermissionRuleResource>> {
+        let page = self
+            .api
+            .list_permission_rules(PermissionRuleListQuery {
+                cursor: None,
+                limit: Some(200),
+                search: None,
+            })
+            .await
+            .map_err(api_error)
+            .context("failed to list permission rules")?;
+        let mut rules = page.items;
+        rules.sort_by(|left, right| left.action_key.cmp(&right.action_key));
+        Ok(rules)
+    }
+
+    pub async fn create_permission_rule(
+        &self,
+        action_key: String,
+        mode: PermissionMode,
+    ) -> Result<PermissionRuleResource> {
+        self.api
+            .create_permission_rule(PermissionRuleWriteRequest { action_key, mode })
+            .await
+            .map_err(api_error)
+            .context("failed to create permission rule")
+    }
+
+    pub async fn replace_permission_rule(
+        &self,
+        rule_id: i64,
+        action_key: String,
+        mode: PermissionMode,
+    ) -> Result<PermissionRuleResource> {
+        self.api
+            .replace_permission_rule(rule_id, PermissionRuleWriteRequest { action_key, mode })
+            .await
+            .map_err(api_error)
+            .context("failed to replace permission rule")
+    }
+
+    pub async fn delete_permission_rule(&self, rule_id: i64) -> Result<PermissionRuleResource> {
+        self.api
+            .delete_permission_rule(rule_id)
+            .await
+            .map_err(api_error)
+            .context("failed to delete permission rule")
+    }
+
+    pub fn config_inspector_rows(&self) -> Vec<InspectorRow> {
+        let snapshot = self.runtime.current_snapshot();
+        let resolution = snapshot.config_resolution();
+        let mut rows = vec![
+            InspectorRow {
+                label: "config_path".to_string(),
+                detail: resolution.meta.config_path.display().to_string(),
+            },
+            InspectorRow {
+                label: "config_found".to_string(),
+                detail: resolution.meta.config_found.to_string(),
+            },
+            InspectorRow {
+                label: "active_mode".to_string(),
+                detail: resolution
+                    .meta
+                    .active_mode
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "default".to_string()),
+            },
+            InspectorRow {
+                label: "provider_count".to_string(),
+                detail: resolution.config.providers.len().to_string(),
+            },
+            InspectorRow {
+                label: "plugin_entries".to_string(),
+                detail: resolution
+                    .config
+                    .plugins
+                    .list
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            },
+            InspectorRow {
+                label: "mcp_servers".to_string(),
+                detail: resolution.config.mcp.servers.len().to_string(),
+            },
+            InspectorRow {
+                label: "lsp_servers".to_string(),
+                detail: resolution.config.lsp.servers.len().to_string(),
+            },
+        ];
+        rows.retain(|row| !row.detail.is_empty());
+        rows
+    }
+
+    pub fn worktree_inspector_rows(&self) -> Vec<InspectorRow> {
+        let Some(manager) = self.runtime.session_manager() else {
+            return vec![InspectorRow {
+                label: "session_runtime".to_string(),
+                detail: "unavailable".to_string(),
+            }];
+        };
+        let executor = manager.tool_executor();
+        let Some(registry) = executor.worktree_registry() else {
+            return vec![InspectorRow {
+                label: "worktree_registry".to_string(),
+                detail: "unavailable".to_string(),
+            }];
+        };
+        let active = tool::worktree_list_active(registry);
+        let managed = tool::worktree_list_managed(&self.workspace_root, registry);
+        let mut rows = vec![
+            InspectorRow {
+                label: "active_sessions".to_string(),
+                detail: active.len().to_string(),
+            },
+            InspectorRow {
+                label: "managed_dirs".to_string(),
+                detail: managed.len().to_string(),
+            },
+        ];
+        rows.extend(active.into_iter().map(|entry| InspectorRow {
+            label: format!("session #{}", entry.session_id),
+            detail: format!(
+                "{} | branch={} | created_here={}",
+                entry.path.display(),
+                entry.branch,
+                entry.created_here
+            ),
+        }));
+        rows.extend(managed.into_iter().map(|entry| {
+            let session_id = entry
+                .session_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let branch = entry
+                .branch
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let stale = entry.is_stale();
+            InspectorRow {
+                label: entry.path.display().to_string(),
+                detail: format!(
+                    "session={} | branch={} | git_registered={} | stale={}",
+                    session_id, branch, entry.registered_with_git, stale
+                ),
+            }
+        }));
+        rows
+    }
+
+    pub async fn git_inspector_rows(&self) -> Result<Vec<InspectorRow>> {
+        let status = self
+            .api
+            .git_status(&self.runtime)
+            .await
+            .map_err(api_error)
+            .context("failed to load git status")?;
+        Ok(git_status_inspector_rows(status))
+    }
+
+    pub fn enter_worktree(
+        &self,
+        session_id: i64,
+        name: Option<String>,
+        path: Option<String>,
+    ) -> Result<BuiltinToolOutput> {
+        let manager = self.session_manager()?;
+        manager
+            .tool_executor()
+            .execute_builtin_output_for_session(
+                &BuiltinToolInput::EnterWorktree(EnterWorktreeToolInput { name, path }),
+                session_id,
+            )
+            .map_err(|error| anyhow!(error.to_string()))
+    }
+
+    pub fn exit_worktree(
+        &self,
+        session_id: i64,
+        action: String,
+        discard_changes: bool,
+    ) -> Result<BuiltinToolOutput> {
+        let manager = self.session_manager()?;
+        manager
+            .tool_executor()
+            .execute_builtin_output_for_session(
+                &BuiltinToolInput::ExitWorktree(ExitWorktreeToolInput {
+                    action,
+                    discard_changes,
+                }),
+                session_id,
+            )
+            .map_err(|error| anyhow!(error.to_string()))
+    }
+
+    pub async fn create_commit(&self, message: String) -> Result<(String, String)> {
+        let status = self
+            .api
+            .git_status(&self.runtime)
+            .await
+            .map_err(api_error)
+            .context("failed to load git status")?;
+        if !status.git_available {
+            return Err(anyhow!("git is not available in PATH"));
+        }
+        if !status.repo {
+            return Err(anyhow!("not a git repository: {}", self.workspace_root.display()));
+        }
+        if status.staged_files == 0 {
+            return Err(anyhow!("no staged changes to commit"));
+        }
+
+        let output = Command::new("git")
+            .args(["commit", "-m", message.as_str()])
+            .current_dir(&self.workspace_root)
+            .output()
+            .context("failed to execute git commit")?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "git commit failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let commit = git_command_output(&self.workspace_root, ["rev-parse", "HEAD"])?;
+        let summary = git_command_output(&self.workspace_root, ["log", "-1", "--pretty=%s"])?;
+        Ok((commit, summary))
+    }
+
+    pub async fn create_pr(
+        &self,
+        title: String,
+        body: Option<String>,
+        base: Option<String>,
+        head: Option<String>,
+    ) -> Result<String> {
+        let status = self
+            .api
+            .git_status(&self.runtime)
+            .await
+            .map_err(api_error)
+            .context("failed to load git status")?;
+        if !status.git_available {
+            return Err(anyhow!("git is not available in PATH"));
+        }
+        if !status.gh_available {
+            return Err(anyhow!("gh is not available in PATH"));
+        }
+        if !status.repo {
+            return Err(anyhow!("not a git repository: {}", self.workspace_root.display()));
+        }
+
+        let branch = head
+            .clone()
+            .or(status.branch.clone())
+            .ok_or_else(|| anyhow!("could not determine current branch"))?;
+
+        let mut command = Command::new("gh");
+        command.arg("pr").arg("create").arg("--title").arg(title);
+        command.arg("--body").arg(body.unwrap_or_default());
+        if let Some(base) = base {
+            command.arg("--base").arg(base);
+        }
+        command.arg("--head").arg(branch);
+        command.current_dir(&self.workspace_root);
+
+        let output = command.output().context("failed to execute gh pr create")?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "gh pr create failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
     pub fn resolve_model_target(&self, target: &str, model: Option<&str>) -> Result<ModelRef> {
         self.runtime
             .current_snapshot()
@@ -786,6 +1281,10 @@ impl Backend {
         self.runtime
             .session_manager()
             .ok_or_else(|| anyhow!("session runtime is not available"))
+    }
+
+    fn memory_store(&self) -> MemoryStore {
+        MemoryStore::for_workspace(&self.workspace_root)
     }
 }
 
@@ -869,6 +1368,89 @@ fn direct_path_candidate(workspace_root: &Path, query: &str) -> Option<PathBuf> 
 
 fn api_error(error: ApiError) -> anyhow::Error {
     anyhow!("{error:?}")
+}
+
+fn git_command_output<const N: usize>(workspace_root: &Path, args: [&str; N]) -> Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(workspace_root)
+        .output()
+        .context("failed to execute git command")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn git_status_inspector_rows(status: GitStatusResource) -> Vec<InspectorRow> {
+    let mut rows = vec![
+        InspectorRow {
+            label: "workspace_root".to_string(),
+            detail: status.workspace_root,
+        },
+        InspectorRow {
+            label: "git_available".to_string(),
+            detail: status.git_available.to_string(),
+        },
+        InspectorRow {
+            label: "repo".to_string(),
+            detail: status.repo.to_string(),
+        },
+        InspectorRow {
+            label: "gh_available".to_string(),
+            detail: status.gh_available.to_string(),
+        },
+        InspectorRow {
+            label: "branch".to_string(),
+            detail: status.branch.unwrap_or_else(|| "unknown".to_string()),
+        },
+        InspectorRow {
+            label: "upstream".to_string(),
+            detail: status.upstream.unwrap_or_else(|| "none".to_string()),
+        },
+        InspectorRow {
+            label: "ahead".to_string(),
+            detail: status.ahead.unwrap_or_default().to_string(),
+        },
+        InspectorRow {
+            label: "behind".to_string(),
+            detail: status.behind.unwrap_or_default().to_string(),
+        },
+        InspectorRow {
+            label: "staged_files".to_string(),
+            detail: status.staged_files.to_string(),
+        },
+        InspectorRow {
+            label: "unstaged_files".to_string(),
+            detail: status.unstaged_files.to_string(),
+        },
+        InspectorRow {
+            label: "untracked_files".to_string(),
+            detail: status.untracked_files.to_string(),
+        },
+        InspectorRow {
+            label: "changed_files".to_string(),
+            detail: status.changed_files.to_string(),
+        },
+        InspectorRow {
+            label: "clean".to_string(),
+            detail: status.clean.to_string(),
+        },
+        InspectorRow {
+            label: "worktree_active_sessions".to_string(),
+            detail: status.worktree_active_sessions.to_string(),
+        },
+        InspectorRow {
+            label: "worktree_managed_dirs".to_string(),
+            detail: status.worktree_managed_dirs.to_string(),
+        },
+    ];
+    rows.retain(|row| !row.detail.is_empty());
+    rows
 }
 
 fn detect_dimensions(bytes: &[u8]) -> (Option<u32>, Option<u32>) {

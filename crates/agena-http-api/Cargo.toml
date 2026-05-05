@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 agena = { path = "../agena" }
+agena-scheduler = { path = "../agena-scheduler" }
 async-stream = "0.3.6"
 axum = "0.8.6"
 base64 = "0.22.1"

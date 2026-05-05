@@ -1,50 +1,12 @@
-use crate::message::{BuiltinToolOutput, TaskToolInput};
+use crate::message::TaskToolInput;
 
-use super::{BuiltinExecution, SubtaskSessionRequest, ToolExecutionView, ToolExecutor};
+use super::{BuiltinExecution, ToolExecutor};
 
 pub(super) fn execute(
-    executor: &ToolExecutor,
-    input: &TaskToolInput,
+    _executor: &ToolExecutor,
+    _input: &TaskToolInput,
 ) -> Result<BuiltinExecution, super::ToolError> {
-    let session = executor
-        .subtask_manager()
-        .create_or_resume(SubtaskSessionRequest {
-            requested_task_id: input.task_id.clone(),
-            description: input.description.clone(),
-            prompt: input.subagent_type.apply_prompt_guidance(&input.prompt),
-            subagent_type: input.subagent_type,
-            command: input.command.clone(),
-        })
-        .map_err(|err| super::ToolError::InvalidInput(err.to_string()))?;
-
-    let output = BuiltinToolOutput::Task {
-        session_id: Some(session.session_id.clone()),
-        model_provider_id: session.model_provider_id,
-        model_id: session.model_id,
-    };
-
-    let mut view = ToolExecutionView::simple(
-        format!("Task {} ({})", input.description, input.subagent_type),
-        format!(
-            "Created/resumed subagent task session {} for profile '{}' in workspace {}.",
-            session.session_id,
-            input.subagent_type,
-            executor.display_path(executor.workspace_root())
-        ),
-    );
-    view.metadata
-        .insert("description".to_string(), input.description.clone());
-    view.metadata
-        .insert("subagent_type".to_string(), input.subagent_type.to_string());
-    view.metadata.insert(
-        "profile_guidance".to_string(),
-        input.subagent_type.guidance().to_string(),
-    );
-    view.metadata
-        .insert("session_id".to_string(), session.session_id);
-    if let Some(command) = &input.command {
-        view.metadata.insert("command".to_string(), command.clone());
-    }
-
-    Ok(BuiltinExecution::new(output, view))
+    Err(super::ToolError::Plugin(
+        "task must be invoked through the agena.workflow host bridge".to_string(),
+    ))
 }

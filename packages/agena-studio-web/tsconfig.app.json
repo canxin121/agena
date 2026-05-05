@@ -20,6 +20,7 @@
   },
   "include": [
     "src/vite-env.d.ts",
+    "src/bun-test.d.ts",
     "src/main.ts",
     "src/App.vue",
     "src/router.ts",

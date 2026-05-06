@@ -33,8 +33,8 @@ pub use dto::{
     AuthCopilotDevicePollRequest, AuthCopilotDeviceStartRequest, AuthCredentialType,
     AuthDeviceStartResource, AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest,
     AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
-    AuthProviderResource, GitStatusResource, HealthResponse, MessageListQuery, MessageResource, PartLoadMode,
-    PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
+    AuthProviderResource, GitStatusResource, HealthResponse, MessageListQuery, MessageResource,
+    PartLoadMode, PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
     PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
     ProviderModelsResponse, ProviderSummaryResource, RuntimeAutomationResource, RuntimeLspResource,
     RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
@@ -42,16 +42,17 @@ pub use dto::{
     RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
     ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
     SessionContinueRequestBody, SessionCreateRequest, SessionEventListQuery,
-    SessionEventStreamQuery, SessionExecutionResource, SessionListQuery,
-    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionResource,
-    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
-    WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
-    WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource, WorkspaceWriteRequest,
+    SessionEventStreamQuery, SessionExecutionContextResource, SessionExecutionResource,
+    SessionListQuery, SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionResource,
+    SessionRunOptionsRequest, SessionRunState, SessionTurnRequest,
+    SessionUserInputReplyRequestBody, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
+    WorkspaceFileTreeResource, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource,
+    WorkspaceWriteRequest,
 };
 pub use error::ApiError;
 pub use pagination::{PageInfo, PaginatedResponse};
 pub use service::ApiService;
-use service::{list_scheduled_jobs, scheduled_job_resource, sort_jobs_for_display};
+pub use service::{list_scheduled_jobs, scheduled_job_resource, sort_jobs_for_display};
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -293,7 +294,9 @@ async fn reload_runtime(
     }))
 }
 
-async fn get_git_status(State(state): State<ApiState>) -> Result<Json<GitStatusResource>, ApiError> {
+async fn get_git_status(
+    State(state): State<ApiState>,
+) -> Result<Json<GitStatusResource>, ApiError> {
     Ok(Json(state.service().git_status(state.runtime()).await?))
 }
 

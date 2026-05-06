@@ -539,22 +539,94 @@ mod tests {
 
     #[test]
     fn parse_command_supports_runtime_operator_commands() {
-        assert_eq!(parse_command("/mcp").expect("mcp command should parse").spec.id, CommandId::Mcp);
-        assert_eq!(parse_command("/lsp").expect("lsp command should parse").spec.id, CommandId::Lsp);
-        assert_eq!(parse_command("/skill search").expect("skills command should parse").spec.id, CommandId::Skills);
-        assert_eq!(parse_command("/operator").expect("runtime command should parse").spec.id, CommandId::Runtime);
+        assert_eq!(
+            parse_command("/mcp")
+                .expect("mcp command should parse")
+                .spec
+                .id,
+            CommandId::Mcp
+        );
+        assert_eq!(
+            parse_command("/lsp")
+                .expect("lsp command should parse")
+                .spec
+                .id,
+            CommandId::Lsp
+        );
+        assert_eq!(
+            parse_command("/skill search")
+                .expect("skills command should parse")
+                .spec
+                .id,
+            CommandId::Skills
+        );
+        assert_eq!(
+            parse_command("/operator")
+                .expect("runtime command should parse")
+                .spec
+                .id,
+            CommandId::Runtime
+        );
     }
 
     #[test]
     fn parse_command_supports_workflow_commands() {
-        assert_eq!(parse_command("/cost").expect("cost command should parse").spec.id, CommandId::Cost);
-        assert_eq!(parse_command("/review auth flow").expect("review command should parse").spec.id, CommandId::Review);
-        assert_eq!(parse_command("/perm").expect("permissions command should parse").spec.id, CommandId::Permissions);
-        assert_eq!(parse_command("/config").expect("config command should parse").spec.id, CommandId::Config);
-        assert_eq!(parse_command("/wt").expect("worktree command should parse").spec.id, CommandId::Worktree);
-        assert_eq!(parse_command("/repo").expect("git command should parse").spec.id, CommandId::Git);
-        assert_eq!(parse_command("/commit ship it").expect("commit command should parse").spec.id, CommandId::Commit);
-        assert_eq!(parse_command("/pr ship it").expect("pr command should parse").spec.id, CommandId::Pr);
+        assert_eq!(
+            parse_command("/cost")
+                .expect("cost command should parse")
+                .spec
+                .id,
+            CommandId::Cost
+        );
+        assert_eq!(
+            parse_command("/review auth flow")
+                .expect("review command should parse")
+                .spec
+                .id,
+            CommandId::Review
+        );
+        assert_eq!(
+            parse_command("/perm")
+                .expect("permissions command should parse")
+                .spec
+                .id,
+            CommandId::Permissions
+        );
+        assert_eq!(
+            parse_command("/config")
+                .expect("config command should parse")
+                .spec
+                .id,
+            CommandId::Config
+        );
+        assert_eq!(
+            parse_command("/wt")
+                .expect("worktree command should parse")
+                .spec
+                .id,
+            CommandId::Worktree
+        );
+        assert_eq!(
+            parse_command("/repo")
+                .expect("git command should parse")
+                .spec
+                .id,
+            CommandId::Git
+        );
+        assert_eq!(
+            parse_command("/commit ship it")
+                .expect("commit command should parse")
+                .spec
+                .id,
+            CommandId::Commit
+        );
+        assert_eq!(
+            parse_command("/pr ship it")
+                .expect("pr command should parse")
+                .spec
+                .id,
+            CommandId::Pr
+        );
     }
 
     #[test]

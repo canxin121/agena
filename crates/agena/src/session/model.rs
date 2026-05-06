@@ -375,11 +375,7 @@ impl SessionRuntimeState {
         ))
     }
 
-    pub fn set_model_override(
-        &mut self,
-        provider_id: Option<String>,
-        model_id: Option<String>,
-    ) {
+    pub fn set_model_override(&mut self, provider_id: Option<String>, model_id: Option<String>) {
         self.execution.model_provider_id = provider_id.filter(|value| !value.trim().is_empty());
         self.execution.model_id = model_id.filter(|value| !value.trim().is_empty());
     }
@@ -605,6 +601,10 @@ impl Session {
         } else {
             SessionStatus::Idle
         }
+    }
+
+    pub fn runtime(&self) -> &SessionRuntimeState {
+        &self.runtime
     }
 
     pub(crate) fn apply_persisted_metadata(&mut self, persisted: &Session) {

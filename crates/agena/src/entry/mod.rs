@@ -1485,7 +1485,8 @@ impl ToolExecutor {
         if candidate.is_absolute() {
             return candidate;
         }
-        self.effective_workspace_root(session_context).join(candidate)
+        self.effective_workspace_root(session_context)
+            .join(candidate)
     }
 
     pub(crate) fn execute_shell_command(
@@ -1971,7 +1972,9 @@ mod tests {
             let session_id = context.session_id.unwrap_or(-1);
             let call_id = context.call_id.unwrap_or(-1);
             let executor = builtins::current_executor_for_test(session_id, call_id, "todo_write")
-                .ok_or_else(|| PluginError::new("test host: no executor available for todo_write"))?;
+                .ok_or_else(|| {
+                PluginError::new("test host: no executor available for todo_write")
+            })?;
             executor
                 .execute_builtin_payload_for_host(
                     "todo_write",

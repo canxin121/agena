@@ -266,12 +266,24 @@ export type UserInputRequest = {
   created_at: string
 }
 
+export type SessionExecutionContextResource = {
+  agent_profile?: string | null
+  active_skill_name?: string | null
+  system_prompt_override?: string | null
+  allowed_tools: string[]
+  model_provider_id?: string | null
+  model_id?: string | null
+  effective_workspace_root?: string | null
+  task_id?: string | null
+}
+
 export type SessionExecutionResource = {
   session: SessionResource
   blocked: boolean
   run_state: 'idle' | 'awaiting_model' | string
   latest_event_seq?: number | null
   automation?: SessionAutomationResource | null
+  execution: SessionExecutionContextResource
   pending_permission_requests: PermissionRequest[]
   pending_user_input_requests: UserInputRequest[]
 }

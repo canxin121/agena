@@ -1717,8 +1717,14 @@ impl AgenaCli {
         let mut query = entities::permission_rule::Entity::find()
             .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
             .order_by_desc(entities::permission_rule::Column::Id);
-        if let Some(search) = args.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            query = query.filter(entities::permission_rule::Column::ActionKey.like(format!("%{search}%")));
+        if let Some(search) = args
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            query = query
+                .filter(entities::permission_rule::Column::ActionKey.like(format!("%{search}%")));
         }
         let rows = query.all(&db).await?;
         let rules = rows
@@ -1729,9 +1735,19 @@ impl AgenaCli {
                     action_key: row.action_key,
                     mode: row.mode,
                     created_at: DateTime::<Utc>::from_timestamp_millis(row.created_at_ms)
-                        .ok_or_else(|| AppError::Internal(format!("invalid permission rule created_at_ms: {}", row.created_at_ms)))?,
+                        .ok_or_else(|| {
+                            AppError::Internal(format!(
+                                "invalid permission rule created_at_ms: {}",
+                                row.created_at_ms
+                            ))
+                        })?,
                     updated_at: DateTime::<Utc>::from_timestamp_millis(row.updated_at_ms)
-                        .ok_or_else(|| AppError::Internal(format!("invalid permission rule updated_at_ms: {}", row.updated_at_ms)))?,
+                        .ok_or_else(|| {
+                            AppError::Internal(format!(
+                                "invalid permission rule updated_at_ms: {}",
+                                row.updated_at_ms
+                            ))
+                        })?,
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;
@@ -1750,9 +1766,9 @@ impl AgenaCli {
             .session_manager()
             .ok_or_else(session_storage_error)?;
         let executor = manager.tool_executor();
-        let registry = executor
-            .worktree_registry()
-            .ok_or_else(|| AppError::Config("worktree registry is not enabled in this runtime".to_owned()))?;
+        let registry = executor.worktree_registry().ok_or_else(|| {
+            AppError::Config("worktree registry is not enabled in this runtime".to_owned())
+        })?;
         let active = crate::tool::worktree_list_active(registry)
             .into_iter()
             .map(|entry| ActiveWorktreeOutput {
@@ -1796,7 +1812,8 @@ impl AgenaCli {
                 match executor.worktree_registry() {
                     Some(registry) => (
                         crate::tool::worktree_list_active(registry).len() as u64,
-                        crate::tool::worktree_list_managed(runtime.workspace_root(), registry).len() as u64,
+                        crate::tool::worktree_list_managed(runtime.workspace_root(), registry).len()
+                            as u64,
                     ),
                     None => (0, 0),
                 }
@@ -1885,7 +1902,11 @@ impl AgenaCli {
             .ok_or_else(|| AppError::Config("could not determine current branch".to_owned()))?;
 
         let mut command = Command::new("gh");
-        command.arg("pr").arg("create").arg("--title").arg(args.title);
+        command
+            .arg("pr")
+            .arg("create")
+            .arg("--title")
+            .arg(args.title);
         command.arg("--body").arg(args.body.unwrap_or_default());
         if let Some(base) = args.base {
             command.arg("--base").arg(base);
@@ -3185,7 +3206,12 @@ fn collect_git_preflight(workspace_root: &Path) -> Result<GitPreflight, AppError
     let branch = non_empty_string(git_output(workspace_root, ["branch", "--show-current"])?);
     let upstream = git_output(
         workspace_root,
-        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        [
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
     )
     .ok()
     .and_then(non_empty_string);
@@ -3193,8 +3219,11 @@ fn collect_git_preflight(workspace_root: &Path) -> Result<GitPreflight, AppError
         upstream
             .as_ref()
             .and_then(|_| {
-                git_output(workspace_root, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
-                    .ok()
+                git_output(
+                    workspace_root,
+                    ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+                )
+                .ok()
             })
             .as_deref(),
     );
@@ -3794,8 +3823,14 @@ store_path = "{}"
         assert!(args.last);
         assert_eq!(args.format, ConfigOutputFormat::Json);
 
-        let permissions =
-            AgenaCli::parse_from(["agena", "permissions", "--search", "bash", "--format", "json"]);
+        let permissions = AgenaCli::parse_from([
+            "agena",
+            "permissions",
+            "--search",
+            "bash",
+            "--format",
+            "json",
+        ]);
         let Some(AgenaCommand::Permissions(args)) = permissions.command else {
             panic!("expected permissions command");
         };
@@ -3911,9 +3946,13 @@ store_path = "{}"
             .await
             .expect("db should connect");
         init_schema(&db).await.expect("schema should init");
-        crate::db::crud::permission_rule::upsert_rule(&db, "bash", crate::permission::PermissionMode::Allow)
-            .await
-            .expect("rule should upsert");
+        crate::db::crud::permission_rule::upsert_rule(
+            &db,
+            "bash",
+            crate::permission::PermissionMode::Allow,
+        )
+        .await
+        .expect("rule should upsert");
 
         let output = cli
             .render_permissions_command(PermissionsArgs {

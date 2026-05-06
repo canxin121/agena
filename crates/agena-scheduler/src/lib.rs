@@ -21,6 +21,8 @@ pub mod scheduler;
 pub mod store;
 
 pub use error::{SchedulerError, SchedulerResult};
-pub use job::{JobDeliveryResult, JobKind, JobOutcome, JobRunRecord, JobRunStatus, JobSink, ScheduledJob};
+pub use job::{
+    JobDeliveryResult, JobKind, JobOutcome, JobRunRecord, JobRunStatus, JobSink, ScheduledJob,
+};
 pub use scheduler::Scheduler;
 pub use store::{InMemoryJobStore, JobStore};

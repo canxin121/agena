@@ -33,8 +33,9 @@ use agena::{
 use super::{
     dto::{
         GitStatusResource, MessageListQuery, MessageResource, PartLoadMode,
-        PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest, ScheduledJobResource,
-        ScheduledJobRunResource, SessionAutomationResource, SessionCreateRequest, SessionEventListQuery,
+        PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
+        ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
+        SessionCreateRequest, SessionEventListQuery, SessionExecutionContextResource,
         SessionExecutionResource, SessionReplaceRequest, SessionResource, SessionRunOptionsRequest,
         SessionRunState, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
         WorkspaceFileTreeResource, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource,
@@ -776,7 +777,10 @@ impl ApiService {
         Ok(resource)
     }
 
-    pub async fn git_status(&self, runtime: &agena::runtime::AgenaRuntime) -> ApiResult<GitStatusResource> {
+    pub async fn git_status(
+        &self,
+        runtime: &agena::runtime::AgenaRuntime,
+    ) -> ApiResult<GitStatusResource> {
         let workspace_root = runtime.workspace_root().to_path_buf();
         let git_available = command_available("git");
         let gh_available = command_available("gh");
@@ -852,13 +856,28 @@ impl ApiService {
         }
 
         let branch = git_output(&workspace_root, ["branch", "--show-current"])?;
-        let upstream = git_output(&workspace_root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+        let upstream = git_output(
+            &workspace_root,
+            [
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ],
+        )
+        .ok()
+        .and_then(|value| non_empty(Some(value.as_str())).map(ToOwned::to_owned));
+        let ahead_behind = upstream.as_ref().and_then(|_| {
+            git_output(
+                &workspace_root,
+                ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+            )
             .ok()
-            .and_then(|value| non_empty(Some(value.as_str())).map(ToOwned::to_owned));
-        let ahead_behind = upstream.as_ref().and_then(|_| git_output(&workspace_root, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]).ok());
+        });
         let (ahead, behind) = parse_ahead_behind(ahead_behind.as_deref());
         let status = git_output(&workspace_root, ["status", "--porcelain"])?;
-        let (staged_files, unstaged_files, untracked_files, changed_files) = summarize_git_status(status.as_str());
+        let (staged_files, unstaged_files, untracked_files, changed_files) =
+            summarize_git_status(status.as_str());
 
         Ok(GitStatusResource {
             workspace_root: workspace_root.display().to_string(),
@@ -989,6 +1008,19 @@ impl ApiService {
             run_state: SessionRunState::from(session.status()),
             latest_event_seq: self.latest_session_event_seq(manager, session.id).await?,
             automation: session_automation_resource(&scheduler_jobs, session.id),
+            execution: SessionExecutionContextResource {
+                agent_profile: session.runtime().execution.agent_profile.clone(),
+                active_skill_name: session.runtime().execution.active_skill_name.clone(),
+                system_prompt_override: session.runtime().execution.system_prompt_override.clone(),
+                allowed_tools: session.runtime().execution.allowed_tools.clone(),
+                model_provider_id: session.runtime().execution.model_provider_id.clone(),
+                model_id: session.runtime().execution.model_id.clone(),
+                effective_workspace_root: session
+                    .runtime()
+                    .effective_workspace_root()
+                    .map(|path| path.display().to_string()),
+                task_id: session.runtime().execution.task_id.clone(),
+            },
             pending_permission_requests: pending_permission_requests(session),
             pending_user_input_requests: pending_user_input_requests(session),
         })
@@ -1436,7 +1468,9 @@ fn git_output<const N: usize>(workspace_root: &Path, args: [&str; N]) -> ApiResu
         .args(args)
         .current_dir(workspace_root)
         .output()
-        .map_err(|error| ApiError::internal(format!("failed to execute git {:?}: {}", args, error)))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to execute git {:?}: {}", args, error))
+        })?;
     if !output.status.success() {
         return Err(ApiError::internal(format!(
             "git {:?} failed: {}",
@@ -1557,7 +1591,7 @@ fn default_model_from_registry(provider_registry: &ProviderRegistry) -> Option<M
     ))
 }
 
-pub(crate) async fn list_scheduled_jobs(manager: &SessionManager) -> Vec<agena_scheduler::ScheduledJob> {
+pub async fn list_scheduled_jobs(manager: &SessionManager) -> Vec<agena_scheduler::ScheduledJob> {
     let executor = manager.tool_executor();
     let Some(scheduler) = executor.scheduler().cloned() else {
         return Vec::new();
@@ -1584,10 +1618,16 @@ fn session_automation_resource(
     })
 }
 
-pub(crate) fn sort_jobs_for_display(jobs: &mut [agena_scheduler::ScheduledJob]) {
+pub fn sort_jobs_for_display(jobs: &mut [agena_scheduler::ScheduledJob]) {
     jobs.sort_by(|left, right| {
-        let left_last_run = left.last_run.as_ref().map(|run| run.triggered_at.timestamp_millis());
-        let right_last_run = right.last_run.as_ref().map(|run| run.triggered_at.timestamp_millis());
+        let left_last_run = left
+            .last_run
+            .as_ref()
+            .map(|run| run.triggered_at.timestamp_millis());
+        let right_last_run = right
+            .last_run
+            .as_ref()
+            .map(|run| run.triggered_at.timestamp_millis());
         right_last_run
             .cmp(&left_last_run)
             .then_with(|| left.next_fire_at.cmp(&right.next_fire_at))
@@ -1596,9 +1636,11 @@ pub(crate) fn sort_jobs_for_display(jobs: &mut [agena_scheduler::ScheduledJob]) 
     });
 }
 
-pub(crate) fn scheduled_job_resource(job: agena_scheduler::ScheduledJob) -> ScheduledJobResource {
+pub fn scheduled_job_resource(job: agena_scheduler::ScheduledJob) -> ScheduledJobResource {
     let (kind, expression, at) = match job.kind {
-        agena_scheduler::JobKind::Cron { expression, .. } => ("cron".to_string(), Some(expression), None),
+        agena_scheduler::JobKind::Cron { expression, .. } => {
+            ("cron".to_string(), Some(expression), None)
+        }
         agena_scheduler::JobKind::Once { at } => ("once".to_string(), None, Some(at)),
     };
     ScheduledJobResource {

@@ -2,21 +2,26 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::TimeZone;
 use sea_orm::sea_query::{Expr, Order};
 use sea_orm::{
     ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, TransactionTrait,
 };
+use uuid::Uuid;
 
-use crate::event::envelope::DomainEvent;
+use crate::event::envelope::{DomainEvent, EventMeta};
 use crate::event::{EventFilter, EventStore, EventStoreError, KindMatcher, Scope, StoreRange};
 
 use crate::db::event_entity as entity;
 
 /// sea_orm-backed [`EventStore`].
 ///
-/// Generic over the concrete `EventKind` enum `K`. Persists the full
-/// `DomainEvent<K>` envelope as JSONB; indexed columns mirror the meta fields.
+/// Generic over the concrete `EventKind` enum `K`. The `payload_json` column
+/// holds **only** the kind payload — every routing / observability meta
+/// field lives in its own typed column on `agena_events`. This is a single
+/// source of truth: the wire envelope is reconstructed from the columns at
+/// read time.
 pub struct SeaEventStore<K> {
     db: Arc<DatabaseConnection>,
     _phantom: PhantomData<fn() -> K>,
@@ -39,7 +44,7 @@ fn into_active_model<K>(event: &DomainEvent<K>) -> Result<entity::ActiveModel, E
 where
     K: KindMatcher + serde::Serialize,
 {
-    let payload = serde_json::to_value(event)?;
+    let payload = serde_json::to_value(&event.kind)?;
     let tag = event.kind.tag();
     Ok(entity::ActiveModel {
         id: ActiveValue::NotSet,
@@ -61,7 +66,43 @@ fn from_model<K>(model: entity::Model) -> Result<DomainEvent<K>, EventStoreError
 where
     K: serde::de::DeserializeOwned,
 {
-    serde_json::from_value::<DomainEvent<K>>(model.payload).map_err(EventStoreError::Serde)
+    let kind: K = serde_json::from_value(model.payload).map_err(EventStoreError::Serde)?;
+    let id = Uuid::parse_str(&model.event_uuid).map_err(|err| {
+        EventStoreError::InvalidRange(format!("event_uuid not a valid uuid: {err}"))
+    })?;
+    let causation_id = match model.causation_uuid {
+        Some(s) => Some(Uuid::parse_str(&s).map_err(|err| {
+            EventStoreError::InvalidRange(format!("causation_uuid not a valid uuid: {err}"))
+        })?),
+        None => None,
+    };
+    let correlation_id = match model.correlation_uuid {
+        Some(s) => Some(Uuid::parse_str(&s).map_err(|err| {
+            EventStoreError::InvalidRange(format!("correlation_uuid not a valid uuid: {err}"))
+        })?),
+        None => None,
+    };
+    let created_at = chrono::Utc
+        .timestamp_millis_opt(model.created_at_ms)
+        .single()
+        .ok_or_else(|| {
+            EventStoreError::InvalidRange(format!(
+                "created_at_ms out of range: {}",
+                model.created_at_ms
+            ))
+        })?;
+    let meta = EventMeta {
+        id,
+        seq_global: model.seq_global,
+        seq_session: model.seq_session,
+        session_id: model.session_id,
+        workspace_id: model.workspace_id,
+        created_at,
+        causation_id,
+        correlation_id,
+        envelope_schema: model.envelope_schema as u32,
+    };
+    Ok(DomainEvent { meta, kind })
 }
 
 #[async_trait]

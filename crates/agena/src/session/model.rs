@@ -904,7 +904,7 @@ impl Session {
 }
 
 fn tool_invocation_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation::Custom { name, .. } = invocation;
+    let ToolInvocation { name, .. } = invocation;
     name.clone()
 }
 

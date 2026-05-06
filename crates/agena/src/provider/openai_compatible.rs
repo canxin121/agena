@@ -1135,7 +1135,7 @@ mod tests {
             vec![
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
                     call_id: 0,
-                    invocation: ToolInvocation::Custom {
+                    invocation: ToolInvocation {
                         name: "tool".to_owned(),
                         input: StructuredObject::default(),
                     },
@@ -1299,7 +1299,7 @@ mod tests {
                 PartContent::text("Before"),
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
                     call_id: 1,
-                    invocation: ToolInvocation::Custom {
+                    invocation: ToolInvocation {
                         name: "tool_one".to_owned(),
                         input: StructuredObject::default(),
                     },
@@ -1312,7 +1312,7 @@ mod tests {
                 PartContent::text("Middle"),
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
                     call_id: 2,
-                    invocation: ToolInvocation::Custom {
+                    invocation: ToolInvocation {
                         name: "tool_two".to_owned(),
                         input: StructuredObject::default(),
                     },

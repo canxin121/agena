@@ -782,7 +782,11 @@ impl ToolExecutor {
         ) {
             return Ok(None);
         }
-        BuiltinToolInput::from_custom(&invocation.entry_name, &invocation.input)
+        let invocation_view = ToolInvocation::new(
+            invocation.entry_name.clone(),
+            invocation.input.clone(),
+        );
+        BuiltinToolInput::from_invocation(&invocation_view)
             .map(Some)
             .ok_or_else(|| {
                 ToolError::InvalidInput(format!("decode built-in input: {}", invocation.entry_name))
@@ -1681,7 +1685,7 @@ fn parse_invocation_from_json(
     let input = StructuredObject::try_from(value)
         .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
 
-    Ok(ToolInvocation::Custom {
+    Ok(ToolInvocation {
         name: tool_name.to_string(),
         input,
     })
@@ -2990,7 +2994,7 @@ mod tests {
                 )
         }));
 
-        let invocation = ToolInvocation::Custom {
+        let invocation = ToolInvocation {
             name: "plugin_echo".to_string(),
             input: StructuredObject::try_from(json!({ "message": "hello" }))
                 .expect("structured object should build"),
@@ -3004,7 +3008,7 @@ mod tests {
             Some("Prepared plugin echo")
         );
 
-        let ToolInvocation::Custom { input, .. } = &prepared.invocation;
+        let ToolInvocation { input, .. } = &prepared.invocation;
         let prepared_value = serde_json::Value::from(input.clone());
         assert_eq!(prepared_value["message"], "hello prepared");
 
@@ -3049,7 +3053,7 @@ mod tests {
             .prepare_invocation(&invocation, 7, 9)
             .expect("prepare should succeed for builtin");
 
-        let ToolInvocation::Custom { name, input } = prepared.invocation;
+        let ToolInvocation { name, input } = prepared.invocation;
         assert_eq!(name, "read");
         let payload = serde_json::Value::from(input);
         assert_eq!(payload["file_path"], "notes.txt");
@@ -3061,7 +3065,7 @@ mod tests {
     fn prepare_invocation_preserves_plugin_entry_name() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
-        let invocation = ToolInvocation::Custom {
+        let invocation = ToolInvocation {
             name: "mcp:docs:search".to_string(),
             input: StructuredObject::try_from(json!({ "query": "plugin host" }))
                 .expect("structured object should build"),
@@ -3072,7 +3076,7 @@ mod tests {
             .expect("prepare should preserve plugin entry invocation");
 
         match prepared.invocation {
-            ToolInvocation::Custom { name, input } => {
+            ToolInvocation { name, input } => {
                 assert_eq!(name, "mcp:docs:search");
                 let payload = serde_json::Value::from(input);
                 assert_eq!(payload["query"], "plugin host");
@@ -3085,7 +3089,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root));
-        let invocation = ToolInvocation::Custom {
+        let invocation = ToolInvocation {
             name: "plugin_paths".to_string(),
             input: StructuredObject::try_from(json!({
                 "file_path": "docs/spec.md",
@@ -3230,7 +3234,7 @@ mod tests {
                     value: cmd.to_string(),
                 },
             });
-            ToolInvocation::Custom {
+            ToolInvocation {
                 name: "bash".to_string(),
                 input,
             }
@@ -3292,7 +3296,7 @@ mod tests {
                 value: "rm -rf /".to_string(),
             },
         });
-        let inv = ToolInvocation::Custom {
+        let inv = ToolInvocation {
             name: "bash".to_string(),
             input,
         };

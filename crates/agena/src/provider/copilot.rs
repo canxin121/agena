@@ -1818,7 +1818,7 @@ mod tests {
         for (index, _) in tool_call_ids.iter().enumerate() {
             parts.push(PartContent::ToolExecution(ToolExecutionPart::Completed {
                 call_id: index as i64,
-                invocation: ToolInvocation::Custom {
+                invocation: ToolInvocation {
                     name: format!("tool_{index}"),
                     input: StructuredObject::default(),
                 },
@@ -1850,7 +1850,7 @@ mod tests {
             crate::message::PartContent::ToolExecution(
                 crate::message::ToolExecutionPart::Completed {
                     call_id: 1,
-                    invocation: crate::message::ToolInvocation::Custom {
+                    invocation: crate::message::ToolInvocation {
                         name: "search".to_owned(),
                         input: crate::message::StructuredObject::default(),
                     },
@@ -1919,7 +1919,7 @@ mod tests {
                 PartContent::text("Before"),
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
                     call_id: 1,
-                    invocation: ToolInvocation::Custom {
+                    invocation: ToolInvocation {
                         name: "tool_one".to_owned(),
                         input: StructuredObject::default(),
                     },
@@ -1932,7 +1932,7 @@ mod tests {
                 PartContent::text("Middle"),
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
                     call_id: 2,
-                    invocation: ToolInvocation::Custom {
+                    invocation: ToolInvocation {
                         name: "tool_two".to_owned(),
                         input: StructuredObject::default(),
                     },

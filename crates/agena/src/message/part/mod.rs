@@ -28,5 +28,5 @@ pub use tool::{
     RequestUserInputToolInput, ScheduleWakeupToolInput, SkillRunToolInput, TaskSubagentType,
     TaskToolInput, TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolInvocation,
     ToolOutput, ToolResultBlock, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
-    WebSearchHit, WebSearchToolInput, canonical_builtin_name,
+    WebSearchHit, WebSearchToolInput,
 };

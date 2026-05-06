@@ -24,6 +24,6 @@ pub use part::{
     ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock, ToolSearchToolInput,
     UserInputOption, UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputRequest,
     UserInputRequestPart, ViewFileToolInput, WebFetchToolInput, WebSearchHit, WebSearchPart,
-    WebSearchResult, WebSearchToolInput, canonical_builtin_name,
+    WebSearchResult, WebSearchToolInput,
 };
 pub use usage::MessageUsage;

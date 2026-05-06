@@ -3088,7 +3088,7 @@ fn completed_lifecycle(lifecycle: &TimeRange) -> TimeRange {
 }
 
 fn tool_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation::Custom { name, .. } = invocation;
+    let ToolInvocation { name, .. } = invocation;
     name.clone()
 }
 

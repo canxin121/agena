@@ -9078,7 +9078,7 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
             BuiltinToolInput::PowerShell(input) => format!("powershell {}", input.command),
         };
     }
-    let ToolInvocation::Custom { name, .. } = invocation;
+    let ToolInvocation { name, .. } = invocation;
     name.clone()
 }
 

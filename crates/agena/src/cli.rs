@@ -2687,13 +2687,11 @@ fn mcp_tool_invocation(
     name: &str,
     input: StructuredObject,
 ) -> Result<ToolInvocation, McpServerError> {
-    if let Some(builtin) = BuiltinToolInput::from_custom(name, &input) {
+    let invocation = ToolInvocation::new(name.to_owned(), input);
+    if let Some(builtin) = BuiltinToolInput::from_invocation(&invocation) {
         return Ok(builtin.into_invocation());
     }
-    Ok(ToolInvocation::Custom {
-        name: name.to_owned(),
-        input,
-    })
+    Ok(invocation)
 }
 
 fn ensure_memory_index_path(store: &MemoryStore) -> Result<PathBuf, AppError> {

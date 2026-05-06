@@ -1395,12 +1395,12 @@ fn tool_execution_invocation(exec: &ToolExecutionPart) -> &ToolInvocation {
 }
 
 fn tool_invocation_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation::Custom { name, .. } = invocation;
+    let ToolInvocation { name, .. } = invocation;
     name.clone()
 }
 
 fn tool_invocation_arguments_json(invocation: &ToolInvocation) -> String {
-    let ToolInvocation::Custom { input, .. } = invocation;
+    let ToolInvocation { input, .. } = invocation;
     serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
 }
 
@@ -1938,7 +1938,7 @@ mod tests {
             Role::Assistant,
             vec![PartContent::ToolExecution(ToolExecutionPart::Completed {
                 call_id: 17,
-                invocation: ToolInvocation::Custom {
+                invocation: ToolInvocation {
                     name: "edit".to_string(),
                     input: crate::message::StructuredObject::try_from(
                         serde_json::json!({ "path": "src/main.rs" }),
@@ -1973,7 +1973,7 @@ mod tests {
     #[test]
     fn normalize_prompt_messages_matches_multi_tool_result_message_without_synthesizing_duplicates()
     {
-        let invocation = ToolInvocation::Custom {
+        let invocation = ToolInvocation {
             name: "edit".to_string(),
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),
@@ -2077,7 +2077,7 @@ mod tests {
 
     #[test]
     fn normalize_prompt_messages_replaces_empty_matching_tool_results_with_placeholder() {
-        let invocation = ToolInvocation::Custom {
+        let invocation = ToolInvocation {
             name: "edit".to_string(),
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),
@@ -2133,7 +2133,7 @@ mod tests {
 
     #[test]
     fn normalize_prompt_messages_expands_empty_multi_tool_results_into_placeholders() {
-        let invocation = ToolInvocation::Custom {
+        let invocation = ToolInvocation {
             name: "edit".to_string(),
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),
@@ -2211,7 +2211,7 @@ mod tests {
 
     #[test]
     fn prompt_transcript_digest_treats_empty_tool_results_like_synthesized_placeholders() {
-        let invocation = ToolInvocation::Custom {
+        let invocation = ToolInvocation {
             name: "edit".to_string(),
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),
@@ -2254,7 +2254,7 @@ mod tests {
 
     #[test]
     fn prompt_transcript_digest_treats_empty_multi_tool_results_like_synthesized_placeholders() {
-        let invocation = ToolInvocation::Custom {
+        let invocation = ToolInvocation {
             name: "edit".to_string(),
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),

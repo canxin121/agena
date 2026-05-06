@@ -2635,7 +2635,7 @@ mod tests {
                 crate::message::PartContent::ToolExecution(
                     crate::message::ToolExecutionPart::Completed {
                         call_id: 1,
-                        invocation: crate::message::ToolInvocation::Custom {
+                        invocation: crate::message::ToolInvocation {
                             name: "tool_one".to_owned(),
                             input: crate::message::StructuredObject::default(),
                         },
@@ -2650,7 +2650,7 @@ mod tests {
                 crate::message::PartContent::ToolExecution(
                     crate::message::ToolExecutionPart::Completed {
                         call_id: 2,
-                        invocation: crate::message::ToolInvocation::Custom {
+                        invocation: crate::message::ToolInvocation {
                             name: "tool_two".to_owned(),
                             input: crate::message::StructuredObject::default(),
                         },

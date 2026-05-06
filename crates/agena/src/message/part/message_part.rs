@@ -1,57 +1,18 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use super::{
-    AttachmentPart, ExecutionStatus, FileChangeEntry, FileChangeKind, FileChangePart, PartContent,
-    PartKind, ToolExecutionPart, ToolInvocation,
+    AttachmentPart, ExecutionStatus, ExecutionStatusTransitionError, FileChangeEntry,
+    FileChangeKind, FileChangePart, PartContent, PartKind, ToolExecutionPart, ToolInvocation,
 };
 
-#[derive(Debug, Error)]
-#[error("invalid part state transition: {from:?} -> {to:?}")]
-pub struct PartStateTransitionError {
-    pub from: ExecutionStatus,
-    pub to: ExecutionStatus,
-}
-
-fn can_transition(from: ExecutionStatus, to: ExecutionStatus) -> bool {
-    if from == to {
-        return true;
-    }
-
-    matches!(
-        (from, to),
-        (
-            ExecutionStatus::Pending,
-            ExecutionStatus::InProgress | ExecutionStatus::Failed
-        ) | (
-            ExecutionStatus::InProgress,
-            ExecutionStatus::Completed | ExecutionStatus::Failed
-        )
-    )
-}
+/// Alias kept for ergonomic reuse at MessagePart call sites; the underlying
+/// type is the unified [`ExecutionStatusTransitionError`] from
+/// [`super::common`].
+pub type PartStateTransitionError = ExecutionStatusTransitionError;
 
 fn is_false(value: &bool) -> bool {
     !*value
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MessagePartSummary {
-    pub id: i64,
-    pub message_id: i64,
-    pub part_index: i32,
-    #[serde(default)]
-    pub status: ExecutionStatus,
-    pub kind: PartKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub has_detail: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation_id: Option<String>,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -98,43 +59,6 @@ impl MessagePart {
         };
         part.refresh_summary_from_content();
         part
-    }
-
-    pub fn from_summary(summary: MessagePartSummary, content: Option<PartContent>) -> Self {
-        let mut part = Self {
-            id: summary.id,
-            message_id: summary.message_id,
-            part_index: summary.part_index,
-            status: summary.status,
-            kind: summary.kind,
-            name: summary.name,
-            summary: summary.summary,
-            has_detail: summary.has_detail,
-            operation_id: summary.operation_id,
-            created_at: summary.created_at,
-            content,
-        };
-
-        if part.content.is_some() {
-            part.refresh_summary_from_content();
-        }
-
-        part
-    }
-
-    pub fn summary_view(&self) -> MessagePartSummary {
-        MessagePartSummary {
-            id: self.id,
-            message_id: self.message_id,
-            part_index: self.part_index,
-            status: self.status,
-            kind: self.kind,
-            name: self.name.clone(),
-            summary: self.summary.clone(),
-            has_detail: self.has_detail,
-            operation_id: self.operation_id.clone(),
-            created_at: self.created_at,
-        }
     }
 
     pub fn without_detail(&self) -> Self {
@@ -222,7 +146,7 @@ impl MessagePart {
         to: ExecutionStatus,
     ) -> Result<(), PartStateTransitionError> {
         let from = self.status;
-        if !can_transition(from, to) {
+        if !from.can_transition(to) {
             return Err(PartStateTransitionError { from, to });
         }
         self.status = to;

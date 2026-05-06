@@ -706,6 +706,7 @@ impl SessionManager {
                 turn_id: user_turn_id,
                 created_at: user_message.created_at,
                 content: TranscriptContent::from_message_lossy(&user_message),
+                parts: user_message.parts.clone(),
                 metadata: user_message.metadata.clone(),
             }),
             EventKind::TurnCompleted(TurnCompleted {

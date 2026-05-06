@@ -138,6 +138,26 @@ impl SessionViewBuilder {
         self.next_part_id
     }
 
+    /// Adopt the authoritative `parts` carried on a history event.
+    ///
+    /// Each part keeps its content verbatim but is re-anchored to the
+    /// projection's id space: the part id is replaced with a fresh allocator
+    /// draw and `message_id` is set to the message we are folding into. This
+    /// way two events that happen to share part ids (because they were
+    /// recorded with their original on-the-wire ids) cannot collide inside
+    /// the projection.
+    fn adopt_parts(&mut self, parts: &[MessagePart], message_id: i64) -> Vec<MessagePart> {
+        let mut out = Vec::with_capacity(parts.len());
+        for (idx, part) in parts.iter().enumerate() {
+            let mut clone = part.clone();
+            clone.id = self.alloc_part_id();
+            clone.message_id = message_id;
+            clone.part_index = idx as i32;
+            out.push(clone);
+        }
+        out
+    }
+
     fn ensure_turn(&mut self, turn_id: TurnId) -> &mut TurnState {
         if let std::collections::hash_map::Entry::Vacant(e) = self.turn_state.entry(turn_id) {
             e.insert(TurnState::default());
@@ -149,13 +169,18 @@ impl SessionViewBuilder {
     }
 
     fn handle_user(&mut self, payload: &UserMessageAppended) {
-        let parts = parts_from_transcript(
-            &payload.content,
-            payload.message_id.raw(),
-            payload.created_at,
-            ExecutionStatus::Completed,
-            || self.alloc_part_id(),
-        );
+        let parts = if !payload.parts.is_empty() {
+            // Authoritative: the event carries the original parts verbatim.
+            self.adopt_parts(&payload.parts, payload.message_id.raw())
+        } else {
+            parts_from_transcript(
+                &payload.content,
+                payload.message_id.raw(),
+                payload.created_at,
+                ExecutionStatus::Completed,
+                || self.alloc_part_id(),
+            )
+        };
         let message = Message {
             id: payload.message_id.raw(),
             role: Role::User,
@@ -177,13 +202,17 @@ impl SessionViewBuilder {
     }
 
     fn handle_assistant(&mut self, payload: &AssistantMessageCompleted) {
-        let parts = parts_from_transcript(
-            &payload.content,
-            payload.message_id.raw(),
-            payload.created_at,
-            ExecutionStatus::Completed,
-            || self.alloc_part_id(),
-        );
+        let parts = if !payload.parts.is_empty() {
+            self.adopt_parts(&payload.parts, payload.message_id.raw())
+        } else {
+            parts_from_transcript(
+                &payload.content,
+                payload.message_id.raw(),
+                payload.created_at,
+                ExecutionStatus::Completed,
+                || self.alloc_part_id(),
+            )
+        };
         let finish_label = finish_reason_label(payload.finish_reason);
         let message = Message {
             id: payload.message_id.raw(),
@@ -622,6 +651,8 @@ mod tests {
             turn_id,
             created_at: Utc::now(),
             content: TranscriptContent::from_text(text),
+            parts: Vec::new(),
+
             metadata: MessageMetadata::default(),
         }))
     }
@@ -640,6 +671,8 @@ mod tests {
                 content: TranscriptContent::from_text(text),
                 usage: None,
                 finish_reason,
+                parts: Vec::new(),
+
                 metadata: MessageMetadata::default(),
             },
         ))

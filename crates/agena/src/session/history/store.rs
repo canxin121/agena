@@ -28,9 +28,7 @@ impl SessionHistoryStore {
         base_runtime: SessionRuntimeState,
     ) -> Result<LoadedSessionProjection, DbErr> {
         let mut events = self.list_session_events(session_id).await?;
-        let aborted = self
-            .abort_hanging_turns(session_id, &events)
-            .await?;
+        let aborted = self.abort_hanging_turns(session_id, &events).await?;
         events.extend(aborted);
 
         let view: SessionView = fold_history::<SessionViewBuilder>(events.as_slice())
@@ -74,13 +72,10 @@ impl SessionHistoryStore {
         Ok(all)
     }
 
-    /// Scan a previously loaded event slice for any `TurnStarted(t)` without a
-    /// matching `TurnCompleted(t)` / `TurnAborted(t)`. Append a synthetic
-    /// `TurnAborted { reason: ProcessRestart }` for each — the
-    /// `SessionViewBuilder` will then drop the dangling messages.
-    ///
-    /// Returns the newly published abort events so callers can extend their
-    /// in-memory event slice without re-reading the table.
+    /// Persist a synthetic `TurnAborted { ProcessRestart }` for any
+    /// `TurnStarted` that lacks a matching `TurnCompleted` / `TurnAborted` in
+    /// `events`. Returns the freshly published events so the caller can fold
+    /// them into the view in one pass.
     async fn abort_hanging_turns(
         &self,
         session_id: i64,
@@ -105,22 +100,22 @@ impl SessionHistoryStore {
         if started.is_empty() {
             return Ok(Vec::new());
         }
-        let mut out = Vec::with_capacity(started.len());
-        for turn_id in started {
-            let kind = EventKind::TurnAborted(TurnAborted {
-                turn_id,
-                reason: TurnAbortReason::ProcessRestart,
-                message: Some("process restart detected on session load".to_string()),
-            });
-            let ctx = PublishContext::for_session(session_id);
-            let event = self
-                .publisher
-                .publish(ctx, kind)
-                .await
-                .map_err(|err| DbErr::Custom(format!("publish abort failed: {err}")))?;
-            out.push(event);
-        }
-        Ok(out)
+        let ctx = PublishContext::for_session(session_id);
+        let pending: Vec<DomainEvent> = started
+            .into_iter()
+            .map(|turn_id| {
+                let kind = EventKind::TurnAborted(TurnAborted {
+                    turn_id,
+                    reason: TurnAbortReason::ProcessRestart,
+                    message: Some("process restart detected on session load".to_string()),
+                });
+                self.publisher.build(ctx.clone(), kind)
+            })
+            .collect();
+        self.publisher
+            .publish_batch(pending)
+            .await
+            .map_err(|err| DbErr::Custom(format!("publish abort batch failed: {err}")))
     }
 
     /// Append a batch of events for a session through `publish_batch` so the

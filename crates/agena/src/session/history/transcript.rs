@@ -386,7 +386,6 @@ enum PendingFragment {
         message_id: MessageId,
         content: TranscriptContent,
         tool_calls: Vec<TranscriptToolCall>,
-        completed: HashMap<ToolCallId, TranscriptToolOutput>,
     },
     UserMessage {
         message_id: MessageId,
@@ -490,7 +489,6 @@ impl HistoryFold for ProviderTranscriptBuilder {
                         message_id: *message_id,
                         content: content.clone(),
                         tool_calls: Vec::new(),
-                        completed: HashMap::new(),
                     },
                 );
                 self.record_message_location(*message_id, *turn_id, idx);
@@ -533,7 +531,10 @@ impl HistoryFold for ProviderTranscriptBuilder {
             EventKind::SystemNoticeAppended(SystemNoticeAppended {
                 message_id, text, ..
             }) => {
-                let synthetic = TurnId::default();
+                // System notices are not part of any turn; allocate a fresh
+                // synthetic turn id per notice so they never collide with each
+                // other or with a real turn.
+                let synthetic = TurnId::new();
                 let idx = self.push_pending(
                     synthetic,
                     PendingFragment::SystemNotice {

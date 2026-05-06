@@ -31,7 +31,6 @@ use crate::{
     },
     role::Role,
     session::{
-        SessionRuntimeState,
         ids::{MessageId, ToolCallId, TurnId},
     },
 };
@@ -47,16 +46,13 @@ use crate::event::{DomainEvent, EventKind, MessagePartUpdatedEvent};
 
 /// Output of a `SessionViewBuilder` fold.
 ///
-/// `runtime` is **always default-initialized** here. Session runtime state
-/// (provider anchors, prompt-token snapshots, deferred tools, etc.) is
-/// authoritative on `agena_sessions.runtime_state_json` and never passes
-/// through the history log — callers that need it must read the session row
-/// directly.
+/// Session runtime state (provider anchors, prompt-token snapshots, deferred
+/// tools, etc.) is authoritative on `agena_sessions.runtime_state_json` and
+/// never passes through the history log; it does not appear here.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SessionView {
     /// Messages ordered by `(created_at, message_id)`.
     pub messages: Vec<Message>,
-    pub runtime: SessionRuntimeState,
     pub last_seq: i64,
 }
 
@@ -474,7 +470,6 @@ impl HistoryFold for SessionViewBuilder {
         let messages: Vec<Message> = finalized.into_values().collect();
         Ok(SessionView {
             messages,
-            runtime: SessionRuntimeState::default(),
             last_seq,
         })
     }

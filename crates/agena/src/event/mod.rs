@@ -31,6 +31,6 @@ pub use client::{
 };
 
 pub use kind::{
-    DomainEvent, EventKind, EventPublisher, HISTORY_KINDS, PluginEventPayload, PublishContext,
-    UI_KINDS, history_kinds_table, kinds_table, ui_kinds_table,
+    ALL_KINDS, DomainEvent, EventKind, EventPublisher, HISTORY_KINDS, PluginEventPayload,
+    PublishContext, UI_KINDS,
 };

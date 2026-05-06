@@ -3,7 +3,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum EventStoreError {
     #[error("event store backend error: {0}")]
-    Backend(String),
+    Backend(#[from] sea_orm::DbErr),
     #[error("event with seq_global={0} already exists")]
     DuplicateSeq(i64),
     #[error("invalid range: {0}")]

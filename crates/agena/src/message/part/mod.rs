@@ -13,9 +13,9 @@ pub use activity::{
     UserInputRequest, UserInputRequestPart, WebSearchPart, WebSearchResult,
 };
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
-pub use common::{ExecutionStatus, PartKind, TimeRange};
+pub use common::{ExecutionStatus, ExecutionStatusTransitionError, PartKind, TimeRange};
 pub use content::PartContent;
-pub use message_part::{MessagePart, MessagePartSummary, PartStateTransitionError};
+pub use message_part::{MessagePart, PartStateTransitionError};
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput,

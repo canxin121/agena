@@ -273,10 +273,7 @@ impl SessionViewBuilder {
             TranscriptToolOutput::Error { message } => message.clone(),
         };
 
-        // Synthesise a stable but unique message id derived from the call id.
-        // The legacy code never persisted ids for synthetic tool messages
-        // either; the only requirement is uniqueness within the projection.
-        let message_id = synthetic_tool_message_id(&payload.call_id);
+        let message_id = payload.message_id.raw();
         let mut part = MessagePart::with_content(
             part_id,
             message_id,
@@ -284,10 +281,10 @@ impl SessionViewBuilder {
             ExecutionStatus::Completed,
             PartContent::ToolExecution(ToolExecutionPart::Completed {
                 call_id: 0,
-                invocation: ToolInvocation {
-                    name: "tool".to_owned(),
-                    input: StructuredObject::default(),
-                },
+                invocation: ToolInvocation::new(
+                    payload.tool_name.as_str().to_owned(),
+                    StructuredObject::default(),
+                ),
                 output_text,
                 blocks: Vec::new(),
                 attachments: Vec::new(),
@@ -572,19 +569,6 @@ fn structured_from_json(value: &serde_json::Value) -> StructuredObject {
     serde_json::from_value(value.clone()).unwrap_or_default()
 }
 
-#[allow(dead_code)]
-fn synthetic_tool_message_id(call_id: &ToolCallId) -> i64 {
-    // Negative ids never collide with the positive monotonic id space the
-    // store hands out. Hash the call id into the lower 62 bits so two calls
-    // with different ids never collide either.
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    call_id.as_str().hash(&mut hasher);
-    let raw = hasher.finish() as i64;
-    // Ensure negative and avoid i64::MIN overflow on negation.
-    -((raw & i64::MAX) | 1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,8 +690,10 @@ mod tests {
                 created_at: Utc::now(),
             })),
             record(EventKind::ToolCallCompleted(ToolCallCompleted {
+                message_id: MessageId(11),
                 call_id: call.clone(),
                 turn_id,
+                tool_name: SmolStr::new("read_file"),
                 output: TranscriptToolOutput::Text {
                     text: "fn main(){}".into(),
                 },

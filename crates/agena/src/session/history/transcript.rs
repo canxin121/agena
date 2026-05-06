@@ -151,15 +151,16 @@ impl TranscriptContent {
             .push(TranscriptBlock::Text { text: text.into() });
     }
 
-    /// Lossy projection of a `Message`'s parts into the transcript form. This
-    /// is the conversion used when an in-memory `Message` (e.g. user input
-    /// arriving via `submit_user_turn`) needs to be appended to the event log
-    /// as a `UserMessageAppended` payload. Reasoning / attachment / image
-    /// fidelity is best-effort: text/reasoning blocks survive verbatim, every
-    /// other shape collapses into the lossy text rendering of the message,
-    /// matching what the legacy reducer would have stored.
+    /// Project a `Message`'s parts into transcript form. Multi-modal fidelity
+    /// is preserved: text, reasoning, image and attachment blocks all round-
+    /// trip; everything else collapses to its lossy text rendering as a final
+    /// fallback so a message never produces an empty body.
+    ///
+    /// The name retains the `_lossy` suffix because the lossy fallback path
+    /// is unavoidable for content kinds (file changes, web searches, …) the
+    /// transcript shape simply does not model.
     pub fn from_message_lossy(message: &crate::message::Message) -> Self {
-        use crate::message::PartContent;
+        use crate::message::{AttachmentKind, PartContent};
         let mut content = Self::default();
         let mut had_any = false;
         for part in &message.parts {
@@ -178,6 +179,23 @@ impl TranscriptContent {
                         content
                             .blocks
                             .push(TranscriptBlock::Reasoning { text: joined });
+                        had_any = true;
+                    }
+                }
+                Some(PartContent::Attachment(attachment)) => {
+                    for item in &attachment.attachments {
+                        let media_type: SmolStr = item.mime.as_str().into();
+                        let block = match item.kind {
+                            AttachmentKind::Image => TranscriptBlock::Image {
+                                media_type,
+                                digest: attachment_digest_label(&item.source),
+                            },
+                            _ => TranscriptBlock::Attachment {
+                                file_id: attachment_digest_label(&item.source).into(),
+                                media_type: Some(media_type),
+                            },
+                        };
+                        content.blocks.push(block);
                         had_any = true;
                     }
                 }
@@ -297,6 +315,31 @@ impl TranscriptToolOutput {
 #[allow(dead_code)]
 fn hash_len(hasher: &mut blake3::Hasher, len: u64) {
     hasher.update(&len.to_le_bytes());
+}
+
+/// Best-effort short label for an attachment source. The transcript only
+/// keeps a content-stable handle (digest / file id), not the raw payload, so
+/// any URL is hashed by its byte content via the existing transcript
+/// digester; the label here just feeds back into `TranscriptBlock::Image`
+/// or `TranscriptBlock::Attachment` so prompt-cache stability stays tied to
+/// a value the provider also sees.
+fn attachment_digest_label(source: &crate::message::AttachmentSource) -> String {
+    use crate::message::AttachmentSource;
+    match source {
+        AttachmentSource::Url { url } | AttachmentSource::DataUrl { url } => url.clone(),
+        AttachmentSource::Base64 { data } => format!("base64:{}", short_digest(data)),
+        AttachmentSource::FileId { file_id } => file_id.clone(),
+        AttachmentSource::LocalPath { path } => path.clone(),
+    }
+}
+
+/// 16-char prefix of a blake3 digest of `value`. Used to keep an
+/// attachment's transcript label content-stable without storing the full
+/// payload in the event log.
+fn short_digest(value: &str) -> String {
+    let mut hex = blake3::hash(value.as_bytes()).to_hex().to_string();
+    hex.truncate(16);
+    hex
 }
 
 #[inline]
@@ -930,8 +973,10 @@ mod tests {
                 created_at: Utc::now(),
             })),
             record(EventKind::ToolCallCompleted(ToolCallCompleted {
+                message_id: MessageId(11),
                 call_id: call.clone(),
                 turn_id,
+                tool_name: SmolStr::new("read"),
                 output: TranscriptToolOutput::Text { text: "ok".into() },
                 completed_at: Utc::now(),
             })),

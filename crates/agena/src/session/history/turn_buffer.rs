@@ -301,7 +301,14 @@ impl TurnBuffer {
     /// must appear in the history log. Tool-call issuance precedes the
     /// matching `ToolCallCompleted` so that any reader that streams events
     /// can rely on `call_id` being introduced before it is referenced again.
-    pub fn commit(self) -> Result<Vec<EventKind>, TurnBufferError> {
+    ///
+    /// `ids` allocates a `MessageId` for the synthetic tool-result message
+    /// that accompanies each `ToolCallCompleted`; the projection no longer
+    /// has to invent one from a hash of the call id.
+    pub fn commit<A: MessageIdAllocator>(
+        self,
+        ids: &mut A,
+    ) -> Result<Vec<EventKind>, TurnBufferError> {
         let TurnBuffer { turn_id, sections } = self;
         let mut items = Vec::with_capacity(sections.len() * 2);
 
@@ -367,14 +374,20 @@ impl TurnBuffer {
                             message_id,
                             turn_id,
                             call_id: call_id.clone(),
-                            name,
+                            name: name.clone(),
                             arguments,
                             created_at: entry.issued_at,
                         }));
                         if let Some(output) = entry.output {
+                            // Allocate a dedicated `message_id` for the synthetic
+                            // tool-result message so the projection no longer has
+                            // to derive one from a hash of `call_id`.
+                            let tool_message_id = ids.next_message_id();
                             completions.push(EventKind::ToolCallCompleted(ToolCallCompleted {
+                                message_id: tool_message_id,
                                 call_id,
                                 turn_id,
+                                tool_name: name,
                                 output,
                                 completed_at: entry.completed_at.unwrap_or_else(Utc::now),
                             }));
@@ -400,7 +413,7 @@ mod tests {
     #[test]
     fn empty_turn_commits_to_empty_vec() {
         let buf = TurnBuffer::new(TurnId::new());
-        assert!(buf.commit().unwrap().is_empty());
+        assert!(buf.commit(&mut allocator()).unwrap().is_empty());
     }
 
     #[test]
@@ -417,7 +430,7 @@ mod tests {
         buf.push_text_delta(" world").unwrap();
         buf.set_finish_reason(FinishReason::Stop).unwrap();
 
-        let items = buf.commit().unwrap();
+        let items = buf.commit(&mut allocator()).unwrap();
         assert_eq!(items.len(), 2);
         assert!(matches!(items[0], EventKind::UserMessageAppended(_)));
         match &items[1] {
@@ -460,7 +473,7 @@ mod tests {
         .unwrap();
         buf.set_finish_reason(FinishReason::ToolCalls).unwrap();
 
-        let items = buf.commit().unwrap();
+        let items = buf.commit(&mut allocator()).unwrap();
         // assistant + 2 issued + 2 completed = 5
         assert_eq!(items.len(), 5);
         let kinds: Vec<&'static str> = items.iter().map(EventKind::tag_str).collect();
@@ -513,6 +526,6 @@ mod tests {
         buf.begin_assistant(&mut ids);
         let id: ToolCallId = "call_anon".into();
         buf.start_tool_call(id.clone()).unwrap();
-        assert_eq!(buf.commit(), Err(TurnBufferError::ToolCallMissingName(id)));
+        assert_eq!(buf.commit(&mut allocator()), Err(TurnBufferError::ToolCallMissingName(id)));
     }
 }

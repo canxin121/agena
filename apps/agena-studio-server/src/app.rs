@@ -212,12 +212,13 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         )
         .with_state(shared_state.clone());
 
-    let agena_api = agena_http_api::router(ApiState::new(runtime.clone(), db)).layer(
+    let agena_api = agena_http_api::router(ApiState::new(runtime.clone(), db.clone())).layer(
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
-    let agena_api_v2 = agena_api_server::transport_router(ApiV2State::new(runtime.clone())).layer(
-        middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
-    );
+    let agena_api_v2 =
+        agena_api_server::transport_router(ApiV2State::new(runtime.clone(), db.clone())).layer(
+            middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
+        );
 
     let ui_dir_path = args.ui_dir.as_ref().map(PathBuf::from);
     let (has_ui, asset_files, static_files) = match &ui_dir_path {

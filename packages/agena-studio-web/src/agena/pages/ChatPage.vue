@@ -9,11 +9,13 @@ import {
   getSessionState,
   listMessages,
   listProviders,
+  listSessionTimeline,
   listSessions,
   listWorkspaces,
   replyPermission,
   replyUserInput,
   resolveWorkspace,
+  rewindSession,
   streamSessionEvents,
   submitTurn,
   type SessionEventStreamHandle,
@@ -23,6 +25,7 @@ import {
   type RuntimeStatus,
   type SessionExecutionResource,
   type SessionResource,
+  type TimelineEventRecord,
   type WorkspaceResource,
 } from '@/agena/lib/agenaApi'
 
@@ -31,6 +34,7 @@ const providers = ref<ProviderSummary[]>([])
 const workspaces = ref<WorkspaceResource[]>([])
 const sessions = ref<SessionResource[]>([])
 const messages = ref<MessageResource[]>([])
+const timelineEvents = ref<TimelineEventRecord[]>([])
 const sessionState = ref<SessionExecutionResource | null>(null)
 
 const selectedWorkspaceId = ref<number | null>(null)
@@ -160,6 +164,12 @@ function syncEventStream() {
 function formatMessageTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+function formatEventTime(timestampMs: number): string {
+  const date = new Date(timestampMs)
+  if (Number.isNaN(date.getTime())) return String(timestampMs)
   return date.toLocaleString()
 }
 
@@ -469,6 +479,7 @@ async function loadSessionsForWorkspace(workspaceId: number, preserveSelection =
 
   selectedSessionId.value = null
   messages.value = []
+  timelineEvents.value = []
   sessionState.value = null
   stopEventStream()
   clearScheduledConversationRefresh()
@@ -501,10 +512,15 @@ async function refreshConversation(foreground: boolean) {
   refreshInFlight = true
 
   try {
-    const [state, messageItems] = await Promise.all([getSessionState(sessionId), listMessages(sessionId)])
+    const [state, messageItems, eventItems] = await Promise.all([
+      getSessionState(sessionId),
+      listMessages(sessionId),
+      listSessionTimeline(sessionId, { limit: 100 }),
+    ])
     if (selectedSessionId.value !== sessionId) return
     sessionState.value = state
     messages.value = messageItems
+    timelineEvents.value = eventItems
     syncEventStream()
     syncPolling()
   } catch (err) {
@@ -541,17 +557,19 @@ async function resolveWorkspaceAction(createIfMissing: boolean) {
   }
 }
 
-async function createSessionAction() {
+async function createSessionAction(parentId?: number | null) {
   const workspaceId = selectedWorkspaceId.value
   if (!workspaceId) return
 
   loading.value = true
   errorMessage.value = ''
   try {
-    const title = newSessionTitle.value.trim() || 'New session'
+    const fallbackTitle = parentId ? `Child of #${parentId}` : 'New session'
+    const title = newSessionTitle.value.trim() || fallbackTitle
     const session = await createSession({
       workspaceId,
       title,
+      parentId: parentId ?? undefined,
     })
     newSessionTitle.value = ''
     await loadSessionsForWorkspace(workspaceId, false)
@@ -655,11 +673,44 @@ async function cancelUserAnswers(requestId: string) {
   }
 }
 
+async function rewindToMessage(messageId: number) {
+  const sessionId = selectedSessionId.value
+  if (!sessionId) return
+  if (typeof window !== 'undefined' && !window.confirm(`Rewind session #${sessionId} to message #${messageId}?`)) {
+    return
+  }
+
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    sessionState.value = await rewindSession({
+      sessionId,
+      messageId,
+    })
+    await refreshConversation(true)
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    loading.value = false
+  }
+}
+
 const selectedWorkspace = computed(
   () => workspaces.value.find((workspace) => workspace.id === selectedWorkspaceId.value) || null,
 )
 
 const selectedSession = computed(() => sessions.value.find((session) => session.id === selectedSessionId.value) || null)
+
+const parentSession = computed(() => {
+  const parentId = sessionState.value?.session.parent_id ?? selectedSession.value?.parent_id ?? null
+  return parentId ? sessions.value.find((session) => session.id === parentId) || null : null
+})
+
+const childSessions = computed(() => {
+  const sessionId = sessionState.value?.session.id ?? selectedSession.value?.id ?? null
+  if (!sessionId) return [] as SessionResource[]
+  return sessions.value.filter((session) => session.parent_id === sessionId)
+})
 
 const sessionLineageLabel = computed(() => {
   const session = sessionState.value?.session || selectedSession.value
@@ -798,6 +849,18 @@ onBeforeUnmount(() => {
                 sessionState?.blocked ? 'true' : 'false'
               }}
             </div>
+            <div class="button-row" style="margin-top: 8px">
+              <button v-if="parentSession" class="button ghost" @click="selectSession(parentSession.id)">
+                Open Parent #{{ parentSession.id }}
+              </button>
+              <button
+                class="button ghost"
+                :disabled="!selectedSessionId || loading"
+                @click="createSessionAction(selectedSessionId)"
+              >
+                Fork Child Session
+              </button>
+            </div>
             <template v-if="executionFacts.length">
               <div class="muted mono">{{ executionFacts.join(' · ') }}</div>
             </template>
@@ -821,6 +884,19 @@ onBeforeUnmount(() => {
               </div>
               <div v-if="sessionState.automation.latest_job?.last_run?.error_message" class="muted">
                 automation_error={{ sessionState.automation.latest_job.last_run.error_message }}
+              </div>
+            </template>
+            <template v-if="childSessions.length">
+              <div class="muted" style="margin-top: 8px">child_sessions={{ childSessions.length }}</div>
+              <div class="button-row" style="margin-top: 6px">
+                <button
+                  v-for="child in childSessions"
+                  :key="`child-${child.id}`"
+                  class="button ghost"
+                  @click="selectSession(child.id)"
+                >
+                  #{{ child.id }} {{ child.title }}
+                </button>
               </div>
             </template>
           </div>
@@ -865,7 +941,10 @@ onBeforeUnmount(() => {
             <article v-for="message in messages" :key="message.id" class="message" :class="message.role">
               <div class="message-head">
                 <div class="message-role">{{ message.role }}</div>
-                <div>{{ formatMessageTime(message.created_at) }}</div>
+                <div class="button-row">
+                  <button class="button ghost" :disabled="loading" @click="rewindToMessage(message.id)">Rewind Here</button>
+                  <div>{{ formatMessageTime(message.created_at) }}</div>
+                </div>
               </div>
               <div
                 v-if="messageTags(message).length || messageUsageFacts(message).length || message.finish"
@@ -894,6 +973,25 @@ onBeforeUnmount(() => {
             </article>
           </div>
           <p v-else class="muted">No messages yet.</p>
+        </section>
+
+        <section class="card">
+          <div class="page-header" style="margin-bottom: 12px">
+            <h3 style="margin: 0">Timeline</h3>
+            <div class="muted mono">events={{ timelineEvents.length }}</div>
+          </div>
+          <div v-if="timelineEvents.length" class="list">
+            <div v-for="event in timelineEvents" :key="event.seq_global" class="list-item">
+              <div>
+                <strong>{{ event.kind }}</strong>
+              </div>
+              <div class="muted mono">
+                seq={{ event.seq_global }} · session={{ event.session_id ?? 'n/a' }} ·
+                {{ event.created_at ? formatMessageTime(event.created_at) : formatEventTime(event.ts_ms ?? 0) }}
+              </div>
+            </div>
+          </div>
+          <p v-else class="muted">No timeline events yet.</p>
         </section>
 
         <section v-if="sessionState?.pending_permission_requests?.length" class="card">

@@ -507,6 +507,11 @@ pub struct SessionUserInputReplyRequestBody {
     pub reply: UserInputReply,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionRewindRequestBody {
+    pub message_id: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionExecutionContextResource {
     #[serde(skip_serializing_if = "Option::is_none")]

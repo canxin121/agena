@@ -43,9 +43,10 @@ pub use dto::{
     ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
     SessionContinueRequestBody, SessionCreateRequest, SessionEventListQuery,
     SessionEventStreamQuery, SessionExecutionContextResource, SessionExecutionResource,
-    SessionListQuery, SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionResource,
-    SessionRunOptionsRequest, SessionRunState, SessionTurnRequest,
-    SessionUserInputReplyRequestBody, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
+    SessionListQuery, SessionPermissionReplyRequestBody, SessionReplaceRequest,
+    SessionResource, SessionRewindRequestBody, SessionRunOptionsRequest, SessionRunState,
+    SessionTurnRequest, SessionUserInputReplyRequestBody, WorkspaceFileKind, WorkspaceFileNode,
+    WorkspaceFileTreeQuery,
     WorkspaceFileTreeResource, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource,
     WorkspaceWriteRequest,
 };
@@ -203,6 +204,10 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/sessions/{session_id}/user-input-replies",
             post(reply_session_user_input),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/rewind",
+            post(rewind_session),
         )
         .route("/api/v1/messages/{message_id}", get(get_message))
         .route(
@@ -1086,6 +1091,34 @@ async fn reply_session_user_input(
             session_id,
             options,
             reply: request.reply,
+        })
+        .await?;
+    Ok(Json(
+        state
+            .service()
+            .session_execution_resource(state.session_manager()?.as_ref(), &session)
+            .await?,
+    ))
+}
+
+async fn rewind_session(
+    State(state): State<ApiState>,
+    Path(session_id): Path<i64>,
+    headers: HeaderMap,
+    Json(request): Json<SessionRewindRequestBody>,
+) -> Result<Json<SessionExecutionResource>, ApiError> {
+    if let Some(expected_version) = if_match_version(&headers)? {
+        state
+            .service()
+            .assert_session_version(session_id, expected_version)
+            .await?;
+    }
+
+    let session = state
+        .session_manager()?
+        .rewind_session(agena::session::SessionRewindRequest {
+            session_id,
+            message_id: request.message_id,
         })
         .await?;
     Ok(Json(
@@ -3024,6 +3057,136 @@ mod tests {
         assert!(provider_ids.contains("openai"));
         assert!(provider_ids.contains("gitlab"));
         assert!(!provider_ids.contains("gitlab-instance"));
+    }
+
+    #[tokio::test]
+    async fn rewind_endpoint_compacts_messages_from_target_and_returns_updated_session() {
+        let (app, state, _workspace) = test_app_with_scripted_manager().await;
+        let workspace = state
+            .service()
+            .create_workspace(WorkspaceWriteRequest {
+                path: format!("/tmp/runtime-rewind-{}", Uuid::new_v4()),
+            })
+            .await
+            .expect("workspace should be created");
+        let session = state
+            .service()
+            .create_session(SessionCreateRequest {
+                workspace_id: workspace.id,
+                title: "runtime rewind".to_string(),
+                parent_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let turn = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/v1/sessions/{}/turns", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "text": "hello"
+                                }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let turn_status = turn.status();
+        let turn_json = response_json(turn).await;
+        assert_eq!(turn_status, StatusCode::OK, "unexpected body: {turn_json}");
+        let session_version = turn_json["session"]["version"]
+            .as_i64()
+            .expect("session version should exist");
+
+        let before_messages = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/v1/sessions/{}/messages?parts=full", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let before_messages_status = before_messages.status();
+        let before_messages_json = response_json(before_messages).await;
+        assert_eq!(
+            before_messages_status,
+            StatusCode::OK,
+            "unexpected body: {before_messages_json}"
+        );
+        let before_items = before_messages_json["items"]
+            .as_array()
+            .expect("message items should be an array");
+        assert_eq!(before_items.len(), 2, "unexpected body: {before_messages_json}");
+        let assistant_message_id = before_items
+            .iter()
+            .find(|item| item["role"] == json!("assistant"))
+            .and_then(|item| item["id"].as_i64())
+            .expect("assistant message id should exist");
+
+        let rewind = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/v1/sessions/{}/rewind", session.id))
+                    .header("if-match", session_version.to_string())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "message_id": assistant_message_id
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let rewind_status = rewind.status();
+        let rewind_json = response_json(rewind).await;
+        assert_eq!(rewind_status, StatusCode::OK, "unexpected body: {rewind_json}");
+        assert_eq!(rewind_json["session"]["id"], json!(session.id));
+        assert!(
+            rewind_json["session"]["version"]
+                .as_i64()
+                .is_some_and(|version| version > session_version),
+            "unexpected body: {rewind_json}"
+        );
+
+        let after_messages = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/v1/sessions/{}/messages?parts=full", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let after_messages_status = after_messages.status();
+        let after_messages_json = response_json(after_messages).await;
+        assert_eq!(
+            after_messages_status,
+            StatusCode::OK,
+            "unexpected body: {after_messages_json}"
+        );
+        let after_items = after_messages_json["items"]
+            .as_array()
+            .expect("message items should be an array");
+        assert_eq!(after_items.len(), 1, "unexpected body: {after_messages_json}");
+        assert_eq!(after_items[0]["role"], json!("user"));
     }
 
     #[tokio::test]

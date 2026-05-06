@@ -299,6 +299,19 @@ export type SessionEventRecord = {
   created_at: string
 }
 
+export type TimelineEventRecord = {
+  event_id?: number | null
+  workspace_id?: number | null
+  session_id?: number | null
+  seq_global: number
+  causation_id?: number | null
+  correlation_id?: number | null
+  created_at?: string | null
+  ts_ms?: number | null
+  kind: string
+  payload: Record<string, unknown>
+}
+
 export type SessionEventStreamHandle = {
   close: () => void
 }
@@ -558,14 +571,28 @@ export async function listWorkspaceFileTree(input: {
   )
 }
 
-export async function listSessions(workspaceId: number): Promise<SessionResource[]> {
+export async function listSessions(
+  workspaceId: number,
+  options?: {
+    parentId?: number | null
+    roots?: boolean
+  },
+): Promise<SessionResource[]> {
   return await collectPagedItems(
-    (cursor) =>
-      apiJson<PaginatedResponse<SessionResource>>(
-        `/api/v1/sessions?workspace_id=${encodeURIComponent(String(workspaceId))}&limit=100${
-          cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
-        }`,
-      ),
+    (cursor) => {
+      const params = new URLSearchParams({
+        workspace_id: String(workspaceId),
+        limit: '100',
+      })
+      if (cursor) params.set('cursor', cursor)
+      if (options?.parentId !== undefined && options.parentId !== null) {
+        params.set('parent_id', String(options.parentId))
+      }
+      if (options?.roots) {
+        params.set('roots', 'true')
+      }
+      return apiJson<PaginatedResponse<SessionResource>>(`/api/v1/sessions?${params.toString()}`)
+    },
     { resourceName: 'sessions' },
   )
 }
@@ -600,6 +627,23 @@ export async function listMessages(sessionId: number): Promise<MessageResource[]
       ),
     { merge: 'prepend', maxPages: 1000, resourceName: 'session messages' },
   )
+}
+
+export async function listSessionTimeline(
+  sessionId: number,
+  options?: {
+    afterSeq?: number
+    limit?: number
+  },
+): Promise<TimelineEventRecord[]> {
+  const params = new URLSearchParams()
+  if (options?.afterSeq !== undefined) params.set('after_seq', String(options.afterSeq))
+  if (options?.limit !== undefined) params.set('limit', String(options.limit))
+  const query = params.toString()
+  const response = await apiJson<PaginatedResponse<TimelineEventRecord>>(
+    `/api/v1/sessions/${sessionId}/events${query ? `?${query}` : ''}`,
+  )
+  return response.items ?? []
 }
 
 export function streamSessionEvents(
@@ -828,6 +872,19 @@ export async function cancelUserInput(input: {
         kind: 'cancel',
         ...(input.reason ? { reason: input.reason } : {}),
       },
+    }),
+  })
+}
+
+export async function rewindSession(input: {
+  sessionId: number
+  messageId: number
+}): Promise<SessionExecutionResource> {
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/rewind`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      message_id: input.messageId,
     }),
   })
 }

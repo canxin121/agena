@@ -1,11 +1,11 @@
 use sea_orm::entity::prelude::*;
 
-/// Single unified event-log table (`agena_events`). Replaces the legacy
-/// `agena_session_events` and `agena_session_history_events` tables.
+/// Single unified event-log table (`agena_events`).
 ///
-/// `payload_json` stores the full `DomainEvent<K>` envelope. We keep `meta`
-/// columns (`seq_global`, `session_id`, `workspace_id`, `kind_tag`) duplicated
-/// from the JSON for indexed filtering.
+/// Routing and observability metadata live in their own typed columns;
+/// `payload_json` carries only the kind payload (i.e. `EventKind` serialised
+/// as `{"kind": "...", "payload": {...}}`). The full `DomainEvent` envelope
+/// is reconstructed from the columns + payload at read time.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "agena_events")]
 pub struct Model {

@@ -84,12 +84,12 @@ impl SessionStore {
         publisher: Arc<EventPublisher>,
     ) -> Self {
         Self {
-            db,
+            db: db.clone(),
             workspace_path: workspace_root.to_string_lossy().replace('\\', "/"),
             workspace_id: OnceCell::new(),
             cache: Arc::new(Mutex::new(SessionCache::default())),
             ids: Arc::new(AsyncMutex::new(GlobalIdAllocator::default())),
-            history: SessionHistoryStore::new(Arc::clone(&publisher)),
+            history: SessionHistoryStore::new(Arc::clone(&publisher), db),
             publisher,
         }
     }

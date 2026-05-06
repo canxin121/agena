@@ -101,12 +101,10 @@ pub fn project(message: &Message) -> Vec<WirePart> {
             }
             PartContent::TodoList(_) => {}
             PartContent::ToolExecution(exec) => {
-                let call_id = part.operation_id.clone().unwrap_or_else(|| match exec {
-                    ToolExecutionPart::Pending { call_id, .. }
-                    | ToolExecutionPart::InProgress { call_id, .. }
-                    | ToolExecutionPart::Completed { call_id, .. }
-                    | ToolExecutionPart::Failed { call_id, .. } => call_id.to_string(),
-                });
+                let call_id = part
+                    .operation_id
+                    .clone()
+                    .unwrap_or_else(|| exec.call_id().to_string());
 
                 if message.role == Role::Tool {
                     let output_json = if pruned_tool_result {
@@ -351,13 +349,7 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
 fn project_tool_invocation(exec: &ToolExecutionPart, _message: &Message) -> (String, String) {
-    let invocation = match exec {
-        ToolExecutionPart::Pending { invocation, .. }
-        | ToolExecutionPart::InProgress { invocation, .. }
-        | ToolExecutionPart::Completed { invocation, .. }
-        | ToolExecutionPart::Failed { invocation, .. } => invocation,
-    };
-    invocation_name_and_args(invocation)
+    invocation_name_and_args(exec.invocation())
 }
 
 fn invocation_name_and_args(invocation: &ToolInvocation) -> (String, String) {

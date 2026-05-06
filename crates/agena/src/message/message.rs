@@ -103,46 +103,7 @@ impl Message {
                                 None
                             }
                         }
-                        PartContent::ToolExecution(tool) => match tool {
-                            ToolExecutionPart::Pending { title, .. } => {
-                                if title.trim().is_empty() {
-                                    None
-                                } else {
-                                    Some(title.clone())
-                                }
-                            }
-                            ToolExecutionPart::InProgress {
-                                title, output_text, ..
-                            } => {
-                                if !output_text.trim().is_empty() {
-                                    Some(output_text.clone())
-                                } else if !title.trim().is_empty() {
-                                    Some(title.clone())
-                                } else {
-                                    None
-                                }
-                            }
-                            ToolExecutionPart::Completed { output_text, .. } => {
-                                if output_text.trim().is_empty() {
-                                    None
-                                } else {
-                                    Some(output_text.clone())
-                                }
-                            }
-                            ToolExecutionPart::Failed {
-                                output_text,
-                                error_message,
-                                ..
-                            } => {
-                                if !output_text.trim().is_empty() {
-                                    Some(output_text.clone())
-                                } else if !error_message.trim().is_empty() {
-                                    Some(error_message.clone())
-                                } else {
-                                    None
-                                }
-                            }
-                        },
+                        PartContent::ToolExecution(tool) => tool_text_lossy(tool),
                         _ => part.summary.clone(),
                     }
                 } else {
@@ -171,4 +132,33 @@ impl Message {
         self.state = next;
         Ok(())
     }
+}
+
+/// Best-effort textual rendering of a tool-execution part for `as_text_lossy`.
+/// Picks the most informative non-empty surface (output → title → error
+/// message) and falls back to `None` when nothing is populated.
+fn tool_text_lossy(tool: &ToolExecutionPart) -> Option<String> {
+    let candidates: [Option<&str>; 3] = match tool {
+        ToolExecutionPart::Pending { title, .. } => [Some(title.as_str()), None, None],
+        ToolExecutionPart::InProgress {
+            title, output_text, ..
+        } => [Some(output_text.as_str()), Some(title.as_str()), None],
+        ToolExecutionPart::Completed { output_text, .. } => {
+            [Some(output_text.as_str()), None, None]
+        }
+        ToolExecutionPart::Failed {
+            output_text,
+            error_message,
+            ..
+        } => [
+            Some(output_text.as_str()),
+            Some(error_message.as_str()),
+            None,
+        ],
+    };
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|s| !s.trim().is_empty())
+        .map(str::to_owned)
 }

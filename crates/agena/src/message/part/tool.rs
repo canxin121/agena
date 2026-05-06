@@ -1087,6 +1087,70 @@ impl ToolExecutionPart {
         }
     }
 
+    pub fn call_id(&self) -> i64 {
+        match self {
+            Self::Pending { call_id, .. }
+            | Self::InProgress { call_id, .. }
+            | Self::Completed { call_id, .. }
+            | Self::Failed { call_id, .. } => *call_id,
+        }
+    }
+
+    pub fn invocation(&self) -> &ToolInvocation {
+        match self {
+            Self::Pending { invocation, .. }
+            | Self::InProgress { invocation, .. }
+            | Self::Completed { invocation, .. }
+            | Self::Failed { invocation, .. } => invocation,
+        }
+    }
+
+    pub fn lifecycle(&self) -> &TimeRange {
+        match self {
+            Self::Pending { lifecycle, .. }
+            | Self::InProgress { lifecycle, .. }
+            | Self::Completed { lifecycle, .. }
+            | Self::Failed { lifecycle, .. } => lifecycle,
+        }
+    }
+
+    pub fn lifecycle_mut(&mut self) -> &mut TimeRange {
+        match self {
+            Self::Pending { lifecycle, .. }
+            | Self::InProgress { lifecycle, .. }
+            | Self::Completed { lifecycle, .. }
+            | Self::Failed { lifecycle, .. } => lifecycle,
+        }
+    }
+
+    /// `Pending` carries no output yet; the other states all expose an
+    /// `output_text` accumulator.
+    pub fn output_text(&self) -> Option<&str> {
+        match self {
+            Self::Pending { .. } => None,
+            Self::InProgress { output_text, .. }
+            | Self::Completed { output_text, .. }
+            | Self::Failed { output_text, .. } => Some(output_text.as_str()),
+        }
+    }
+
+    /// `Pending` and `InProgress` have no `title` of their own — they share
+    /// the title field; `Completed` / `Failed` drop it.
+    pub fn title(&self) -> Option<&str> {
+        match self {
+            Self::Pending { title, .. } | Self::InProgress { title, .. } => Some(title.as_str()),
+            Self::Completed { .. } | Self::Failed { .. } => None,
+        }
+    }
+
+    /// Only `Failed` carries an error message.
+    pub fn error_message(&self) -> Option<&str> {
+        match self {
+            Self::Failed { error_message, .. } => Some(error_message.as_str()),
+            _ => None,
+        }
+    }
+
     pub fn append_output_delta(&mut self, delta: &str) -> bool {
         match self {
             Self::Pending {

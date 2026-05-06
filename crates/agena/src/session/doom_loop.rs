@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::message::{Message, PartContent, ToolExecutionPart, ToolInvocation};
+use crate::message::{Message, PartContent, ToolInvocation};
 use crate::role::Role;
 
 /// Configuration for [`detect`].
@@ -73,13 +73,7 @@ pub fn detect(messages: &[Message], policy: DoomLoopPolicy) -> Option<DoomLoopHi
             let Some(PartContent::ToolExecution(exec)) = part.content.as_ref() else {
                 continue;
             };
-            let invocation = match exec {
-                ToolExecutionPart::Pending { invocation, .. }
-                | ToolExecutionPart::InProgress { invocation, .. }
-                | ToolExecutionPart::Completed { invocation, .. }
-                | ToolExecutionPart::Failed { invocation, .. } => invocation,
-            };
-            let signature = signature_of(invocation);
+            let signature = signature_of(exec.invocation());
             match &latest_signature {
                 Some(prev) if prev == &signature => {
                     run_len = run_len.saturating_add(1);

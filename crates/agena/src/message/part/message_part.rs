@@ -167,12 +167,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
     match content {
         PartContent::Text(_) => Some("text".to_string()),
         PartContent::Reasoning(_) => Some("reasoning".to_string()),
-        PartContent::ToolExecution(tool) => match tool {
-            ToolExecutionPart::Pending { invocation, .. }
-            | ToolExecutionPart::InProgress { invocation, .. }
-            | ToolExecutionPart::Completed { invocation, .. }
-            | ToolExecutionPart::Failed { invocation, .. } => Some(tool_name(invocation)),
-        },
+        PartContent::ToolExecution(tool) => Some(tool_name(tool.invocation())),
         PartContent::CommandExecution(_) => Some("command".to_string()),
         PartContent::FileChange(_) => Some("file_change".to_string()),
         PartContent::WebSearch(_) => Some("web_search".to_string()),
@@ -201,45 +196,28 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
                 truncate_summary(&reasoning.raw_content.join(" "))
             }
         }
-        PartContent::ToolExecution(tool) => match tool {
-            ToolExecutionPart::Pending {
-                invocation, title, ..
-            }
-            | ToolExecutionPart::InProgress {
-                invocation, title, ..
-            } => {
-                if let Some(summary) = truncate_summary(title) {
-                    Some(summary)
-                } else {
-                    truncate_summary(&tool_name(invocation))
+        PartContent::ToolExecution(tool) => {
+            let invocation = tool.invocation();
+            let candidate = match tool {
+                ToolExecutionPart::Pending { title, .. }
+                | ToolExecutionPart::InProgress { title, .. } => Some(title.as_str()),
+                ToolExecutionPart::Completed { output_text, .. } => Some(output_text.as_str()),
+                ToolExecutionPart::Failed {
+                    error_message,
+                    output_text,
+                    ..
+                } => {
+                    if !error_message.trim().is_empty() {
+                        Some(error_message.as_str())
+                    } else {
+                        Some(output_text.as_str())
+                    }
                 }
-            }
-            ToolExecutionPart::Completed {
-                invocation,
-                output_text,
-                ..
-            } => {
-                if let Some(summary) = truncate_summary(output_text) {
-                    Some(summary)
-                } else {
-                    truncate_summary(&tool_name(invocation))
-                }
-            }
-            ToolExecutionPart::Failed {
-                invocation,
-                error_message,
-                output_text,
-                ..
-            } => {
-                if let Some(summary) = truncate_summary(error_message) {
-                    Some(summary)
-                } else if let Some(summary) = truncate_summary(output_text) {
-                    Some(summary)
-                } else {
-                    truncate_summary(&tool_name(invocation))
-                }
-            }
-        },
+            };
+            candidate
+                .and_then(truncate_summary)
+                .or_else(|| truncate_summary(&tool_name(invocation)))
+        }
         PartContent::CommandExecution(command) => truncate_summary(&command.command),
         PartContent::FileChange(change) => file_change_part_summary(change),
         PartContent::WebSearch(search) => truncate_summary(&search.query),

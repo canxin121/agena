@@ -1,7 +1,26 @@
 import { describe, expect, test } from 'bun:test'
 
-import type { PluginStatus, RuntimeStatus } from '@/agena/lib/agenaApi'
-import { buildOperatorCards, pickNextPluginId } from './runtimePageModel'
+import type {
+  AuthProvider,
+  PluginLogEntry,
+  PluginStatus,
+  ProviderModel,
+  RuntimeStatus,
+  SessionExecutionResource,
+  TimelineEventRecord,
+} from '@/agena/lib/agenaApi'
+import {
+  buildAuthProviderFacts,
+  buildExecutionFacts,
+  buildOperatorCards,
+  buildRuntimeSnapshotFacts,
+  buildSessionCacheFacts,
+  buildTimelineSummary,
+  formatProviderModel,
+  mergePluginLogs,
+  pickNextPluginId,
+  pluginLogCursor,
+} from './runtimePageModel'
 
 function sampleRuntime(): RuntimeStatus {
   return {
@@ -94,6 +113,111 @@ function samplePlugins(): PluginStatus[] {
   ]
 }
 
+function sampleAuthProvider(): AuthProvider {
+  return {
+    provider_id: 'openai',
+    configured: true,
+    credential_present: true,
+    credential_type: 'api',
+    key_preview: 'sk-...abcd',
+    expires_at: '2026-05-05T01:00:00Z',
+    expired: false,
+    account_id: 'acct_123',
+    enterprise_url: 'https://example.internal',
+  }
+}
+
+function sampleExecution(): SessionExecutionResource {
+  return {
+    session: {
+      id: 42,
+      workspace_id: 7,
+      title: 'workflow demo',
+      version: 3,
+      created_at: '2026-05-05T00:00:00Z',
+      updated_at: '2026-05-05T00:01:00Z',
+      message_count: 4,
+      child_session_count: 1,
+      parent_id: null,
+      last_message_at: '2026-05-05T00:01:00Z',
+    },
+    blocked: true,
+    run_state: 'awaiting_model',
+    latest_event_seq: 12,
+    automation: null,
+    execution: {
+      agent_profile: 'planner',
+      active_skill_name: 'edit',
+      system_prompt_override: null,
+      allowed_tools: ['Read', 'Edit'],
+      model_provider_id: 'openai',
+      model_id: 'gpt-4.1-mini',
+      effective_workspace_root: '/workspace',
+      task_id: 'task-1',
+    },
+    pending_permission_requests: [
+      {
+        request_id: 'perm-1',
+        action: {},
+        reason: 'need shell',
+        created_at: '2026-05-05T00:01:00Z',
+        session_id: 42,
+      },
+    ],
+    pending_user_input_requests: [],
+  }
+}
+
+function sampleTimelineEvents(): TimelineEventRecord[] {
+  return [
+    {
+      seq_global: 10,
+      kind: 'run_started',
+      payload: { summary: 'Run started' },
+      created_at: '2026-05-05T00:00:10Z',
+      session_id: 42,
+    },
+    {
+      seq_global: 11,
+      kind: 'command_begin',
+      payload: { command: 'ls -la' },
+      ts_ms: 1_746_400_000_000,
+      session_id: 42,
+    },
+  ]
+}
+
+function samplePluginLogs(): PluginLogEntry[] {
+  return [
+    {
+      seq: 1,
+      plugin_id: 'alpha',
+      level: 'info',
+      target: 'plugin',
+      message: 'started',
+      timestamp_ms: 1,
+    },
+    {
+      seq: 2,
+      plugin_id: 'alpha',
+      level: 'warn',
+      target: 'plugin',
+      message: 'slow',
+      timestamp_ms: 2,
+    },
+  ]
+}
+
+function sampleProviderModel(): ProviderModel {
+  return {
+    provider_id: 'openai',
+    id: 'gpt-4.1-mini',
+    display_name: 'GPT-4.1 Mini',
+    capabilities: {},
+    metadata: {},
+  }
+}
+
 describe('runtimePageModel', () => {
   test('buildOperatorCards summarizes runtime operator counts', () => {
     expect(buildOperatorCards(sampleRuntime())).toEqual([
@@ -108,6 +232,66 @@ describe('runtimePageModel', () => {
 
   test('buildOperatorCards returns empty list without runtime', () => {
     expect(buildOperatorCards(null)).toEqual([])
+  })
+
+  test('buildRuntimeSnapshotFacts includes mode source', () => {
+    const facts = buildRuntimeSnapshotFacts(sampleRuntime())
+    expect(facts.find((fact) => fact.label === 'Mode Source')?.value).toBe('runtime default')
+  })
+
+  test('buildSessionCacheFacts includes max bytes', () => {
+    const facts = buildSessionCacheFacts(sampleRuntime())
+    expect(facts.find((fact) => fact.label === 'Max Bytes')?.value).toBe('67108864')
+  })
+
+  test('buildAuthProviderFacts includes auth detail fields', () => {
+    const facts = buildAuthProviderFacts(sampleAuthProvider())
+    expect(facts.find((fact) => fact.label === 'Account')?.value).toBe('acct_123')
+    expect(facts.find((fact) => fact.label === 'Enterprise URL')?.value).toBe('https://example.internal')
+  })
+
+  test('buildExecutionFacts summarizes blocked workflow state', () => {
+    const facts = buildExecutionFacts(sampleExecution())
+    expect(facts.find((fact) => fact.label === 'Blocked')?.value).toBe('yes')
+    expect(facts.find((fact) => fact.label === 'Pending Permissions')?.value).toBe('1')
+    expect(facts.find((fact) => fact.label === 'Model')?.value).toBe('openai/gpt-4.1-mini')
+  })
+
+  test('buildTimelineSummary renders event summaries', () => {
+    const summaries = buildTimelineSummary(sampleTimelineEvents())
+    expect({ kind: summaries[0]?.kind, summary: summaries[0]?.summary }).toEqual({
+      kind: 'run_started',
+      summary: 'Run started',
+    })
+    expect({ kind: summaries[1]?.kind, summary: summaries[1]?.summary }).toEqual({
+      kind: 'command_begin',
+      summary: 'ls -la',
+    })
+  })
+
+  test('mergePluginLogs deduplicates by sequence and keeps order', () => {
+    const merged = mergePluginLogs(samplePluginLogs(), [
+      samplePluginLogs()[1],
+      {
+        seq: 3,
+        plugin_id: 'alpha',
+        level: 'info',
+        target: 'plugin',
+        message: 'done',
+        timestamp_ms: 3,
+      },
+    ])
+    expect(merged.map((entry) => entry.seq)).toEqual([1, 2, 3])
+  })
+
+  test('pluginLogCursor returns the latest sequence', () => {
+    expect(pluginLogCursor(samplePluginLogs())).toBe(2)
+    expect(pluginLogCursor([])).toBe(null)
+  })
+
+  test('formatProviderModel prefers display name', () => {
+    expect(formatProviderModel(sampleProviderModel())).toBe('GPT-4.1 Mini')
+    expect(formatProviderModel({ ...sampleProviderModel(), display_name: '' })).toBe('gpt-4.1-mini')
   })
 
   test('pickNextPluginId keeps current plugin when still present', () => {

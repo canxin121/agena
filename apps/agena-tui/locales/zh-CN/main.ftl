@@ -44,7 +44,7 @@ composer-session-new = 新会话
 composer-placeholder = Enter 入队（空闲时直接发送）。Ctrl+Enter 立即发送（AI 工作时注入）。Up 编辑队列。Esc 中断。Shift+Enter 换行。F3 附件。F4 编辑器。F6 图片。
 
 status-sessions = Tab 切换面板 | s 恢复会话 | b 分支历史 | / 搜索 | 1 全部 | 2 根 | 3 子树 | m 循环 | Enter 打开 | [ 父会话 | ] 子会话 | R 重命名 | t 时间线 | P 插件 | v 分页查看 | q 退出
-status-transcript = Tab 切换面板 | s 恢复会话 | b 分支历史 | / 或 Ctrl+F 搜索 | Alt+P 命令 | 1/2/3 切视图 | [ 父会话 | ] 子会话 | R 重命名 | t 时间线 | P 插件 | e 导出 | v 分页查看 | y/Y 复制 | q 退出
+status-transcript = Tab 切换面板 | s 恢复会话 | b 分支历史 | / 或 Ctrl+F 搜索 | Alt+P 命令 | 1/2/3 切视图 | [ 父会话 | ] 子会话 | R 重命名 | t 时间线 | Enter 时间线跳转 | P 插件 | e 导出 | v 分页查看 | y/Y 复制 | q 退出
 status-composer = Enter 入队/发送 | Ctrl+Enter 立即发送 | Up 编辑队列 | Esc 中断 | / 命令 | Alt+P 面板 | F3 附件 | F4 编辑器 | Tab 切换 | q 退出
 
 help-title = 帮助
@@ -63,7 +63,7 @@ help-transcript-line-4 = PageUp 或在顶部附近滚动会加载更早消息
 help-transcript-line-5 = g/G 跳到顶部或底部
 help-transcript-line-6 = / 或 Ctrl+F 搜索已加载内容，n/N 跳转结果
 help-transcript-line-7 = y 复制已加载全文，Y 复制当前可见视口
-help-transcript-line-8 = R 重命名会话，t 打开时间线，b 打开分支历史，P 打开插件检查器，e 导出已加载记录为 markdown，v 用分页器打开已加载记录
+help-transcript-line-8 = R 重命名会话，t 打开时间线，在时间线里按 Enter 可跳到关联消息，b 打开分支历史，P 打开插件检查器，e 导出已加载记录为 markdown，v 用分页器打开已加载记录
 help-section-composer = 输入框
 help-composer-line-1 = Enter 发送
 help-composer-line-2 = Alt/Shift+Enter 或 Ctrl+J 插入换行
@@ -157,7 +157,7 @@ overlay-children-empty = 没有子会话
 overlay-timeline-title = 时间线 [#{$session}]
 overlay-timeline-prompt = 按事件类型、命令或消息元数据过滤
 overlay-timeline-empty = 没有匹配的事件
-overlay-timeline-footer = 输入以过滤 | Up/Down 移动 | PageUp/PageDown 跳转 | Ctrl+Y 复制事件 | Esc 关闭
+overlay-timeline-footer = 输入以过滤 | Up/Down 移动 | Enter 跳到消息 | PageUp/PageDown 跳转 | Ctrl+Y 复制事件 | Esc 关闭
 overlay-timeline-events = 事件
 overlay-timeline-detail = 详情
 overlay-plugins-title = 插件检查器

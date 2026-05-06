@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 
 import {
   cancelUserInput,
+  continueSession,
   createSession,
   createWorkspace,
   fetchRuntimeStatus,
+  forkSession,
   getSessionState,
   listMessages,
+  listProviderModels,
   listProviders,
   listSessionTimeline,
   listSessions,
@@ -21,16 +25,20 @@ import {
   type SessionEventStreamHandle,
   type MessagePart,
   type MessageResource,
+  type ProviderModel,
   type ProviderSummary,
   type RuntimeStatus,
+  type SessionEventRecord,
   type SessionExecutionResource,
   type SessionResource,
   type TimelineEventRecord,
   type WorkspaceResource,
 } from '@/agena/lib/agenaApi'
 
+const route = useRoute()
 const runtime = ref<RuntimeStatus | null>(null)
 const providers = ref<ProviderSummary[]>([])
+const providerModels = reactive<Record<string, ProviderModel[]>>({})
 const workspaces = ref<WorkspaceResource[]>([])
 const sessions = ref<SessionResource[]>([])
 const messages = ref<MessageResource[]>([])
@@ -40,12 +48,14 @@ const sessionState = ref<SessionExecutionResource | null>(null)
 const selectedWorkspaceId = ref<number | null>(null)
 const selectedSessionId = ref<number | null>(null)
 const workspacePath = ref('')
+const sessionSearch = ref('')
 const newSessionTitle = ref('')
 const composer = ref('')
 const selectedProviderId = ref('')
 const selectedModelId = ref('')
 const loading = ref(false)
 const sending = ref(false)
+const continuing = ref(false)
 const errorMessage = ref('')
 
 const userInputDrafts = reactive<Record<string, Record<string, string>>>({})
@@ -64,6 +74,22 @@ let eventStream: SessionEventStreamHandle | null = null
 
 function providerDefaultModel(providerId: string): string {
   return providers.value.find((provider) => provider.provider_id === providerId)?.default_model || ''
+}
+
+function providerModelOptions(providerId: string): ProviderModel[] {
+  return providerId ? providerModels[providerId] || [] : []
+}
+
+function providerModelLabel(model: ProviderModel): string {
+  return model.display_name?.trim() || model.id
+}
+
+function readRouteSessionId(value: unknown): number | null {
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
 }
 
 function stopEventStream() {
@@ -287,6 +313,16 @@ function readFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function readPayloadMessageId(payload: Record<string, unknown>): number | null {
+  return readFiniteNumber(payload.message_id)
+}
+
+function scrollToMessage(messageId: number) {
+  if (typeof document === 'undefined') return
+  const target = document.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`)
+  target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
 function sortMessages(items: MessageResource[]): MessageResource[] {
   return [...items].sort((left, right) => {
     const leftTime = Date.parse(left.created_at)
@@ -407,16 +443,80 @@ function applyMessagePartDeltaEvent(payload: Record<string, unknown>): boolean {
   return false
 }
 
+function appendTimelineEvent(event: SessionEventRecord) {
+  const record: TimelineEventRecord = {
+    event_id: event.event_id,
+    session_id: event.session_id,
+    seq_global: event.seq,
+    causation_id: event.causation_id,
+    correlation_id: event.correlation_id,
+    created_at: event.created_at,
+    kind: event.event_type,
+    payload: event.payload,
+  }
+  if (timelineEvents.value.some((item) => item.seq_global === record.seq_global)) {
+    return
+  }
+  timelineEvents.value = [...timelineEvents.value, record].sort((left, right) => left.seq_global - right.seq_global)
+}
+
+function patchSessionStateFromEvent(event: SessionEventRecord, payload: Record<string, unknown>): boolean {
+  if (!sessionState.value) return true
+  appendTimelineEvent(event)
+
+  switch (event.event_type) {
+    case 'run_started':
+    case 'turn_started':
+      sessionState.value = {
+        ...sessionState.value,
+        blocked: false,
+        run_state: 'awaiting_model',
+      }
+      return false
+    case 'turn_completed':
+    case 'assistant_message_completed':
+      sessionState.value = {
+        ...sessionState.value,
+        blocked: false,
+        run_state: 'idle',
+      }
+      return false
+    case 'run_failed':
+    case 'turn_aborted':
+      sessionState.value = {
+        ...sessionState.value,
+        blocked: true,
+        run_state: readString(payload.run_state) || sessionState.value.run_state,
+      }
+      return false
+    case 'message_revised':
+      return true
+    default:
+      return false
+  }
+}
+
 function applySessionEvent(event: SessionEventRecord): boolean {
   const payload = asRecord(event.payload)
   if (!payload) return true
 
   switch (event.event_type) {
     case 'message_part_updated':
+      appendTimelineEvent(event)
       return applyMessagePartUpdatedEvent(payload)
     case 'message_part_delta':
       return applyMessagePartDeltaEvent(payload)
+    case 'user_message_appended':
+    case 'run_started':
+    case 'run_failed':
+    case 'turn_started':
+    case 'turn_completed':
+    case 'turn_aborted':
+    case 'assistant_message_completed':
+    case 'message_revised':
+      return patchSessionStateFromEvent(event, payload)
     default:
+      appendTimelineEvent(event)
       return true
   }
 }
@@ -427,6 +527,20 @@ function readUserAnswer(requestId: string, questionId: string): string {
 
 function updateUserAnswer(requestId: string, questionId: string, value: string) {
   ;(userInputDrafts[requestId] ||= {})[questionId] = value
+}
+
+async function trySelectRouteSession(workspaceItems: WorkspaceResource[], routeSessionId: number): Promise<boolean> {
+  for (const workspace of workspaceItems) {
+    const workspaceSessions = await listSessions(workspace.id, { search: sessionSearch.value })
+    const match = workspaceSessions.find((session) => session.id === routeSessionId)
+    if (!match) continue
+    sessions.value = workspaceSessions
+    selectedWorkspaceId.value = workspace.id
+    selectedSessionId.value = match.id
+    await refreshConversation(true)
+    return true
+  }
+  return false
 }
 
 async function loadSidebar() {
@@ -440,9 +554,22 @@ async function loadSidebar() {
   providers.value = providerData
   workspaces.value = workspaceData
 
+  await Promise.all(
+    providerData.map(async (provider) => {
+      providerModels[provider.provider_id] = await listProviderModels(provider.provider_id)
+    }),
+  )
+
   if (!selectedProviderId.value && providerData.length === 1) {
     selectedProviderId.value = providerData[0]?.provider_id || ''
     selectedModelId.value = providerData[0]?.default_model || ''
+  }
+
+  const routeSessionId = readRouteSessionId(route.query.session)
+  if (routeSessionId !== null) {
+    selectedSessionId.value = routeSessionId
+    const matched = await trySelectRouteSession(workspaceData, routeSessionId)
+    if (matched) return
   }
 
   if (selectedWorkspaceId.value && workspaceData.some((workspace) => workspace.id === selectedWorkspaceId.value)) {
@@ -457,7 +584,7 @@ async function loadSidebar() {
 }
 
 async function loadSessionsForWorkspace(workspaceId: number, preserveSelection = true) {
-  sessions.value = await listSessions(workspaceId)
+  sessions.value = await listSessions(workspaceId, { search: sessionSearch.value })
   selectedWorkspaceId.value = workspaceId
 
   const currentSelectionStillExists =
@@ -466,6 +593,14 @@ async function loadSessionsForWorkspace(workspaceId: number, preserveSelection =
     sessions.value.some((session) => session.id === selectedSessionId.value)
 
   if (currentSelectionStillExists && selectedSessionId.value !== null) {
+    await refreshConversation(true)
+    return
+  }
+
+  const routeSessionId = readRouteSessionId(route.query.session)
+  const routeSession = routeSessionId ? sessions.value.find((session) => session.id === routeSessionId) : null
+  if (routeSession) {
+    selectedSessionId.value = routeSession.id
     await refreshConversation(true)
     return
   }
@@ -581,6 +716,31 @@ async function createSessionAction(parentId?: number | null) {
   }
 }
 
+async function forkCurrentSession() {
+  const sessionId = selectedSessionId.value
+  const workspaceId = selectedWorkspaceId.value
+  const latestEventSeq = sessionState.value?.latest_event_seq
+  if (!sessionId || !workspaceId) return
+
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const fallbackTitle = `Fork of #${sessionId}`
+    const execution = await forkSession({
+      sessionId,
+      ...(latestEventSeq != null ? { atEventSeq: latestEventSeq } : {}),
+      title: newSessionTitle.value.trim() || fallbackTitle,
+    })
+    newSessionTitle.value = ''
+    await loadSessionsForWorkspace(workspaceId, false)
+    await selectSession(execution.session.id)
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    loading.value = false
+  }
+}
+
 async function sendPrompt() {
   const sessionId = selectedSessionId.value
   const text = composer.value.trim()
@@ -603,6 +763,27 @@ async function sendPrompt() {
     errorMessage.value = err instanceof Error ? err.message : String(err)
   } finally {
     sending.value = false
+  }
+}
+
+async function continueCurrentSession() {
+  const sessionId = selectedSessionId.value
+  if (!sessionId) return
+
+  continuing.value = true
+  errorMessage.value = ''
+  try {
+    sessionState.value = await continueSession({
+      sessionId,
+      providerId: selectedProviderId.value || undefined,
+      modelId: selectedProviderId.value && selectedModelId.value ? selectedModelId.value : undefined,
+    })
+    syncEventStream()
+    await refreshConversation(false)
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    continuing.value = false
   }
 }
 
@@ -701,9 +882,17 @@ const selectedWorkspace = computed(
 
 const selectedSession = computed(() => sessions.value.find((session) => session.id === selectedSessionId.value) || null)
 
+const sessionsById = computed(() => {
+  const map = new Map<number, SessionResource>()
+  for (const session of sessions.value) {
+    map.set(session.id, session)
+  }
+  return map
+})
+
 const parentSession = computed(() => {
   const parentId = sessionState.value?.session.parent_id ?? selectedSession.value?.parent_id ?? null
-  return parentId ? sessions.value.find((session) => session.id === parentId) || null : null
+  return parentId ? sessionsById.value.get(parentId) || null : null
 })
 
 const childSessions = computed(() => {
@@ -712,12 +901,30 @@ const childSessions = computed(() => {
   return sessions.value.filter((session) => session.parent_id === sessionId)
 })
 
+const ancestorSessions = computed(() => {
+  const items: SessionResource[] = []
+  let current = parentSession.value
+  while (current) {
+    items.unshift(current)
+    current = current.parent_id ? sessionsById.value.get(current.parent_id) || null : null
+  }
+  return items
+})
+
+const siblingSessions = computed(() => {
+  const current = selectedSession.value
+  if (!current?.parent_id) return [] as SessionResource[]
+  return sessions.value.filter((session) => session.parent_id === current.parent_id && session.id !== current.id)
+})
+
 const sessionLineageLabel = computed(() => {
   const session = sessionState.value?.session || selectedSession.value
   if (!session) return ''
-  const parent = session.parent_id ? `parent=${session.parent_id}` : 'root'
-  const children = `children=${session.child_session_count}`
-  return `${parent} · ${children}`
+  const rootLabel = ancestorSessions.value.length ? `root=#${ancestorSessions.value[0]?.id}` : 'root'
+  const parent = session.parent_id ? `parent=#${session.parent_id}` : 'parent=none'
+  const siblings = `siblings=${siblingSessions.value.length}`
+  const children = `children=${childSessions.value.length}`
+  return `${rootLabel} · ${parent} · ${siblings} · ${children}`
 })
 
 const executionFacts = computed(() => {
@@ -735,6 +942,25 @@ const executionFacts = computed(() => {
   if (execution.allowed_tools.length) facts.push(`allowed_tools=${execution.allowed_tools.length}`)
   return facts
 })
+
+watch(selectedProviderId, (providerId) => {
+  if (!providerId) return
+  if (!selectedModelId.value) {
+    selectedModelId.value = providerDefaultModel(providerId)
+  }
+})
+
+watch(
+  () => route.query.session,
+  (value) => {
+    const routeSessionId = readRouteSessionId(value)
+    if (routeSessionId === null || routeSessionId === selectedSessionId.value) return
+    selectedSessionId.value = routeSessionId
+    void loadSidebar().catch((err) => {
+      errorMessage.value = err instanceof Error ? err.message : String(err)
+    })
+  },
+)
 
 onMounted(() => {
   void loadSidebar().catch((err) => {
@@ -807,6 +1033,16 @@ onBeforeUnmount(() => {
         <section class="card">
           <h3>Sessions</h3>
           <div class="field">
+            <label class="label" for="session-search">Search</label>
+            <input
+              id="session-search"
+              v-model="sessionSearch"
+              class="input"
+              placeholder="search sessions"
+              @keyup.enter="selectedWorkspaceId && loadSessionsForWorkspace(selectedWorkspaceId, false)"
+            />
+          </div>
+          <div class="field">
             <label class="label" for="session-title">Title</label>
             <input id="session-title" v-model="newSessionTitle" class="input" placeholder="New session" />
           </div>
@@ -853,14 +1089,20 @@ onBeforeUnmount(() => {
               <button v-if="parentSession" class="button ghost" @click="selectSession(parentSession.id)">
                 Open Parent #{{ parentSession.id }}
               </button>
+              <button class="button ghost" :disabled="!selectedSessionId || loading" @click="forkCurrentSession">
+                Fork Current Session
+              </button>
               <button
                 class="button ghost"
-                :disabled="!selectedSessionId || loading"
-                @click="createSessionAction(selectedSessionId)"
+                :disabled="!selectedSessionId || continuing || sessionState?.run_state === 'idle' && !sessionState?.blocked"
+                @click="continueCurrentSession"
               >
-                Fork Child Session
+                {{ continuing ? 'Continuing…' : 'Continue Run' }}
               </button>
             </div>
+            <template v-if="ancestorSessions.length">
+              <div class="muted">ancestors={{ ancestorSessions.map((session) => `#${session.id}`).join(' → ') }}</div>
+            </template>
             <template v-if="executionFacts.length">
               <div class="muted mono">{{ executionFacts.join(' · ') }}</div>
             </template>
@@ -884,6 +1126,19 @@ onBeforeUnmount(() => {
               </div>
               <div v-if="sessionState.automation.latest_job?.last_run?.error_message" class="muted">
                 automation_error={{ sessionState.automation.latest_job.last_run.error_message }}
+              </div>
+            </template>
+            <template v-if="siblingSessions.length">
+              <div class="muted" style="margin-top: 8px">siblings={{ siblingSessions.length }}</div>
+              <div class="button-row" style="margin-top: 6px">
+                <button
+                  v-for="sibling in siblingSessions"
+                  :key="`sibling-${sibling.id}`"
+                  class="button ghost"
+                  @click="selectSession(sibling.id)"
+                >
+                  #{{ sibling.id }} {{ sibling.title }}
+                </button>
               </div>
             </template>
             <template v-if="childSessions.length">
@@ -922,7 +1177,12 @@ onBeforeUnmount(() => {
             </div>
             <div class="field">
               <label class="label" for="model-id">Model</label>
-              <input id="model-id" v-model="selectedModelId" class="input mono" placeholder="gpt-5" />
+              <select id="model-id" v-model="selectedModelId" class="select">
+                <option value="">Auto</option>
+                <option v-for="model in providerModelOptions(selectedProviderId)" :key="`${model.provider_id}-${model.id}`" :value="model.id">
+                  {{ providerModelLabel(model) }}
+                </option>
+              </select>
             </div>
           </div>
         </section>
@@ -938,7 +1198,13 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-if="messages.length" class="message-list">
-            <article v-for="message in messages" :key="message.id" class="message" :class="message.role">
+            <article
+              v-for="message in messages"
+              :key="message.id"
+              class="message"
+              :class="message.role"
+              :data-message-id="message.id"
+            >
               <div class="message-head">
                 <div class="message-role">{{ message.role }}</div>
                 <div class="button-row">
@@ -984,6 +1250,13 @@ onBeforeUnmount(() => {
             <div v-for="event in timelineEvents" :key="event.seq_global" class="list-item">
               <div>
                 <strong>{{ event.kind }}</strong>
+              </div>
+              <div class="muted">{{ typeof event.payload.summary === 'string' ? event.payload.summary : typeof event.payload.command === 'string' ? event.payload.command : typeof event.payload.message === 'string' ? event.payload.message : event.kind }}</div>
+              <div v-if="readPayloadMessageId(event.payload) !== null" class="button-row" style="margin-top: 6px">
+                <span class="muted mono">message_id={{ readPayloadMessageId(event.payload) }}</span>
+                <button class="button ghost" @click="scrollToMessage(readPayloadMessageId(event.payload)!)">
+                  Jump to Message
+                </button>
               </div>
               <div class="muted mono">
                 seq={{ event.seq_global }} · session={{ event.session_id ?? 'n/a' }} ·

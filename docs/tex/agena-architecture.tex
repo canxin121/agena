@@ -35,8 +35,8 @@
 
 \begin{itemize}
   \item \highlight{真正的本体是 \pathinline{crates/agena}}。这里面有运行时、会话、消息、工具、Provider、权限、插件、数据库等核心能力。
-  \item \pathinline{crates/agena-http-api} 是把核心能力包装成 HTTP API 的接口层。
-  \item \pathinline{apps/agena-cli}、\pathinline{apps/agena-http-api-server}、\pathinline{apps/agena-studio-server} 是“可运行入口”，本质上是不同的启动壳。
+  \item \pathinline{crates/agena-api-server} 是把核心能力包装成统一 HTTP API 的接口层。
+  \item \pathinline{apps/agena-cli} 与 \pathinline{apps/agena-studio-server} 是当前主要“可运行入口”，本质上是不同的启动壳。
   \item \pathinline{packages/agena-studio-web} 是前端页面，用来消费 Studio Server 暴露出来的 API。
   \item \pathinline{apps/agena-studio-desktop} 是 Tauri 桌面壳，用来把同一套 Web UI + 后端 sidecar 包成桌面应用。
 \end{itemize}
@@ -55,7 +55,7 @@ $\rightarrow$
 $\rightarrow$
 \pathinline{tool/}
 $\rightarrow$
-\pathinline{crates/agena-http-api}
+\pathinline{crates/agena-api-server}
 $\rightarrow$
 \pathinline{apps/agena-studio-server}
 $\rightarrow$
@@ -69,9 +69,9 @@ $\rightarrow$
 \textbf{目录} & \textbf{作用} & \textbf{小白怎么读} \\
 \midrule
 \endhead
-\pathinline{apps/} & 可运行应用入口。包括 CLI、HTTP API 服务、Studio Server、Desktop、TUI。 & 把它理解成“启动器”最合适。这里不是核心逻辑的主要沉淀地。 \\
+\pathinline{apps/} & 可运行应用入口。包括 CLI、Studio Server、Desktop、TUI。 & 把它理解成“启动器”最合适。这里不是核心逻辑的主要沉淀地。 \\
 \pathinline{crates/agena/} & 仓库真正的核心。包括 runtime、provider、session、tool、permission、plugin、db。 & 这是最值得深读的目录。绝大多数系统设计都在这里。 \\
-\pathinline{crates/agena-http-api/} & 把核心能力变成资源化 HTTP API。 & 如果你想从前后端联调角度看系统，这里是桥梁层。 \\
+\pathinline{crates/agena-api-server/} & 把核心能力变成统一资源化 HTTP API。 & 如果你想从前后端联调角度看系统，这里是桥梁层。 \\
 \pathinline{packages/agena-studio-web/} & Studio 的 Vue 前端。负责聊天页、登录页、Runtime 页。 & 用来理解前端如何消费 API、如何用 SSE 做增量刷新。 \\
 \pathinline{ops/} & 构建、打包、发布、安装相关脚本。 & 当你关心部署、桌面打包、服务安装时再看。 \\
 \pathinline{docs/} & 项目文档和接口说明。 & 适合先扫一遍，但一定要和源码交叉验证。 \\
@@ -81,11 +81,10 @@ $\rightarrow$
 \begin{diagramlandscape}
 \begin{tikzpicture}[diagram, node distance=12mm and 14mm, scale=0.88, every node/.style={transform shape}]
   \node[terminal] (cli) {\textbf{agena-cli}\\读取配置并启动核心运行时\\目录：\pathinline{apps/agena-cli}};
-  \node[terminal, below=of cli] (apiapp) {\textbf{agena-http-api-server}\\对外提供 REST + SSE\\目录：\pathinline{apps/agena-http-api-server}};
-  \node[terminal, below=of apiapp] (studio) {\textbf{agena-studio-server}\\Studio API + UI 鉴权 + 静态资源\\目录：\pathinline{apps/agena-studio-server}};
+  \node[terminal, below=of cli] (studio) {\textbf{agena-studio-server}\\统一 REST + SSE + Studio 静态资源\\目录：\pathinline{apps/agena-studio-server}};
   \node[terminal, below=of studio] (desktop) {\textbf{agena-studio-desktop}\\Tauri 桌面壳，管理 sidecar\\目录：\pathinline{apps/agena-studio-desktop}};
 
-  \node[runtime, right=26mm of apiapp, text width=60mm, minimum height=16mm] (runtime) {\textbf{AgenaRuntime}\\运行时入口对象\\持有当前 \pathinline{RuntimeSnapshot}、后台任务控制、重载能力};
+  \node[runtime, right=26mm of studio, text width=60mm, minimum height=16mm] (runtime) {\textbf{AgenaRuntime}\\运行时入口对象\\持有当前 \pathinline{RuntimeSnapshot}、后台任务控制、重载能力};
 
   \node[runtime, above right=14mm and 18mm of runtime] (config) {\textbf{Config 子系统}\\\pathinline{config/}\\默认值 + 文件 + mode + 环境变量 + CLI 覆盖};
   \node[runtime, right=22mm of runtime] (providers) {\textbf{ProviderRegistry}\\\pathinline{provider/}\\统一抽象 OpenAI / Anthropic / Gemini / Copilot / GitLab / Vertex 等};
@@ -437,7 +436,7 @@ Studio 的 Browser 模式和 Desktop 模式，\highlight{共享的是同一套�
   \item \pathinline{crates/agena/src/session/processor.rs}
   \item \pathinline{crates/agena/src/session/store.rs}
   \item \pathinline{crates/agena/src/tool/mod.rs}
-  \item \pathinline{crates/agena-http-api/src/lib.rs}
+  \item \pathinline{crates/agena-api-server/src/lib.rs}
   \item \pathinline{apps/agena-studio-server/src/app.rs}
   \item \pathinline{packages/agena-studio-web/src/agena/pages/ChatPage.vue}
 \end{enumerate}
@@ -452,7 +451,7 @@ Studio 的 Browser 模式和 Desktop 模式，\highlight{共享的是同一套�
 
 \begin{itemize}
   \item \highlight{核心层}：\pathinline{crates/agena}
-  \item \highlight{接口层}：\pathinline{crates/agena-http-api}
+  \item \highlight{接口层}：\pathinline{crates/agena-api-server}
   \item \highlight{产品壳层}：\pathinline{apps/*} 和 \pathinline{packages/agena-studio-web}
 \end{itemize}
 

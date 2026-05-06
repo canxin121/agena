@@ -44,7 +44,7 @@ composer-session-new = new session
 composer-placeholder = Enter queues (sends when idle). Ctrl+Enter sends now (steers when busy). Up edits queue. Esc cancels. Shift+Enter newline. F3 attach. F4 editor. F6 image.
 
 status-sessions = Tab switch pane | s resume | b branches | / search | 1 all | 2 roots | 3 subtree | m cycle | Enter open | [ parent | ] children | R rename | t timeline | P plugins | v pager | q quit
-status-transcript = Tab switch pane | s resume | b branches | / or Ctrl+F search | Alt+P commands | 1/2/3 session views | [ parent | ] children | R rename | t timeline | P plugins | e export | v pager | y/Y copy | q quit
+status-transcript = Tab switch pane | s resume | b branches | / or Ctrl+F search | Alt+P commands | 1/2/3 session views | [ parent | ] children | R rename | t timeline | Enter timeline jump | P plugins | e export | v pager | y/Y copy | q quit
 status-composer = Enter queue/send | Ctrl+Enter send-now | Up edit queue | Esc cancel | / command | Alt+P palette | F3 attach | F4 editor | Tab switch | q quit
 
 help-title = Help
@@ -63,7 +63,7 @@ help-transcript-line-4 = PageUp or scrolling near top loads older messages
 help-transcript-line-5 = g/G jump to top or bottom
 help-transcript-line-6 = / or Ctrl+F searches loaded transcript, n/N jump matches
 help-transcript-line-7 = y copies the loaded transcript, Y copies the visible viewport
-help-transcript-line-8 = R renames the session, t opens timeline, b opens branch history, P opens plugin inspector, e exports markdown, v opens the loaded transcript in a pager
+help-transcript-line-8 = R renames the session, t opens timeline, Enter on timeline jumps to a related message, b opens branch history, P opens plugin inspector, e exports markdown, v opens the loaded transcript in a pager
 help-section-composer = Composer
 help-composer-line-1 = Enter sends
 help-composer-line-2 = Alt/Shift+Enter or Ctrl+J inserts newline
@@ -157,7 +157,7 @@ overlay-children-empty = No child sessions found
 overlay-timeline-title = Timeline [#{$session}]
 overlay-timeline-prompt = Filter by event type, command, or message metadata
 overlay-timeline-empty = No matching events
-overlay-timeline-footer = Type to filter | Up/Down move | PageUp/PageDown jump | Ctrl+Y copy event | Esc close
+overlay-timeline-footer = Type to filter | Up/Down move | Enter jump to message | PageUp/PageDown jump | Ctrl+Y copy event | Esc close
 overlay-timeline-events = Events
 overlay-timeline-detail = Detail
 overlay-plugins-title = Plugin Inspector

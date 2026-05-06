@@ -2,7 +2,7 @@
 
 ## Overview
 
-`agena-http-api` 现在提供一套基于 `axum` 的服务端 API，重点面向：
+`agena-api-server` 现在提供统一的 `v1` 服务端 API，重点面向：
 
 - workspace / session / message / permission rule 的标准 CRUD
 - 聊天类数据的高性能读取
@@ -16,7 +16,7 @@
 启动：
 
 ```bash
-cargo run -p agena-http-api-server -- serve
+cargo run -p agena-studio-server -- --help
 ```
 
 常用参数：
@@ -29,9 +29,9 @@ cargo run -p agena-http-api-server -- serve
 架构说明：
 
 - core 能力保留在 `agena` crate
-- HTTP API library 保留在 `crates/agena-http-api`
-- HTTP API 可执行入口放在 `apps/agena-http-api-server`
-- 这样应用如果只需要 runtime / provider / session 等能力，就不必依赖 HTTP server 栈
+- HTTP API library 保留在 `crates/agena-api-server`
+- HTTP API 可执行入口放在 `apps/agena-studio-server`
+- 这样应用如果只需要 runtime / provider / session 等能力，就不必依赖额外的旧 server 入口
 
 ## Pagination
 

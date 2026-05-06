@@ -31,6 +31,7 @@
 pub mod dispatch;
 pub mod error;
 pub mod ipc;
+pub mod local_api;
 pub mod rest;
 pub mod sse;
 pub mod state;
@@ -51,7 +52,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/runtime/reload", post(rest::reload_runtime))
         .route("/api/v1/plugins", get(rest::list_plugins))
         .route("/api/v1/plugins/{plugin_id}", get(rest::get_plugin))
-        .route("/api/v1/plugins/{plugin_id}/logs", get(rest::list_plugin_logs))
+        .route(
+            "/api/v1/plugins/{plugin_id}/logs",
+            get(rest::list_plugin_logs),
+        )
         .route("/api/v1/auth/providers", get(rest::list_auth_providers))
         .route(
             "/api/v1/auth/providers/{provider_id}",
@@ -118,6 +122,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/sessions/{session_id}/continue",
             post(rest::continue_run),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/fork",
+            post(rest::fork_session),
         )
         .route(
             "/api/v1/sessions/{session_id}/cancel",

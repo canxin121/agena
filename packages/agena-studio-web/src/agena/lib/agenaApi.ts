@@ -59,6 +59,7 @@ export type RuntimeStatus = {
   config_path: string
   config_found: boolean
   active_mode?: string | null
+  active_mode_source?: string | null
   auth_store_path: string
   provider_ids: string[]
   plugin_count: number
@@ -149,6 +150,14 @@ export type ProviderSummary = {
   provider_id: string
   default_model: string
   default_model_ref: string
+}
+
+export type ProviderModel = {
+  provider_id: string
+  id: string
+  display_name?: string | null
+  capabilities?: Record<string, unknown>
+  metadata?: Record<string, unknown>
 }
 
 export type AuthProvider = {
@@ -450,15 +459,30 @@ export async function getPlugin(pluginId: string): Promise<PluginInspect> {
   return response.plugin
 }
 
-export async function listPluginLogs(pluginId: string, limit = 50): Promise<PluginLogEntry[]> {
+export async function listPluginLogs(
+  pluginId: string,
+  options?: {
+    limit?: number
+    afterSeq?: number
+  },
+): Promise<PluginLogEntry[]> {
+  const params = new URLSearchParams()
+  params.set('limit', String(options?.limit ?? 50))
+  if (options?.afterSeq !== undefined) {
+    params.set('after_seq', String(options.afterSeq))
+  }
   const response = await apiJson<{ entries: PluginLogEntry[] }>(
-    `/api/v1/plugins/${encodeURIComponent(pluginId)}/logs?limit=${encodeURIComponent(String(limit))}`,
+    `/api/v1/plugins/${encodeURIComponent(pluginId)}/logs?${params.toString()}`,
   )
   return response.entries ?? []
 }
 
 export async function listProviders(): Promise<ProviderSummary[]> {
   return await apiJson<ProviderSummary[]>('/api/v1/providers')
+}
+
+export async function listProviderModels(providerId: string): Promise<ProviderModel[]> {
+  return await apiJson<ProviderModel[]>(`/api/v1/providers/${encodeURIComponent(providerId)}/models`)
 }
 
 export async function listAuthProviders(): Promise<AuthProvider[]> {
@@ -576,6 +600,7 @@ export async function listSessions(
   options?: {
     parentId?: number | null
     roots?: boolean
+    search?: string
   },
 ): Promise<SessionResource[]> {
   return await collectPagedItems(
@@ -590,6 +615,9 @@ export async function listSessions(
       }
       if (options?.roots) {
         params.set('roots', 'true')
+      }
+      if (options?.search?.trim()) {
+        params.set('search', options.search.trim())
       }
       return apiJson<PaginatedResponse<SessionResource>>(`/api/v1/sessions?${params.toString()}`)
     },
@@ -790,6 +818,42 @@ export function streamSessionEvents(
   void connect()
 
   return { close }
+}
+
+export async function forkSession(input: {
+  sessionId: number
+  atEventSeq?: number
+  title?: string
+}): Promise<SessionExecutionResource> {
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/fork`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...(input.atEventSeq !== undefined ? { at_event_seq: input.atEventSeq } : {}),
+      ...(input.title?.trim() ? { title: input.title.trim() } : {}),
+    }),
+  })
+}
+
+export async function continueSession(input: {
+  sessionId: number
+  providerId?: string
+  modelId?: string
+}): Promise<SessionExecutionResource> {
+  const body: Record<string, unknown> = {}
+
+  if (input.providerId && input.modelId) {
+    body.model = {
+      provider_id: input.providerId,
+      model_id: input.modelId,
+    }
+  }
+
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/continue`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
 }
 
 export async function submitTurn(input: {

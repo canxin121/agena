@@ -236,7 +236,9 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         }
     };
 
-    let mut app = public_router.merge(agena_api).layer(TraceLayer::new_for_http());
+    let mut app = public_router
+        .merge(agena_api)
+        .layer(TraceLayer::new_for_http());
 
     if let Some(cors) = build_cors_layer(&normalized_cors_origins, args.cors_allow_all) {
         if args.cors_allow_all {

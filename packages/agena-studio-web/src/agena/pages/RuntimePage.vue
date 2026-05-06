@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 import {
   createPermissionRule,
@@ -7,11 +8,16 @@ import {
   deleteProviderCredential,
   fetchRuntimeStatus,
   getPlugin,
+  getSessionState,
   listAuthProviders,
   listPermissionRules,
   listPluginLogs,
   listPlugins,
+  listProviderModels,
   listProviders,
+  listSessionTimeline,
+  listSessions,
+  listWorkspaces,
   refreshProviderCredential,
   reloadRuntime,
   setProviderApiKey,
@@ -22,16 +28,33 @@ import {
   type PluginInspect,
   type PluginLogEntry,
   type PluginStatus,
+  type ProviderModel,
   type ProviderSummary,
   type RuntimeSkill,
   type RuntimeStatus,
+  type SessionExecutionResource,
+  type SessionResource,
+  type TimelineEventRecord,
+  type WorkspaceResource,
 } from '@/agena/lib/agenaApi'
-import { buildOperatorCards, pickNextPluginId } from './runtimePageModel'
+import {
+  buildAuthProviderFacts,
+  buildExecutionFacts,
+  buildOperatorCards,
+  buildRuntimeSnapshotFacts,
+  buildSessionCacheFacts,
+  buildTimelineSummary,
+  formatProviderModel,
+  mergePluginLogs,
+  pickNextPluginId,
+  pluginLogCursor,
+} from './runtimePageModel'
 
-type RuntimeTab = 'overview' | 'plugins' | 'mcp' | 'lsp' | 'skills' | 'operator'
+type RuntimeTab = 'overview' | 'workflow' | 'plugins' | 'mcp' | 'lsp' | 'skills' | 'operator'
 
 const tabs: Array<{ id: RuntimeTab; label: string }> = [
   { id: 'overview', label: 'Overview' },
+  { id: 'workflow', label: 'Workflow' },
   { id: 'plugins', label: 'Plugins' },
   { id: 'mcp', label: 'MCP' },
   { id: 'lsp', label: 'LSP' },
@@ -39,17 +62,27 @@ const tabs: Array<{ id: RuntimeTab; label: string }> = [
   { id: 'operator', label: 'Operator' },
 ]
 
+const router = useRouter()
 const activeTab = ref<RuntimeTab>('overview')
 const runtime = ref<RuntimeStatus | null>(null)
 const providers = ref<ProviderSummary[]>([])
+const providerModels = reactive<Record<string, ProviderModel[]>>({})
 const authProviders = ref<AuthProvider[]>([])
 const permissionRules = ref<PermissionRuleResource[]>([])
 const plugins = ref<PluginStatus[]>([])
+const workspaces = ref<WorkspaceResource[]>([])
+const sessions = ref<SessionResource[]>([])
+const selectedWorkspaceId = ref<number | null>(null)
+const selectedSessionId = ref<number | null>(null)
+const sessionExecution = ref<SessionExecutionResource | null>(null)
+const sessionTimeline = ref<TimelineEventRecord[]>([])
 const selectedPluginId = ref('')
 const selectedPlugin = ref<PluginInspect | null>(null)
 const pluginLogs = ref<PluginLogEntry[]>([])
+const pluginLogPollTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const loading = ref(false)
 const pluginLoading = ref(false)
+const workflowLoading = ref(false)
 const actionError = ref('')
 const actionMessage = ref('')
 const drafts = reactive<Record<string, string>>({})
@@ -61,6 +94,10 @@ const permissionDraft = reactive<{ actionKey: string; mode: PermissionMode }>({
 const editingPermissionRuleId = ref<number | null>(null)
 
 const operatorCards = computed(() => buildOperatorCards(runtime.value))
+const runtimeSnapshotFacts = computed(() => buildRuntimeSnapshotFacts(runtime.value))
+const sessionCacheFacts = computed(() => buildSessionCacheFacts(runtime.value))
+const executionFacts = computed(() => buildExecutionFacts(sessionExecution.value))
+const timelineSummaries = computed(() => buildTimelineSummary(sessionTimeline.value))
 
 const skillCommands = computed<RuntimeSkill[]>(() => runtime.value?.operator.skills.commands ?? [])
 const discoveredSkills = computed<RuntimeSkill[]>(() => runtime.value?.operator.skills.skills ?? [])
@@ -69,18 +106,38 @@ async function load() {
   loading.value = true
   actionError.value = ''
   try {
-    const [runtimeData, providerData, authData, permissionRuleData, pluginData] = await Promise.all([
+    const [runtimeData, providerData, authData, permissionRuleData, pluginData, workspaceData] = await Promise.all([
       fetchRuntimeStatus(),
       listProviders(),
       listAuthProviders(),
       listPermissionRules(permissionSearch.value),
       listPlugins(),
+      listWorkspaces(),
     ])
     runtime.value = runtimeData
     providers.value = providerData
     authProviders.value = authData
     permissionRules.value = permissionRuleData
     plugins.value = pluginData
+    workspaces.value = workspaceData
+
+    await Promise.all(
+      providerData.map(async (provider) => {
+        providerModels[provider.provider_id] = await listProviderModels(provider.provider_id)
+      }),
+    )
+
+    const nextWorkspaceId = pickWorkspaceId(selectedWorkspaceId.value, workspaceData)
+    selectedWorkspaceId.value = nextWorkspaceId
+    sessions.value = nextWorkspaceId ? await listSessions(nextWorkspaceId) : []
+    const nextSessionId = pickSessionId(selectedSessionId.value, sessions.value)
+    selectedSessionId.value = nextSessionId
+    if (nextSessionId) {
+      await loadSessionExecution(nextSessionId)
+    } else {
+      sessionExecution.value = null
+      sessionTimeline.value = []
+    }
 
     const nextPluginId = pickNextPluginId(selectedPluginId.value, pluginData)
     selectedPluginId.value = nextPluginId
@@ -89,6 +146,7 @@ async function load() {
     } else {
       selectedPlugin.value = null
       pluginLogs.value = []
+      stopPluginLogPolling()
     }
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : String(err)
@@ -101,15 +159,17 @@ async function loadPluginDetails(pluginId: string) {
   if (!pluginId) {
     selectedPlugin.value = null
     pluginLogs.value = []
+    stopPluginLogPolling()
     return
   }
   pluginLoading.value = true
   actionError.value = ''
   try {
-    const [plugin, logs] = await Promise.all([getPlugin(pluginId), listPluginLogs(pluginId, 50)])
+    const [plugin, logs] = await Promise.all([getPlugin(pluginId), listPluginLogs(pluginId, { limit: 50 })])
     selectedPluginId.value = pluginId
     selectedPlugin.value = plugin
     pluginLogs.value = logs
+    syncPluginLogPolling()
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -127,6 +187,87 @@ async function triggerReload() {
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : String(err)
   }
+}
+
+async function loadSessionExecution(sessionId: number) {
+  workflowLoading.value = true
+  actionError.value = ''
+  try {
+    const [execution, timeline] = await Promise.all([
+      getSessionState(sessionId),
+      listSessionTimeline(sessionId, { limit: 25 }),
+    ])
+    if (selectedSessionId.value !== sessionId) return
+    sessionExecution.value = execution
+    sessionTimeline.value = timeline
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    workflowLoading.value = false
+  }
+}
+
+async function selectWorkspace(workspaceId: number) {
+  selectedWorkspaceId.value = workspaceId
+  sessions.value = await listSessions(workspaceId)
+  const nextSessionId = pickSessionId(selectedSessionId.value, sessions.value)
+  selectedSessionId.value = nextSessionId
+  if (nextSessionId) {
+    await loadSessionExecution(nextSessionId)
+  } else {
+    sessionExecution.value = null
+    sessionTimeline.value = []
+  }
+}
+
+async function selectSession(sessionId: number) {
+  selectedSessionId.value = sessionId
+  await loadSessionExecution(sessionId)
+}
+
+function openSelectedSessionInChat() {
+  if (!selectedSessionId.value) return
+  void router.push(`/chat?session=${selectedSessionId.value}`)
+}
+
+function pickWorkspaceId(currentWorkspaceId: number | null, items: WorkspaceResource[]): number | null {
+  if (currentWorkspaceId && items.some((workspace) => workspace.id === currentWorkspaceId)) {
+    return currentWorkspaceId
+  }
+  return items[0]?.id ?? null
+}
+
+function pickSessionId(currentSessionId: number | null, items: SessionResource[]): number | null {
+  if (currentSessionId && items.some((session) => session.id === currentSessionId)) {
+    return currentSessionId
+  }
+  return items[0]?.id ?? null
+}
+
+function stopPluginLogPolling() {
+  if (!pluginLogPollTimer.value) return
+  clearInterval(pluginLogPollTimer.value)
+  pluginLogPollTimer.value = null
+}
+
+function syncPluginLogPolling() {
+  stopPluginLogPolling()
+  if (activeTab.value !== 'plugins' || !selectedPluginId.value) return
+  pluginLogPollTimer.value = setInterval(() => {
+    void refreshPluginLogsIncrementally()
+  }, 1_500)
+}
+
+async function refreshPluginLogsIncrementally() {
+  const pluginId = selectedPluginId.value
+  if (!pluginId) return
+  const afterSeq = pluginLogCursor(pluginLogs.value)
+  const incoming = await listPluginLogs(pluginId, {
+    limit: 50,
+    ...(afterSeq != null ? { afterSeq } : {}),
+  })
+  if (!incoming.length) return
+  pluginLogs.value = mergePluginLogs(pluginLogs.value, incoming)
 }
 
 async function saveApiKey(providerId: string) {
@@ -217,8 +358,20 @@ async function removePermissionRule(rule: PermissionRuleResource) {
   }
 }
 
+watch(activeTab, (tab) => {
+  if (tab === 'plugins') {
+    syncPluginLogPolling()
+    return
+  }
+  stopPluginLogPolling()
+})
+
 onMounted(() => {
   void load()
+})
+
+onBeforeUnmount(() => {
+  stopPluginLogPolling()
 })
 </script>
 
@@ -261,18 +414,11 @@ onMounted(() => {
       <div class="grid two" style="margin-top: 16px">
         <section class="card">
           <h3>Runtime Snapshot</h3>
-          <div v-if="runtime" class="stack">
-            <div><strong>Generation:</strong> {{ runtime.generation }}</div>
-            <div><strong>Loaded At:</strong> {{ runtime.loaded_at }}</div>
-            <div><strong>Workspace Root:</strong> <span class="mono">{{ runtime.workspace_root }}</span></div>
-            <div><strong>Config Path:</strong> <span class="mono">{{ runtime.config_path }}</span></div>
-            <div><strong>Config Found:</strong> {{ runtime.config_found ? 'yes' : 'no' }}</div>
-            <div><strong>Active Mode:</strong> {{ runtime.active_mode || 'default' }}</div>
-            <div><strong>Auth Store:</strong> <span class="mono">{{ runtime.auth_store_path }}</span></div>
-            <div><strong>Providers:</strong> {{ runtime.provider_ids.join(', ') || 'none' }}</div>
-            <div><strong>Session Runtime:</strong> {{ runtime.session_runtime_available ? 'enabled' : 'disabled' }}</div>
-            <div><strong>Automation:</strong> {{ runtime.automation.enabled ? 'enabled' : 'disabled' }}</div>
-            <div><strong>Scheduled Jobs:</strong> {{ runtime.automation.job_count }}</div>
+          <div v-if="runtimeSnapshotFacts.length" class="stack">
+            <div v-for="fact in runtimeSnapshotFacts" :key="fact.label">
+              <strong>{{ fact.label }}:</strong>
+              <span :class="{ mono: fact.mono }">{{ fact.value }}</span>
+            </div>
           </div>
           <p v-else class="muted">Loading runtime snapshot…</p>
         </section>
@@ -321,6 +467,10 @@ onMounted(() => {
               <div><strong>{{ provider.provider_id }}</strong></div>
               <div class="muted">Default model: {{ provider.default_model }}</div>
               <div class="muted mono">{{ provider.default_model_ref }}</div>
+              <div class="muted">
+                Models:
+                {{ (providerModels[provider.provider_id] || []).map((model) => formatProviderModel(model)).join(', ') || 'none' }}
+              </div>
             </div>
           </div>
           <p v-else class="muted">No providers loaded.</p>
@@ -328,13 +478,10 @@ onMounted(() => {
 
         <section class="card">
           <h3>Session Cache</h3>
-          <div v-if="runtime?.session_cache" class="stack">
-            <div><strong>Entries:</strong> {{ runtime.session_cache.entry_count }}</div>
-            <div><strong>Total Bytes:</strong> {{ runtime.session_cache.total_bytes }}</div>
-            <div><strong>Hits / Misses:</strong> {{ runtime.session_cache.hits }} / {{ runtime.session_cache.misses }}</div>
-            <div><strong>Inserts / Evictions:</strong> {{ runtime.session_cache.inserts }} / {{ runtime.session_cache.evictions }}</div>
-            <div><strong>TTL:</strong> {{ runtime.session_cache.ttl_secs }}s</div>
-            <div><strong>Max Sessions:</strong> {{ runtime.session_cache.max_sessions }}</div>
+          <div v-if="sessionCacheFacts.length" class="stack">
+            <div v-for="fact in sessionCacheFacts" :key="fact.label">
+              <strong>{{ fact.label }}:</strong> {{ fact.value }}
+            </div>
           </div>
           <p v-else class="muted">Session cache is not available.</p>
         </section>
@@ -348,13 +495,10 @@ onMounted(() => {
               <div class="page-header" style="align-items: flex-start">
                 <div>
                   <div><strong>{{ provider.provider_id }}</strong></div>
-                  <div class="muted">
-                    configured={{ provider.configured ? 'yes' : 'no' }}, credential={{
-                      provider.credential_present ? 'present' : 'missing'
-                    }}
+                  <div v-for="fact in buildAuthProviderFacts(provider)" :key="fact.label" class="muted">
+                    <strong>{{ fact.label }}:</strong>
+                    <span :class="{ mono: fact.mono }">{{ fact.value }}</span>
                   </div>
-                  <div v-if="provider.key_preview" class="muted mono">{{ provider.key_preview }}</div>
-                  <div v-if="provider.expires_at" class="muted">expires {{ provider.expires_at }}</div>
                 </div>
                 <span class="badge">{{ provider.credential_type || 'unknown' }}</span>
               </div>
@@ -447,6 +591,78 @@ onMounted(() => {
       </div>
     </template>
 
+    <template v-else-if="activeTab === 'workflow'">
+      <div class="grid two">
+        <section class="card">
+          <div class="page-header" style="align-items: flex-start">
+            <div>
+              <h3>Workflow Inspector</h3>
+              <p class="muted">Observe real session execution state without leaving the runtime page.</p>
+            </div>
+            <button class="button ghost" :disabled="!selectedSessionId" @click="openSelectedSessionInChat">
+              Open in Chat
+            </button>
+          </div>
+
+          <div class="grid two" style="margin-top: 12px">
+            <div class="field">
+              <label class="label" for="workflow-workspace">Workspace</label>
+              <select
+                id="workflow-workspace"
+                :value="selectedWorkspaceId ?? ''"
+                class="select"
+                @change="selectWorkspace(Number(($event.target as HTMLSelectElement).value))"
+              >
+                <option v-for="workspace in workspaces" :key="workspace.id" :value="workspace.id">
+                  #{{ workspace.id }} · {{ workspace.path }}
+                </option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label" for="workflow-session">Session</label>
+              <select
+                id="workflow-session"
+                :value="selectedSessionId ?? ''"
+                class="select"
+                @change="selectSession(Number(($event.target as HTMLSelectElement).value))"
+              >
+                <option v-for="session in sessions" :key="session.id" :value="session.id">
+                  #{{ session.id }} · {{ session.title }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div v-if="executionFacts.length" class="stack" style="margin-top: 12px">
+            <div v-for="fact in executionFacts" :key="fact.label">
+              <strong>{{ fact.label }}:</strong>
+              <span :class="{ mono: fact.mono }">{{ fact.value }}</span>
+            </div>
+          </div>
+          <p v-else-if="workflowLoading" class="muted" style="margin-top: 12px">Loading execution state…</p>
+          <p v-else class="muted" style="margin-top: 12px">Select a session to inspect workflow execution state.</p>
+        </section>
+
+        <section class="card">
+          <h3>Recent Timeline</h3>
+          <div v-if="timelineSummaries.length" class="list">
+            <div v-for="event in timelineSummaries" :key="event.key" class="list-item">
+              <div class="page-header" style="align-items: flex-start">
+                <div>
+                  <div><strong>{{ event.kind }}</strong></div>
+                  <div class="muted">{{ event.summary }}</div>
+                  <div class="muted">{{ event.sessionId }}</div>
+                </div>
+                <span class="badge">{{ event.timestamp }}</span>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="workflowLoading" class="muted">Loading session timeline…</p>
+          <p v-else class="muted">No timeline events loaded yet.</p>
+        </section>
+      </div>
+    </template>
+
     <template v-else-if="activeTab === 'plugins'">
       <div class="grid two">
         <section class="card">
@@ -480,6 +696,7 @@ onMounted(() => {
             <div><strong>State:</strong> {{ selectedPlugin.status.state }}</div>
             <div><strong>PID:</strong> {{ selectedPlugin.status.pid ?? 'n/a' }}</div>
             <div><strong>Last Exit:</strong> {{ selectedPlugin.status.last_exit_code ?? 'n/a' }}</div>
+            <div><strong>Last Restart:</strong> {{ selectedPlugin.status.last_restart_at_ms ?? 'n/a' }}</div>
             <div><strong>Manifest:</strong></div>
             <pre class="mono" style="white-space: pre-wrap">{{ JSON.stringify(selectedPlugin.manifest ?? {}, null, 2) }}</pre>
             <div><strong>Recent Logs:</strong></div>
@@ -489,6 +706,7 @@ onMounted(() => {
                   <strong>#{{ entry.seq }}</strong>
                   <span class="badge">{{ entry.level }}</span>
                 </div>
+                <div class="muted">{{ entry.target || 'plugin' }} · {{ entry.timestamp_ms }}</div>
                 <div class="muted">{{ entry.message }}</div>
               </div>
             </div>

@@ -20,9 +20,12 @@ use agena::{
     provider::ProviderModel,
     role::Role,
 };
-use agena_http_api::{
-    MessageResource, PaginatedResponse, PermissionRuleResource, ProviderSummaryResource,
-    SessionExecutionResource, SessionResource, SessionRunOptionsRequest,
+use agena_api::{
+    pagination::PaginatedResponse,
+    resource::{
+        MessageResource, PermissionRuleResource, ProviderSummaryResource, RunOptions,
+        SessionExecutionResource, SessionResource, SessionRunState,
+    },
 };
 use agena_skills::Skill;
 use anyhow::Result;
@@ -426,6 +429,7 @@ struct TimelineItem {
     detail: String,
     search_text: String,
     copy_text: String,
+    linked_message_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -699,6 +703,7 @@ struct RenderedTranscript {
     width: u16,
     lines: Vec<RenderedLine>,
     search_matches: Vec<usize>,
+    message_line_starts: Vec<(i64, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -1545,7 +1550,15 @@ impl App {
                 }
                 false
             }
-            KeyCode::Enter => false,
+            KeyCode::Enter => {
+                if let Some(item) = dialog.items.get(dialog.selected)
+                    && let Some(message_id) = item.linked_message_id
+                {
+                    self.jump_to_message(message_id);
+                    return true;
+                }
+                false
+            }
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(item) = dialog.items.get(dialog.selected) {
                     match set_clipboard_text(item.copy_text.as_str()) {
@@ -5117,6 +5130,7 @@ impl App {
         };
 
         let mut parts = Vec::new();
+        parts.push(format!("state={}", session_workflow_state_label(execution)));
         if let Some(agent_profile) = execution.execution.agent_profile.as_deref() {
             if !agent_profile.trim().is_empty() {
                 parts.push(format!("agent={agent_profile}"));
@@ -5171,6 +5185,15 @@ impl App {
             self.layout.transcript_body.height,
             forward,
         );
+    }
+
+    fn jump_to_message(&mut self, message_id: i64) {
+        self.transcript.jump_to_message(
+            self.layout.transcript_body.width,
+            self.layout.transcript_body.height,
+            message_id,
+        );
+        self.focus = Focus::Transcript;
     }
 
     fn flush_input_buffers_if_due(&mut self, now: Instant) {
@@ -6050,11 +6073,9 @@ impl App {
     }
 
     fn render_transcript_header(&mut self, frame: &mut Frame, area: Rect) {
-        let is_running = self
-            .transcript
-            .execution
-            .as_ref()
-            .is_some_and(|execution| format!("{:?}", execution.run_state) != "Idle");
+        let is_running = self.transcript.execution.as_ref().is_some_and(|execution| {
+            execution.run_state != SessionRunState::Idle || execution.blocked
+        });
         let title = ui_text::transcript_header_title(
             &self.i18n,
             self.transcript.session_id,
@@ -7582,6 +7603,22 @@ impl TranscriptState {
         self.clamp_scroll(width, height);
     }
 
+    fn jump_to_message(&mut self, width: u16, height: u16, message_id: i64) {
+        let rendered = self.rendered(width);
+        let Some((_, line)) = rendered
+            .message_line_starts
+            .iter()
+            .find(|(candidate_id, _)| *candidate_id == message_id)
+            .copied()
+        else {
+            return;
+        };
+        let padding = height.saturating_div(3) as usize;
+        self.scroll = line.saturating_sub(padding);
+        self.follow_tail = false;
+        self.clamp_scroll(width, height);
+    }
+
     fn should_load_older(&self) -> bool {
         self.session_id.is_some()
             && self.has_more_older
@@ -7600,6 +7637,7 @@ impl TranscriptState {
         }
 
         let mut lines = Vec::new();
+        let mut message_line_starts = Vec::new();
         if self.session_id.is_some() {
             if self.loading_older {
                 lines.push(RenderedLine::dim(ui_text::t(
@@ -7625,6 +7663,7 @@ impl TranscriptState {
             if index > 0 {
                 lines.push(RenderedLine::plain(""));
             }
+            message_line_starts.push((message.id, lines.len()));
             lines.extend(render_message(message, width, &self.i18n));
         }
 
@@ -7645,6 +7684,7 @@ impl TranscriptState {
             width,
             lines,
             search_matches,
+            message_line_starts,
         });
         self.rendered.as_ref().expect("render cache should exist")
     }
@@ -9515,17 +9555,58 @@ fn build_timeline_item(record: &DomainEvent) -> TimelineItem {
         summary.to_ascii_lowercase(),
         detail.to_ascii_lowercase()
     );
+    let linked_message_id = timeline_event_message_id(record);
 
     TimelineItem {
         summary,
         detail,
         search_text,
         copy_text,
+        linked_message_id,
+    }
+}
+
+fn timeline_event_message_id(record: &DomainEvent) -> Option<i64> {
+    match &record.kind {
+        AgenaSessionEvent::MessagePartUpdated(event) => Some(event.message_id),
+        AgenaSessionEvent::MessagePartDelta(event) => Some(event.message_id),
+        AgenaSessionEvent::CommandBegin(event) => event.context.message_id,
+        AgenaSessionEvent::CommandOutputDelta(event) => event.context.message_id,
+        AgenaSessionEvent::CommandEnd(event) => event.context.message_id,
+        AgenaSessionEvent::UserMessageAppended(event) => Some(event.message_id.into()),
+        AgenaSessionEvent::AssistantMessageCompleted(event) => Some(event.message_id.into()),
+        AgenaSessionEvent::SystemNoticeAppended(event) => Some(event.message_id.into()),
+        AgenaSessionEvent::MessageRevised(event) => Some(event.target_message_id),
+        AgenaSessionEvent::RunStarted(_)
+        | AgenaSessionEvent::RunFailed(_)
+        | AgenaSessionEvent::StreamError(_)
+        | AgenaSessionEvent::TurnStarted(_)
+        | AgenaSessionEvent::TurnCompleted(_)
+        | AgenaSessionEvent::TurnAborted(_)
+        | AgenaSessionEvent::ToolCallIssued(_)
+        | AgenaSessionEvent::ToolCallCompleted(_)
+        | AgenaSessionEvent::PluginEvent(_) => None,
     }
 }
 
 fn timeline_event_type_name(record: &DomainEvent) -> &'static str {
     record.kind.tag_str()
+}
+
+fn session_workflow_state_label(execution: &SessionExecutionResource) -> &'static str {
+    if !execution.pending_permission_requests.is_empty() {
+        return "awaiting_permission";
+    }
+    if !execution.pending_user_input_requests.is_empty() {
+        return "awaiting_user_input";
+    }
+    if execution.blocked {
+        return "blocked";
+    }
+    match execution.run_state {
+        SessionRunState::AwaitingModel => "awaiting_model",
+        SessionRunState::Idle => "idle",
+    }
 }
 
 fn timeline_event_summary(record: &DomainEvent) -> String {
@@ -10651,8 +10732,8 @@ impl PasteBurst {
 }
 
 impl RunOptionsState {
-    fn to_request(&self) -> SessionRunOptionsRequest {
-        SessionRunOptionsRequest {
+    fn to_request(&self) -> RunOptions {
+        RunOptions {
             model: self.model.clone(),
             system: self.system.clone(),
             temperature: self.temperature,
@@ -11312,6 +11393,7 @@ mod tests {
                     RenderedLine::plain("hello two"),
                 ],
                 search_matches: vec![1, 3],
+                message_line_starts: Vec::new(),
             }),
             ..TranscriptState::default()
         };
@@ -11422,6 +11504,29 @@ mod tests {
         assert!(item.summary.contains("exit=0"));
         assert!(item.detail.contains("duration_ms: 240"));
         assert!(item.copy_text.contains("call_id: 77"));
+        assert_eq!(item.linked_message_id, Some(5));
+    }
+
+    #[test]
+    fn transcript_jump_to_message_scrolls_to_linked_message() {
+        let mut transcript = TranscriptState {
+            rendered: Some(RenderedTranscript {
+                width: 80,
+                lines: vec![
+                    RenderedLine::plain("header"),
+                    RenderedLine::plain("msg1"),
+                    RenderedLine::plain("msg2"),
+                    RenderedLine::plain("msg3"),
+                ],
+                search_matches: Vec::new(),
+                message_line_starts: vec![(10, 1), (20, 2), (30, 3)],
+            }),
+            ..TranscriptState::default()
+        };
+
+        transcript.jump_to_message(80, 3, 30);
+        assert_eq!(transcript.scroll, 1);
+        assert!(!transcript.follow_tail);
     }
 
     #[test]

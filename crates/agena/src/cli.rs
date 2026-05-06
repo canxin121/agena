@@ -888,7 +888,7 @@ impl AgenaCli {
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
             Some(AgenaCommand::Review(args)) => self.run_review(args).await,
             Some(AgenaCommand::Serve(_command)) => Err(AppError::Config(
-                "the HTTP server moved to the `apps/agena-http-api-server` app; run `cargo run -p agena-http-api-server -- --help` from the repository root".to_owned(),
+                "the HTTP server moved to the unified `apps/agena-studio-server` app; run `cargo run -p agena-studio-server -- --help` from the repository root".to_owned(),
             )),
             Some(AgenaCommand::Sessions(command)) => self.run_sessions(command).await,
             Some(AgenaCommand::Worktree(args)) => self.run_worktree(args).await,

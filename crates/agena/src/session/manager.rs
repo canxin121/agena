@@ -5002,6 +5002,37 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn fork_session_allows_empty_source_at_zero_seq() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+        let source = service
+            .create_session(SessionCreateRequest {
+                title: "source".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create source session");
+
+        let forked = service
+            .fork_session(SessionForkRequest {
+                session_id: source.id,
+                at_event_seq: 0,
+                title: Some("empty fork".to_string()),
+            })
+            .await
+            .expect("fork empty session");
+
+        assert_eq!(forked.parent_id, Some(source.id));
+        assert_eq!(forked.title, "empty fork");
+        assert!(forked.messages.is_empty());
+    }
+
     #[test]
     fn cache_skips_entries_larger_than_byte_budget() {
         let state = cache_state(1, "x".repeat(256));

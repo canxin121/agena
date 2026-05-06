@@ -14,11 +14,16 @@ fn stdio_binary_path() -> Option<PathBuf> {
         .parent()?
         .parent()?
         .to_path_buf();
-    let base = workspace.join("examples/echo_plugin_stdio/target/debug");
-    for name in ["agena-echo-plugin-stdio", "agena-echo-plugin-stdio.exe"] {
-        let candidate = base.join(name);
-        if candidate.exists() {
-            return Some(candidate);
+    let candidates = [
+        workspace.join("target/debug"),
+        workspace.join("examples/echo_plugin_stdio/target/debug"),
+    ];
+    for base in candidates {
+        for name in ["agena-echo-plugin-stdio", "agena-echo-plugin-stdio.exe"] {
+            let candidate = base.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
         }
     }
     None

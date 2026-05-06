@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agena_scheduler::{
-    InMemoryJobStore, JobSink, ScheduledJob, Scheduler, scheduler::build_in_memory,
+    InMemoryJobStore, JobDeliveryResult, JobSink, ScheduledJob, Scheduler,
+    scheduler::build_in_memory,
 };
 use parking_lot::Mutex;
 
@@ -13,8 +14,9 @@ struct CountingSink {
 
 #[async_trait::async_trait]
 impl JobSink for CountingSink {
-    async fn deliver(&self, job: &ScheduledJob) {
+    async fn deliver(&self, job: &ScheduledJob) -> JobDeliveryResult {
         self.fires.lock().push(job.prompt.clone());
+        JobDeliveryResult::submitted(None)
     }
 }
 

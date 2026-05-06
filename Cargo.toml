@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
     "apps/agena-cli",
-    "apps/agena-http-api-server",
     "apps/agena-studio-server",
     "apps/agena-tui",
     "crates/agena-app-server",
@@ -11,7 +10,6 @@ members = [
     "crates/agena-api",
     "crates/agena-api-server",
     "crates/agena-client",
-    "crates/agena-http-api",
     "crates/agena-keyring-store",
     "crates/agena-lsp",
     "crates/agena-otel",

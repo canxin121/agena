@@ -19,6 +19,17 @@ pub trait KindMatcher {
     fn tag(&self) -> EventKindTag;
 }
 
+/// Extends [`KindMatcher`] with a per-variant policy for whether the event
+/// should be persisted in the durable event log. UI-only events (streaming
+/// deltas, run lifecycle signals) return `false`; durable history events
+/// (`UserMessageAppended`, `ToolCallCompleted`, …) return `true`.
+///
+/// Only the [`crate::event::publisher::EventPublisher`] consults this; the
+/// store itself does not filter, so we keep one source of truth.
+pub trait KindPersistence: KindMatcher {
+    fn is_persistent(&self) -> bool;
+}
+
 /// Subscription scope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]

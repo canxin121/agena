@@ -4,7 +4,7 @@
 //! the wire protocol and must not be renamed without a versioning ceremony
 //! (see [`ALL_KINDS`]).
 
-use crate::event::filter::{EventKindTag, KindMatcher};
+use crate::event::filter::{EventKindTag, KindMatcher, KindPersistence};
 use serde::{Deserialize, Serialize};
 
 use crate::event::client::{
@@ -98,6 +98,12 @@ impl EventKind {
 impl KindMatcher for EventKind {
     fn tag(&self) -> EventKindTag {
         EventKindTag::from(self.tag_str())
+    }
+}
+
+impl KindPersistence for EventKind {
+    fn is_persistent(&self) -> bool {
+        EventKind::is_persistent(self)
     }
 }
 

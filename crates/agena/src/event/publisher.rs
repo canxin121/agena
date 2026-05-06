@@ -7,7 +7,7 @@ use crate::event::bus::EventBus;
 use crate::event::envelope::{DomainEvent, ENVELOPE_SCHEMA_VERSION, EventMeta};
 use crate::event::error::{EventStoreError, PublishError};
 use crate::event::event_store::EventStore;
-use crate::event::filter::KindMatcher;
+use crate::event::filter::KindPersistence;
 use crate::event::sequence::SequenceAllocator;
 
 /// Optional routing context attached to a publish call. The publisher fills
@@ -36,7 +36,7 @@ impl PublishContext {
 /// directly.
 pub struct EventPublisher<K>
 where
-    K: KindMatcher + Send + Sync + Clone + 'static,
+    K: KindPersistence + Send + Sync + Clone + 'static,
 {
     seq: Arc<SequenceAllocator>,
     store: Arc<dyn EventStore<K>>,
@@ -45,7 +45,7 @@ where
 
 impl<K> EventPublisher<K>
 where
-    K: KindMatcher + Send + Sync + Clone + 'static,
+    K: KindPersistence + Send + Sync + Clone + 'static,
 {
     pub fn new(
         seq: Arc<SequenceAllocator>,
@@ -100,14 +100,17 @@ where
         &self,
         event: DomainEvent<K>,
     ) -> Result<DomainEvent<K>, PublishError> {
-        self.store
-            .append_batch(std::slice::from_ref(&event))
-            .await?;
+        if event.kind.is_persistent() {
+            self.store
+                .append_batch(std::slice::from_ref(&event))
+                .await?;
+        }
         self.bus.publish(event.clone()).await?;
         Ok(event)
     }
 
     /// Persist + broadcast a batch atomically (with respect to the store).
+    /// Non-persistent kinds are forwarded to the bus only.
     pub async fn publish_batch(
         &self,
         events: Vec<DomainEvent<K>>,
@@ -115,7 +118,14 @@ where
         if events.is_empty() {
             return Ok(events);
         }
-        self.store.append_batch(&events).await?;
+        let persistent: Vec<DomainEvent<K>> = events
+            .iter()
+            .filter(|e| e.kind.is_persistent())
+            .cloned()
+            .collect();
+        if !persistent.is_empty() {
+            self.store.append_batch(&persistent).await?;
+        }
         for event in &events {
             self.bus.publish(event.clone()).await?;
         }
@@ -134,7 +144,7 @@ where
 
 impl<K> Clone for EventPublisher<K>
 where
-    K: KindMatcher + Send + Sync + Clone + 'static,
+    K: KindPersistence + Send + Sync + Clone + 'static,
 {
     fn clone(&self) -> Self {
         Self {

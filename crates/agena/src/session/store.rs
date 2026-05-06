@@ -776,9 +776,9 @@ mod tests {
     fn test_publisher(db: &sea_orm::DatabaseConnection) -> std::sync::Arc<EventPublisher> {
         use crate::event::{EventBus, EventStore, InProcessEventBus, SequenceAllocator};
         let store_dyn: std::sync::Arc<dyn EventStore<crate::event::EventKind>> =
-            std::sync::Arc::new(crate::db::HistoryEventStore::new(std::sync::Arc::new(
-                db.clone(),
-            )));
+            std::sync::Arc::new(crate::db::SeaEventStore::<crate::event::EventKind>::new(
+                std::sync::Arc::new(db.clone()),
+            ));
         let bus: std::sync::Arc<dyn EventBus<crate::event::EventKind>> =
             std::sync::Arc::new(InProcessEventBus::<crate::event::EventKind>::new(64));
         let seq = std::sync::Arc::new(SequenceAllocator::new());

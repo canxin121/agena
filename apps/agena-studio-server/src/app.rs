@@ -3,7 +3,6 @@ use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 use agena::runtime::AgenaRuntime;
 use agena::storage::StorageConfig;
 use agena_api_server::AppState as ApiV2State;
-use agena_http_api::ApiState;
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Json, Router,
@@ -212,13 +211,9 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         )
         .with_state(shared_state.clone());
 
-    let agena_api = agena_http_api::router(ApiState::new(runtime.clone(), db.clone())).layer(
+    let agena_api = agena_api_server::router(ApiV2State::new(runtime.clone(), db.clone())).layer(
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
-    let agena_api_v2 =
-        agena_api_server::transport_router(ApiV2State::new(runtime.clone(), db.clone())).layer(
-            middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
-        );
 
     let ui_dir_path = args.ui_dir.as_ref().map(PathBuf::from);
     let (has_ui, asset_files, static_files) = match &ui_dir_path {
@@ -241,10 +236,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         }
     };
 
-    let mut app = public_router
-        .merge(agena_api)
-        .merge(agena_api_v2)
-        .layer(TraceLayer::new_for_http());
+    let mut app = public_router.merge(agena_api).layer(TraceLayer::new_for_http());
 
     if let Some(cors) = build_cors_layer(&normalized_cors_origins, args.cors_allow_all) {
         if args.cors_allow_all {

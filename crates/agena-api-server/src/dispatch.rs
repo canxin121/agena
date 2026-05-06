@@ -18,7 +18,8 @@ use agena_api::{
         CancelTurnParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
         DeleteWorkspaceParams, ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        SubmitTurnParams, UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        RewindSessionParams, SubmitTurnParams, UpdateSessionParams, UpdateWorkspaceParams,
+        UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
@@ -59,21 +60,6 @@ fn run_options_to_core(options: &RunOptions) -> SessionRunOptions {
         system: options.system.clone(),
         temperature: options.temperature,
         max_output_tokens: options.max_output_tokens,
-    }
-}
-
-fn session_to_resource(session: &agena::session::Session) -> SessionResource {
-    SessionResource {
-        id: session.id,
-        parent_id: session.parent_id,
-        workspace_id: session.workspace_id,
-        title: session.title.clone(),
-        version: session.version,
-        created_at: session.created_at,
-        updated_at: session.updated_at,
-        message_count: session.messages.len() as u64,
-        child_session_count: 0,
-        last_message_at: session.messages.last().map(|m| m.created_at),
     }
 }
 
@@ -460,7 +446,12 @@ pub async fn dispatch_command(
                 parts,
             };
             let session = manager.submit_user_turn(request).await?;
-            Ok(CommandResult::Session(session_to_resource(&session)))
+            let resource = state
+                .service()
+                .session_execution_resource(manager.as_ref(), &session)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::Execution(session_execution_from_http(resource)))
         }
         Command::ContinueRun(ContinueRunParams {
             session_id,
@@ -471,7 +462,12 @@ pub async fn dispatch_command(
                 options: run_options_to_core(&options),
             };
             let session = manager.continue_session(request).await?;
-            Ok(CommandResult::Session(session_to_resource(&session)))
+            let resource = state
+                .service()
+                .session_execution_resource(manager.as_ref(), &session)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::Execution(session_execution_from_http(resource)))
         }
         Command::CancelTurn(CancelTurnParams { session_id }) => {
             // Best-effort: if the turn just finished moments before the
@@ -481,6 +477,31 @@ pub async fn dispatch_command(
                 Ok(()) => Ok(CommandResult::Ack),
                 Err(_) => Ok(CommandResult::Ack),
             }
+        }
+        Command::RewindSession(RewindSessionParams {
+            session_id,
+            message_id,
+            expected_version,
+        }) => {
+            if let Some(expected_version) = expected_version {
+                state
+                    .service()
+                    .assert_session_version(session_id, expected_version)
+                    .await
+                    .map_err(server_error_from_http)?;
+            }
+            let session = manager
+                .rewind_session(agena::session::SessionRewindRequest {
+                    session_id,
+                    message_id,
+                })
+                .await?;
+            let resource = state
+                .service()
+                .session_execution_resource(manager.as_ref(), &session)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::Execution(session_execution_from_http(resource)))
         }
         Command::ReplyPermission(ReplyPermissionParams {
             session_id,
@@ -493,7 +514,12 @@ pub async fn dispatch_command(
                 reply,
             };
             let session = manager.reply_permission(request).await?;
-            Ok(CommandResult::Session(session_to_resource(&session)))
+            let resource = state
+                .service()
+                .session_execution_resource(manager.as_ref(), &session)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::Execution(session_execution_from_http(resource)))
         }
         Command::ReplyUserInput(ReplyUserInputParams {
             session_id,
@@ -506,7 +532,12 @@ pub async fn dispatch_command(
                 reply,
             };
             let session = manager.reply_user_input(request).await?;
-            Ok(CommandResult::Session(session_to_resource(&session)))
+            let resource = state
+                .service()
+                .session_execution_resource(manager.as_ref(), &session)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::Execution(session_execution_from_http(resource)))
         }
         Command::UpdateSession(UpdateSessionParams {
             session_id,

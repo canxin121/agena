@@ -149,6 +149,7 @@ dependencies = [
  "agena",
  "agena-api",
  "agena-http-api",
+ "async-stream",
  "async-trait",
  "axum 0.8.8",
  "chrono",

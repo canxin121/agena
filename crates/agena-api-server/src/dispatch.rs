@@ -36,7 +36,7 @@ use agena_api::{
         SessionResource, SessionRunState, WorkspaceResource,
     },
 };
-use agena_http_api::{
+use crate::local_api::{
     PermissionRuleListQuery, PermissionRuleResource as HttpPermissionRuleResource,
     PermissionRuleWriteRequest, SessionAutomationResource as HttpSessionAutomationResource,
     SessionCreateRequest as HttpSessionCreateRequest,
@@ -63,8 +63,8 @@ fn run_options_to_core(options: &RunOptions) -> SessionRunOptions {
     }
 }
 
-fn server_error_from_http(_error: agena_http_api::ApiError) -> ServerError {
-    ServerError::Internal("legacy http api call failed".into())
+fn server_error_from_http(_error: crate::local_api::ApiError) -> ServerError {
+    ServerError::Internal("internal API call failed".into())
 }
 
 fn workspace_from_http(value: HttpWorkspaceResource) -> WorkspaceResource {
@@ -100,7 +100,7 @@ fn session_automation_from_http(value: HttpSessionAutomationResource) -> Session
 }
 
 fn scheduled_job_from_http(
-    value: agena_http_api::ScheduledJobResource,
+    value: crate::local_api::ScheduledJobResource,
 ) -> agena_api::resource::ScheduledJobResource {
     agena_api::resource::ScheduledJobResource {
         id: value.id,
@@ -116,7 +116,7 @@ fn scheduled_job_from_http(
 }
 
 fn scheduled_job_run_from_http(
-    value: agena_http_api::ScheduledJobRunResource,
+    value: crate::local_api::ScheduledJobRunResource,
 ) -> agena_api::resource::ScheduledJobRunResource {
     agena_api::resource::ScheduledJobRunResource {
         triggered_at: value.triggered_at,
@@ -147,8 +147,8 @@ fn session_execution_from_http(value: HttpSessionExecutionResource) -> SessionEx
         session: session_from_http(value.session),
         blocked: value.blocked,
         run_state: match value.run_state {
-            agena_http_api::SessionRunState::Idle => SessionRunState::Idle,
-            agena_http_api::SessionRunState::AwaitingModel => SessionRunState::AwaitingModel,
+            crate::local_api::SessionRunState::Idle => SessionRunState::Idle,
+            crate::local_api::SessionRunState::AwaitingModel => SessionRunState::AwaitingModel,
         },
         latest_event_seq: value.latest_event_seq,
         automation: value.automation.map(session_automation_from_http),
@@ -171,7 +171,7 @@ fn permission_rule_from_http(
 }
 
 fn page_from_http<T, U>(
-    value: agena_http_api::PaginatedResponse<T>,
+    value: crate::local_api::PaginatedResponse<T>,
     map: impl Fn(T) -> U,
 ) -> PaginatedResponse<U> {
     PaginatedResponse {
@@ -296,15 +296,15 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     };
 
     let automation = if let Some(manager) = snapshot.session_manager() {
-        let mut jobs = agena_http_api::list_scheduled_jobs(&manager).await;
-        agena_http_api::sort_jobs_for_display(&mut jobs);
+        let mut jobs = crate::local_api::list_scheduled_jobs(&manager).await;
+        crate::local_api::sort_jobs_for_display(&mut jobs);
         RuntimeAutomationResource {
             enabled: manager.tool_executor().scheduler().is_some(),
             job_count: jobs.len(),
             recent_jobs: jobs
                 .into_iter()
                 .take(10)
-                .map(agena_http_api::scheduled_job_resource)
+                .map(crate::local_api::scheduled_job_resource)
                 .map(scheduled_job_from_http)
                 .collect(),
         }
@@ -451,7 +451,9 @@ pub async fn dispatch_command(
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
                 .map_err(server_error_from_http)?;
-            Ok(CommandResult::Execution(session_execution_from_http(resource)))
+            Ok(CommandResult::Execution(session_execution_from_http(
+                resource,
+            )))
         }
         Command::ContinueRun(ContinueRunParams {
             session_id,
@@ -467,7 +469,9 @@ pub async fn dispatch_command(
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
                 .map_err(server_error_from_http)?;
-            Ok(CommandResult::Execution(session_execution_from_http(resource)))
+            Ok(CommandResult::Execution(session_execution_from_http(
+                resource,
+            )))
         }
         Command::CancelTurn(CancelTurnParams { session_id }) => {
             // Best-effort: if the turn just finished moments before the
@@ -501,7 +505,9 @@ pub async fn dispatch_command(
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
                 .map_err(server_error_from_http)?;
-            Ok(CommandResult::Execution(session_execution_from_http(resource)))
+            Ok(CommandResult::Execution(session_execution_from_http(
+                resource,
+            )))
         }
         Command::ReplyPermission(ReplyPermissionParams {
             session_id,
@@ -519,7 +525,9 @@ pub async fn dispatch_command(
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
                 .map_err(server_error_from_http)?;
-            Ok(CommandResult::Execution(session_execution_from_http(resource)))
+            Ok(CommandResult::Execution(session_execution_from_http(
+                resource,
+            )))
         }
         Command::ReplyUserInput(ReplyUserInputParams {
             session_id,
@@ -537,7 +545,9 @@ pub async fn dispatch_command(
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
                 .map_err(server_error_from_http)?;
-            Ok(CommandResult::Execution(session_execution_from_http(resource)))
+            Ok(CommandResult::Execution(session_execution_from_http(
+                resource,
+            )))
         }
         Command::UpdateSession(UpdateSessionParams {
             session_id,

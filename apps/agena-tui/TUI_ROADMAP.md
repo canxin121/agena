@@ -105,6 +105,9 @@
 - branch-aware transcript header, status line, and session-pane tags
 - rename/timeline/export discoverability
 - message rewind / backtrack picker with confirmation flow
+- timeline event → transcript message jump
+- unified blocked / awaiting-model / permission / user-input status summary
+- timeline jump discoverability in transcript help/footer/status copy
 
 剩余计划项：
 - none in this phase

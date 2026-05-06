@@ -93,7 +93,7 @@ publisher → store → bus → multi-transport server → SDK + TUI subscriptio
   `Backend::subscribe_session_events` and `AppMessage::SessionEventArrived`.
 - `agena-studio-server` mounts both v1 (`/api/v1/*`) and v2 (`/api/v2/*`)
   routers — Studio UI can adopt v2 incrementally.
-- `agena-http-api-server` likewise serves v1 + v2 from one bind address.
+- `agena-studio-server` 继续作为统一入口承接当前对外 HTTP surface。
 
 **Still on v1 only** (no v2 ports yet): auth flows, runtime status, provider
 listing, workspace/permission-rule CRUD, message-part details. The

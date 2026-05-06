@@ -40,20 +40,10 @@ impl AgenaClient {
             .expect("valid endpoint")
     }
 
-    async fn parse_query(&self, response: reqwest::Response) -> Result<QueryResult, ClientError> {
-        let status = response.status();
-        let value: serde_json::Value = response.json().await?;
-        if !status.is_success() {
-            let api: agena_api::error::ApiError = serde_json::from_value(value)?;
-            return Err(ClientError::Api(api));
-        }
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn parse_command(
+    async fn parse_json<T: serde::de::DeserializeOwned>(
         &self,
         response: reqwest::Response,
-    ) -> Result<CommandResult, ClientError> {
+    ) -> Result<T, ClientError> {
         let status = response.status();
         let value: serde_json::Value = response.json().await?;
         if !status.is_success() {
@@ -71,12 +61,7 @@ impl AgenaClient {
             .get(self.endpoint("/api/v1/health"))
             .send()
             .await?;
-        match self.parse_query(response).await? {
-            QueryResult::Health(h) => Ok(h),
-            other => Err(ClientError::Protocol(format!(
-                "expected Health, got {other:?}"
-            ))),
-        }
+        self.parse_json(response).await
     }
 
     pub async fn create_session(
@@ -96,12 +81,7 @@ impl AgenaClient {
             .json(&body)
             .send()
             .await?;
-        match self.parse_command(response).await? {
-            CommandResult::Session(s) => Ok(s),
-            other => Err(ClientError::Protocol(format!(
-                "expected Session result, got {other:?}"
-            ))),
-        }
+        self.parse_json(response).await
     }
 
     pub async fn submit_turn(
@@ -118,12 +98,7 @@ impl AgenaClient {
             .json(&body)
             .send()
             .await?;
-        match self.parse_command(response).await? {
-            CommandResult::Session(s) => Ok(s),
-            other => Err(ClientError::Protocol(format!(
-                "expected Session, got {other:?}"
-            ))),
-        }
+        self.parse_json(response).await
     }
 
     pub async fn continue_run(
@@ -142,12 +117,7 @@ impl AgenaClient {
             session_id,
             options,
         };
-        match self.parse_command(response).await? {
-            CommandResult::Session(s) => Ok(s),
-            other => Err(ClientError::Protocol(format!(
-                "expected Session, got {other:?}"
-            ))),
-        }
+        self.parse_json(response).await
     }
 
     pub async fn cancel_turn(&self, session_id: i64) -> Result<(), ClientError> {
@@ -156,7 +126,7 @@ impl AgenaClient {
             .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/cancel")))
             .send()
             .await?;
-        let _ = self.parse_command(response).await?;
+        let _: serde_json::Value = self.parse_json(response).await?;
         Ok(())
     }
 
@@ -177,12 +147,7 @@ impl AgenaClient {
             .json(&body)
             .send()
             .await?;
-        match self.parse_command(response).await? {
-            CommandResult::Session(s) => Ok(s),
-            other => Err(ClientError::Protocol(format!(
-                "expected Session, got {other:?}"
-            ))),
-        }
+        self.parse_json(response).await
     }
 
     pub async fn reply_user_input(
@@ -202,12 +167,7 @@ impl AgenaClient {
             .json(&body)
             .send()
             .await?;
-        match self.parse_command(response).await? {
-            CommandResult::Session(s) => Ok(s),
-            other => Err(ClientError::Protocol(format!(
-                "expected Session, got {other:?}"
-            ))),
-        }
+        self.parse_json(response).await
     }
 
     pub async fn list_events(
@@ -246,12 +206,7 @@ impl AgenaClient {
             }
         }
         let response = self.http.get(url).send().await?;
-        match self.parse_query(response).await? {
-            QueryResult::Events(p) => Ok(p),
-            other => Err(ClientError::Protocol(format!(
-                "expected Events, got {other:?}"
-            ))),
-        }
+        self.parse_json(response).await
     }
 
     /// Escape hatch: run any [`Command`] over REST. Falls back to

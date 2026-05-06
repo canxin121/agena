@@ -14,8 +14,8 @@
 其中关键入口如下：
 
 - CLI app：`apps/agena-cli`
-- HTTP API app：`apps/agena-http-api-server`
-- HTTP API crate：`crates/agena-http-api`
+- Unified v1 API server app：`apps/agena-studio-server`
+- Unified v1 API server crate：`crates/agena-api-server`
 - Studio server app：`apps/agena-studio-server`
 - Studio desktop app：`apps/agena-studio-desktop`
 - Studio web package：`packages/agena-studio-web`
@@ -49,22 +49,19 @@ cargo check --workspace --locked
 ./ops/agena-studio/desktop/build-full.ps1
 ```
 
-## HTTP API（新增）
+## Unified v1 API
 
-HTTP 后端现在已经拆成两层：
+HTTP / SSE / WS 入口现在统一收敛到：
 
-- library crate：`crates/agena-http-api`
-- runnable app：`apps/agena-http-api-server`
+- library crate：`crates/agena-api-server`
+- runnable app：`apps/agena-studio-server`
 
-这样做的目的很直接：
+这样 Web / Studio / TUI 共用同一套统一的 `v1` server surface。
 
-- 纯应用开发只依赖 `agena` 时，不再被动拉入 `axum` / HTTP server 这条依赖链
-- 后端接口层可以独立演进、独立测试、独立部署
-
-启动 HTTP API：
+启动服务：
 
 ```bash
-cargo run -p agena-http-api-server -- serve
+cargo run -p agena-studio-server -- --help
 ```
 
 默认行为：
@@ -75,18 +72,11 @@ cargo run -p agena-http-api-server -- serve
 
 也可显式指定：
 
-```bash
-cargo run -p agena-http-api-server -- serve \
-  --listen 0.0.0.0:8080 \
-  --database-path ./data/agena.db \
-  --workspace-root .
-```
-
 说明：
 
 - `cargo run -- serve` 在 core crate 中已不再真正启动服务，而是给出迁移提示
 - 仓库根目录执行 `cargo test` 默认覆盖 `agena`
-- 执行 `cargo test --workspace` 会同时覆盖 `agena`、`agena-http-api` 和相关 app package
+- 执行 `cargo test --workspace` 会覆盖当前 workspace 内的统一 server / client / app 包
 
 已提供的资源接口：
 

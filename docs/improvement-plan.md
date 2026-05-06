@@ -207,7 +207,7 @@
 - 目标：避免 resume 只是 API 存在但实际不可用。
 - 主要文件：
   - `crates/agena/src/session/`
-  - `crates/agena-http-api/`
+  - `crates/agena-api-server/`
 - 验收标准：
   - 启动 turn → 中断 → 重启 manager → continue。
   - blocked permission → 重启 → permission reply。
@@ -315,7 +315,7 @@
 - 目标：提供 stdio / websocket / unix socket 传输。
 - 主要文件：
   - 新 crate：`crates/agena-app-server/`
-  - `apps/agena-http-api-server/` 或新 app
+  - `apps/agena-studio-server/` 或独立 app-server 入口
 - 验收标准：
   - stdio JSON-RPC smoke test。
   - websocket 可订阅 session events。
@@ -514,7 +514,7 @@
 - 目标：Web/Studio 中可处理权限请求。
 - 主要文件：
   - `packages/agena-studio-web/`
-  - `crates/agena-http-api/`
+  - `crates/agena-api-server/`
 - 验收标准：
   - blocked session 可在 Web 中恢复。
 - 建议提交信息：
@@ -535,7 +535,7 @@
 - 目标：Studio 中浏览 workspace 文件与模型修改。
 - 主要文件：
   - `packages/agena-studio-web/`
-  - `crates/agena-http-api/`
+  - `crates/agena-api-server/`
 - 验收标准：
   - 可查看文件树。
   - 可查看 tool 修改 diff。

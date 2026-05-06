@@ -1,5 +1,5 @@
-//! REST resource projections. Lifted from `agena-http-api::dto` and
-//! reorganised by domain so external clients can `use agena_api::resource::*`.
+//! REST resource projections for the unified API surface, reorganised by
+//! domain so external clients can `use agena_api::resource::*`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

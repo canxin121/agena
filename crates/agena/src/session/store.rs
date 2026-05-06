@@ -303,6 +303,18 @@ impl SessionStore {
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
         let events = self.history.list_session_events(source.id).await?;
+        if events.is_empty() {
+            if at_event_seq != 0 {
+                return Err(AppError::Internal(format!(
+                    "event seq not found for session {}: {}",
+                    source.id, at_event_seq
+                )));
+            }
+            return self
+                .create_session(title, Some(source.id), cache_policy)
+                .await;
+        }
+
         if !events
             .iter()
             .any(|event| event.meta.seq_global == at_event_seq)

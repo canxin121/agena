@@ -15,22 +15,29 @@ use agena::{
         EnterWorktreeToolInput, ExitWorktreeToolInput, PartContent, UserInputReply,
     },
     model::ModelRef,
-    permission::{PermissionMode, PermissionReply, PermissionReplyKind},
+    permission::{PermissionMode, PermissionReplyKind},
     provider::ProviderModel,
     runtime::AgenaRuntime,
-    session::{
-        SessionContinueRequest, SessionPermissionReplyRequest, SessionRewindRequest,
-        SessionUserInputReplyRequest, SessionUserTurnRequest,
-    },
     tool,
 };
-use agena_http_api::{
-    ApiError, ApiService, GitStatusResource, MessageListQuery, MessageResource, PaginatedResponse,
-    PartLoadMode, PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
-    ProviderSummaryResource, SessionCreateRequest, SessionEventListQuery, SessionExecutionResource,
-    SessionListQuery, SessionReplaceRequest, SessionResource, SessionRunOptionsRequest,
-    WorkspaceResolveRequest,
+use agena_api::{
+    commands::{
+        Command as ApiCommand, CommandResult, ContinueRunParams, CreateSessionParams,
+        DeletePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
+        RewindSessionParams, SubmitTurnParams, UpdateSessionParams, UpsertPermissionRuleParams,
+    },
+    pagination::PaginatedResponse,
+    queries::{
+        GetPermissionRuleParams, GetSessionParams, ListMessagesParams, ListPermissionRulesParams,
+        ListSessionsParams, Query, QueryResult,
+    },
+    resource::{
+        MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
+        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
+        WorkspaceResource,
+    },
 };
+use agena_api_server::{dispatch, state::AppState};
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ignore::WalkBuilder;
@@ -46,6 +53,25 @@ pub struct SessionRefresh {
     pub event_count: usize,
     pub execution: Option<SessionExecutionResource>,
     pub latest_messages: Option<PaginatedResponse<MessageResource>>,
+}
+
+#[derive(Debug, Clone)]
+struct GitStatusResource {
+    workspace_root: String,
+    git_available: bool,
+    repo: bool,
+    gh_available: bool,
+    branch: Option<String>,
+    upstream: Option<String>,
+    ahead: Option<u64>,
+    behind: Option<u64>,
+    staged_files: u64,
+    unstaged_files: u64,
+    untracked_files: u64,
+    changed_files: u64,
+    clean: bool,
+    worktree_active_sessions: u64,
+    worktree_managed_dirs: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +92,7 @@ pub struct LiveEvent {
 #[derive(Clone)]
 pub struct Backend {
     runtime: AgenaRuntime,
-    api: ApiService,
+    app_state: AppState,
     workspace_root: PathBuf,
     file_index: Arc<OnceLock<Vec<PathBuf>>>,
 }
@@ -78,8 +104,8 @@ impl Backend {
         workspace_root: PathBuf,
     ) -> Self {
         Self {
+            app_state: AppState::new(runtime.clone(), db),
             runtime,
-            api: ApiService::new(db),
             workspace_root,
             file_index: Arc::new(OnceLock::new()),
         }
@@ -87,7 +113,7 @@ impl Backend {
 
     pub async fn list_workspace_sessions(&self, roots_only: bool) -> Result<Vec<SessionResource>> {
         let workspace_id = self.current_workspace_id().await?;
-        self.list_sessions_query(SessionListQuery {
+        self.list_sessions_query(ListSessionsParams {
             cursor: None,
             limit: Some(200),
             workspace_id: Some(workspace_id),
@@ -105,24 +131,25 @@ impl Backend {
         parent_id: Option<i64>,
     ) -> Result<SessionResource> {
         let workspace = self
-            .api
-            .resolve_workspace(WorkspaceResolveRequest {
-                path: self.workspace_root.to_string_lossy().to_string(),
-                create_if_missing: true,
-            })
+            .resolve_workspace_resource(true)
             .await
-            .map_err(api_error)
             .context("failed to resolve workspace for agena-tui")?;
 
-        self.api
-            .create_session(SessionCreateRequest {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::CreateSession(CreateSessionParams {
                 workspace_id: workspace.id,
                 title,
                 parent_id,
-            })
-            .await
-            .map_err(api_error)
-            .context("failed to create session")
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Session(session) => Ok(session),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to create session")
     }
 
     pub async fn rename_session(&self, session_id: i64, title: String) -> Result<SessionResource> {
@@ -132,17 +159,22 @@ impl Backend {
             .context("failed to load session before rename")?
             .ok_or_else(|| anyhow!("session not found: {session_id}"))?;
 
-        self.api
-            .replace_session(
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::UpdateSession(UpdateSessionParams {
                 session_id,
-                SessionReplaceRequest {
-                    title,
-                    parent_id: existing.parent_id,
-                },
-            )
-            .await
-            .map_err(api_error)
-            .context("failed to rename session")
+                title,
+                parent_id: existing.parent_id,
+                expected_version: Some(existing.version),
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Session(session) => Ok(session),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to rename session")
     }
 
     pub fn list_providers(&self) -> Vec<ProviderSummaryResource> {
@@ -175,7 +207,7 @@ impl Backend {
 
     pub async fn list_child_sessions(&self, parent_id: i64) -> Result<Vec<SessionResource>> {
         let workspace_id = self.current_workspace_id().await?;
-        self.list_sessions_query(SessionListQuery {
+        self.list_sessions_query(ListSessionsParams {
             cursor: None,
             limit: Some(200),
             workspace_id: Some(workspace_id),
@@ -188,11 +220,20 @@ impl Backend {
     }
 
     pub async fn get_session(&self, session_id: i64) -> Result<Option<SessionResource>> {
-        self.api
-            .get_session(session_id)
-            .await
-            .map_err(api_error)
-            .context("failed to fetch session")
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::GetSession(GetSessionParams { session_id }),
+        )
+        .await
+        {
+            Ok(QueryResult::Session(session)) => Ok(Some(session)),
+            Ok(other) => Err(anyhow!("unexpected query result: {:?}", other))
+                .context("failed to fetch session"),
+            Err(error) if matches!(error, agena_api_server::error::ServerError::NotFound(_)) => {
+                Ok(None)
+            }
+            Err(error) => Err(api_error(error).context("failed to fetch session")),
+        }
     }
 
     pub async fn list_session_subtree(&self, session_id: i64) -> Result<Vec<SessionResource>> {
@@ -203,7 +244,7 @@ impl Backend {
 
         while let Some(parent_id) = stack.pop() {
             let children = self
-                .list_sessions_query(SessionListQuery {
+                .list_sessions_query(ListSessionsParams {
                     cursor: None,
                     limit: Some(200),
                     workspace_id: Some(root.workspace_id),
@@ -232,43 +273,25 @@ impl Backend {
         limit: u64,
     ) -> Result<Vec<DomainEvent>> {
         let manager = self.session_manager()?;
-        self.api
-            .list_session_events(
-                manager.as_ref(),
-                session_id,
-                SessionEventListQuery {
-                    cursor: None,
-                    limit: Some(limit),
-                },
-            )
+        let mut all = manager
+            .list_session_events(session_id)
             .await
-            .map_err(api_error)
-            .map(|page| page.items)
-            .context("failed to list session events")
+            .context("failed to list session events")?;
+        all.sort_by(|a, b| a.meta.seq_global.cmp(&b.meta.seq_global));
+        if all.len() > limit as usize {
+            all = all.split_off(all.len() - limit as usize);
+        }
+        Ok(all)
     }
 
     pub async fn list_all_messages(&self, session_id: i64) -> Result<Vec<MessageResource>> {
         let mut cursor = None;
         let mut messages = Vec::new();
 
-        let manager = self
-            .runtime
-            .session_manager()
-            .ok_or_else(|| anyhow::anyhow!("session runtime is not available"))?;
         loop {
             let page = self
-                .api
-                .list_messages(
-                    manager.as_ref(),
-                    session_id,
-                    MessageListQuery {
-                        cursor: cursor.clone(),
-                        limit: Some(200),
-                        parts: PartLoadMode::Full,
-                    },
-                )
+                .list_messages(session_id, cursor.clone(), 200)
                 .await
-                .map_err(api_error)
                 .context("failed to list full session message history")?;
             cursor = page.page.next_cursor.clone();
             messages.extend(page.items);
@@ -286,16 +309,17 @@ impl Backend {
     }
 
     pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource> {
-        let session = self
-            .session_manager()?
-            .get_session(session_id)
-            .await
-            .context("failed to load session state")?;
-        self.api
-            .session_execution_resource(self.session_manager()?.as_ref(), &session)
-            .await
-            .map_err(api_error)
-            .context("failed to materialize session execution resource")
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::GetSessionState(GetSessionParams { session_id }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::SessionState(state) => Ok(state),
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to load session state")
     }
 
     pub async fn list_messages(
@@ -304,23 +328,22 @@ impl Backend {
         cursor: Option<String>,
         limit: u64,
     ) -> Result<PaginatedResponse<MessageResource>> {
-        let manager = self
-            .runtime
-            .session_manager()
-            .ok_or_else(|| anyhow::anyhow!("session runtime is not available"))?;
-        self.api
-            .list_messages(
-                manager.as_ref(),
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::ListMessages(ListMessagesParams {
                 session_id,
-                MessageListQuery {
-                    cursor,
-                    limit: Some(limit),
-                    parts: PartLoadMode::Full,
-                },
-            )
-            .await
-            .map_err(api_error)
-            .context("failed to list session messages")
+                cursor,
+                limit: Some(limit),
+                parts: PartLoadMode::Full,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::Messages(page) => Ok(page),
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to list session messages")
     }
 
     pub async fn refresh_session(
@@ -331,12 +354,11 @@ impl Backend {
         force: bool,
     ) -> Result<SessionRefresh> {
         let manager = self.session_manager()?;
-        let latest_event_seq = self
-            .api
-            .latest_session_event_seq(manager.as_ref(), session_id)
+        let all_events = manager
+            .list_session_events(session_id)
             .await
-            .map_err(api_error)
             .context("failed to fetch latest session event sequence")?;
+        let latest_event_seq = all_events.iter().map(|event| event.meta.seq_global).max();
         let changed = force
             || match (after_seq, latest_event_seq) {
                 (None, Some(_)) => true,
@@ -354,13 +376,11 @@ impl Backend {
         }
 
         let event_count = match after_seq {
-            Some(after) => self
-                .api
-                .list_session_events_after(manager.as_ref(), session_id, after, Some(256))
-                .await
-                .map_err(api_error)
-                .context("failed to fetch incremental session events")?
-                .len(),
+            Some(after) => all_events
+                .iter()
+                .filter(|event| event.meta.seq_global > after)
+                .take(256)
+                .count(),
             None => 0,
         };
 
@@ -424,24 +444,23 @@ impl Backend {
         &self,
         session_id: i64,
         parts: Vec<PartContent>,
-        request: SessionRunOptionsRequest,
+        request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        let options = self.resolve_run_options(session_id, request).await?;
-        let session = self
-            .session_manager()?
-            .submit_user_turn(SessionUserTurnRequest {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::SubmitTurn(SubmitTurnParams {
                 session_id,
-                options,
+                options: request,
                 parts,
-            })
-            .await
-            .context("failed to submit user turn")?;
-
-        self.api
-            .session_execution_resource(self.session_manager()?.as_ref(), &session)
-            .await
-            .map_err(api_error)
-            .context("failed to materialize updated session state")
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to submit user turn")
     }
 
     pub fn prepare_attachment_from_path(&self, path: &Path) -> Result<AttachmentItem> {
@@ -581,23 +600,22 @@ impl Backend {
     pub async fn continue_session_with_options(
         &self,
         session_id: i64,
-        request: SessionRunOptionsRequest,
+        request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        let options = self.resolve_run_options(session_id, request).await?;
-        let session = self
-            .session_manager()?
-            .continue_session(SessionContinueRequest {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ContinueRun(ContinueRunParams {
                 session_id,
-                options,
-            })
-            .await
-            .context("failed to continue session")?;
-
-        self.api
-            .session_execution_resource(self.session_manager()?.as_ref(), &session)
-            .await
-            .map_err(api_error)
-            .context("failed to materialize continued session state")
+                options: request,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to continue session")
     }
 
     /// Best-effort cancel of the in-flight turn for `session_id`. Forwards
@@ -626,53 +644,51 @@ impl Backend {
         session_id: i64,
         request_id: String,
         kind: PermissionReplyKind,
-        request: SessionRunOptionsRequest,
+        request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        let options = self.resolve_run_options(session_id, request).await?;
-        let session = self
-            .session_manager()?
-            .reply_permission(SessionPermissionReplyRequest {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ReplyPermission(ReplyPermissionParams {
                 session_id,
-                options,
+                options: request,
                 reply: PermissionReply {
                     request_id,
                     kind,
                     reason: None,
                     scope: None,
                 },
-            })
-            .await
-            .context("failed to reply to permission request")?;
-
-        self.api
-            .session_execution_resource(self.session_manager()?.as_ref(), &session)
-            .await
-            .map_err(api_error)
-            .context("failed to materialize permission reply result")
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to reply to permission request")
     }
 
     pub async fn reply_user_input_with_options(
         &self,
         session_id: i64,
         reply: UserInputReply,
-        request: SessionRunOptionsRequest,
+        request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        let options = self.resolve_run_options(session_id, request).await?;
-        let session = self
-            .session_manager()?
-            .reply_user_input(SessionUserInputReplyRequest {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ReplyUserInput(ReplyUserInputParams {
                 session_id,
-                options,
+                options: request,
                 reply,
-            })
-            .await
-            .context("failed to submit user input reply")?;
-
-        self.api
-            .session_execution_resource(self.session_manager()?.as_ref(), &session)
-            .await
-            .map_err(api_error)
-            .context("failed to materialize user input reply result")
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to submit user input reply")
     }
 
     pub async fn rewind_session_to_message(
@@ -680,42 +696,26 @@ impl Backend {
         session_id: i64,
         message_id: i64,
     ) -> Result<SessionExecutionResource> {
-        let session = self
-            .session_manager()?
-            .rewind_session(SessionRewindRequest {
+        let expected_version = self
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| anyhow!("session not found: {session_id}"))?
+            .version;
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::RewindSession(RewindSessionParams {
                 session_id,
                 message_id,
-            })
-            .await
-            .context("failed to rewind session to message")?;
-
-        self.api
-            .session_execution_resource(self.session_manager()?.as_ref(), &session)
-            .await
-            .map_err(api_error)
-            .context("failed to materialize rewound session state")
-    }
-
-    async fn resolve_run_options(
-        &self,
-        session_id: i64,
-        request: SessionRunOptionsRequest,
-    ) -> Result<agena::session::SessionRunOptions> {
-        let snapshot = self.runtime.current_snapshot();
-        let manager = self
-            .runtime
-            .session_manager()
-            .ok_or_else(|| anyhow::anyhow!("session runtime is not available"))?;
-        self.api
-            .resolve_run_options(
-                snapshot.provider_registry().as_ref(),
-                manager.as_ref(),
-                session_id,
-                request,
-            )
-            .await
-            .map_err(api_error)
-            .context("failed to resolve run options")
+                expected_version: Some(expected_version),
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to rewind session to message")
     }
 
     pub fn plugin_statusline_segments(&self) -> Vec<agena::plugin::HostStatuslineSegment> {
@@ -935,19 +935,25 @@ impl Backend {
     }
 
     pub async fn list_permission_rules(&self) -> Result<Vec<PermissionRuleResource>> {
-        let page = self
-            .api
-            .list_permission_rules(PermissionRuleListQuery {
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::ListPermissionRules(ListPermissionRulesParams {
                 cursor: None,
                 limit: Some(200),
                 search: None,
-            })
-            .await
-            .map_err(api_error)
-            .context("failed to list permission rules")?;
-        let mut rules = page.items;
-        rules.sort_by(|left, right| left.action_key.cmp(&right.action_key));
-        Ok(rules)
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::PermissionRules(page) => {
+                let mut rules = page.items;
+                rules.sort_by(|left, right| left.action_key.cmp(&right.action_key));
+                Ok(rules)
+            }
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to list permission rules")
     }
 
     pub async fn create_permission_rule(
@@ -955,11 +961,17 @@ impl Backend {
         action_key: String,
         mode: PermissionMode,
     ) -> Result<PermissionRuleResource> {
-        self.api
-            .create_permission_rule(PermissionRuleWriteRequest { action_key, mode })
-            .await
-            .map_err(api_error)
-            .context("failed to create permission rule")
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::UpsertPermissionRule(UpsertPermissionRuleParams { action_key, mode }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::PermissionRule(rule) => Ok(rule),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to create permission rule")
     }
 
     pub async fn replace_permission_rule(
@@ -968,19 +980,42 @@ impl Backend {
         action_key: String,
         mode: PermissionMode,
     ) -> Result<PermissionRuleResource> {
-        self.api
-            .replace_permission_rule(rule_id, PermissionRuleWriteRequest { action_key, mode })
-            .await
-            .map_err(api_error)
-            .context("failed to replace permission rule")
+        let _ = rule_id;
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::UpsertPermissionRule(UpsertPermissionRuleParams { action_key, mode }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::PermissionRule(rule) => Ok(rule),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to replace permission rule")
     }
 
     pub async fn delete_permission_rule(&self, rule_id: i64) -> Result<PermissionRuleResource> {
-        self.api
-            .delete_permission_rule(rule_id)
-            .await
-            .map_err(api_error)
-            .context("failed to delete permission rule")
+        let existing = match dispatch::dispatch_query(
+            &self.app_state,
+            Query::GetPermissionRule(GetPermissionRuleParams { rule_id }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::PermissionRule(rule) => rule,
+            other => return Err(anyhow!("unexpected query result: {:?}", other)),
+        };
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::DeletePermissionRule(DeletePermissionRuleParams { rule_id }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::PermissionRuleDeleted { .. } => Ok(existing),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to delete permission rule")
     }
 
     pub fn config_inspector_rows(&self) -> Vec<InspectorRow> {
@@ -1089,12 +1124,7 @@ impl Backend {
     }
 
     pub async fn git_inspector_rows(&self) -> Result<Vec<InspectorRow>> {
-        let status = self
-            .api
-            .git_status(&self.runtime)
-            .await
-            .map_err(api_error)
-            .context("failed to load git status")?;
+        let status = self.git_status().await.context("failed to load git status")?;
         Ok(git_status_inspector_rows(status))
     }
 
@@ -1134,12 +1164,7 @@ impl Backend {
     }
 
     pub async fn create_commit(&self, message: String) -> Result<(String, String)> {
-        let status = self
-            .api
-            .git_status(&self.runtime)
-            .await
-            .map_err(api_error)
-            .context("failed to load git status")?;
+        let status = self.git_status().await.context("failed to load git status")?;
         if !status.git_available {
             return Err(anyhow!("git is not available in PATH"));
         }
@@ -1177,12 +1202,7 @@ impl Backend {
         base: Option<String>,
         head: Option<String>,
     ) -> Result<String> {
-        let status = self
-            .api
-            .git_status(&self.runtime)
-            .await
-            .map_err(api_error)
-            .context("failed to load git status")?;
+        let status = self.git_status().await.context("failed to load git status")?;
         if !status.git_available {
             return Err(anyhow!("git is not available in PATH"));
         }
@@ -1220,6 +1240,136 @@ impl Backend {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    async fn resolve_workspace_resource(&self, create_if_missing: bool) -> Result<WorkspaceResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ResolveWorkspace(agena_api::commands::ResolveWorkspaceParams {
+                path: self.workspace_root.to_string_lossy().to_string(),
+                create_if_missing,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Workspace(workspace) => Ok(workspace),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to resolve workspace")
+    }
+
+    async fn git_status(&self) -> Result<GitStatusResource> {
+        let workspace_root = self.runtime.workspace_root().to_path_buf();
+        let git_available = command_available("git");
+        let gh_available = command_available("gh");
+
+        let Some(manager) = self.runtime.session_manager() else {
+            return Ok(GitStatusResource {
+                workspace_root: workspace_root.display().to_string(),
+                git_available,
+                repo: false,
+                gh_available,
+                branch: None,
+                upstream: None,
+                ahead: None,
+                behind: None,
+                staged_files: 0,
+                unstaged_files: 0,
+                untracked_files: 0,
+                changed_files: 0,
+                clean: true,
+                worktree_active_sessions: 0,
+                worktree_managed_dirs: 0,
+            });
+        };
+
+        let executor = manager.tool_executor();
+        let (worktree_active_sessions, worktree_managed_dirs) = match executor.worktree_registry() {
+            Some(registry) => (
+                tool::worktree_list_active(registry).len() as u64,
+                tool::worktree_list_managed(&workspace_root, registry).len() as u64,
+            ),
+            None => (0, 0),
+        };
+
+        if !git_available {
+            return Ok(GitStatusResource {
+                workspace_root: workspace_root.display().to_string(),
+                git_available,
+                repo: false,
+                gh_available,
+                branch: None,
+                upstream: None,
+                ahead: None,
+                behind: None,
+                staged_files: 0,
+                unstaged_files: 0,
+                untracked_files: 0,
+                changed_files: 0,
+                clean: true,
+                worktree_active_sessions,
+                worktree_managed_dirs,
+            });
+        }
+
+        let repo = git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]);
+        if !repo {
+            return Ok(GitStatusResource {
+                workspace_root: workspace_root.display().to_string(),
+                git_available,
+                repo,
+                gh_available,
+                branch: None,
+                upstream: None,
+                ahead: None,
+                behind: None,
+                staged_files: 0,
+                unstaged_files: 0,
+                untracked_files: 0,
+                changed_files: 0,
+                clean: true,
+                worktree_active_sessions,
+                worktree_managed_dirs,
+            });
+        }
+
+        let branch = git_command_output(&workspace_root, ["branch", "--show-current"])?;
+        let upstream = git_command_output(
+            &workspace_root,
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        )
+        .ok()
+        .and_then(|value| non_empty(Some(value.as_str())).map(ToOwned::to_owned));
+        let ahead_behind = upstream.as_ref().and_then(|_| {
+            git_command_output(
+                &workspace_root,
+                ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+            )
+            .ok()
+        });
+        let (ahead, behind) = parse_ahead_behind(ahead_behind.as_deref());
+        let status = git_command_output(&workspace_root, ["status", "--porcelain"])?;
+        let (staged_files, unstaged_files, untracked_files, changed_files) =
+            summarize_git_status(status.as_str());
+
+        Ok(GitStatusResource {
+            workspace_root: workspace_root.display().to_string(),
+            git_available,
+            repo,
+            gh_available,
+            branch: non_empty(Some(branch.as_str())).map(ToOwned::to_owned),
+            upstream,
+            ahead,
+            behind,
+            staged_files,
+            unstaged_files,
+            untracked_files,
+            changed_files,
+            clean: changed_files == 0,
+            worktree_active_sessions,
+            worktree_managed_dirs,
+        })
+    }
+
     pub fn resolve_model_target(&self, target: &str, model: Option<&str>) -> Result<ModelRef> {
         self.runtime
             .current_snapshot()
@@ -1228,37 +1378,36 @@ impl Backend {
     }
 
     async fn current_workspace_id(&self) -> Result<i64> {
-        let workspace = self
-            .api
-            .resolve_workspace(WorkspaceResolveRequest {
-                path: self.workspace_root.to_string_lossy().to_string(),
-                create_if_missing: true,
-            })
+        Ok(self
+            .resolve_workspace_resource(true)
             .await
-            .map_err(api_error)
-            .context("failed to resolve current workspace")?;
-        Ok(workspace.id)
+            .context("failed to resolve current workspace")?
+            .id)
     }
 
-    async fn list_sessions_query(&self, query: SessionListQuery) -> Result<Vec<SessionResource>> {
+    async fn list_sessions_query(&self, query: ListSessionsParams) -> Result<Vec<SessionResource>> {
         let mut cursor = query.cursor.clone();
         let limit = query.limit.unwrap_or(200);
         let mut items = Vec::new();
 
         loop {
-            let page = self
-                .api
-                .list_sessions(SessionListQuery {
+            let page = match dispatch::dispatch_query(
+                &self.app_state,
+                Query::ListSessions(ListSessionsParams {
                     cursor: cursor.clone(),
                     limit: Some(limit),
                     workspace_id: query.workspace_id,
                     parent_id: query.parent_id,
                     roots: query.roots,
                     search: query.search.clone(),
-                })
-                .await
-                .map_err(api_error)
-                .context("failed to list session page")?;
+                }),
+            )
+            .await
+            .map_err(api_error)?
+            {
+                QueryResult::Sessions(page) => page,
+                other => return Err(anyhow!("unexpected query result: {:?}", other)),
+            };
             cursor = page.page.next_cursor.clone();
             items.extend(page.items);
             if !page.page.has_more || cursor.is_none() {
@@ -1372,8 +1521,66 @@ fn direct_path_candidate(workspace_root: &Path, query: &str) -> Option<PathBuf> 
         .or(Some(resolved))
 }
 
-fn api_error(error: ApiError) -> anyhow::Error {
-    anyhow!("{error:?}")
+fn api_error(error: impl std::fmt::Display) -> anyhow::Error {
+    anyhow!(error.to_string())
+}
+
+fn command_available(command: &str) -> bool {
+    Command::new(command)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(workspace_root)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
+}
+
+fn parse_ahead_behind(value: Option<&str>) -> (Option<u64>, Option<u64>) {
+    let Some(value) = value else {
+        return (None, None);
+    };
+    let mut parts = value.split_whitespace();
+    let behind = parts.next().and_then(|part| part.parse::<u64>().ok());
+    let ahead = parts.next().and_then(|part| part.parse::<u64>().ok());
+    (ahead, behind)
+}
+
+fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
+    let mut staged = 0_u64;
+    let mut unstaged = 0_u64;
+    let mut untracked = 0_u64;
+    let mut changed = 0_u64;
+
+    for line in status.lines().filter(|line| !line.is_empty()) {
+        changed += 1;
+        let bytes = line.as_bytes();
+        let x = bytes.first().copied().unwrap_or(b' ');
+        let y = bytes.get(1).copied().unwrap_or(b' ');
+        if x == b'?' && y == b'?' {
+            untracked += 1;
+            continue;
+        }
+        if x != b' ' {
+            staged += 1;
+        }
+        if y != b' ' {
+            unstaged += 1;
+        }
+    }
+
+    (staged, unstaged, untracked, changed)
 }
 
 fn git_command_output<const N: usize>(workspace_root: &Path, args: [&str; N]) -> Result<String> {

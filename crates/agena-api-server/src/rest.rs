@@ -2,27 +2,32 @@
 //! return the plain JSON resources the current web client already consumes,
 //! while WS/SSE protocol traffic continues to route through `dispatch`.
 
-use std::{collections::{BTreeSet, HashMap}, convert::Infallible, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    convert::Infallible,
+    sync::Arc,
+};
 
 use agena::event::{EventStore, StoreRange};
 use agena_api::queries::{ListEventsParams, Query, QueryResult};
-use agena_http_api::{
+use crate::local_api::{
     AuthApiKeyWriteRequest, AuthCredentialType, AuthProviderResource, HealthResponse,
-    MessageListQuery, PermissionRuleListQuery,
-    PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery,
-    PluginLogListResponse, PluginStatusListResponse, RuntimeReloadResponse,
-    SessionContinueRequestBody, SessionCreateRequest, SessionEventStreamQuery,
-    SessionListQuery, SessionPermissionReplyRequestBody, SessionReplaceRequest,
-    SessionRewindRequestBody, SessionRunOptionsRequest, SessionTurnRequest,
-    SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery, WorkspaceListQuery,
-    WorkspaceResolveRequest, WorkspaceWriteRequest,
+    MessageListQuery, PermissionRuleListQuery, PermissionRuleWriteRequest, PluginInspectResponse,
+    PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse, RuntimeReloadResponse,
+    SessionContinueRequestBody, SessionCreateRequest, SessionEventStreamQuery, SessionListQuery,
+    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
+    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
+    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use async_stream::stream;
 use axum::{
     Json,
     extract::{Path, Query as AxumQuery, State},
     http::{HeaderMap, header::IF_MATCH},
-    response::{IntoResponse, sse::{Event, Sse}},
+    response::{
+        IntoResponse,
+        sse::{Event, Sse},
+    },
 };
 use serde::Deserialize;
 
@@ -36,6 +41,14 @@ pub struct SessionEventListCompatQuery {
     pub limit: Option<u64>,
     #[serde(default)]
     pub after_seq: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SessionForkRequestBody {
+    #[serde(default)]
+    pub at_event_seq: Option<i64>,
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
@@ -71,7 +84,11 @@ pub async fn reload_runtime(
 
 pub async fn list_plugins(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
     Ok(Json(PluginStatusListResponse {
-        entries: state.runtime().current_snapshot().plugin_manager().plugin_statuses(),
+        entries: state
+            .runtime()
+            .current_snapshot()
+            .plugin_manager()
+            .plugin_statuses(),
     }))
 }
 
@@ -95,7 +112,9 @@ pub async fn list_plugin_logs(
 ) -> Result<impl IntoResponse, ServerError> {
     let plugin_manager = state.runtime().current_snapshot().plugin_manager();
     if plugin_manager.plugin_status(plugin_id.as_str()).is_none() {
-        return Err(ServerError::NotFound(format!("plugin not found: {plugin_id}")));
+        return Err(ServerError::NotFound(format!(
+            "plugin not found: {plugin_id}"
+        )));
     }
     Ok(Json(PluginLogListResponse {
         plugin_id: plugin_id.clone(),
@@ -111,13 +130,21 @@ pub async fn list_auth_providers(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
     let configured_ids = configured_provider_ids(&state);
-    let auth_map = state.runtime().auth_manager().all().map_err(ServerError::Core)?;
+    let auth_map = state
+        .runtime()
+        .auth_manager()
+        .all()
+        .map_err(ServerError::Core)?;
     let provider_ids = public_auth_provider_ids(&configured_ids, &auth_map);
     let items = provider_ids
         .into_iter()
         .map(|provider_id| {
             let auth = auth_map.get(provider_id.as_str());
-            auth_provider_resource(configured_ids.contains(provider_id.as_str()), provider_id, auth)
+            auth_provider_resource(
+                configured_ids.contains(provider_id.as_str()),
+                provider_id,
+                auth,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(items))
@@ -261,7 +288,9 @@ pub async fn refresh_auth_provider(
     )?))
 }
 
-pub async fn list_providers(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
+pub async fn list_providers(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ServerError> {
     match dispatch::dispatch_query(&state, Query::ListProviders).await? {
         QueryResult::Providers(providers) => Ok(Json(providers)),
         _ => unreachable!("providers query returned unexpected result"),
@@ -407,7 +436,10 @@ pub async fn get_session_state(
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    let session = manager.get_session(session_id).await.map_err(ServerError::Core)?;
+    let session = manager
+        .get_session(session_id)
+        .await
+        .map_err(ServerError::Core)?;
     let resource = state
         .service()
         .session_execution_resource(manager.as_ref(), &session)
@@ -504,14 +536,16 @@ pub async fn list_session_events(
         .list_session_events(
             manager.as_ref(),
             session_id,
-            agena_http_api::SessionEventListQuery {
+            crate::local_api::SessionEventListQuery {
                 cursor: query.cursor,
                 limit: query.limit,
             },
         )
         .await
         .map_err(server_error_from_http)?;
-    Ok(Json(serde_json::to_value(page).map_err(|error| ServerError::Internal(error.to_string()))?))
+    Ok(Json(serde_json::to_value(page).map_err(|error| {
+        ServerError::Internal(error.to_string())
+    })?))
 }
 
 pub async fn stream_session_events(
@@ -641,9 +675,61 @@ pub async fn continue_run(
     let options = resolve_run_options(&state, session_id, request.options).await?;
     let manager = state.session_manager()?;
     let session = manager
-        .continue_session(agena::session::SessionContinueRequest { session_id, options })
+        .continue_session(agena::session::SessionContinueRequest {
+            session_id,
+            options,
+        })
         .await
         .map_err(ServerError::Core)?;
+    let resource = state
+        .service()
+        .session_execution_resource(manager.as_ref(), &session)
+        .await
+        .map_err(server_error_from_http)?;
+    Ok(Json(resource))
+}
+
+pub async fn fork_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    Json(request): Json<SessionForkRequestBody>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let latest_event_seq = state
+        .service()
+        .latest_session_event_seq(manager.as_ref(), session_id)
+        .await
+        .map_err(server_error_from_http)?;
+    let at_event_seq = request.at_event_seq.or(latest_event_seq).unwrap_or(0);
+
+    let session = if latest_event_seq.is_none() && at_event_seq <= 0 {
+        let source = manager.get_session(session_id).await.map_err(ServerError::Core)?;
+        let created = state
+            .service()
+            .create_session(SessionCreateRequest {
+                workspace_id: source.workspace_id,
+                title: request
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| format!("Fork of {}", source.title)),
+                parent_id: Some(session_id),
+            })
+            .await
+            .map_err(server_error_from_http)?;
+        manager
+            .get_session(created.id)
+            .await
+            .map_err(ServerError::Core)?
+    } else {
+        manager
+            .fork_session(agena::session::SessionForkRequest {
+                session_id,
+                at_event_seq,
+                title: request.title,
+            })
+            .await
+            .map_err(ServerError::Core)?
+    };
     let resource = state
         .service()
         .session_execution_resource(manager.as_ref(), &session)
@@ -658,7 +744,9 @@ pub async fn cancel_turn(
 ) -> Result<impl IntoResponse, ServerError> {
     match dispatch::dispatch_command(
         &state,
-        agena_api::commands::Command::CancelTurn(agena_api::commands::CancelTurnParams { session_id }),
+        agena_api::commands::Command::CancelTurn(agena_api::commands::CancelTurnParams {
+            session_id,
+        }),
     )
     .await?
     {
@@ -881,20 +969,25 @@ pub async fn plugin_rpc(
     Json(req): Json<agena::plugin::sdk::rpc::Request>,
 ) -> Result<impl IntoResponse, ServerError> {
     let host = state.runtime().current_snapshot().plugin_manager();
-    let response = plugin_rpc_response(host, plugin_id.as_str(), bearer_token(&headers), req).await?;
+    let response =
+        plugin_rpc_response(host, plugin_id.as_str(), bearer_token(&headers), req).await?;
     Ok(Json(response))
 }
 
-fn server_error_from_http(error: agena_http_api::ApiError) -> ServerError {
+fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
     let status = error.into_response().status();
     match status {
-        axum::http::StatusCode::BAD_REQUEST => ServerError::BadRequest("legacy API bad request".into()),
-        axum::http::StatusCode::NOT_FOUND => ServerError::NotFound("legacy API resource not found".into()),
-        axum::http::StatusCode::CONFLICT => ServerError::Conflict("legacy API conflict".into()),
-        axum::http::StatusCode::SERVICE_UNAVAILABLE => {
-            ServerError::ServiceUnavailable("legacy API service unavailable".into())
+        axum::http::StatusCode::BAD_REQUEST => {
+            ServerError::BadRequest("bad request".into())
         }
-        _ => ServerError::Internal("legacy API internal error".into()),
+        axum::http::StatusCode::NOT_FOUND => {
+            ServerError::NotFound("resource not found".into())
+        }
+        axum::http::StatusCode::CONFLICT => ServerError::Conflict("conflict".into()),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE => {
+            ServerError::ServiceUnavailable("service unavailable".into())
+        }
+        _ => ServerError::Internal("internal error".into()),
     }
 }
 
@@ -926,7 +1019,9 @@ fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError> {
         .map_err(|error| ServerError::BadRequest(format!("invalid If-Match header: {error}")))?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(ServerError::BadRequest("If-Match header cannot be empty".into()));
+        return Err(ServerError::BadRequest(
+            "If-Match header cannot be empty".into(),
+        ));
     }
     if trimmed == "*" {
         return Err(ServerError::BadRequest(
@@ -944,7 +1039,9 @@ fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError> {
         .and_then(|value| value.strip_suffix('"'))
         .unwrap_or(trimmed);
     let version = version_text.parse::<i64>().map_err(|error| {
-        ServerError::BadRequest(format!("If-Match must be a numeric session version: {error}"))
+        ServerError::BadRequest(format!(
+            "If-Match must be a numeric session version: {error}"
+        ))
     })?;
 
     Ok(Some(version))
@@ -955,7 +1052,11 @@ fn sse_error_event(message: impl Into<String>) -> Event {
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
-    let raw = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let raw = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .trim();
     let mut parts = raw.split_whitespace();
     let scheme = parts.next()?;
     let token = parts.next()?;
@@ -1048,7 +1149,10 @@ async fn plugin_rpc_response(
         }
     }
 
-    match handle.handle_call_for_plugin(plugin_id, &req.method, params).await {
+    match handle
+        .handle_call_for_plugin(plugin_id, &req.method, params)
+        .await
+    {
         Ok(result) => Ok(Response {
             jsonrpc: JsonRpcVersion,
             id,

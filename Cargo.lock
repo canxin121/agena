@@ -148,14 +148,16 @@ version = "0.1.0"
 dependencies = [
  "agena",
  "agena-api",
- "agena-http-api",
+ "agena-scheduler",
  "async-stream",
  "async-trait",
  "axum 0.8.8",
+ "base64 0.22.1",
  "chrono",
  "futures-util",
  "http-body-util",
  "hyper 1.8.1",
+ "path-clean",
  "sea-orm",
  "serde",
  "serde_json",
@@ -225,46 +227,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "agena-http-api"
-version = "0.1.0"
-dependencies = [
- "agena",
- "agena-scheduler",
- "async-stream",
- "async-trait",
- "axum 0.8.8",
- "base64 0.22.1",
- "chrono",
- "clap",
- "futures-core",
- "futures-util",
- "path-clean",
- "sea-orm",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "agena-http-api-server"
-version = "0.1.0"
-dependencies = [
- "agena",
- "agena-api-server",
- "agena-http-api",
- "axum 0.8.8",
- "clap",
- "sea-orm",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -465,7 +427,6 @@ version = "0.1.0"
 dependencies = [
  "agena",
  "agena-api-server",
- "agena-http-api",
  "anyhow",
  "argon2",
  "axum 0.8.8",
@@ -492,7 +453,8 @@ name = "agena-tui"
 version = "0.1.0"
 dependencies = [
  "agena",
- "agena-http-api",
+ "agena-api",
+ "agena-api-server",
  "agena-otel",
  "agena-skills",
  "anyhow",

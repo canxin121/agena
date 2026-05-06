@@ -40,7 +40,11 @@ async fn build_state() -> (AppState, Arc<SessionManager>) {
         Agent::new("api-server-test", PermissionPolicy::allow_all()),
     );
 
-    let manager = Arc::new(SessionManager::new(db.as_ref().clone(), processor, executor));
+    let manager = Arc::new(SessionManager::new(
+        db.as_ref().clone(),
+        processor,
+        executor,
+    ));
 
     let runtime = agena::runtime::AgenaRuntime::builder()
         .with_workspace_root(std::env::temp_dir())
@@ -121,14 +125,14 @@ async fn session_state_endpoint_returns_execution_resource() {
 
     let workspace = state
         .service()
-        .create_workspace(agena_http_api::WorkspaceWriteRequest {
+        .create_workspace(agena_api_server::local_api::WorkspaceWriteRequest {
             path: format!("/tmp/api-server-state-{}", uuid::Uuid::new_v4()),
         })
         .await
         .expect("workspace should be created");
     let session = state
         .service()
-        .create_session(agena_http_api::SessionCreateRequest {
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
             workspace_id: workspace.id,
             title: "state route".to_string(),
             parent_id: None,
@@ -148,12 +152,85 @@ async fn session_state_endpoint_returns_execution_resource() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(value.get("session").and_then(|s| s.get("id")).and_then(|id| id.as_i64()), Some(session.id));
-    assert!(value
-        .get("execution")
-        .and_then(|execution| execution.get("allowed_tools"))
-        .and_then(|allowed_tools| allowed_tools.as_array())
-        .is_some());
+    assert_eq!(
+        value
+            .get("session")
+            .and_then(|s| s.get("id"))
+            .and_then(|id| id.as_i64()),
+        Some(session.id)
+    );
+    assert!(
+        value
+            .get("execution")
+            .and_then(|execution| execution.get("allowed_tools"))
+            .and_then(|allowed_tools| allowed_tools.as_array())
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn fork_session_endpoint_returns_forked_execution_resource() {
+    let (state, _manager) = build_state().await;
+    let app = router(state.clone());
+
+    let workspace = state
+        .service()
+        .create_workspace(agena_api_server::local_api::WorkspaceWriteRequest {
+            path: format!("/tmp/api-server-fork-{}", uuid::Uuid::new_v4()),
+        })
+        .await
+        .expect("workspace should be created");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "fork source".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/sessions/{}/fork", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"at_event_seq":0,"title":"fork child"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "body: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_ne!(
+        value
+            .get("session")
+            .and_then(|s| s.get("id"))
+            .and_then(|id| id.as_i64()),
+        Some(session.id)
+    );
+    assert_eq!(
+        value
+            .get("session")
+            .and_then(|s| s.get("parent_id"))
+            .and_then(|id| id.as_i64()),
+        Some(session.id)
+    );
+    assert_eq!(
+        value
+            .get("session")
+            .and_then(|s| s.get("title"))
+            .and_then(|title| title.as_str()),
+        Some("fork child")
+    );
 }
 
 #[tokio::test]

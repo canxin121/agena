@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use agena::event::EventBus;
 use agena::{event::EventKind, runtime::AgenaRuntime, session::SessionManager};
-use agena_http_api::ApiService;
 use sea_orm::DatabaseConnection;
+
+use crate::local_api::ApiService;
 
 use crate::error::ServerError;
 

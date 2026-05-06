@@ -2,7 +2,7 @@
 //! flowing on the agena bus. Variant ordering only matters for serde tag
 //! stability — `kind` strings (snake_case of the variant name) are part of
 //! the wire protocol and must not be renamed without a versioning ceremony
-//! (see [`kinds_table`]).
+//! (see [`ALL_KINDS`]).
 
 use crate::event::filter::{EventKindTag, KindMatcher};
 use serde::{Deserialize, Serialize};
@@ -127,41 +127,28 @@ pub const HISTORY_KINDS: &[&str] = &[
     "plugin_event",
 ];
 
-/// Stable list of every known kind tag (UI + history).
-pub fn kinds_table() -> &'static [&'static str] {
-    // UI kinds first (match serde tag ordering in the enum), then history kinds.
-    const ALL: &[&str] = &[
-        "run_started",
-        "run_failed",
-        "stream_error",
-        "message_part_updated",
-        "message_part_delta",
-        "command_begin",
-        "command_output_delta",
-        "command_end",
-        "turn_started",
-        "turn_completed",
-        "turn_aborted",
-        "user_message_appended",
-        "assistant_message_completed",
-        "tool_call_issued",
-        "tool_call_completed",
-        "system_notice_appended",
-        "message_revised",
-        "plugin_event",
-    ];
-    ALL
-}
-
-/// Ephemeral UI-only kind tags (never written to the event store).
-pub fn ui_kinds_table() -> &'static [&'static str] {
-    UI_KINDS
-}
-
-/// Persistent history kind tags (written to SQLite and replayable).
-pub fn history_kinds_table() -> &'static [&'static str] {
-    HISTORY_KINDS
-}
+/// Stable list of every known kind tag (UI + history). Order matches the
+/// serde tag ordering in `EventKind`.
+pub const ALL_KINDS: &[&str] = &[
+    "run_started",
+    "run_failed",
+    "stream_error",
+    "message_part_updated",
+    "message_part_delta",
+    "command_begin",
+    "command_output_delta",
+    "command_end",
+    "turn_started",
+    "turn_completed",
+    "turn_aborted",
+    "user_message_appended",
+    "assistant_message_completed",
+    "tool_call_issued",
+    "tool_call_completed",
+    "system_notice_appended",
+    "message_revised",
+    "plugin_event",
+];
 
 /// Concrete `DomainEvent` envelope specialised for agena's `EventKind`.
 pub type DomainEvent = crate::event::envelope::DomainEvent<EventKind>;
@@ -194,12 +181,12 @@ mod tests {
             ts_ms: 0,
         });
         assert_eq!(kind.tag().as_str(), "run_started");
-        assert!(kinds_table().contains(&"run_started"));
+        assert!(ALL_KINDS.contains(&"run_started"));
     }
 
     #[test]
     fn ui_and_history_kinds_partition_all_kinds() {
-        let all: std::collections::HashSet<&str> = kinds_table().iter().copied().collect();
+        let all: std::collections::HashSet<&str> = ALL_KINDS.iter().copied().collect();
         let ui: std::collections::HashSet<&str> = UI_KINDS.iter().copied().collect();
         let history: std::collections::HashSet<&str> = HISTORY_KINDS.iter().copied().collect();
         // No overlap

@@ -27,20 +27,19 @@ impl SessionHistoryStore {
         session_id: i64,
         base_runtime: SessionRuntimeState,
     ) -> Result<LoadedSessionProjection, DbErr> {
-        self.repair_hanging_turns(session_id).await?;
-        let events = self.list_session_events(session_id).await?;
+        let mut events = self.list_session_events(session_id).await?;
+        let aborted = self
+            .abort_hanging_turns(session_id, &events)
+            .await?;
+        events.extend(aborted);
 
         let view: SessionView = fold_history::<SessionViewBuilder>(events.as_slice())
             .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?
             .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?;
 
-        let mut runtime = view.runtime;
-        if runtime == SessionRuntimeState::default() {
-            runtime = base_runtime;
-        }
         Ok(LoadedSessionProjection {
             messages: view.messages,
-            runtime,
+            runtime: base_runtime,
             last_seq: view.last_seq,
         })
     }
@@ -75,15 +74,21 @@ impl SessionHistoryStore {
         Ok(all)
     }
 
-    /// Scan the tail of the history for any `TurnStarted(t)` without a
+    /// Scan a previously loaded event slice for any `TurnStarted(t)` without a
     /// matching `TurnCompleted(t)` / `TurnAborted(t)`. Append a synthetic
     /// `TurnAborted { reason: ProcessRestart }` for each — the
     /// `SessionViewBuilder` will then drop the dangling messages.
-    async fn repair_hanging_turns(&self, session_id: i64) -> Result<(), DbErr> {
+    ///
+    /// Returns the newly published abort events so callers can extend their
+    /// in-memory event slice without re-reading the table.
+    async fn abort_hanging_turns(
+        &self,
+        session_id: i64,
+        events: &[DomainEvent],
+    ) -> Result<Vec<DomainEvent>, DbErr> {
         use std::collections::HashSet;
-        let events = self.list_session_events(session_id).await?;
         let mut started: HashSet<TurnId> = HashSet::new();
-        for event in &events {
+        for event in events {
             match &event.kind {
                 EventKind::TurnStarted(TurnStarted { turn_id, .. }) => {
                     started.insert(*turn_id);
@@ -98,8 +103,9 @@ impl SessionHistoryStore {
             }
         }
         if started.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
+        let mut out = Vec::with_capacity(started.len());
         for turn_id in started {
             let kind = EventKind::TurnAborted(TurnAborted {
                 turn_id,
@@ -107,16 +113,18 @@ impl SessionHistoryStore {
                 message: Some("process restart detected on session load".to_string()),
             });
             let ctx = PublishContext::for_session(session_id);
-            self.publisher
+            let event = self
+                .publisher
                 .publish(ctx, kind)
                 .await
                 .map_err(|err| DbErr::Custom(format!("publish abort failed: {err}")))?;
+            out.push(event);
         }
-        Ok(())
+        Ok(out)
     }
 
-    /// Append a batch of events for a session. Each entry is published
-    /// through the unified [`EventPublisher`].
+    /// Append a batch of events for a session through `publish_batch` so the
+    /// store sees a single transactional append.
     pub(crate) async fn append_items(
         &self,
         session_id: i64,
@@ -126,17 +134,15 @@ impl SessionHistoryStore {
         if kinds.is_empty() {
             return Ok(Vec::new());
         }
-        let mut out = Vec::with_capacity(kinds.len());
-        for kind in kinds {
-            let ctx = PublishContext::for_session(session_id);
-            let event = self
-                .publisher
-                .publish(ctx, kind)
-                .await
-                .map_err(|err| DbErr::Custom(format!("publish history item failed: {err}")))?;
-            out.push(event);
-        }
-        Ok(out)
+        let ctx = PublishContext::for_session(session_id);
+        let built: Vec<DomainEvent> = kinds
+            .into_iter()
+            .map(|kind| self.publisher.build(ctx.clone(), kind))
+            .collect();
+        self.publisher
+            .publish_batch(built)
+            .await
+            .map_err(|err| DbErr::Custom(format!("publish history batch failed: {err}")))
     }
 }
 

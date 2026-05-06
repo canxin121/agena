@@ -448,10 +448,7 @@ impl SessionStore {
 
         session.apply_persisted_metadata(&updated);
         session.replace_messages(view.messages);
-        session.runtime = view.runtime.clone();
-        if session.runtime == super::SessionRuntimeState::default() {
-            session.runtime = updated.runtime.clone();
-        }
+        session.runtime = updated.runtime.clone();
         session.refresh_derived();
 
         let session_for_cache = session.clone();

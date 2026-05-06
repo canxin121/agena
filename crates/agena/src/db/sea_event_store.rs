@@ -35,10 +35,6 @@ impl<K> SeaEventStore<K> {
     }
 }
 
-fn map_db_err(err: sea_orm::DbErr) -> EventStoreError {
-    EventStoreError::Backend(err.to_string())
-}
-
 fn into_active_model<K>(event: &DomainEvent<K>) -> Result<entity::ActiveModel, EventStoreError>
 where
     K: KindMatcher + serde::Serialize,
@@ -77,21 +73,13 @@ where
         if events.is_empty() {
             return Ok(());
         }
-        let txn = self.db.begin().await.map_err(map_db_err)?;
+        let txn = self.db.begin().await?;
         let mut models = Vec::with_capacity(events.len());
         for ev in events {
             models.push(into_active_model(ev)?);
         }
-        entity::Entity::insert_many(models)
-            .exec(&txn)
-            .await
-            .map_err(|err| match err {
-                sea_orm::DbErr::Exec(_) | sea_orm::DbErr::Query(_) => {
-                    EventStoreError::Backend(err.to_string())
-                }
-                other => map_db_err(other),
-            })?;
-        txn.commit().await.map_err(map_db_err)?;
+        entity::Entity::insert_many(models).exec(&txn).await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -124,7 +112,7 @@ where
             query = query.filter(entity::Column::SeqGlobal.gt(since));
         }
 
-        let models = query.all(self.db.as_ref()).await.map_err(map_db_err)?;
+        let models = query.all(self.db.as_ref()).await?;
         let mut out = Vec::with_capacity(models.len());
         for model in models {
             out.push(from_model(model)?);
@@ -138,8 +126,7 @@ where
             .column_as(Expr::col(entity::Column::SeqGlobal).max(), "max_seq")
             .into_tuple()
             .one(self.db.as_ref())
-            .await
-            .map_err(map_db_err)?;
+            .await?;
         Ok(row.and_then(|(v,)| v))
     }
 
@@ -153,8 +140,7 @@ where
             .column_as(Expr::col(entity::Column::SeqSession).max(), "max_seq")
             .into_tuple()
             .one(self.db.as_ref())
-            .await
-            .map_err(map_db_err)?;
+            .await?;
         Ok(row.and_then(|(v,)| v))
     }
 }

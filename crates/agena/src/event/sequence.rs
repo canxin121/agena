@@ -12,20 +12,17 @@ pub struct SequenceAllocator {
 
 impl SequenceAllocator {
     pub fn new() -> Self {
-        Self {
-            next: AtomicI64::new(1),
-        }
+        Self::from_high_watermark(0)
     }
 
     pub fn from_high_watermark(highest: i64) -> Self {
         Self {
-            next: AtomicI64::new(highest.saturating_add(1).max(1)),
+            next: AtomicI64::new(Self::next_after(highest)),
         }
     }
 
     pub fn init_from(&self, highest: i64) {
-        self.next
-            .store(highest.saturating_add(1).max(1), Ordering::SeqCst);
+        self.next.store(Self::next_after(highest), Ordering::SeqCst);
     }
 
     pub fn next(&self) -> i64 {
@@ -34,6 +31,13 @@ impl SequenceAllocator {
 
     pub fn peek(&self) -> i64 {
         self.next.load(Ordering::SeqCst)
+    }
+
+    /// First sequence number to hand out after observing `highest` already
+    /// consumed. Saturates at 1 so a fresh allocator never returns 0 even if
+    /// passed a negative watermark.
+    fn next_after(highest: i64) -> i64 {
+        highest.saturating_add(1).max(1)
     }
 }
 

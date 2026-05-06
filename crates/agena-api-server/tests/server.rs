@@ -42,14 +42,16 @@ async fn build_state() -> (AppState, Arc<SessionManager>) {
 
     let manager = Arc::new(SessionManager::new(db, processor, executor));
 
+    let runtime_db = Arc::new(sea_orm::Database::connect("sqlite::memory:").await.unwrap());
     let runtime = agena::runtime::AgenaRuntime::builder()
         .with_workspace_root(std::env::temp_dir())
-        .with_database_connection(sea_orm::Database::connect("sqlite::memory:").await.unwrap())
+        .with_database_connection(runtime_db.as_ref().clone())
         .build()
         .await
         .expect("runtime build");
 
-    let state = AppState::new(runtime).with_manager_override(Arc::clone(&manager));
+    let state =
+        AppState::new(runtime, Arc::clone(&runtime_db)).with_manager_override(Arc::clone(&manager));
     (state, manager)
 }
 

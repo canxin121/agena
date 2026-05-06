@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use agena::event::EventBus;
 use agena::{event::EventKind, runtime::AgenaRuntime, session::SessionManager};
+use agena_http_api::ApiService;
+use sea_orm::DatabaseConnection;
 
 use crate::error::ServerError;
 
@@ -9,15 +11,17 @@ use crate::error::ServerError;
 #[derive(Clone)]
 pub struct AppState {
     runtime: AgenaRuntime,
+    service: ApiService,
     /// Optional override; tests bypass `AgenaRuntime` and inject a manager
     /// directly.
     manager_override: Option<Arc<SessionManager>>,
 }
 
 impl AppState {
-    pub fn new(runtime: AgenaRuntime) -> Self {
+    pub fn new(runtime: AgenaRuntime, db: Arc<DatabaseConnection>) -> Self {
         Self {
             runtime,
+            service: ApiService::new(db),
             manager_override: None,
         }
     }
@@ -29,6 +33,10 @@ impl AppState {
 
     pub fn runtime(&self) -> &AgenaRuntime {
         &self.runtime
+    }
+
+    pub fn service(&self) -> &ApiService {
+        &self.service
     }
 
     pub fn session_manager(&self) -> Result<Arc<SessionManager>, ServerError> {

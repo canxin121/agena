@@ -661,6 +661,30 @@ const selectedWorkspace = computed(
 
 const selectedSession = computed(() => sessions.value.find((session) => session.id === selectedSessionId.value) || null)
 
+const sessionLineageLabel = computed(() => {
+  const session = sessionState.value?.session || selectedSession.value
+  if (!session) return ''
+  const parent = session.parent_id ? `parent=${session.parent_id}` : 'root'
+  const children = `children=${session.child_session_count}`
+  return `${parent} · ${children}`
+})
+
+const executionFacts = computed(() => {
+  const execution = sessionState.value?.execution
+  if (!execution) return [] as string[]
+
+  const facts: string[] = []
+  if (execution.agent_profile) facts.push(`agent=${execution.agent_profile}`)
+  if (execution.active_skill_name) facts.push(`skill=${execution.active_skill_name}`)
+  if (execution.task_id) facts.push(`task=${execution.task_id}`)
+  if (execution.model_provider_id || execution.model_id) {
+    facts.push(`model=${[execution.model_provider_id, execution.model_id].filter(Boolean).join('/')}`)
+  }
+  if (execution.effective_workspace_root) facts.push(`workspace=${execution.effective_workspace_root}`)
+  if (execution.allowed_tools.length) facts.push(`allowed_tools=${execution.allowed_tools.length}`)
+  return facts
+})
+
 onMounted(() => {
   void loadSidebar().catch((err) => {
     errorMessage.value = err instanceof Error ? err.message : String(err)
@@ -768,11 +792,23 @@ onBeforeUnmount(() => {
               <strong>{{ selectedSession.title }}</strong>
             </div>
             <div class="muted">workspace={{ selectedWorkspace?.path || 'unknown' }}</div>
+            <div class="muted">{{ sessionLineageLabel }}</div>
             <div class="muted">
               run_state={{ sessionState?.run_state || 'unknown' }}, blocked={{
                 sessionState?.blocked ? 'true' : 'false'
               }}
             </div>
+            <template v-if="executionFacts.length">
+              <div class="muted mono">{{ executionFacts.join(' · ') }}</div>
+            </template>
+            <template v-if="sessionState?.execution">
+              <div v-if="sessionState.execution.allowed_tools.length" class="muted mono">
+                allowed_tools={{ sessionState.execution.allowed_tools.join(', ') }}
+              </div>
+              <div v-if="sessionState.execution.system_prompt_override" class="muted mono">
+                system_prompt_override={{ sessionState.execution.system_prompt_override }}
+              </div>
+            </template>
             <template v-if="sessionState?.automation">
               <div class="muted">automation_jobs={{ sessionState.automation.job_count }}</div>
               <div v-if="sessionState.automation.latest_job?.last_run" class="muted">

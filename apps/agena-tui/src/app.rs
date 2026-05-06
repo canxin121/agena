@@ -1166,7 +1166,9 @@ impl App {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
             }
             Overlay::SessionRename(dialog) => self.handle_session_rename_overlay_key(key, dialog),
-            Overlay::PermissionRuleEdit(dialog) => self.handle_permission_rule_edit_overlay_key(key, dialog),
+            Overlay::PermissionRuleEdit(dialog) => {
+                self.handle_permission_rule_edit_overlay_key(key, dialog)
+            }
             Overlay::FileAttach(dialog) => self.handle_file_attach_overlay_key(key, dialog),
             Overlay::Permission(dialog) => self.handle_permission_overlay_key(key, dialog),
             Overlay::UserInputReply(dialog) => self.handle_user_input_overlay_key(key, dialog),
@@ -1363,15 +1365,12 @@ impl App {
                 match tokio::runtime::Handle::try_current() {
                     Ok(handle) => {
                         let result = match dialog.rule_id {
-                            Some(rule_id) => handle.block_on(self.backend.replace_permission_rule(
-                                rule_id,
-                                action_key,
-                                mode,
-                            )),
-                            None => handle.block_on(self.backend.create_permission_rule(
-                                action_key,
-                                mode,
-                            )),
+                            Some(rule_id) => handle.block_on(
+                                self.backend
+                                    .replace_permission_rule(rule_id, action_key, mode),
+                            ),
+                            None => handle
+                                .block_on(self.backend.create_permission_rule(action_key, mode)),
                         };
                         match result {
                             Ok(rule) => {
@@ -3455,7 +3454,13 @@ impl App {
         self.overlay = Some(Overlay::PluginInspector(dialog));
     }
 
-    fn open_inspector_picker(&mut self, title: String, prompt: String, query: &str, rows: Vec<crate::backend::InspectorRow>) {
+    fn open_inspector_picker(
+        &mut self,
+        title: String,
+        prompt: String,
+        query: &str,
+        rows: Vec<crate::backend::InspectorRow>,
+    ) {
         let mut overlay = PickerOverlay {
             title,
             prompt,
@@ -3523,7 +3528,11 @@ impl App {
             Some(rule) => (
                 Some(rule.id),
                 ui_text::t(&self.i18n, "overlay-permission-rule-edit-title"),
-                Editor::from_text(format!("{} {}", rule.action_key, permission_mode_name(rule.mode))),
+                Editor::from_text(format!(
+                    "{} {}",
+                    rule.action_key,
+                    permission_mode_name(rule.mode)
+                )),
             ),
             None => (
                 None,
@@ -4188,6 +4197,7 @@ impl App {
             }
         }
         parts.extend(self.current_lineage_context_parts());
+        parts.extend(self.current_execution_context_parts());
 
         parts.push(self.current_session_view_summary());
 
@@ -4560,15 +4570,17 @@ impl App {
             return;
         };
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => match handle.block_on(self.backend.session_cost_inspector_rows(session_id)) {
-                Ok(rows) => self.open_inspector_picker(
-                    format!("Cost [#{}]", session_id),
-                    "Inspect session usage and cost".to_string(),
-                    "",
-                    rows,
-                ),
-                Err(error) => self.flash_error(error.to_string()),
-            },
+            Ok(handle) => {
+                match handle.block_on(self.backend.session_cost_inspector_rows(session_id)) {
+                    Ok(rows) => self.open_inspector_picker(
+                        format!("Cost [#{}]", session_id),
+                        "Inspect session usage and cost".to_string(),
+                        "",
+                        rows,
+                    ),
+                    Err(error) => self.flash_error(error.to_string()),
+                }
+            }
             Err(error) => self.flash_error(error.to_string()),
         }
     }
@@ -4713,7 +4725,11 @@ impl App {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => match handle.block_on(self.backend.create_commit(message.to_string())) {
                 Ok((commit, summary)) => {
-                    self.flash_success(format!("commit created: {} {}", &commit[..commit.len().min(12)], summary));
+                    self.flash_success(format!(
+                        "commit created: {} {}",
+                        &commit[..commit.len().min(12)],
+                        summary
+                    ));
                 }
                 Err(error) => self.flash_error(error.to_string()),
             },
@@ -5037,10 +5053,12 @@ impl App {
     }
 
     fn current_runtime_status_summary(&self) -> String {
-        let mut parts = vec![self
-            .run_options
-            .summary()
-            .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default"))];
+        let mut parts = vec![
+            self.run_options
+                .summary()
+                .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default")),
+        ];
+        parts.extend(self.current_execution_context_parts());
         parts.push(format!(
             "queue_key={} submit_key={}",
             self.keybindings.queue.len(),
@@ -5091,6 +5109,60 @@ impl App {
         self.sessions
             .view_mode
             .label(&self.i18n, self.sessions.subtree_root_id)
+    }
+
+    fn current_execution_context_parts(&self) -> Vec<String> {
+        let Some(execution) = self.transcript.execution.as_ref() else {
+            return Vec::new();
+        };
+
+        let mut parts = Vec::new();
+        if let Some(agent_profile) = execution.execution.agent_profile.as_deref() {
+            if !agent_profile.trim().is_empty() {
+                parts.push(format!("agent={agent_profile}"));
+            }
+        }
+        if let Some(skill_name) = execution.execution.active_skill_name.as_deref() {
+            if !skill_name.trim().is_empty() {
+                parts.push(format!("skill={skill_name}"));
+            }
+        }
+        if let Some(task_id) = execution.execution.task_id.as_deref() {
+            if !task_id.trim().is_empty() {
+                parts.push(format!("task={task_id}"));
+            }
+        }
+        if execution.execution.model_provider_id.is_some() || execution.execution.model_id.is_some()
+        {
+            let provider = execution
+                .execution
+                .model_provider_id
+                .as_deref()
+                .unwrap_or("auto");
+            let model = execution.execution.model_id.as_deref().unwrap_or("default");
+            parts.push(format!("model={provider}/{model}"));
+        }
+        if let Some(workspace_root) = execution.execution.effective_workspace_root.as_deref() {
+            if !workspace_root.trim().is_empty() {
+                parts.push(format!("cwd={workspace_root}"));
+            }
+        }
+        if !execution.execution.allowed_tools.is_empty() {
+            parts.push(format!("tools={}", execution.execution.allowed_tools.len()));
+        }
+        if !execution.pending_permission_requests.is_empty() {
+            parts.push(format!(
+                "perm={}",
+                execution.pending_permission_requests.len()
+            ));
+        }
+        if !execution.pending_user_input_requests.is_empty() {
+            parts.push(format!(
+                "input={}",
+                execution.pending_user_input_requests.len()
+            ));
+        }
+        parts
     }
 
     fn jump_search_match(&mut self, forward: bool) {
@@ -6021,6 +6093,7 @@ impl App {
             }
         }
         bottom_left.extend(self.current_lineage_context_parts());
+        bottom_left.extend(self.current_execution_context_parts());
         bottom_left.push(self.current_session_view_summary());
         if let Some(summary) = self.run_options.summary() {
             bottom_left.push(summary);
@@ -10651,7 +10724,9 @@ fn permission_mode_name(mode: PermissionMode) -> &'static str {
     }
 }
 
-fn parse_permission_rule_input(input: &str) -> std::result::Result<(String, PermissionMode), String> {
+fn parse_permission_rule_input(
+    input: &str,
+) -> std::result::Result<(String, PermissionMode), String> {
     let tokens = shlex::split(input).ok_or_else(|| "invalid shell-style arguments".to_string())?;
     if tokens.len() != 2 {
         return Err("expected: <action_key> <allow|ask|deny>".to_string());
@@ -10668,7 +10743,8 @@ fn parse_permission_rule_input(input: &str) -> std::result::Result<(String, Perm
 fn parse_pr_command_args(
     args: &str,
 ) -> Result<(String, Option<String>, Option<String>, Option<String>)> {
-    let tokens = shlex::split(args).ok_or_else(|| anyhow::anyhow!("invalid shell-style arguments"))?;
+    let tokens =
+        shlex::split(args).ok_or_else(|| anyhow::anyhow!("invalid shell-style arguments"))?;
     let mut title_parts = Vec::new();
     let mut body = None;
     let mut base = None;
@@ -10880,8 +10956,7 @@ mod tests {
 
     #[test]
     fn parse_permission_rule_input_rejects_invalid_mode() {
-        let error =
-            parse_permission_rule_input("git maybe").expect_err("invalid mode should fail");
+        let error = parse_permission_rule_input("git maybe").expect_err("invalid mode should fail");
         assert!(error.contains("allow, ask, or deny"));
     }
 

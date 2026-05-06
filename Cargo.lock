@@ -133,6 +133,7 @@ name = "agena-api"
 version = "0.1.0"
 dependencies = [
  "agena",
+ "agena-scheduler",
  "chrono",
  "serde",
  "serde_json",
@@ -147,6 +148,7 @@ version = "0.1.0"
 dependencies = [
  "agena",
  "agena-api",
+ "agena-http-api",
  "async-trait",
  "axum 0.8.8",
  "chrono",

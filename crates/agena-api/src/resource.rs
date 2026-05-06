@@ -41,6 +41,103 @@ pub struct RuntimeSessionCacheResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledJobRunResource {
+    pub triggered_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub status: agena_scheduler::JobRunStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledJobResource {
+    pub id: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<DateTime<Utc>>,
+    pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_session_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_fire_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_fired_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<ScheduledJobRunResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionAutomationResource {
+    pub job_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_job: Option<ScheduledJobResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeAutomationResource {
+    pub enabled: bool,
+    pub job_count: usize,
+    pub recent_jobs: Vec<ScheduledJobResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeOperatorResource {
+    pub mcp: RuntimeMcpResource,
+    pub lsp: RuntimeLspResource,
+    pub skills: RuntimeSkillsResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeMcpResource {
+    pub server_count: usize,
+    pub tool_count: usize,
+    pub servers: Vec<RuntimeMcpServerResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeMcpServerResource {
+    pub name: String,
+    pub tool_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeLspResource {
+    pub server_count: usize,
+    pub diagnostics_count: usize,
+    pub files_with_diagnostics: usize,
+    pub servers: Vec<RuntimeLspServerResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeLspServerResource {
+    pub name: String,
+    pub command: String,
+    pub file_extensions: Vec<String>,
+    pub root_markers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeSkillsResource {
+    pub skill_count: usize,
+    pub command_count: usize,
+    pub skills: Vec<RuntimeSkillResource>,
+    pub commands: Vec<RuntimeSkillResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeSkillResource {
+    pub name: String,
+    pub description: String,
+    pub aliases: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeStatusResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
@@ -60,6 +157,8 @@ pub struct RuntimeStatusResponse {
     pub janitor: RuntimeTaskResource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_cache: Option<RuntimeSessionCacheResource>,
+    pub automation: RuntimeAutomationResource,
+    pub operator: RuntimeOperatorResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,12 +232,34 @@ impl From<SessionStatus> for SessionRunState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionExecutionContextResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_skill_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt_override: Option<String>,
+    pub allowed_tools: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_workspace_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionExecutionResource {
     pub session: SessionResource,
     pub blocked: bool,
     pub run_state: SessionRunState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_event_seq: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automation: Option<SessionAutomationResource>,
+    pub execution: SessionExecutionContextResource,
     pub pending_permission_requests: Vec<PermissionRequest>,
     pub pending_user_input_requests: Vec<UserInputRequest>,
 }

@@ -22,8 +22,8 @@ pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
     SessionManager, SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest,
-    SessionRunOptions, SessionSubtaskRequest, SessionSubtaskResponse,
-    SessionUserInputReplyRequest, SessionUserTurnRequest,
+    SessionRunOptions, SessionSubtaskRequest, SessionSubtaskResponse, SessionUserInputReplyRequest,
+    SessionUserTurnRequest,
 };
 #[allow(unused_imports)]
 pub(crate) use model::{

@@ -508,6 +508,25 @@ pub struct SessionUserInputReplyRequestBody {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SessionExecutionContextResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_skill_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt_override: Option<String>,
+    pub allowed_tools: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_workspace_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SessionExecutionResource {
     pub session: SessionResource,
     pub blocked: bool,
@@ -516,6 +535,7 @@ pub struct SessionExecutionResource {
     pub latest_event_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automation: Option<SessionAutomationResource>,
+    pub execution: SessionExecutionContextResource,
     pub pending_permission_requests: Vec<PermissionRequest>,
     pub pending_user_input_requests: Vec<UserInputRequest>,
 }

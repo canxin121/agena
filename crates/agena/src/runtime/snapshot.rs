@@ -808,7 +808,10 @@ fn build_scheduler(session_manager: Arc<SessionManager>) -> Arc<agena_scheduler:
 
     #[async_trait::async_trait]
     impl agena_scheduler::JobSink for SessionSink {
-        async fn deliver(&self, job: &agena_scheduler::ScheduledJob) -> agena_scheduler::JobDeliveryResult {
+        async fn deliver(
+            &self,
+            job: &agena_scheduler::ScheduledJob,
+        ) -> agena_scheduler::JobDeliveryResult {
             let result = if let Some(session_id) = job.owner_session_id {
                 if self.session_manager.is_turn_active(session_id).await {
                     agena_scheduler::JobDeliveryResult::skipped(
@@ -834,7 +837,11 @@ fn build_scheduler(session_manager: Arc<SessionManager>) -> Arc<agena_scheduler:
                             "session is blocked on permission or user input",
                         )
                     } else {
-                        let options = match self.session_manager.resolve_scheduled_run_options(session_id).await {
+                        let options = match self
+                            .session_manager
+                            .resolve_scheduled_run_options(session_id)
+                            .await
+                        {
                             Ok(options) => options,
                             Err(err) => {
                                 let result = agena_scheduler::JobDeliveryResult::failed(
@@ -855,7 +862,9 @@ fn build_scheduler(session_manager: Arc<SessionManager>) -> Arc<agena_scheduler:
                             })
                             .await
                         {
-                            Ok(_) => agena_scheduler::JobDeliveryResult::submitted(Some(session_id)),
+                            Ok(_) => {
+                                agena_scheduler::JobDeliveryResult::submitted(Some(session_id))
+                            }
                             Err(err) => agena_scheduler::JobDeliveryResult::failed(
                                 Some(session_id),
                                 err.to_string(),
@@ -864,7 +873,10 @@ fn build_scheduler(session_manager: Arc<SessionManager>) -> Arc<agena_scheduler:
                     }
                 }
             } else {
-                agena_scheduler::JobDeliveryResult::failed(None, "scheduled job has no owner_session_id")
+                agena_scheduler::JobDeliveryResult::failed(
+                    None,
+                    "scheduled job has no owner_session_id",
+                )
             };
             self.notify_job_result(job, &result);
             result

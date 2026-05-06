@@ -25,11 +25,11 @@ use agena::{
     tool,
 };
 use agena_http_api::{
-    ApiError, ApiService, GitStatusResource, MessageListQuery, MessageResource,
-    PaginatedResponse, PartLoadMode, PermissionRuleListQuery, PermissionRuleResource,
-    PermissionRuleWriteRequest, ProviderSummaryResource, SessionCreateRequest, SessionEventListQuery,
-    SessionExecutionResource, SessionListQuery, SessionReplaceRequest, SessionResource,
-    SessionRunOptionsRequest, WorkspaceResolveRequest,
+    ApiError, ApiService, GitStatusResource, MessageListQuery, MessageResource, PaginatedResponse,
+    PartLoadMode, PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
+    ProviderSummaryResource, SessionCreateRequest, SessionEventListQuery, SessionExecutionResource,
+    SessionListQuery, SessionReplaceRequest, SessionResource, SessionRunOptionsRequest,
+    WorkspaceResolveRequest,
 };
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -1144,7 +1144,10 @@ impl Backend {
             return Err(anyhow!("git is not available in PATH"));
         }
         if !status.repo {
-            return Err(anyhow!("not a git repository: {}", self.workspace_root.display()));
+            return Err(anyhow!(
+                "not a git repository: {}",
+                self.workspace_root.display()
+            ));
         }
         if status.staged_files == 0 {
             return Err(anyhow!("no staged changes to commit"));
@@ -1187,7 +1190,10 @@ impl Backend {
             return Err(anyhow!("gh is not available in PATH"));
         }
         if !status.repo {
-            return Err(anyhow!("not a git repository: {}", self.workspace_root.display()));
+            return Err(anyhow!(
+                "not a git repository: {}",
+                self.workspace_root.display()
+            ));
         }
 
         let branch = head

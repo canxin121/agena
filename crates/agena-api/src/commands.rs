@@ -30,6 +30,7 @@ pub enum Command {
     SubmitTurn(SubmitTurnParams),
     ContinueRun(ContinueRunParams),
     CancelTurn(CancelTurnParams),
+    RewindSession(RewindSessionParams),
 
     // ── interactive replies ──
     ReplyPermission(ReplyPermissionParams),
@@ -128,6 +129,14 @@ pub struct ContinueRunParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelTurnParams {
     pub session_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewindSessionParams {
+    pub session_id: i64,
+    pub message_id: i64,
+    #[serde(default)]
+    pub expected_version: Option<i64>,
 }
 
 // ─── interactive replies ────────────────────────────────────────────────

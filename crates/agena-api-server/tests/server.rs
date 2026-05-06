@@ -27,8 +27,8 @@ use sea_orm::Database;
 use tower::ServiceExt;
 
 async fn build_state() -> (AppState, Arc<SessionManager>) {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-    agena::db::init_schema(&db).await.unwrap();
+    let db = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
+    agena::db::init_schema(db.as_ref()).await.unwrap();
 
     let registry = ProviderRegistry::new();
     let processor = SessionProcessor::new(
@@ -40,18 +40,16 @@ async fn build_state() -> (AppState, Arc<SessionManager>) {
         Agent::new("api-server-test", PermissionPolicy::allow_all()),
     );
 
-    let manager = Arc::new(SessionManager::new(db, processor, executor));
+    let manager = Arc::new(SessionManager::new(db.as_ref().clone(), processor, executor));
 
-    let runtime_db = Arc::new(sea_orm::Database::connect("sqlite::memory:").await.unwrap());
     let runtime = agena::runtime::AgenaRuntime::builder()
         .with_workspace_root(std::env::temp_dir())
-        .with_database_connection(runtime_db.as_ref().clone())
+        .with_database_connection(db.as_ref().clone())
         .build()
         .await
         .expect("runtime build");
 
-    let state =
-        AppState::new(runtime, Arc::clone(&runtime_db)).with_manager_override(Arc::clone(&manager));
+    let state = AppState::new(runtime, Arc::clone(&db)).with_manager_override(Arc::clone(&manager));
     (state, manager)
 }
 
@@ -104,11 +102,8 @@ async fn list_events_returns_published_events() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let result = value.get("result").and_then(|s| s.as_str());
-    assert_eq!(result, Some("events"));
     let items = value
-        .get("data")
-        .and_then(|d| d.get("items"))
+        .get("items")
         .and_then(|i| i.as_array())
         .expect("items array");
     assert!(
@@ -117,6 +112,48 @@ async fn list_events_returns_published_events() {
             .any(|e| e.get("kind").and_then(|k| k.as_str()) == Some("plugin_event")),
         "expected plugin_event event in {value:?}"
     );
+}
+
+#[tokio::test]
+async fn session_state_endpoint_returns_execution_resource() {
+    let (state, _manager) = build_state().await;
+    let app = router(state.clone());
+
+    let workspace = state
+        .service()
+        .create_workspace(agena_http_api::WorkspaceWriteRequest {
+            path: format!("/tmp/api-server-state-{}", uuid::Uuid::new_v4()),
+        })
+        .await
+        .expect("workspace should be created");
+    let session = state
+        .service()
+        .create_session(agena_http_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "state route".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/sessions/{}/state", session.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value.get("session").and_then(|s| s.get("id")).and_then(|id| id.as_i64()), Some(session.id));
+    assert!(value
+        .get("execution")
+        .and_then(|execution| execution.get("allowed_tools"))
+        .and_then(|allowed_tools| allowed_tools.as_array())
+        .is_some());
 }
 
 #[tokio::test]

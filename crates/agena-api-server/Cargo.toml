@@ -7,6 +7,7 @@ edition = "2024"
 agena = { path = "../agena" }
 agena-api = { path = "../agena-api" }
 agena-http-api = { path = "../agena-http-api" }
+async-stream = "0.3.6"
 async-trait = "0.1.89"
 axum = { version = "0.8.6", features = ["ws", "macros"] }
 chrono = { version = "0.4.42", features = ["serde"] }

@@ -386,6 +386,7 @@ impl CodexProvider {
                             wire_message::WirePart::ToolResult {
                                 tool_call_id,
                                 output_json,
+                                ..
                             } => {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 if !tool_call_id.trim().is_empty() {
@@ -419,6 +420,7 @@ impl CodexProvider {
                                 wire_message::WirePart::ToolResult {
                                     tool_call_id,
                                     output_json,
+                                    ..
                                 } => {
                                     if !buffered_parts.is_empty() {
                                         Self::push_responses_message_from_parts(

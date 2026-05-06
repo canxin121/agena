@@ -40,6 +40,11 @@ pub enum WirePart {
     },
     ToolResult {
         tool_call_id: String,
+        /// Name of the tool that produced this result. Required by some
+        /// providers (Gemini's `functionResponse`) and ignored by others
+        /// (OpenAI/Anthropic only need the call id). Empty string if
+        /// unknown — callers that require it must fall back gracefully.
+        tool_name: String,
         output_json: String,
     },
 }
@@ -129,6 +134,7 @@ pub fn project(message: &Message) -> Vec<WirePart> {
                     };
                     parts.push(WirePart::ToolResult {
                         tool_call_id: call_id,
+                        tool_name: exec.invocation().name.clone(),
                         output_json,
                     });
                 } else {
@@ -178,6 +184,7 @@ pub fn tool_results(parts: &[WirePart]) -> Vec<(String, String)> {
             WirePart::ToolResult {
                 tool_call_id,
                 output_json,
+                ..
             } => Some((tool_call_id.clone(), output_json.clone())),
             _ => None,
         })
@@ -354,9 +361,10 @@ fn project_tool_invocation(exec: &ToolExecutionPart, _message: &Message) -> (Str
 
 fn invocation_name_and_args(invocation: &ToolInvocation) -> (String, String) {
     let ToolInvocation { name, input } = invocation;
+    let json_value: serde_json::Value = input.clone().into();
     (
         name.clone(),
-        serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
+        serde_json::to_string(&json_value).unwrap_or_else(|_| "{}".to_owned()),
     )
 }
 
@@ -678,6 +686,7 @@ mod tests {
             parts,
             vec![WirePart::ToolResult {
                 tool_call_id: "call_5".to_string(),
+                tool_name: "resource_tool".to_string(),
                 output_json: PRUNED_TOOL_RESULT_PLACEHOLDER.to_string(),
             }]
         );

@@ -353,7 +353,7 @@ fn project_tool_invocation(exec: &ToolExecutionPart, _message: &Message) -> (Str
 }
 
 fn invocation_name_and_args(invocation: &ToolInvocation) -> (String, String) {
-    let ToolInvocation::Custom { name, input } = invocation;
+    let ToolInvocation { name, input } = invocation;
     (
         name.clone(),
         serde_json::to_string(input).unwrap_or_else(|_| "{}".to_owned()),
@@ -551,7 +551,7 @@ mod tests {
                     ExecutionStatus::Completed,
                     PartContent::ToolExecution(crate::message::ToolExecutionPart::Completed {
                         call_id: 4,
-                        invocation: crate::message::ToolInvocation::Custom {
+                        invocation: crate::message::ToolInvocation {
                             name: "resource_tool".to_string(),
                             input: crate::message::StructuredObject::default(),
                         },
@@ -629,7 +629,7 @@ mod tests {
                     ExecutionStatus::Completed,
                     PartContent::ToolExecution(crate::message::ToolExecutionPart::Completed {
                         call_id: 5,
-                        invocation: crate::message::ToolInvocation::Custom {
+                        invocation: crate::message::ToolInvocation {
                             name: "resource_tool".to_string(),
                             input: crate::message::StructuredObject::default(),
                         },

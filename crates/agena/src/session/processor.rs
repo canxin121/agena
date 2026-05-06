@@ -1050,7 +1050,7 @@ fn placeholder_tool_invocation(
         .iter()
         .find(|tool| tool.name == requested_name)
     else {
-        return ToolInvocation::Custom {
+        return ToolInvocation {
             name: requested_name.to_string(),
             input: StructuredObject::default(),
         };
@@ -1080,7 +1080,7 @@ fn tool_invocation_for_definition(
     tool: &EntryDefinition,
     input: StructuredObject,
 ) -> ToolInvocation {
-    ToolInvocation::Custom {
+    ToolInvocation {
         name: tool.name.clone(),
         input,
     }
@@ -1285,7 +1285,7 @@ mod tests {
             parse_tool_invocation("plugin_echo", "{\"message\":\"hello\"}", tools.as_slice())
                 .expect("custom tool call should parse");
 
-        let ToolInvocation::Custom { name, input } = invocation;
+        let ToolInvocation { name, input } = invocation;
         assert_eq!(name, "plugin_echo");
         let payload = serde_json::Value::from(input);
         assert_eq!(payload["message"], "hello");
@@ -1499,7 +1499,7 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(*call_id, 300);
-                let ToolInvocation::Custom { name, input } = invocation;
+                let ToolInvocation { name, input } = invocation;
                 assert_eq!(name, "search");
                 let payload = serde_json::Value::from(input.clone());
                 assert_eq!(payload["q"], "rust");

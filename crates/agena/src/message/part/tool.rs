@@ -489,8 +489,8 @@ impl BuiltinToolInput {
         }
     }
 
-    /// Convert into a `ToolInvocation::Custom` carrying the tool name and a
-    /// `StructuredObject`-encoded payload.
+    /// Convert into a generic [`ToolInvocation`] carrying this tool's name
+    /// and a `StructuredObject` payload.
     pub fn into_invocation(self) -> ToolInvocation {
         let name = self.tool_name().to_string();
         let value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
@@ -501,63 +501,26 @@ impl BuiltinToolInput {
         object.remove("tool");
         let payload =
             StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
-        ToolInvocation::Custom {
-            name,
-            input: payload,
-        }
+        ToolInvocation::new(name, payload)
     }
 
-    /// Reconstruct a `BuiltinToolInput` from a `(name, StructuredObject)`
-    /// pair, or `None` if the name is not a recognized built-in tool.
-    pub fn from_custom(name: &str, payload: &StructuredObject) -> Option<Self> {
-        let value: serde_json::Value = payload.clone().into();
+    /// Reconstruct a `BuiltinToolInput` from a [`ToolInvocation`], or `None`
+    /// if the invocation does not name a built-in tool. The look-up is
+    /// authoritative: any name that round-trips through [`tool_name`] is
+    /// accepted; anything else returns `None`.
+    pub fn from_invocation(invocation: &ToolInvocation) -> Option<Self> {
+        let value: serde_json::Value = invocation.input.clone().into();
         let mut object = match value {
             serde_json::Value::Object(map) => map,
             serde_json::Value::Null => serde_json::Map::new(),
             _ => return None,
         };
-        let tag = canonical_builtin_name(name)?;
         object.insert(
             "tool".to_string(),
-            serde_json::Value::String(tag.to_string()),
+            serde_json::Value::String(invocation.name.clone()),
         );
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
-}
-
-/// Returns `Some(canonical_tag)` if `name` matches a built-in tool.
-pub fn canonical_builtin_name(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "bash" => "bash",
-        "read" => "read",
-        "view_file" => "view_file",
-        "apply_patch" => "apply_patch",
-        "glob" => "glob",
-        "grep" => "grep",
-        "task" => "task",
-        "tool_search" => "tool_search",
-        "todo_write" => "todo_write",
-        "ask_user" => "ask_user",
-        "monitor" => "monitor",
-        "web_fetch" => "web_fetch",
-        "web_search" => "web_search",
-        "enter_plan_mode" => "enter_plan_mode",
-        "exit_plan_mode" => "exit_plan_mode",
-        "skill_run" => "skill_run",
-        "enter_worktree" => "enter_worktree",
-        "exit_worktree" => "exit_worktree",
-        "cron_create" => "cron_create",
-        "cron_list" => "cron_list",
-        "cron_delete" => "cron_delete",
-        "schedule_wakeup" => "schedule_wakeup",
-        "lsp_definition" => "lsp_definition",
-        "lsp_references" => "lsp_references",
-        "lsp_hover" => "lsp_hover",
-        "lsp_diagnostics" => "lsp_diagnostics",
-        "notebook_edit" => "notebook_edit",
-        "powershell" => "powershell",
-        _ => return None,
-    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -568,30 +531,35 @@ pub struct PluginInvocation {
 
 impl PluginInvocation {
     pub fn from_tool_invocation(invocation: &ToolInvocation) -> Self {
-        let ToolInvocation::Custom { name, input } = invocation;
         Self {
-            entry_name: name.clone(),
-            input: input.clone(),
+            entry_name: invocation.name.clone(),
+            input: invocation.input.clone(),
         }
     }
 }
 
+/// A dynamic tool invocation: stable name + structured payload. Built-in
+/// tools and plugin-supplied tools share this shape; the typed
+/// [`BuiltinToolInput`] is recovered on demand via [`Self::as_builtin`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "source", rename_all = "snake_case")]
-pub enum ToolInvocation {
-    Custom {
-        name: String,
-        #[serde(default)]
-        input: StructuredObject,
-    },
+pub struct ToolInvocation {
+    pub name: String,
+    #[serde(default)]
+    pub input: StructuredObject,
 }
 
 impl ToolInvocation {
+    pub fn new(name: impl Into<String>, input: StructuredObject) -> Self {
+        Self {
+            name: name.into(),
+            input,
+        }
+    }
+
     /// If this invocation names a built-in tool, decode its input into a
     /// strongly-typed [`BuiltinToolInput`].
     pub fn as_builtin(&self) -> Option<BuiltinToolInput> {
-        let Self::Custom { name, input } = self;
-        BuiltinToolInput::from_custom(name, input)
+        BuiltinToolInput::from_invocation(self)
     }
 }
 
@@ -856,9 +824,10 @@ impl BuiltinToolOutput {
     }
 
     /// Reverse of [`into_custom_output`]: try to decode a `CustomToolOutput`
-    /// emitted by a built-in tool back into the strongly-typed enum.
+    /// emitted by a built-in tool back into the strongly-typed enum. Returns
+    /// `None` for any name that does not correspond to one of the built-in
+    /// variants (serde rejects the unknown tag).
     pub fn from_custom(output: &CustomToolOutput) -> Option<Self> {
-        let tag = canonical_builtin_name(&output.name)?;
         let value: serde_json::Value = output.payload.clone().into();
         let mut object = match value {
             serde_json::Value::Object(map) => map,
@@ -867,7 +836,7 @@ impl BuiltinToolOutput {
         };
         object.insert(
             "tool".to_string(),
-            serde_json::Value::String(tag.to_string()),
+            serde_json::Value::String(output.name.clone()),
         );
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }

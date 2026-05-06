@@ -70,7 +70,7 @@ impl Message {
             Role::Tool,
             vec![PartContent::ToolExecution(ToolExecutionPart::Completed {
                 call_id: 0,
-                invocation: crate::message::ToolInvocation::Custom {
+                invocation: crate::message::ToolInvocation {
                     name: "tool".to_owned(),
                     input: crate::message::StructuredObject::default(),
                 },

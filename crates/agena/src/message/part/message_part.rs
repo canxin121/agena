@@ -292,7 +292,7 @@ const fn file_change_kind_label(kind: FileChangeKind) -> &'static str {
 }
 
 fn tool_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation::Custom { name, .. } = invocation;
+    let ToolInvocation { name, .. } = invocation;
     name.clone()
 }
 

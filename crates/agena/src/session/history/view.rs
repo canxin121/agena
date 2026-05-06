@@ -225,7 +225,7 @@ impl SessionViewBuilder {
         };
 
         let buffered = &mut turn.messages[assistant_index];
-        let invocation = ToolInvocation::Custom {
+        let invocation = ToolInvocation {
             name: payload.name.to_string(),
             input: structured_from_json(&payload.arguments),
         };
@@ -284,7 +284,7 @@ impl SessionViewBuilder {
             ExecutionStatus::Completed,
             PartContent::ToolExecution(ToolExecutionPart::Completed {
                 call_id: 0,
-                invocation: ToolInvocation::Custom {
+                invocation: ToolInvocation {
                     name: "tool".to_owned(),
                     input: StructuredObject::default(),
                 },

@@ -593,6 +593,7 @@ impl AmazonBedrockProvider {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
+                    ..
                 } => blocks.push(BedrockAnthropicTextBlock::tool_result(
                     tool_call_id,
                     output_json,
@@ -1588,6 +1589,7 @@ fn ordered_tool_and_user_messages_from_parts(parts: &[wire_message::WirePart]) -
             wire_message::WirePart::ToolResult {
                 tool_call_id,
                 output_json,
+                ..
             } if !tool_call_id.trim().is_empty() => {
                 if !buffered_parts.is_empty() {
                     messages.push(ChatMessage {

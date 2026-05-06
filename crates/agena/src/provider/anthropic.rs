@@ -150,6 +150,7 @@ impl AnthropicProvider {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
+                    ..
                 } => blocks.push(AnthropicTextBlock::tool_result(tool_call_id, output_json)),
             }
         }

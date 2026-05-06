@@ -971,6 +971,7 @@ fn ordered_tool_and_user_chat_messages(parts: &[wire_message::WirePart]) -> Vec<
             wire_message::WirePart::ToolResult {
                 tool_call_id,
                 output_json,
+                ..
             } if !tool_call_id.trim().is_empty() => {
                 if !buffered_parts.is_empty() {
                     messages.push(ChatMessage {
@@ -1193,6 +1194,7 @@ fn append_responses_items_for_message(
                         wire_message::WirePart::ToolResult {
                             tool_call_id,
                             output_json,
+                            ..
                         } => {
                             flush_assistant_responses_text(input, &mut text_chunks);
                             if !tool_call_id.trim().is_empty() {
@@ -1226,6 +1228,7 @@ fn append_responses_items_for_message(
                             wire_message::WirePart::ToolResult {
                                 tool_call_id,
                                 output_json,
+                                ..
                             } => {
                                 if !buffered_parts.is_empty() {
                                     push_responses_message_from_parts(

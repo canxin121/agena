@@ -558,6 +558,7 @@ fn ordered_tool_and_user_messages(parts: &[wire_message::WirePart]) -> Vec<ChatM
             wire_message::WirePart::ToolResult {
                 tool_call_id,
                 output_json,
+                ..
             } if !tool_call_id.trim().is_empty() => {
                 if !buffered.is_empty() {
                     messages.push(ChatMessage::user(

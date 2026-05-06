@@ -188,12 +188,19 @@ impl GeminiProvider {
             .map(|part| match part {
                 wire_message::WirePart::Text { text } => GeminiPart::text(text.clone()),
                 wire_message::WirePart::Attachment { item } => Self::attachment_part(item),
-                wire_message::WirePart::ToolCall { name, .. } => {
-                    GeminiPart::text(format!("[tool_call:{name}]"))
-                }
-                wire_message::WirePart::ToolResult { tool_call_id, .. } => {
-                    GeminiPart::text(format!("[tool_result:{tool_call_id}]"))
-                }
+                wire_message::WirePart::ToolCall {
+                    name,
+                    arguments_json,
+                    ..
+                } => GeminiPart::function_call(name.clone(), parse_json_or_object(arguments_json)),
+                wire_message::WirePart::ToolResult {
+                    tool_name,
+                    output_json,
+                    ..
+                } => GeminiPart::function_response(
+                    tool_name.clone(),
+                    parse_json_or_string_object(output_json),
+                ),
             })
             .collect()
     }
@@ -235,6 +242,10 @@ impl GeminiProvider {
         let fallback_model = request.model.clone();
         let mut stream = ModelProvider::complete_stream(self, request).await?;
         let mut text = String::new();
+        let mut tool_calls: Vec<crate::provider::CompletionToolCall> = Vec::new();
+        let mut tool_call_acc: std::collections::HashMap<String, (String, String, String)> =
+            std::collections::HashMap::new();
+        let mut tool_call_order: Vec<String> = Vec::new();
         let mut completed: Option<(
             ProviderId,
             ModelId,
@@ -257,8 +268,44 @@ impl GeminiProvider {
                 } => {
                     completed = Some((provider_id, model, finish_reason, usage, provider_metadata));
                 }
-                CompletionStreamEvent::ToolCallDelta { .. } => {}
+                CompletionStreamEvent::ToolCallDelta {
+                    stream_key,
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
+                    let entry = tool_call_acc
+                        .entry(stream_key.clone())
+                        .or_insert_with(|| (String::new(), String::new(), String::new()));
+                    if entry.0.is_empty() {
+                        if let Some(id) = id {
+                            entry.0 = id;
+                        }
+                    }
+                    if entry.1.is_empty() {
+                        if let Some(name) = name {
+                            entry.1 = name;
+                        }
+                    }
+                    entry.2.push_str(arguments_delta.as_str());
+                    if !tool_call_order.contains(&stream_key) {
+                        tool_call_order.push(stream_key);
+                    }
+                }
                 CompletionStreamEvent::ThinkingDelta { .. } => {}
+            }
+        }
+
+        for key in tool_call_order {
+            if let Some((id, name, arguments_json)) = tool_call_acc.remove(&key)
+                && !name.is_empty()
+            {
+                tool_calls.push(crate::provider::CompletionToolCall::Function {
+                    id: if id.is_empty() { name.clone() } else { id },
+                    name,
+                    arguments_json,
+                });
             }
         }
 
@@ -273,7 +320,7 @@ impl GeminiProvider {
                 )
             });
 
-        if text.is_empty() && finish_reason.is_none() {
+        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
             return Err(AppError::Provider(
                 "gemini stream fallback produced empty completion".to_owned(),
             ));
@@ -285,7 +332,7 @@ impl GeminiProvider {
             text,
             reasoning_text: None,
             finish_reason,
-            tool_calls: Vec::new(),
+            tool_calls,
             usage,
             provider_metadata,
         })
@@ -412,6 +459,8 @@ impl ModelProvider for GeminiProvider {
                 }
             },
             stream: None,
+            tools: build_gemini_tools(request.tools.as_slice()),
+            tool_config: None,
         };
 
         let response = self
@@ -434,19 +483,16 @@ impl ModelProvider for GeminiProvider {
 
         let payload: GeminiGenerateResponse =
             utils::parse_json_response(PROVIDER_ID, response).await?;
-        let text = payload
-            .candidates
-            .first()
-            .map(GeminiCandidate::text)
+        let candidate = payload.candidates.first();
+        let text = candidate.map(GeminiCandidate::text).unwrap_or_default();
+        let tool_calls = candidate
+            .map(GeminiCandidate::function_calls)
             .unwrap_or_default();
 
-        let finish_reason = payload
-            .candidates
-            .first()
-            .and_then(|c| c.finish_reason.clone());
+        let finish_reason = candidate.and_then(|c| c.finish_reason.clone());
         let usage = payload.usage_metadata.map(map_gemini_usage);
 
-        if text.is_empty() {
+        if text.is_empty() && tool_calls.is_empty() {
             return self
                 .complete_by_aggregating_stream(stream_fallback_request)
                 .await;
@@ -458,7 +504,7 @@ impl ModelProvider for GeminiProvider {
             text,
             reasoning_text: None,
             finish_reason: CompletionFinishReason::from_provider(finish_reason.as_deref()),
-            tool_calls: Vec::new(),
+            tool_calls,
             usage,
             provider_metadata: payload
                 .candidates
@@ -515,6 +561,8 @@ impl ModelProvider for GeminiProvider {
                 }
             },
             stream: Some(true),
+            tools: build_gemini_tools(request.tools.as_slice()),
+            tool_config: None,
         };
 
         let response = self
@@ -545,10 +593,12 @@ impl ModelProvider for GeminiProvider {
 
         let stream = async_stream::try_stream! {
             let mut emitted = String::new();
+            let mut emitted_tool_calls: usize = 0;
             let mut saw_content = false;
             let mut fallback_usage: Option<crate::provider::CompletionUsage> = None;
             let mut fallback_provider_metadata: Option<serde_json::Value> = None;
             let mut completed_emitted = false;
+            let mut tool_call_seen = false;
 
             while let Some(event) = events.next().await {
                 let event = event?;
@@ -567,7 +617,7 @@ impl ModelProvider for GeminiProvider {
                 }
                 let mut done = false;
 
-                for stream_event in GeminiStreamEvent::from_chunk(chunk, &mut emitted) {
+                for stream_event in GeminiStreamEvent::from_chunk(chunk, &mut emitted, &mut emitted_tool_calls) {
                     match stream_event {
                         GeminiStreamEvent::TextDelta(delta) => {
                             saw_content = true;
@@ -577,18 +627,37 @@ impl ModelProvider for GeminiProvider {
                                 delta,
                             };
                         }
+                        GeminiStreamEvent::ToolCall(call) => {
+                            saw_content = true;
+                            tool_call_seen = true;
+                            let crate::provider::CompletionToolCall::Function {
+                                id, name, arguments_json,
+                            } = call;
+                            yield CompletionStreamEvent::ToolCallDelta {
+                                provider_id: provider_id.clone(),
+                                model: model_name.clone(),
+                                stream_key: id.clone(),
+                                id: Some(id),
+                                name: Some(name),
+                                arguments_delta: arguments_json,
+                            };
+                        }
                         GeminiStreamEvent::Completed {
                             finish_reason,
                             usage,
                             provider_metadata,
                         } => {
                             completed_emitted = true;
+                            let resolved_finish_reason = CompletionFinishReason::from_provider(
+                                Some(finish_reason.as_str()),
+                            )
+                            .or_else(|| {
+                                tool_call_seen.then_some(CompletionFinishReason::ToolCalls)
+                            });
                             yield CompletionStreamEvent::Completed {
                                 provider_id: provider_id.clone(),
                                 model: model_name.clone(),
-                                finish_reason: CompletionFinishReason::from_provider(
-                                    Some(finish_reason.as_str()),
-                                ),
+                                finish_reason: resolved_finish_reason,
                                 usage: usage.or_else(|| fallback_usage.clone()),
                                 provider_metadata: provider_metadata
                                     .or_else(|| fallback_provider_metadata.clone()),
@@ -610,7 +679,7 @@ impl ModelProvider for GeminiProvider {
                 yield CompletionStreamEvent::Completed {
                     provider_id: provider_id.clone(),
                     model: model_name.clone(),
-                    finish_reason: None,
+                    finish_reason: tool_call_seen.then_some(CompletionFinishReason::ToolCalls),
                     usage: fallback_usage,
                     provider_metadata: fallback_provider_metadata,
                 };
@@ -630,6 +699,13 @@ struct GeminiGenerateRequest {
     generation_config: GeminiGenerationConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<GeminiTool>>,
+    #[serde(
+        rename = "toolConfig",
+        skip_serializing_if = "Option::is_none"
+    )]
+    tool_config: Option<GeminiToolConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -644,7 +720,7 @@ struct GeminiContent {
     parts: Vec<GeminiPart>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 struct GeminiPart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<String>,
@@ -654,25 +730,96 @@ struct GeminiPart {
         skip_serializing_if = "Option::is_none"
     )]
     inline_data: Option<GeminiInlineData>,
+    #[serde(
+        default,
+        rename = "functionCall",
+        skip_serializing_if = "Option::is_none"
+    )]
+    function_call: Option<GeminiFunctionCall>,
+    #[serde(
+        default,
+        rename = "functionResponse",
+        skip_serializing_if = "Option::is_none"
+    )]
+    function_response: Option<GeminiFunctionResponse>,
 }
 
 impl GeminiPart {
     fn text(text: impl Into<String>) -> Self {
         Self {
             text: Some(text.into()),
-            inline_data: None,
+            ..Self::default()
         }
     }
 
     fn inline_data(mime_type: impl Into<String>, data: impl Into<String>) -> Self {
         Self {
-            text: None,
             inline_data: Some(GeminiInlineData {
                 mime_type: mime_type.into(),
                 data: data.into(),
             }),
+            ..Self::default()
         }
     }
+
+    fn function_call(name: impl Into<String>, args: serde_json::Value) -> Self {
+        Self {
+            function_call: Some(GeminiFunctionCall {
+                name: name.into(),
+                args,
+            }),
+            ..Self::default()
+        }
+    }
+
+    fn function_response(name: impl Into<String>, response: serde_json::Value) -> Self {
+        Self {
+            function_response: Some(GeminiFunctionResponse {
+                name: name.into(),
+                response,
+            }),
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct GeminiFunctionCall {
+    name: String,
+    #[serde(default)]
+    args: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiFunctionResponse {
+    name: String,
+    #[serde(default)]
+    response: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiTool {
+    #[serde(rename = "functionDeclarations")]
+    function_declarations: Vec<GeminiFunctionDeclaration>,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiFunctionDeclaration {
+    name: String,
+    description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiToolConfig {
+    #[serde(rename = "functionCallingConfig")]
+    function_calling_config: GeminiFunctionCallingConfig,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiFunctionCallingConfig {
+    mode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -752,6 +899,32 @@ impl GeminiCandidate {
             .unwrap_or_default()
     }
 
+    fn function_calls(&self) -> Vec<crate::provider::CompletionToolCall> {
+        self.content
+            .as_ref()
+            .map(|content| {
+                content
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, part)| {
+                        let call = part.function_call.as_ref()?;
+                        let arguments_json = if call.args.is_null() {
+                            "{}".to_owned()
+                        } else {
+                            serde_json::to_string(&call.args).unwrap_or_else(|_| "{}".to_owned())
+                        };
+                        Some(crate::provider::CompletionToolCall::Function {
+                            id: format!("{}-{idx}", call.name),
+                            name: call.name.clone(),
+                            arguments_json,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn provider_metadata(&self) -> Option<serde_json::Value> {
         let mut map = serde_json::Map::new();
         if let Some(s) = self.safety_ratings.clone() {
@@ -762,6 +935,95 @@ impl GeminiCandidate {
         }
         (!map.is_empty()).then_some(serde_json::Value::Object(map))
     }
+}
+
+fn parse_json_or_object(raw: &str) -> serde_json::Value {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return serde_json::Value::Object(Default::default());
+    }
+    serde_json::from_str::<serde_json::Value>(trimmed)
+        .unwrap_or_else(|_| serde_json::Value::Object(Default::default()))
+}
+
+/// Wrap non-JSON tool output in `{ "result": "<text>" }` because Gemini's
+/// `functionResponse.response` field must be a JSON object.
+fn parse_json_or_string_object(raw: &str) -> serde_json::Value {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return serde_json::Value::Object(Default::default());
+    }
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(value @ serde_json::Value::Object(_)) => value,
+        Ok(other) => serde_json::json!({ "result": other }),
+        Err(_) => serde_json::json!({ "result": raw }),
+    }
+}
+
+/// Strip JSON Schema fields that Gemini's function declaration parser rejects.
+/// Specifically `additionalProperties`, `$schema`, `$ref`, `definitions` and
+/// the `format` keyword on string types except for the few values Gemini
+/// understands (`enum`, `date-time`).
+fn sanitize_function_parameters(value: &serde_json::Value) -> Option<serde_json::Value> {
+    fn walk(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut out = serde_json::Map::new();
+                for (key, child) in map {
+                    if matches!(
+                        key.as_str(),
+                        "$schema"
+                            | "$ref"
+                            | "definitions"
+                            | "$defs"
+                            | "additionalProperties"
+                            | "title"
+                            | "default"
+                    ) {
+                        continue;
+                    }
+                    if key == "format"
+                        && !matches!(
+                            child.as_str(),
+                            Some("enum") | Some("date-time")
+                        )
+                    {
+                        continue;
+                    }
+                    out.insert(key.clone(), walk(child));
+                }
+                serde_json::Value::Object(out)
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(walk).collect())
+            }
+            other => other.clone(),
+        }
+    }
+
+    let cleaned = walk(value);
+    if matches!(cleaned, serde_json::Value::Object(ref m) if m.is_empty()) {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn build_gemini_tools(tools: &[crate::tool::EntryDefinition]) -> Option<Vec<GeminiTool>> {
+    if tools.is_empty() {
+        return None;
+    }
+    let function_declarations = tools
+        .iter()
+        .map(|tool| GeminiFunctionDeclaration {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            parameters: sanitize_function_parameters(&tool.input_schema),
+        })
+        .collect();
+    Some(vec![GeminiTool {
+        function_declarations,
+    }])
 }
 
 fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage {
@@ -779,6 +1041,7 @@ fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage 
 #[derive(Debug)]
 enum GeminiStreamEvent {
     TextDelta(String),
+    ToolCall(crate::provider::CompletionToolCall),
     Completed {
         finish_reason: String,
         usage: Option<crate::provider::CompletionUsage>,
@@ -787,7 +1050,11 @@ enum GeminiStreamEvent {
 }
 
 impl GeminiStreamEvent {
-    fn from_chunk(chunk: GeminiGenerateResponse, emitted: &mut String) -> Vec<Self> {
+    fn from_chunk(
+        chunk: GeminiGenerateResponse,
+        emitted: &mut String,
+        emitted_tool_calls: &mut usize,
+    ) -> Vec<Self> {
         let mut events = Vec::new();
         let candidate = chunk.candidates.first();
 
@@ -802,6 +1069,16 @@ impl GeminiStreamEvent {
             } else if !full_text.is_empty() {
                 *emitted = full_text.clone();
                 events.push(Self::TextDelta(full_text));
+            }
+
+            // Gemini streams emit each functionCall as a complete part rather
+            // than incremental JSON deltas, so we forward them once apiece.
+            let calls = candidate.function_calls();
+            if calls.len() > *emitted_tool_calls {
+                for call in calls.into_iter().skip(*emitted_tool_calls) {
+                    events.push(Self::ToolCall(call));
+                    *emitted_tool_calls += 1;
+                }
             }
 
             if let Some(finish_reason) = candidate.finish_reason.clone() {
@@ -1274,5 +1551,284 @@ mod tests {
         assert_eq!(usage.input_tokens, 4);
         assert_eq!(usage.output_tokens, 1);
         assert_eq!(usage.cache_read_tokens, 2);
+    }
+
+    #[test]
+    fn build_gemini_tools_emits_function_declarations_with_sanitized_schema() {
+        let definition = crate::tool::EntryDefinition {
+            name: "lookup".to_owned(),
+            description: "Look up something".to_owned(),
+            input_schema: serde_json::json!({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "title": "Strip me",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "query": { "type": "string", "format": "uuid" },
+                    "limit": { "type": "integer" }
+                },
+                "required": ["query"]
+            }),
+            behavior: crate::entry::EntryBehavior::ReadOnly,
+            source: crate::entry::EntrySource::Builtin,
+            search_terms: Vec::new(),
+            read_only: true,
+            concurrency_safe: true,
+            requires_user_interaction: false,
+            load_priority: crate::entry::EntryLoadPriority::Standard,
+            strict: false,
+        };
+        let tools = build_gemini_tools(std::slice::from_ref(&definition))
+            .expect("tools should be present");
+        assert_eq!(tools.len(), 1);
+        let decl = &tools[0].function_declarations[0];
+        assert_eq!(decl.name, "lookup");
+        let parameters = decl.parameters.as_ref().expect("parameters present");
+        let object = parameters.as_object().expect("object schema");
+        assert!(!object.contains_key("$schema"));
+        assert!(!object.contains_key("title"));
+        assert!(!object.contains_key("additionalProperties"));
+        let query = object
+            .get("properties")
+            .and_then(|p| p.get("query"))
+            .and_then(|v| v.as_object())
+            .expect("query property");
+        assert!(!query.contains_key("format"));
+        assert_eq!(
+            query.get("type").and_then(|v| v.as_str()),
+            Some("string")
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_parses_function_call_response() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "key".to_owned(),
+                "test-key".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "candidates": [{
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {"functionCall": {
+                                    "name": "lookup",
+                                    "args": { "query": "rust" }
+                                }}
+                            ]
+                        },
+                        "finishReason": "STOP"
+                    }],
+                    "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 6}
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "Find rust")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.tool_calls.len(), 1);
+        let crate::provider::CompletionToolCall::Function {
+            name,
+            arguments_json,
+            ..
+        } = &response.tool_calls[0];
+        assert_eq!(name, "lookup");
+        let args: serde_json::Value =
+            serde_json::from_str(arguments_json).expect("args parse as json");
+        assert_eq!(args["query"], "rust");
+    }
+
+    #[tokio::test]
+    async fn complete_stream_emits_tool_call_delta_for_function_call_part() {
+        let mut server = mockito::Server::new_async().await;
+        let body = concat!(
+            "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{\"q\":1}}}]}}]}\n\n",
+            "data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{\"q\":1}}}]}}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":2}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let _mock = server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("alt".to_owned(), "sse".to_owned()),
+                mockito::Matcher::UrlEncoded("key".to_owned(), "test-key".to_owned()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        );
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "go")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut tool_call_event: Option<(String, String)> = None;
+        let mut completed_finish: Option<Option<CompletionFinishReason>> = None;
+        while let Some(event) = stream.next().await {
+            match event.expect("stream item should parse") {
+                CompletionStreamEvent::ToolCallDelta {
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
+                    tool_call_event = Some((name.unwrap_or_default(), arguments_delta));
+                }
+                CompletionStreamEvent::Completed { finish_reason, .. } => {
+                    completed_finish = Some(finish_reason);
+                }
+                _ => {}
+            }
+        }
+
+        let (name, args) = tool_call_event.expect("tool call delta emitted");
+        assert_eq!(name, "lookup");
+        let args: serde_json::Value = serde_json::from_str(&args).unwrap();
+        assert_eq!(args["q"], 1);
+        let finish = completed_finish.expect("completed emitted");
+        assert!(matches!(finish, Some(CompletionFinishReason::Stop)));
+    }
+
+    #[test]
+    fn message_parts_serialize_tool_call_and_tool_result_natively() {
+        use crate::message::{
+            ExecutionStatus, Message, MessageMetadata, MessagePart, MessageStatus, TimeRange,
+            ToolExecutionPart, ToolInvocation, ToolOutput,
+        };
+        use chrono::Utc;
+
+        let mut assistant_part = MessagePart::with_content(
+            10,
+            42,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            crate::message::PartContent::ToolExecution(ToolExecutionPart::Completed {
+                call_id: 7,
+                invocation: ToolInvocation {
+                    name: "lookup".to_owned(),
+                    input: crate::message::StructuredObject::try_from(serde_json::json!({"q": "rust"}))
+                        .expect("structured object"),
+                },
+                output_text: String::new(),
+                blocks: Vec::new(),
+                attachments: Vec::new(),
+                details: ToolOutput::default(),
+                lifecycle: TimeRange::default(),
+            }),
+        );
+        assistant_part.operation_id = Some("call_7".to_owned());
+        let assistant_msg = Message {
+            id: 42,
+            role: crate::role::Role::Assistant,
+            state: MessageStatus::Completed,
+            parts: vec![assistant_part],
+            created_at: Utc::now(),
+            metadata: MessageMetadata::default(),
+            usage: None,
+            finish: None,
+        };
+        let parts = GeminiProvider::message_parts(&assistant_msg);
+        assert_eq!(parts.len(), 1);
+        let call = parts[0]
+            .function_call
+            .as_ref()
+            .expect("function_call emitted");
+        assert_eq!(call.name, "lookup");
+        assert_eq!(call.args["q"], "rust");
+
+        let mut tool_part = MessagePart::with_content(
+            11,
+            43,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            crate::message::PartContent::ToolExecution(ToolExecutionPart::Completed {
+                call_id: 7,
+                invocation: ToolInvocation {
+                    name: "lookup".to_owned(),
+                    input: crate::message::StructuredObject::default(),
+                },
+                output_text: "ok".to_owned(),
+                blocks: Vec::new(),
+                attachments: Vec::new(),
+                details: ToolOutput::default(),
+                lifecycle: TimeRange::default(),
+            }),
+        );
+        tool_part.operation_id = Some("call_7".to_owned());
+        let tool_msg = Message {
+            id: 43,
+            role: crate::role::Role::Tool,
+            state: MessageStatus::Completed,
+            parts: vec![tool_part],
+            created_at: Utc::now(),
+            metadata: MessageMetadata::default(),
+            usage: None,
+            finish: None,
+        };
+        let parts = GeminiProvider::message_parts(&tool_msg);
+        assert_eq!(parts.len(), 1);
+        let resp = parts[0]
+            .function_response
+            .as_ref()
+            .expect("function_response emitted");
+        assert_eq!(resp.name, "lookup");
+        assert_eq!(resp.response["result"], "ok");
     }
 }

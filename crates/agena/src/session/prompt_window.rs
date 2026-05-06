@@ -564,6 +564,7 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                     if let ProjectedSessionPart::ToolResult {
                         tool_call_id,
                         output_json,
+                        ..
                     } = part
                     {
                         if output_json.is_empty() {

@@ -1012,11 +1012,6 @@ pub enum ToolOutput {
     Custom {
         output: CustomToolOutput,
     },
-    Unknown {
-        name: String,
-        #[serde(default)]
-        payload: StructuredObject,
-    },
 }
 
 impl ToolOutput {

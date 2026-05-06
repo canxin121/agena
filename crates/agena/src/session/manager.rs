@@ -244,10 +244,12 @@ impl SessionManager {
         tool_executor: ToolExecutor,
     ) -> Self {
         let db_arc = Arc::new(db.clone());
-        // HistoryEventStore wraps SeaEventStore but silently drops UI-only
-        // (non-persistent) events so streaming deltas never land in SQLite.
-        let store_inner: Arc<dyn crate::event::EventStore<crate::event::EventKind>> =
-            Arc::new(crate::db::HistoryEventStore::new(Arc::clone(&db_arc)));
+        // The publisher (not the store) consults `EventKind::is_persistent`
+        // to decide which events land in SQLite, so the store stays a single
+        // generic type.
+        let store_inner: Arc<dyn crate::event::EventStore<crate::event::EventKind>> = Arc::new(
+            crate::db::SeaEventStore::<crate::event::EventKind>::new(Arc::clone(&db_arc)),
+        );
         let bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>> =
             Arc::new(crate::event::InProcessEventBus::<crate::event::EventKind>::new(4096));
         let seq = Arc::new(crate::event::SequenceAllocator::new());

@@ -1146,15 +1146,20 @@ mod tests {
     };
     use crate::tool::{EntryBehavior, EntryDefinition};
 
-    /// Construct an in-memory `EventPublisher` backed by a tiny test store
-    /// that just keeps events in a Vec. The store side of the publisher is
-    /// the side tests inspect; the bus is wired but unused here.
+    /// Construct an in-memory `EventPublisher` whose `MemEventStore` collects
+    /// every event the publisher routes to it — including non-persistent
+    /// (UI) ones in tests, since the test bus mirrors them back into the
+    /// store. Tests inspect the store side as a single ordered transcript.
     fn test_publisher() -> (Arc<EventPublisher>, Arc<MemEventStore>) {
-        use crate::event::{EventStore, InProcessEventBus, SequenceAllocator};
+        use crate::event::{EventStore, SequenceAllocator};
         let store: Arc<MemEventStore> = Arc::new(MemEventStore::default());
         let store_dyn: Arc<dyn EventStore<EventKind>> = Arc::clone(&store) as _;
+        // The test bus forwards every published event into the same
+        // collector store, so non-persistent UI events show up in the
+        // assertion transcript even though the production publisher would
+        // skip them on the store side.
         let bus: Arc<dyn crate::event::EventBus<EventKind>> =
-            Arc::new(InProcessEventBus::<EventKind>::new(64));
+            Arc::new(MirrorBus::new(Arc::clone(&store)));
         let seq = Arc::new(SequenceAllocator::new());
         (Arc::new(EventPublisher::new(seq, store_dyn, bus)), store)
     }
@@ -1164,16 +1169,56 @@ mod tests {
         events: Mutex<Vec<DomainEvent>>,
     }
 
+    /// Test-only bus that mirrors every published event into a `MemEventStore`,
+    /// so assertions can read the full event transcript (history + UI) from a
+    /// single Vec. It does not deliver to subscribers — tests don't need
+    /// subscription semantics.
+    struct MirrorBus {
+        store: Arc<MemEventStore>,
+    }
+
+    impl MirrorBus {
+        fn new(store: Arc<MemEventStore>) -> Self {
+            Self { store }
+        }
+    }
+
+    #[async_trait]
+    impl crate::event::EventBus<EventKind> for MirrorBus {
+        async fn publish(&self, event: DomainEvent) -> Result<(), crate::event::BusError> {
+            self.store
+                .events
+                .lock()
+                .expect("test bus lock")
+                .push(event);
+            Ok(())
+        }
+
+        fn subscribe(
+            &self,
+            filter: crate::event::EventFilter,
+        ) -> crate::event::Subscription<EventKind> {
+            // Tests don't subscribe; route through a one-shot in-process bus
+            // so the trait method has a working implementation if anyone ever
+            // calls it.
+            let bridge = crate::event::InProcessEventBus::<EventKind>::new(1);
+            bridge.subscribe(filter)
+        }
+
+        fn capacity(&self) -> usize {
+            usize::MAX
+        }
+    }
+
     #[async_trait]
     impl crate::event::EventStore<EventKind> for MemEventStore {
         async fn append_batch(
             &self,
-            events: &[DomainEvent],
+            _events: &[DomainEvent],
         ) -> Result<(), crate::event::EventStoreError> {
-            self.events
-                .lock()
-                .expect("test store lock")
-                .extend(events.iter().cloned());
+            // No-op: the test transcript is the bus side. The bus mirrors
+            // every published event into `events`, so a no-op store keeps
+            // each event recorded exactly once.
             Ok(())
         }
 

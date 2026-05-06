@@ -102,8 +102,17 @@ pub struct ToolCallIssued {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCallCompleted {
+    /// `MessageId` allocated for the synthetic `Role::Tool` message that
+    /// carries this tool result in the projected view. Stored on the event so
+    /// the projection no longer has to invent one from a hash of `call_id`.
+    pub message_id: MessageId,
     pub call_id: ToolCallId,
     pub turn_id: TurnId,
+    /// Stable name of the tool that produced this result. Stored verbatim so
+    /// the projection can reconstruct a faithful `ToolInvocation` rather than
+    /// the placeholder `name: "tool"` it had to use when the field was
+    /// missing.
+    pub tool_name: SmolStr,
     pub output: TranscriptToolOutput,
     pub completed_at: DateTime<Utc>,
 }

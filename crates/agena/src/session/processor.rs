@@ -542,7 +542,11 @@ impl SessionProcessor {
             }));
             // Even on failure the buffer has accumulated state we can still
             // commit; downstream callers may inspect it for diagnostics.
-            let history_items = turn_buffer.commit().unwrap_or_default();
+            let history_items = turn_buffer
+                .commit(&mut crate::session::history::SequentialIdAllocator::starting_at(
+                    run.next_message_id.saturating_add(1),
+                ))
+                .unwrap_or_default();
             return Ok(SessionRunResult {
                 assistant_message_id,
                 state: vec![assistant],
@@ -574,7 +578,9 @@ impl SessionProcessor {
             .map_err(|err| AppError::Internal(err.to_string()))?;
 
         let history_items = turn_buffer
-            .commit()
+            .commit(&mut crate::session::history::SequentialIdAllocator::starting_at(
+                run.next_message_id.saturating_add(1),
+            ))
             .map_err(|err| AppError::Internal(err.to_string()))?;
 
         Ok(SessionRunResult {

@@ -2396,6 +2396,7 @@ impl SessionManager {
                 text: execution.view.output_text.clone(),
             },
         };
+        let tool_message_id = tool_message.id;
         let session = self
             .persist_session_changes(
                 session,
@@ -2408,8 +2409,10 @@ impl SessionManager {
         let now = Utc::now();
         let turn_id = HistoryTurnId::new();
         let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
+            message_id: HistoryMessageId(tool_message_id),
             call_id: tool_call_id,
             turn_id,
+            tool_name: resolved.invocation.name.clone().into(),
             output: tool_output_event,
             completed_at: now,
         })];
@@ -2474,6 +2477,7 @@ impl SessionManager {
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
         let tool_call_id = tool_call_id_for(&resolved);
+        let tool_message_id = tool_message.id;
         let session = self
             .persist_session_changes(
                 session,
@@ -2486,8 +2490,10 @@ impl SessionManager {
         let now = Utc::now();
         let turn_id = HistoryTurnId::new();
         let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
+            message_id: HistoryMessageId(tool_message_id),
             call_id: tool_call_id,
             turn_id,
+            tool_name: resolved.invocation.name.clone().into(),
             output: TranscriptToolOutput::Error { message: reason },
             completed_at: now,
         })];

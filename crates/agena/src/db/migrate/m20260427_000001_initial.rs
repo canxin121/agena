@@ -13,6 +13,7 @@ pub struct Migration;
 /// - `agena_workspaces`
 /// - `agena_sessions`
 /// - `agena_permission_rules`
+/// - `agena_session_snapshots`
 ///
 /// The unified event log (`agena_events`) is created by the migrator from
 /// `agena-event-store-sea`, which runs immediately after this migration.
@@ -33,6 +34,10 @@ impl MigrationTrait for Migration {
                 .to_owned(),
             schema
                 .create_table_from_entity(entities::permission_rule::Entity)
+                .if_not_exists()
+                .to_owned(),
+            schema
+                .create_table_from_entity(entities::session_snapshot::Entity)
                 .if_not_exists()
                 .to_owned(),
         ] {
@@ -84,6 +89,10 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for entity in [
+            Table::drop()
+                .if_exists()
+                .table(entities::session_snapshot::Entity)
+                .to_owned(),
             Table::drop()
                 .if_exists()
                 .table(entities::permission_rule::Entity)

@@ -4,7 +4,7 @@ use smol_str::SmolStr;
 use strum::Display;
 
 use crate::{
-    message::{MessageMetadata, MessageUsage},
+    message::{MessageMetadata, MessagePart, MessageUsage},
     session::{
         history::transcript::{TranscriptContent, TranscriptToolOutput},
         ids::{MessageId, ToolCallId, TurnId},
@@ -72,7 +72,15 @@ pub struct UserMessageAppended {
     pub message_id: MessageId,
     pub turn_id: TurnId,
     pub created_at: DateTime<Utc>,
+    /// Cache-stable transcript projection of the message body. Used to
+    /// re-derive `ProviderTranscript::digest()` without re-folding the full
+    /// part list.
     pub content: TranscriptContent,
+    /// Authoritative copy of the message body. The projection rebuilds the
+    /// in-memory `Message` from these parts directly so multi-modal fidelity
+    /// (images, attachments, …) round-trips losslessly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<MessagePart>,
     #[serde(default)]
     pub metadata: MessageMetadata,
 }
@@ -83,6 +91,10 @@ pub struct AssistantMessageCompleted {
     pub turn_id: TurnId,
     pub created_at: DateTime<Utc>,
     pub content: TranscriptContent,
+    /// Authoritative copy of the assistant message body. See the
+    /// [`UserMessageAppended::parts`] doc comment for rationale.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<MessagePart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<MessageUsage>,
     pub finish_reason: FinishReason,

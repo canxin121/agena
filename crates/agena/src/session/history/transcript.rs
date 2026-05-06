@@ -862,6 +862,8 @@ mod tests {
                 turn_id,
                 created_at: Utc::now(),
                 content: TranscriptContent::from_text("hi"),
+                parts: Vec::new(),
+
                 metadata: MessageMetadata::default(),
             })),
             record(EventKind::AssistantMessageCompleted(
@@ -872,6 +874,8 @@ mod tests {
                     content: TranscriptContent::from_text("hello!"),
                     usage: None,
                     finish_reason: FinishReason::Stop,
+                    parts: Vec::new(),
+
                     metadata: MessageMetadata::default(),
                 },
             )),
@@ -961,6 +965,8 @@ mod tests {
                     content: TranscriptContent::from_text("calling"),
                     usage: None,
                     finish_reason: FinishReason::ToolCalls,
+                    parts: Vec::new(),
+
                     metadata: MessageMetadata::default(),
                 },
             )),

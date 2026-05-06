@@ -325,6 +325,7 @@ impl TurnBuffer {
                         turn_id,
                         created_at,
                         content,
+                        parts: Vec::new(),
                         metadata,
                     }));
                 }
@@ -348,6 +349,7 @@ impl TurnBuffer {
                             turn_id,
                             created_at: started_at,
                             content,
+                            parts: Vec::new(),
                             usage,
                             finish_reason,
                             metadata,

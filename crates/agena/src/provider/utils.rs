@@ -556,7 +556,7 @@ pub fn responses_stream_error(
     provider_id: &str,
     event: &serde_json::Value,
 ) -> Result<Option<AppError>, AppError> {
-    let Some(payload) = event.get("error") else {
+    let Some(payload) = event.get("error").filter(|v| !v.is_null()) else {
         return Ok(None);
     };
     let parsed = parse_json_value::<ResponsesStreamErrorPayload>(
@@ -564,6 +564,11 @@ pub fn responses_stream_error(
         "responses stream error",
         payload.clone(),
     )?;
+    if parsed.code.is_none() && parsed.message.is_none() {
+        // Empty error envelopes appear on some `response.completed`
+        // events that carry `error: {}`. Don't report a phantom error.
+        return Ok(None);
+    }
     Ok(Some(classify_stream_error(
         provider_id,
         parsed.code.as_deref(),

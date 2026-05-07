@@ -885,7 +885,7 @@ impl AmazonBedrockProvider {
                         state.id = id;
                         state.name = name;
 
-                        if let Some(arguments_delta) = content_block
+                        let arguments_delta = content_block
                             .input
                             .as_ref()
                             .map(json_value_to_string)
@@ -896,17 +896,20 @@ impl AmazonBedrockProvider {
                                     Some(value)
                                 }
                             })
-                        {
-                            stream_has_content = true;
-                            yield CompletionStreamEvent::ToolCallDelta {
-                                provider_id: provider_id.clone(),
-                                model: stream_model.clone(),
-                                stream_key: format!("idx:{index}"),
-                                id: Some(state.id.clone()),
-                                name: Some(state.name.clone()),
-                                arguments_delta,
-                            };
-                        }
+                            .unwrap_or_default();
+
+                        // Always emit at least one ToolCallDelta so the
+                        // shared aggregator records the tool call even
+                        // when the model called a parameterless tool.
+                        stream_has_content = true;
+                        yield CompletionStreamEvent::ToolCallDelta {
+                            provider_id: provider_id.clone(),
+                            model: stream_model.clone(),
+                            stream_key: format!("idx:{index}"),
+                            id: Some(state.id.clone()),
+                            name: Some(state.name.clone()),
+                            arguments_delta,
+                        };
                     }
                     BedrockAnthropicStreamEvent::ContentBlockDelta { index, delta } => {
                         if let Some(text) = delta.text.clone().filter(|value| !value.is_empty()) {

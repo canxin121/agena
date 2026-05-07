@@ -10,7 +10,7 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, ResponseFormat,
+        ManagedCredential, ModelProvider, ProviderModel, ResponseFormat,
         ThinkingRequest, should_retry_credential, sse, utils, wire_message,
     },
     role::Role,
@@ -234,108 +234,13 @@ impl GeminiProvider {
         }
     }
 
-    #[allow(clippy::type_complexity)]
     async fn complete_by_aggregating_stream(
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
-        let mut stream = ModelProvider::complete_stream(self, request).await?;
-        let mut text = String::new();
-        let mut tool_calls: Vec<crate::provider::CompletionToolCall> = Vec::new();
-        let mut tool_call_acc: std::collections::HashMap<String, (String, String, String)> =
-            std::collections::HashMap::new();
-        let mut tool_call_order: Vec<String> = Vec::new();
-        let mut completed: Option<(
-            ProviderId,
-            ModelId,
-            Option<CompletionFinishReason>,
-            Option<CompletionUsage>,
-            Option<serde_json::Value>,
-        )> = None;
-
-        while let Some(item) = stream.next().await {
-            match item? {
-                CompletionStreamEvent::TextDelta { delta, .. } => {
-                    text.push_str(delta.as_str());
-                }
-                CompletionStreamEvent::Completed {
-                    provider_id,
-                    model,
-                    finish_reason,
-                    usage,
-                    provider_metadata,
-                } => {
-                    completed = Some((provider_id, model, finish_reason, usage, provider_metadata));
-                }
-                CompletionStreamEvent::ToolCallDelta {
-                    stream_key,
-                    id,
-                    name,
-                    arguments_delta,
-                    ..
-                } => {
-                    let entry = tool_call_acc
-                        .entry(stream_key.clone())
-                        .or_insert_with(|| (String::new(), String::new(), String::new()));
-                    if entry.0.is_empty()
-                        && let Some(id) = id
-                    {
-                        entry.0 = id;
-                    }
-                    if entry.1.is_empty()
-                        && let Some(name) = name
-                    {
-                        entry.1 = name;
-                    }
-                    entry.2.push_str(arguments_delta.as_str());
-                    if !tool_call_order.contains(&stream_key) {
-                        tool_call_order.push(stream_key);
-                    }
-                }
-                CompletionStreamEvent::ThinkingDelta { .. } => {}
-            }
-        }
-
-        for key in tool_call_order {
-            if let Some((id, name, arguments_json)) = tool_call_acc.remove(&key)
-                && !name.is_empty()
-            {
-                tool_calls.push(crate::provider::CompletionToolCall::Function {
-                    id: if id.is_empty() { name.clone() } else { id },
-                    name,
-                    arguments_json,
-                });
-            }
-        }
-
-        let (provider_id, model, finish_reason, usage, provider_metadata) = completed
-            .unwrap_or_else(|| {
-                (
-                    ProviderId::new(PROVIDER_ID),
-                    fallback_model,
-                    None,
-                    None,
-                    None,
-                )
-            });
-
-        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
-            return Err(AppError::Provider(
-                "gemini stream fallback produced empty completion".to_owned(),
-            ));
-        }
-
-        Ok(CompletionResponse {
-            provider_id,
-            model,
-            text,
-            reasoning_text: None,
-            finish_reason,
-            tool_calls,
-            usage,
-            provider_metadata,
-        })
+        let stream = ModelProvider::complete_stream(self, request).await?;
+        utils::aggregate_stream(PROVIDER_ID, fallback_model, stream).await
     }
 }
 
@@ -960,10 +865,12 @@ fn parse_json_or_string_object(raw: &str) -> serde_json::Value {
     }
 }
 
-/// Strip JSON Schema fields that Gemini's function declaration parser rejects.
-/// Specifically `additionalProperties`, `$schema`, `$ref`, `definitions` and
-/// the `format` keyword on string types except for the few values Gemini
-/// understands (`enum`, `date-time`).
+/// Strip JSON Schema fields that Gemini's function declaration parser
+/// rejects. Gemini accepts an OpenAPI 3.0 subset, so:
+/// - drop meta-keys (`$schema`, `$ref`, `definitions`, `$defs`,
+///   `additionalProperties`, `title`)
+/// - drop unknown `format` values (Gemini accepts `enum` and `date-time`
+///   for strings; `float`, `double`, `int32`, `int64` for numbers)
 fn sanitize_function_parameters(value: &serde_json::Value) -> Option<serde_json::Value> {
     fn walk(value: &serde_json::Value) -> serde_json::Value {
         match value {
@@ -978,14 +885,18 @@ fn sanitize_function_parameters(value: &serde_json::Value) -> Option<serde_json:
                             | "$defs"
                             | "additionalProperties"
                             | "title"
-                            | "default"
                     ) {
                         continue;
                     }
                     if key == "format"
                         && !matches!(
                             child.as_str(),
-                            Some("enum") | Some("date-time")
+                            Some("enum")
+                                | Some("date-time")
+                                | Some("float")
+                                | Some("double")
+                                | Some("int32")
+                                | Some("int64")
                         )
                     {
                         continue;

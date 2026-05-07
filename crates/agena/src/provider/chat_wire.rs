@@ -318,6 +318,10 @@ pub(crate) struct ChatToolCallStreamState {
     pub id: Option<String>,
     pub name: Option<String>,
     pub arguments: String,
+    /// Set once the first ToolCallDelta has been emitted for this call.
+    /// Used to detect parameterless tool calls that need a registration
+    /// delta so the shared aggregator does not drop them.
+    pub announced: bool,
 }
 
 // ─── Utility helpers ──────────────────────────────────────────────────────────

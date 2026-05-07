@@ -403,6 +403,7 @@ impl OpenAiProvider {
                     if let Some(id) = id {
                         state.id = Some(id);
                     }
+                    let mut emitted_any = false;
                     if let Some(function) = tool.function {
                         if let Some(name) = utils::normalize_optional_text(function.name) {
                             state.name = Some(name);
@@ -411,6 +412,8 @@ impl OpenAiProvider {
                             && !args.is_empty() {
                                 state.arguments.push_str(args.as_str());
                                 stream_has_content = true;
+                                emitted_any = true;
+                                state.announced = true;
                                 yield CompletionStreamEvent::ToolCallDelta {
                                     provider_id: provider_id.clone(),
                                     model: model_name.clone(),
@@ -420,6 +423,22 @@ impl OpenAiProvider {
                                     arguments_delta: args,
                                 };
                             }
+                    }
+                    // Register the call with the aggregator the first
+                    // time we have its name available, even if no
+                    // arguments arrived this chunk — a parameterless
+                    // call may never carry args.
+                    if !state.announced && !emitted_any && state.name.is_some() {
+                        state.announced = true;
+                        stream_has_content = true;
+                        yield CompletionStreamEvent::ToolCallDelta {
+                            provider_id: provider_id.clone(),
+                            model: model_name.clone(),
+                            stream_key: key.clone(),
+                            id: state.id.clone(),
+                            name: state.name.clone(),
+                            arguments_delta: String::new(),
+                        };
                     }
                 }
 
@@ -2358,6 +2377,85 @@ mod tests {
         }
 
         assert!(saw_completed);
+    }
+
+    #[tokio::test]
+    async fn complete_stream_chat_records_parameterless_tool_call() {
+        // Chat Completions tool_calls deltas may contain only id+name
+        // with empty arguments. Without a registration delta the
+        // aggregator silently drops the call.
+        let mut server = mockito::Server::new_async().await;
+        let body = concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_x\",\"type\":\"function\",\"function\":{\"name\":\"now\",\"arguments\":\"\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let _chat = server
+            .mock("POST", "/chat/completions")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider =
+            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-4o-mini");
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: ModelId::new("gpt-4o-mini"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "what time")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut tool_event_seen: Option<(String, String, String)> = None;
+        let mut completed = false;
+        while let Some(item) = stream.next().await {
+            match item.expect("stream item should parse") {
+                CompletionStreamEvent::ToolCallDelta {
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
+                    let entry = tool_event_seen.get_or_insert((
+                        id.clone().unwrap_or_default(),
+                        name.clone().unwrap_or_default(),
+                        String::new(),
+                    ));
+                    entry.2.push_str(arguments_delta.as_str());
+                }
+                CompletionStreamEvent::Completed { finish_reason, .. } => {
+                    assert!(matches!(
+                        finish_reason,
+                        Some(CompletionFinishReason::ToolCalls)
+                    ));
+                    completed = true;
+                }
+                _ => {}
+            }
+        }
+
+        let (id, name, args) = tool_event_seen.expect("tool call should be emitted");
+        assert_eq!(id, "call_x");
+        assert_eq!(name, "now");
+        assert!(args.is_empty() || args == "{}");
+        assert!(completed);
     }
 
     #[tokio::test]

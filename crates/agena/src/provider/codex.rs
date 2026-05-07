@@ -1080,18 +1080,21 @@ struct OpenAiInputTokenDetails {
 }
 
 fn map_openai_usage(u: OpenAiUsage) -> CompletionUsage {
+    let input_tokens_raw = u.input_tokens.unwrap_or_default();
+    let cache_read_tokens = u
+        .input_tokens_details
+        .and_then(|d| d.cached_tokens)
+        .unwrap_or_default();
+    let input_tokens = input_tokens_raw.saturating_sub(cache_read_tokens);
     MessageUsage {
-        input_tokens: u.input_tokens.unwrap_or_default(),
+        input_tokens,
         output_tokens: u.output_tokens.unwrap_or_default(),
         reasoning_tokens: u
             .output_tokens_details
             .and_then(|d| d.reasoning_tokens)
             .unwrap_or_default(),
         cache_write_tokens: 0,
-        cache_read_tokens: u
-            .input_tokens_details
-            .and_then(|d| d.cached_tokens)
-            .unwrap_or_default(),
+        cache_read_tokens,
         total_cost: 0.0,
     }
     .into()

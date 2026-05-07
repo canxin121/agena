@@ -278,15 +278,15 @@ impl GeminiProvider {
                     let entry = tool_call_acc
                         .entry(stream_key.clone())
                         .or_insert_with(|| (String::new(), String::new(), String::new()));
-                    if entry.0.is_empty() {
-                        if let Some(id) = id {
-                            entry.0 = id;
-                        }
+                    if entry.0.is_empty()
+                        && let Some(id) = id
+                    {
+                        entry.0 = id;
                     }
-                    if entry.1.is_empty() {
-                        if let Some(name) = name {
-                            entry.1 = name;
-                        }
+                    if entry.1.is_empty()
+                        && let Some(name) = name
+                    {
+                        entry.1 = name;
                     }
                     entry.2.push_str(arguments_delta.as_str());
                     if !tool_call_order.contains(&stream_key) {
@@ -1027,12 +1027,18 @@ fn build_gemini_tools(tools: &[crate::tool::EntryDefinition]) -> Option<Vec<Gemi
 }
 
 fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage {
+    let prompt_tokens = u.prompt_token_count.unwrap_or_default();
+    let cache_read_tokens = u.cached_content_token_count.unwrap_or_default();
+    // Gemini's `promptTokenCount` is inclusive of cached tokens; the rest
+    // of the codebase follows Anthropic's convention where `input_tokens`
+    // is just the uncached portion. Subtract to match.
+    let input_tokens = prompt_tokens.saturating_sub(cache_read_tokens);
     MessageUsage {
-        input_tokens: u.prompt_token_count.unwrap_or_default(),
+        input_tokens,
         output_tokens: u.candidates_token_count.unwrap_or_default(),
         reasoning_tokens: u.thoughts_token_count.unwrap_or_default(),
         cache_write_tokens: 0,
-        cache_read_tokens: u.cached_content_token_count.unwrap_or_default(),
+        cache_read_tokens,
         total_cost: 0.0,
     }
     .into()
@@ -1463,7 +1469,8 @@ mod tests {
                 } => {
                     assert!(matches!(finish_reason, Some(CompletionFinishReason::Stop)));
                     let usage = usage.expect("usage should be present");
-                    assert_eq!(usage.input_tokens, 4);
+                    // promptTokenCount=4, cachedContentTokenCount=1 → uncached input = 3
+                    assert_eq!(usage.input_tokens, 3);
                     assert_eq!(usage.output_tokens, 2);
                     assert_eq!(usage.reasoning_tokens, 1);
                     assert_eq!(usage.cache_read_tokens, 1);
@@ -1548,7 +1555,8 @@ mod tests {
         let (finish_reason, usage) = completed.expect("completed event should be emitted");
         assert!(finish_reason.is_none());
         let usage = usage.expect("usage should be present");
-        assert_eq!(usage.input_tokens, 4);
+        // promptTokenCount=4, cachedContentTokenCount=2 → uncached input = 2
+        assert_eq!(usage.input_tokens, 2);
         assert_eq!(usage.output_tokens, 1);
         assert_eq!(usage.cache_read_tokens, 2);
     }

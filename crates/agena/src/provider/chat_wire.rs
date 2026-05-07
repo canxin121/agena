@@ -329,18 +329,24 @@ pub(crate) fn extract_text_from_content(value: &Value) -> String {
 }
 
 pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
+    let prompt_tokens = usage.prompt_tokens.unwrap_or_default();
+    let cache_read_tokens = usage
+        .input_tokens_details
+        .and_then(|d| d.cached_tokens)
+        .unwrap_or_default();
+    // OpenAI's `prompt_tokens` is inclusive of cached tokens; the rest of
+    // the codebase follows Anthropic's convention where `input_tokens`
+    // names only the uncached portion. Subtract to match.
+    let input_tokens = prompt_tokens.saturating_sub(cache_read_tokens);
     MessageUsage {
-        input_tokens: usage.prompt_tokens.unwrap_or_default(),
+        input_tokens,
         output_tokens: usage.completion_tokens.unwrap_or_default(),
         reasoning_tokens: usage
             .output_tokens_details
             .and_then(|d| d.reasoning_tokens)
             .unwrap_or_default(),
         cache_write_tokens: 0,
-        cache_read_tokens: usage
-            .input_tokens_details
-            .and_then(|d| d.cached_tokens)
-            .unwrap_or_default(),
+        cache_read_tokens,
         total_cost: 0.0,
     }
     .into()

@@ -602,12 +602,29 @@ impl OpenAiProvider {
                 if let Some(tool_event) = utils::responses_tool_event(PROVIDER_ID, &event)? {
                     let key = tool_event.stream_key(PROVIDER_ID)?;
 
+                    let is_added = matches!(tool_event.kind, utils::ResponsesToolEventKind::Added);
+                    let was_new = !pending_tool_calls.contains_key(&key);
                     let state = pending_tool_calls.entry(key.clone()).or_default();
                     if let Some(id) = tool_event.id.clone() {
                         state.id = Some(id);
                     }
                     if let Some(name) = tool_event.name.clone() {
                         state.name = Some(name);
+                    }
+
+                    if is_added && was_new {
+                        // Register the call with the aggregator so a
+                        // parameterless tool call (no Delta events) is
+                        // not silently dropped.
+                        stream_has_content = true;
+                        yield CompletionStreamEvent::ToolCallDelta {
+                            provider_id: provider_id.clone(),
+                            model: model_name.clone(),
+                            stream_key: key.clone(),
+                            id: state.id.clone(),
+                            name: state.name.clone(),
+                            arguments_delta: String::new(),
+                        };
                     }
 
                     match tool_event.kind {
@@ -1430,12 +1447,29 @@ impl ModelProvider for OpenAiProvider {
                 if let Some(tool_event) = utils::responses_tool_event(PROVIDER_ID, &event)? {
                     let key = tool_event.stream_key(PROVIDER_ID)?;
 
+                    let is_added = matches!(tool_event.kind, utils::ResponsesToolEventKind::Added);
+                    let was_new = !pending_tool_calls.contains_key(&key);
                     let state = pending_tool_calls.entry(key.clone()).or_default();
                     if let Some(id) = tool_event.id.clone() {
                         state.id = Some(id);
                     }
                     if let Some(name) = tool_event.name.clone() {
                         state.name = Some(name);
+                    }
+
+                    if is_added && was_new {
+                        // Register the call with the aggregator so a
+                        // parameterless tool call (no Delta events) is
+                        // not silently dropped.
+                        stream_has_content = true;
+                        yield CompletionStreamEvent::ToolCallDelta {
+                            provider_id: provider_id.clone(),
+                            model: model_name.clone(),
+                            stream_key: key.clone(),
+                            id: state.id.clone(),
+                            name: state.name.clone(),
+                            arguments_delta: String::new(),
+                        };
                     }
 
                     match tool_event.kind {
@@ -2768,6 +2802,85 @@ mod tests {
         assert!(completed);
     }
 
+    #[tokio::test]
+    async fn complete_stream_responses_records_parameterless_tool_call() {
+        // Regression: a tool call with no arguments emits no
+        // function_call_arguments.delta events. Ensure the call is still
+        // surfaced via the aggregator.
+        let mut server = mockito::Server::new_async().await;
+        let body = concat!(
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_x\",\"name\":\"now\",\"arguments\":\"\"}}\n\n",
+            "data: {\"type\":\"response.function_call_arguments.done\",\"output_index\":0,\"arguments\":\"\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"stop_reason\":\"tool_calls\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let _responses = server
+            .mock("POST", "/responses")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider =
+            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: ModelId::new("gpt-5"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "what time")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut tool_event_seen: Option<(String, String, String)> = None;
+        let mut completed = false;
+        while let Some(item) = stream.next().await {
+            match item.expect("stream item should parse") {
+                CompletionStreamEvent::ToolCallDelta {
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
+                    let entry = tool_event_seen.get_or_insert((
+                        id.clone().unwrap_or_default(),
+                        name.clone().unwrap_or_default(),
+                        String::new(),
+                    ));
+                    entry.2.push_str(arguments_delta.as_str());
+                }
+                CompletionStreamEvent::Completed { finish_reason, .. } => {
+                    assert!(matches!(
+                        finish_reason,
+                        Some(CompletionFinishReason::ToolCalls)
+                    ));
+                    completed = true;
+                }
+                _ => {}
+            }
+        }
+
+        let (id, name, args) = tool_event_seen.expect("tool call delta should be emitted");
+        assert_eq!(id, "call_x");
+        assert_eq!(name, "now");
+        assert!(args.is_empty() || args == "{}");
+        assert!(completed);
+    }
     #[tokio::test]
     async fn complete_stream_responses_emits_response_id_metadata() {
         let mut server = mockito::Server::new_async().await;

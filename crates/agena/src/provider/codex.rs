@@ -745,12 +745,28 @@ impl ModelProvider for CodexProvider {
                 if let Some(tool_event) = utils::responses_tool_event(PROVIDER_ID, &event)? {
                     let key = tool_event.stream_key(PROVIDER_ID)?;
 
+                    let is_added = matches!(tool_event.kind, utils::ResponsesToolEventKind::Added);
+                    let was_new = !pending_tool_calls.contains_key(&key);
                     let state = pending_tool_calls.entry(key.clone()).or_default();
                     if let Some(id) = tool_event.id.clone() {
                         state.id = Some(id);
                     }
                     if let Some(name) = tool_event.name.clone() {
                         state.name = Some(name);
+                    }
+
+                    if is_added && was_new {
+                        // Register the call so a parameterless tool call
+                        // (no Delta events) is not silently dropped.
+                        stream_has_content = true;
+                        yield CompletionStreamEvent::ToolCallDelta {
+                            provider_id: provider_id.clone(),
+                            model: model_name.clone(),
+                            stream_key: key.clone(),
+                            id: state.id.clone(),
+                            name: state.name.clone(),
+                            arguments_delta: String::new(),
+                        };
                     }
 
                     match tool_event.kind {

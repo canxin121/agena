@@ -505,10 +505,20 @@ pub fn responses_finish_reason(event: &serde_json::Value) -> Option<String> {
                 .map(ToOwned::to_owned)
         })
         .or_else(|| {
+            // Only treat `response.status` as a finish reason when it is
+            // terminal — early events can carry `status: "in_progress"`
+            // and would otherwise be latched as the final finish reason
+            // even though the response continues.
             event
                 .get("response")
                 .and_then(|r| r.get("status"))
                 .and_then(|v| v.as_str())
+                .filter(|status| {
+                    !matches!(
+                        *status,
+                        "in_progress" | "queued" | "pending" | "created" | "started"
+                    )
+                })
                 .map(ToOwned::to_owned)
         })
         .or_else(|| {

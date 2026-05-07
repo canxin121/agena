@@ -287,9 +287,15 @@ pub(crate) struct ChatUsage {
     pub prompt_tokens: Option<u64>,
     #[serde(default, alias = "output_tokens")]
     pub completion_tokens: Option<u64>,
-    #[serde(default)]
+    /// Reasoning-token breakdown. Chat Completions calls this
+    /// `completion_tokens_details`; the Responses API calls it
+    /// `output_tokens_details`. Accept both.
+    #[serde(default, alias = "completion_tokens_details")]
     pub output_tokens_details: Option<ChatOutputTokensDetails>,
-    #[serde(default)]
+    /// Cached-prompt breakdown. Chat Completions calls this
+    /// `prompt_tokens_details`; the Responses API calls it
+    /// `input_tokens_details`. Accept both.
+    #[serde(default, alias = "prompt_tokens_details")]
     pub input_tokens_details: Option<ChatInputTokensDetails>,
 }
 

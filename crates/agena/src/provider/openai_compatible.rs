@@ -912,6 +912,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
                     if let Some(id) = id {
                         state.id = Some(id);
                     }
+                    let mut emitted_any = false;
                     if let Some(function) = tool.function {
                         if let Some(name) = utils::normalize_optional_text(function.name) {
                             state.name = Some(name);
@@ -920,6 +921,8 @@ impl ModelProvider for OpenAiCompatibleProvider {
                             && !args.is_empty() {
                                 state.arguments.push_str(args.as_str());
                                 stream_has_content = true;
+                                emitted_any = true;
+                                state.announced = true;
                                 yield CompletionStreamEvent::ToolCallDelta {
                                     provider_id: provider_id.clone(),
                                     model: model_name.clone(),
@@ -929,6 +932,20 @@ impl ModelProvider for OpenAiCompatibleProvider {
                                     arguments_delta: args,
                                 };
                             }
+                    }
+                    if !state.announced && !emitted_any && state.name.is_some() {
+                        // Register a parameterless tool call so the
+                        // shared aggregator does not silently drop it.
+                        state.announced = true;
+                        stream_has_content = true;
+                        yield CompletionStreamEvent::ToolCallDelta {
+                            provider_id: provider_id.clone(),
+                            model: model_name.clone(),
+                            stream_key: key.clone(),
+                            id: state.id.clone(),
+                            name: state.name.clone(),
+                            arguments_delta: String::new(),
+                        };
                     }
                 }
 

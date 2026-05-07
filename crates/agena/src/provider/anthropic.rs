@@ -610,7 +610,7 @@ impl ModelProvider for AnthropicProvider {
                         state.id = id;
                         state.name = name;
 
-                        if let Some(arguments_delta) = content_block
+                        let arguments_delta = content_block
                             .input
                             .as_ref()
                             .map(json_value_to_string)
@@ -621,17 +621,23 @@ impl ModelProvider for AnthropicProvider {
                                     Some(value)
                                 }
                             })
-                        {
-                            stream_has_content = true;
-                            yield CompletionStreamEvent::ToolCallDelta {
-                                provider_id: provider_id.clone(),
-                                model: model_name.clone(),
-                                stream_key: format!("idx:{index}"),
-                                id: Some(state.id.clone()),
-                                name: Some(state.name.clone()),
-                                arguments_delta,
-                            };
-                        }
+                            .unwrap_or_default();
+
+                        // Always emit at least one ToolCallDelta so the
+                        // shared aggregator records the tool call. Without
+                        // this, a tool_use block whose input arrives only
+                        // via the start event (or with no input at all)
+                        // would be dropped because the aggregator only
+                        // tracks calls it has seen a delta for.
+                        stream_has_content = true;
+                        yield CompletionStreamEvent::ToolCallDelta {
+                            provider_id: provider_id.clone(),
+                            model: model_name.clone(),
+                            stream_key: format!("idx:{index}"),
+                            id: Some(state.id.clone()),
+                            name: Some(state.name.clone()),
+                            arguments_delta,
+                        };
                     }
                     AnthropicSseEvent::ContentBlockDelta { index, delta } => {
                         // Text content
@@ -1712,5 +1718,88 @@ mod tests {
 
         assert_eq!(args, "{\"q\":\"rust\"}");
         assert!(done);
+    }
+
+    #[tokio::test]
+    async fn complete_stream_records_empty_input_tool_use_via_aggregator() {
+        let mut server = mockito::Server::new_async().await;
+        // Tool with no parameters: ContentBlockStart carries empty input,
+        // there are no input_json_delta events, then ContentBlockStop.
+        // The aggregator must still surface this as a tool call.
+        let body = concat!(
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_2\",\"name\":\"now\",\"input\":{}}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let _mock = server
+            .mock("POST", "/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider = AnthropicProvider::new(
+            reqwest::Client::new(),
+            "ak-test",
+            server.url(),
+            "claude-3-7-sonnet-latest",
+        );
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: crate::model::ModelId::new("claude-3-7-sonnet-latest"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "what time")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut tool_call_seen: Option<(String, String, String)> = None;
+        let mut completed = false;
+        while let Some(item) = stream.next().await {
+            match item.expect("stream item should parse") {
+                CompletionStreamEvent::ToolCallDelta {
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
+                    tool_call_seen = Some((
+                        id.unwrap_or_default(),
+                        name.unwrap_or_default(),
+                        arguments_delta,
+                    ));
+                }
+                CompletionStreamEvent::Completed { finish_reason, .. } => {
+                    assert!(matches!(
+                        finish_reason,
+                        Some(CompletionFinishReason::ToolCalls)
+                    ));
+                    completed = true;
+                }
+                _ => {}
+            }
+        }
+
+        let (id, name, args) = tool_call_seen.expect("tool call delta should be emitted");
+        assert_eq!(id, "toolu_2");
+        assert_eq!(name, "now");
+        assert!(args.is_empty() || args == "{}");
+        assert!(completed);
     }
 }

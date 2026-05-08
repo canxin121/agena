@@ -1,28 +1,24 @@
-//! `agena-skills` — discovery + loading of reusable LLM workflows
-//! ("skills") packaged as `SKILL.md` files with a YAML frontmatter
-//! header.
+//! `agena-skills` — parser + discovery helpers for reusable LLM workflows
+//! ("skills") packaged as markdown files with YAML frontmatter.
 //!
-//! This crate is plumbing only: it parses skills off disk and exposes
-//! a [`SkillsManager`] registry. The actual integration with the plugin
-//! host (filesystem scanning, manifest-declared skills, etc.) lives
-//! inside `agena` as the bundled `SkillsFsPlugin`.
+//! This crate is plumbing only: it parses bundled or on-disk workflow content
+//! and exposes discovery helpers. Runtime registration into the shared plugin
+//! entry registry lives in `agena` inside the bundled `SkillsFsPlugin`.
 //!
 //! Discovery roots, in priority order:
 //!
 //! 1. `<workspace>/.agena/skills/`
 //! 2. `~/.agena/skills/`
 //! 3. `~/.claude/skills/` (claude-code-compatible)
-//! 4. Built-in bundled skills (compiled into the binary)
 //!
-//! User slash commands are discovered from `<workspace>/.agena/commands/*.md`
-//! and `~/.agena/commands/*.md` with the same frontmatter format.
+//! User slash-command markdown is discovered from
+//! `<workspace>/.agena/commands/*.md` and `~/.agena/commands/*.md` with the
+//! same frontmatter format.
 
 pub mod bundled;
 pub mod discovery;
 pub mod error;
-pub mod manager;
 pub mod skill;
 
 pub use error::{SkillError, SkillResult};
-pub use manager::SkillsManager;
 pub use skill::{Skill, SkillFrontmatter};

@@ -1271,12 +1271,8 @@ pub async fn plugin_rpc(
 
 fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
     match error.status_code() {
-        axum::http::StatusCode::BAD_REQUEST => {
-            ServerError::BadRequest(error.message().to_owned())
-        }
-        axum::http::StatusCode::NOT_FOUND => {
-            ServerError::NotFound(error.message().to_owned())
-        }
+        axum::http::StatusCode::BAD_REQUEST => ServerError::BadRequest(error.message().to_owned()),
+        axum::http::StatusCode::NOT_FOUND => ServerError::NotFound(error.message().to_owned()),
         axum::http::StatusCode::CONFLICT => ServerError::Conflict(error.message().to_owned()),
         axum::http::StatusCode::SERVICE_UNAVAILABLE => {
             ServerError::ServiceUnavailable(error.message().to_owned())

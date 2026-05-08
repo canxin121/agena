@@ -2,14 +2,14 @@
 
 use crate::message::{WebFetchToolInput, WebSearchToolInput};
 use crate::plugin::sdk::{EntryBehavior as SdkEntryBehavior, PlanModePolicy, PluginEntryDecl};
-use crate::plugins::bundled::router::BuiltinRouterPlugin;
+use crate::plugins::bundled::router::FirstPartyRouterPlugin;
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
 
-pub(crate) fn new_plugin() -> BuiltinRouterPlugin {
-    BuiltinRouterPlugin::new(
+pub(crate) fn new_plugin() -> FirstPartyRouterPlugin {
+    FirstPartyRouterPlugin::new(
         "agena-web",
-        "Web tools (web_fetch, web_search) bridged to built-in implementations.",
+        "Web tools (web_fetch, web_search) routed through the shared first-party executor bridge.",
         entries(),
     )
 }

@@ -7,7 +7,7 @@ use crate::attachment::AttachmentItem;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EntrySource {
-    Builtin,
+    FirstParty,
     Plugin { plugin: String },
 }
 

@@ -1,10 +1,10 @@
 use globset::Glob;
 use walkdir::WalkDir;
 
-use crate::message::{BuiltinToolOutput, GlobToolInput};
+use crate::message::{FirstPartyToolOutput, GlobToolInput};
 
 use super::{
-    BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor, normalize_path_for_display,
+    FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor, normalize_path_for_display,
 };
 
 const MAX_MATCHES: usize = 5_000;
@@ -12,7 +12,7 @@ const MAX_MATCHES: usize = 5_000;
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &GlobToolInput,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     let base_path = input
         .path
         .as_deref()
@@ -68,7 +68,7 @@ pub(super) fn execute(
     } else {
         matches.join("\n")
     };
-    let output = BuiltinToolOutput::Glob {
+    let output = FirstPartyToolOutput::Glob {
         count: Some(matches.len() as u32),
     };
 
@@ -80,5 +80,5 @@ pub(super) fn execute(
     view.metadata
         .insert("count".to_string(), matches.len().to_string());
 
-    Ok(BuiltinExecution::new(output, view))
+    Ok(FirstPartyExecution::new(output, view))
 }

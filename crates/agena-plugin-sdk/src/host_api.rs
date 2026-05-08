@@ -35,20 +35,20 @@ pub trait HostClient: Send + Sync + 'static {
     async fn invoke_tool(&self, tool: String, input: serde_json::Value)
     -> Result<ToolInvokeOutput>;
 
-    // ---------------- Built-in-style host capabilities ----------------
+    // ---------------- First-party host capabilities ----------------
     //
-    // These are used by the in-process built-in plugins (bash, ask_user, task,
-    // monitor, ...). External plugins generally don't need to implement them;
+    // These are used by the in-process first-party plugins (bash, ask_user,
+    // task, monitor, ...). External plugins generally don't need to implement them;
     // the default `NoopHostClient` and host implementations that don't expose
     // these capabilities should return `HostUnavailable`.
 
     /// Prompt the user for input via the active session UI (used by the
-    /// `ask_user` built-in tool).
+    /// `ask_user` first-party tool).
     async fn ask_user(&self, _req: AskUserRequest) -> Result<AskUserResponse> {
         Err(unavailable())
     }
 
-    /// Spawn a child agent / subtask. Used by the `task` built-in tool.
+    /// Spawn a child agent / subtask. Used by the `task` first-party tool.
     async fn spawn_subtask(&self, _req: SpawnSubtaskRequest) -> Result<SpawnSubtaskResponse> {
         Err(unavailable())
     }
@@ -80,42 +80,6 @@ pub trait HostClient: Send + Sync + 'static {
 
     /// Exit the current session's git worktree.
     async fn exit_worktree(&self, _req: HostExitWorktreeRequest) -> Result<ToolInvokeOutput> {
-        Err(unavailable())
-    }
-
-    /// Execute a host-owned built-in adapter. This is reserved for the in-process
-    /// built-ins plugin and should not be exposed to arbitrary plugins.
-    async fn execute_builtin_tool(&self, _req: BuiltinToolRequest) -> Result<ToolInvokeOutput> {
-        Err(unavailable())
-    }
-
-    /// Read a skill body and metadata by name.
-    async fn skill_get(&self, _req: HostSkillGetRequest) -> Result<HostSkillGetResponse> {
-        Err(unavailable())
-    }
-
-    /// Register a skill at runtime, owned by the calling plugin. Replaces any
-    /// existing skill of the same name owned by this plugin. Skills declared
-    /// in the plugin manifest are registered automatically by the host on
-    /// load — use this only for skills discovered dynamically (e.g. by
-    /// scanning the filesystem).
-    async fn skill_register(
-        &self,
-        _req: HostSkillRegisterRequest,
-    ) -> Result<HostSkillMutationResponse> {
-        Err(unavailable())
-    }
-
-    /// Remove a skill previously registered by this plugin.
-    async fn skill_remove(
-        &self,
-        _req: HostSkillRemoveRequest,
-    ) -> Result<HostSkillMutationResponse> {
-        Err(unavailable())
-    }
-
-    /// List every skill known to the host's skill registry.
-    async fn skill_list(&self) -> Result<HostSkillListResponse> {
         Err(unavailable())
     }
 
@@ -268,24 +232,6 @@ pub trait HostClient: Send + Sync + 'static {
         &self,
         _req: HostSchedulerDeleteRequest,
     ) -> Result<HostSchedulerDeleteResponse> {
-        Err(unavailable())
-    }
-
-    /// Slash command registry — register or update a runtime command.
-    async fn command_register(&self, _req: HostCommandRegisterRequest) -> Result<()> {
-        Err(unavailable())
-    }
-
-    /// Slash command registry — remove a runtime command by name.
-    async fn command_remove(
-        &self,
-        _req: HostCommandRemoveRequest,
-    ) -> Result<HostCommandRemoveResponse> {
-        Err(unavailable())
-    }
-
-    /// Slash command registry — list every command currently registered.
-    async fn command_list(&self) -> Result<HostCommandListResponse> {
         Err(unavailable())
     }
 
@@ -514,13 +460,6 @@ pub struct ToolDescriptor {
     pub plugin_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BuiltinToolRequest {
-    pub tool_name: String,
-    #[serde(default)]
-    pub input: serde_json::Value,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HostTodoStatus {
@@ -570,50 +509,6 @@ pub struct HostExitWorktreeRequest {
     pub action: String,
     #[serde(default)]
     pub discard_changes: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostSkillGetRequest {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostSkillGetResponse {
-    pub name: String,
-    pub body: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostSkillRegisterRequest {
-    pub skill: crate::manifest::SkillManifestEntry,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostSkillRemoveRequest {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostSkillMutationResponse {
-    pub generation: u64,
-    pub removed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostSkillDescriptor {
-    pub plugin_id: String,
-    pub skill: crate::manifest::SkillManifestEntry,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostSkillListResponse {
-    pub generation: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<HostSkillDescriptor>,
 }
 
 // ---------------- monitor ----------------
@@ -1017,44 +912,7 @@ pub struct HostSchedulerDeleteResponse {
     pub removed: bool,
 }
 
-// ---------------- commands / agents ----------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostCommandDescriptor {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
-    pub body: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub scope: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostCommandRegisterRequest {
-    pub command: HostCommandDescriptor,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostCommandRemoveRequest {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostCommandRemoveResponse {
-    pub removed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostCommandListResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<HostCommandDescriptor>,
-}
+// ---------------- agents ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostAgentDescriptor {

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use crate::message::{BuiltinToolOutput, PowerShellToolInput};
+use crate::message::{FirstPartyToolOutput, PowerShellToolInput};
 
 use super::shell::{ExecutionPolicy, ShellRequest};
 use super::{
-    BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
+    FirstPartyExecution, FirstPartyExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -14,8 +14,8 @@ const MAX_OUTPUT_LINES: usize = 2_000;
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &PowerShellToolInput,
-    context: BuiltinExecutionContext,
-) -> Result<BuiltinExecution, ToolError> {
+    context: FirstPartyExecutionContext,
+) -> Result<FirstPartyExecution, ToolError> {
     if !cfg!(windows) {
         return Err(ToolError::InvalidInput(
             "powershell tool is only available on Windows".to_string(),
@@ -70,7 +70,7 @@ pub(super) fn execute(
         trimmed_output.clone()
     };
 
-    let output = BuiltinToolOutput::PowerShell {
+    let output = FirstPartyToolOutput::PowerShell {
         output: Some(display_output.clone()),
         description: if input.description.trim().is_empty() {
             None
@@ -91,7 +91,7 @@ pub(super) fn execute(
         .insert("truncated".to_string(), truncated.to_string());
     view.metadata.insert("status".to_string(), status_text);
 
-    Ok(BuiltinExecution::new(output, view))
+    Ok(FirstPartyExecution::new(output, view))
 }
 
 fn inherited_environment() -> HashMap<String, String> {
@@ -173,7 +173,7 @@ mod tests {
                 timeout_ms: None,
                 workdir: None,
             },
-            BuiltinExecutionContext::default(),
+            FirstPartyExecutionContext::default(),
         )
         .expect_err("non-windows should reject powershell");
         assert!(err.to_string().contains("only available on Windows"));

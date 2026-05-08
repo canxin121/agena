@@ -1,10 +1,10 @@
 use crate::agent::Agent;
 
-use super::{EntryBehavior, EntryDefinition, EntrySource, builtins};
+use super::{EntryBehavior, EntryDefinition, EntrySource};
 use crate::plugin::sdk::Plugin;
 use crate::plugins::bundled::{
     cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, shell as bundled_shell,
-    skills as bundled_skills, web as bundled_web, workflow as bundled_workflow,
+    web as bundled_web, workflow as bundled_workflow,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,10 +75,10 @@ impl ToolCatalog {
         }
     }
 
-    pub fn builtin_definitions(&self) -> Vec<EntryDefinition> {
+    pub fn first_party_definitions(&self) -> Vec<EntryDefinition> {
         first_party_decls()
             .into_iter()
-            .map(|decl| EntryDefinition::from_decl(decl.name.clone(), &decl, EntrySource::Builtin))
+            .map(|decl| EntryDefinition::from_decl(decl.name.clone(), &decl, EntrySource::FirstParty))
             .filter(|definition| self.is_behavior_enabled(definition.behavior))
             .collect()
     }
@@ -93,8 +93,7 @@ impl ToolCatalog {
 }
 
 fn first_party_decls() -> Vec<crate::plugin::sdk::PluginEntryDecl> {
-    let mut decls = builtins::entry_decls();
-    decls.extend(bundled_skills::SkillsPlugin::new().manifest().entries);
+    let mut decls = Vec::new();
     decls.extend(bundled_lsp::LspPlugin::new().manifest().entries);
     decls.extend(bundled_cron::CronPlugin::new().manifest().entries);
     decls.extend(bundled_fs::new_plugin().manifest().entries);
@@ -109,18 +108,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_catalog_marks_read_tools_as_always_loaded() {
+    fn first_party_catalog_marks_read_tools_as_always_loaded() {
         let catalog = ToolCatalog::for_model(None);
-        let definitions = catalog.builtin_definitions();
+        let definitions = catalog.first_party_definitions();
 
         let read = definitions
             .iter()
             .find(|tool| tool.name == "read")
-            .expect("read builtin should exist");
+            .expect("read first-party should exist");
         let grep = definitions
             .iter()
             .find(|tool| tool.name == "grep")
-            .expect("grep builtin should exist");
+            .expect("grep first-party should exist");
 
         assert!(read.read_only);
         assert!(read.concurrency_safe);
@@ -129,15 +128,15 @@ mod tests {
     }
 
     #[test]
-    fn builtin_catalog_defers_mutating_and_task_tools() {
+    fn first_party_catalog_defers_mutating_and_task_tools() {
         let catalog = ToolCatalog::for_model(None);
-        let definitions = catalog.builtin_definitions();
+        let definitions = catalog.first_party_definitions();
 
         for tool_name in ["bash", "apply_patch", "task", "notebook_edit", "powershell"] {
             let definition = definitions
                 .iter()
                 .find(|tool| tool.name == tool_name)
-                .unwrap_or_else(|| panic!("missing builtin definition for {tool_name}"));
+                .unwrap_or_else(|| panic!("missing first-party definition for {tool_name}"));
             assert!(definition.is_deferred(), "{tool_name} should be deferred");
         }
     }
@@ -153,7 +152,7 @@ mod tests {
             EntryBehavior::ReadOnly,
             "third_party",
         );
-        let mutating_builtin = EntryDefinition::builtin::<crate::message::ApplyPatchToolInput>(
+        let mutating_first_party = EntryDefinition::first_party::<crate::message::ApplyPatchToolInput>(
             "apply_patch",
             "patch files",
             EntryBehavior::Mutating,
@@ -173,7 +172,7 @@ mod tests {
         );
         assert!(
             !catalog
-                .availability_for_definition(&agent, &mutating_builtin)
+                .availability_for_definition(&agent, &mutating_first_party)
                 .enabled
         );
         assert!(

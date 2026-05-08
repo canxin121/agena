@@ -2355,7 +2355,7 @@ mod tests {
 
     #[test]
     fn fingerprint_request_options_changes_when_tools_change() {
-        let tool = EntryDefinition::builtin::<serde_json::Value>(
+        let tool = EntryDefinition::first_party::<serde_json::Value>(
             "grep",
             "Search files.",
             EntryBehavior::ReadOnly,
@@ -2513,7 +2513,7 @@ mod tests {
 
     #[test]
     fn prompt_char_budget_uses_model_limits_and_request_overhead() {
-        let tool = EntryDefinition::builtin::<serde_json::Value>(
+        let tool = EntryDefinition::first_party::<serde_json::Value>(
             "grep",
             "Search files.",
             EntryBehavior::ReadOnly,

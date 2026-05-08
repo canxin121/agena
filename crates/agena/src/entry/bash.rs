@@ -3,11 +3,11 @@ use std::collections::HashMap;
 
 use super::shell::{ExecutionPolicy, ShellRequest};
 
-use crate::message::{BashToolInput, BuiltinToolOutput};
+use crate::message::{BashToolInput, FirstPartyToolOutput};
 use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 
 use super::{
-    BuiltinExecution, BuiltinExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
+    FirstPartyExecution, FirstPartyExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -17,8 +17,8 @@ const MAX_OUTPUT_LINES: usize = 2_000;
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &BashToolInput,
-    context: BuiltinExecutionContext,
-) -> Result<BuiltinExecution, ToolError> {
+    context: FirstPartyExecutionContext,
+) -> Result<FirstPartyExecution, ToolError> {
     if input.command.trim().is_empty() {
         return Err(ToolError::InvalidInput(
             "bash command must not be empty".to_string(),
@@ -168,7 +168,7 @@ pub(super) fn execute(
         trimmed_output.clone()
     };
 
-    let output = BuiltinToolOutput::Bash {
+    let output = FirstPartyToolOutput::Bash {
         output: Some(display_output.clone()),
         description: Some(status_text.clone()),
     };
@@ -213,7 +213,7 @@ pub(super) fn execute(
         );
     }
 
-    Ok(BuiltinExecution::new(output, view))
+    Ok(FirstPartyExecution::new(output, view))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

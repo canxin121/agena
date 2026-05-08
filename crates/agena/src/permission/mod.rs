@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::message::BuiltinToolInput;
+use crate::message::FirstPartyToolInput;
 
 pub use request::{
     PendingPermission, PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
@@ -56,7 +56,7 @@ pub enum ExecutionMode {
     #[default]
     Auto,
     /// After all other rules, any `Allow` decision for a "sensitive"
-    /// builtin (bash / apply_patch / write-style edits) is promoted to
+    /// first-party tool (bash / apply_patch / write-style edits) is promoted to
     /// `Ask`. Use when a user wants every shell-out confirmed without
     /// authoring a per-pattern rule for each one.
     Ask,
@@ -128,8 +128,8 @@ impl ToolPermissionPolicy {
         self.execution_mode
     }
 
-    pub fn with_builtin_mode(mut self, builtin_name: &'static str, mode: PermissionMode) -> Self {
-        self.tool_modes.insert(builtin_name.to_string(), mode);
+    pub fn with_first_party_mode(mut self, first_party_tool_name: &'static str, mode: PermissionMode) -> Self {
+        self.tool_modes.insert(first_party_tool_name.to_string(), mode);
         self
     }
 
@@ -141,7 +141,7 @@ impl ToolPermissionPolicy {
     /// Append a bash command pattern rule. Patterns use `globset` glob syntax
     /// against the literal command string (e.g. `git status`, `rm *`,
     /// `pnpm *`). Rules are evaluated in registration order; the first match
-    /// wins. Bash-pattern rules apply *only* to `BuiltinToolInput::Bash` and
+    /// wins. Bash-pattern rules apply *only* to `FirstPartyToolInput::Bash` and
     /// override the per-tool default for that one invocation when matched.
     pub fn with_bash_pattern_rule(
         mut self,
@@ -174,18 +174,18 @@ impl ToolPermissionPolicy {
         &self.bash_deny_rules
     }
 
-    pub fn check_builtin(&self, input: &BuiltinToolInput) -> PermissionDecision {
-        let tool_name = builtin_name(input);
+    pub fn check_first_party(&self, input: &FirstPartyToolInput) -> PermissionDecision {
+        let tool_name = first_party_tool_name(input);
         let command = match input {
-            BuiltinToolInput::Bash(bash) => Some(bash.command.as_str()),
+            FirstPartyToolInput::Bash(bash) => Some(bash.command.as_str()),
             _ => None,
         };
         let sensitive = matches!(
             input,
-            BuiltinToolInput::Bash(_)
-                | BuiltinToolInput::ApplyPatch(_)
-                | BuiltinToolInput::NotebookEdit(_)
-                | BuiltinToolInput::PowerShell(_)
+            FirstPartyToolInput::Bash(_)
+                | FirstPartyToolInput::ApplyPatch(_)
+                | FirstPartyToolInput::NotebookEdit(_)
+                | FirstPartyToolInput::PowerShell(_)
         );
         self.check_tool(tool_name, command, sensitive)
     }
@@ -298,36 +298,35 @@ impl ToolPermissionPolicy {
     }
 }
 
-pub fn builtin_name(input: &BuiltinToolInput) -> &'static str {
+pub fn first_party_tool_name(input: &FirstPartyToolInput) -> &'static str {
     match input {
-        BuiltinToolInput::Bash(_) => "bash",
-        BuiltinToolInput::Read(_) => "read",
-        BuiltinToolInput::ViewFile(_) => "view_file",
-        BuiltinToolInput::ApplyPatch(_) => "apply_patch",
-        BuiltinToolInput::Glob(_) => "glob",
-        BuiltinToolInput::Grep(_) => "grep",
-        BuiltinToolInput::Task(_) => "task",
-        BuiltinToolInput::ToolSearch(_) => "tool_search",
-        BuiltinToolInput::TodoWrite(_) => "todo_write",
-        BuiltinToolInput::AskUser(_) => "ask_user",
-        BuiltinToolInput::Monitor(_) => "monitor",
-        BuiltinToolInput::WebFetch(_) => "web_fetch",
-        BuiltinToolInput::WebSearch(_) => "web_search",
-        BuiltinToolInput::EnterPlanMode(_) => "enter_plan_mode",
-        BuiltinToolInput::ExitPlanMode(_) => "exit_plan_mode",
-        BuiltinToolInput::SkillRun(_) => "skill_run",
-        BuiltinToolInput::EnterWorktree(_) => "enter_worktree",
-        BuiltinToolInput::ExitWorktree(_) => "exit_worktree",
-        BuiltinToolInput::CronCreate(_) => "cron_create",
-        BuiltinToolInput::CronList(_) => "cron_list",
-        BuiltinToolInput::CronDelete(_) => "cron_delete",
-        BuiltinToolInput::ScheduleWakeup(_) => "schedule_wakeup",
-        BuiltinToolInput::LspDefinition(_) => "lsp_definition",
-        BuiltinToolInput::LspReferences(_) => "lsp_references",
-        BuiltinToolInput::LspHover(_) => "lsp_hover",
-        BuiltinToolInput::LspDiagnostics(_) => "lsp_diagnostics",
-        BuiltinToolInput::NotebookEdit(_) => "notebook_edit",
-        BuiltinToolInput::PowerShell(_) => "powershell",
+        FirstPartyToolInput::Bash(_) => "bash",
+        FirstPartyToolInput::Read(_) => "read",
+        FirstPartyToolInput::ViewFile(_) => "view_file",
+        FirstPartyToolInput::ApplyPatch(_) => "apply_patch",
+        FirstPartyToolInput::Glob(_) => "glob",
+        FirstPartyToolInput::Grep(_) => "grep",
+        FirstPartyToolInput::Task(_) => "task",
+        FirstPartyToolInput::ToolSearch(_) => "tool_search",
+        FirstPartyToolInput::TodoWrite(_) => "todo_write",
+        FirstPartyToolInput::AskUser(_) => "ask_user",
+        FirstPartyToolInput::Monitor(_) => "monitor",
+        FirstPartyToolInput::WebFetch(_) => "web_fetch",
+        FirstPartyToolInput::WebSearch(_) => "web_search",
+        FirstPartyToolInput::EnterPlanMode(_) => "enter_plan_mode",
+        FirstPartyToolInput::ExitPlanMode(_) => "exit_plan_mode",
+        FirstPartyToolInput::EnterWorktree(_) => "enter_worktree",
+        FirstPartyToolInput::ExitWorktree(_) => "exit_worktree",
+        FirstPartyToolInput::CronCreate(_) => "cron_create",
+        FirstPartyToolInput::CronList(_) => "cron_list",
+        FirstPartyToolInput::CronDelete(_) => "cron_delete",
+        FirstPartyToolInput::ScheduleWakeup(_) => "schedule_wakeup",
+        FirstPartyToolInput::LspDefinition(_) => "lsp_definition",
+        FirstPartyToolInput::LspReferences(_) => "lsp_references",
+        FirstPartyToolInput::LspHover(_) => "lsp_hover",
+        FirstPartyToolInput::LspDiagnostics(_) => "lsp_diagnostics",
+        FirstPartyToolInput::NotebookEdit(_) => "notebook_edit",
+        FirstPartyToolInput::PowerShell(_) => "powershell",
     }
 }
 
@@ -666,7 +665,7 @@ fn normalize_path_string(path: &Path) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::message::{ApplyPatchToolInput, BuiltinToolInput, ReadToolInput};
+    use crate::message::{ApplyPatchToolInput, FirstPartyToolInput, ReadToolInput};
 
     use super::{
         AccessKind, AccessSelector, ExecutionMode, PermissionDecision, PermissionMode,
@@ -768,13 +767,13 @@ mod tests {
     #[test]
     fn tool_permission_policy_uses_default_mode() {
         let policy = ToolPermissionPolicy::new(PermissionMode::Ask);
-        let input = BuiltinToolInput::Read(ReadToolInput {
+        let input = FirstPartyToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
 
-        match policy.check_builtin(&input) {
+        match policy.check_first_party(&input) {
             PermissionDecision::Ask { reason } => {
                 assert!(reason.contains("read"));
             }
@@ -785,21 +784,21 @@ mod tests {
     #[test]
     fn tool_permission_policy_supports_per_tool_overrides() {
         let policy = ToolPermissionPolicy::new(PermissionMode::Deny)
-            .with_builtin_mode("read", PermissionMode::Allow)
-            .with_builtin_mode("apply_patch", PermissionMode::Ask);
+            .with_first_party_mode("read", PermissionMode::Allow)
+            .with_first_party_mode("apply_patch", PermissionMode::Ask);
 
-        let read = BuiltinToolInput::Read(ReadToolInput {
+        let read = FirstPartyToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
-        let apply_patch = BuiltinToolInput::ApplyPatch(ApplyPatchToolInput {
+        let apply_patch = FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
             patch: "*** Begin Patch\n*** Add File: README.md\n+hello\n*** End Patch".to_string(),
         });
 
-        assert_eq!(policy.check_builtin(&read), PermissionDecision::Allow);
+        assert_eq!(policy.check_first_party(&read), PermissionDecision::Allow);
 
-        match policy.check_builtin(&apply_patch) {
+        match policy.check_first_party(&apply_patch) {
             PermissionDecision::Ask { reason } => {
                 assert!(reason.contains("apply_patch"));
             }
@@ -810,25 +809,25 @@ mod tests {
     #[test]
     fn bash_pattern_rule_allows_matching_command_even_when_default_is_ask() {
         let policy = ToolPermissionPolicy::new(PermissionMode::Allow)
-            .with_builtin_mode("bash", PermissionMode::Ask)
+            .with_first_party_mode("bash", PermissionMode::Ask)
             .with_bash_pattern_rule("git *", PermissionMode::Allow)
             .expect("git glob compiles");
 
-        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let bash = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "git status".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
         });
-        assert_eq!(policy.check_builtin(&bash), PermissionDecision::Allow);
+        assert_eq!(policy.check_first_party(&bash), PermissionDecision::Allow);
 
-        let other = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let other = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "make".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
         });
-        match policy.check_builtin(&other) {
+        match policy.check_first_party(&other) {
             PermissionDecision::Ask { reason } => assert!(reason.contains("bash")),
             other => panic!("expected ask decision, got {other:?}"),
         }
@@ -840,24 +839,24 @@ mod tests {
             .with_bash_pattern_rule("rm *", PermissionMode::Ask)
             .expect("rm glob compiles");
 
-        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let bash = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "rm -rf build".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
         });
-        match policy.check_builtin(&bash) {
+        match policy.check_first_party(&bash) {
             PermissionDecision::Ask { reason } => assert!(reason.contains("`rm *`")),
             other => panic!("expected ask decision, got {other:?}"),
         }
 
         // Non-bash invocations are unaffected by bash pattern rules.
-        let read = BuiltinToolInput::Read(ReadToolInput {
+        let read = FirstPartyToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
-        assert_eq!(policy.check_builtin(&read), PermissionDecision::Allow);
+        assert_eq!(policy.check_first_party(&read), PermissionDecision::Allow);
     }
 
     #[test]
@@ -868,24 +867,24 @@ mod tests {
             .with_bash_pattern_rule("git *", PermissionMode::Allow)
             .expect("second rule compiles");
 
-        let push = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let push = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "git push origin master".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
         });
-        match policy.check_builtin(&push) {
+        match policy.check_first_party(&push) {
             PermissionDecision::Ask { reason } => assert!(reason.contains("`git push *`")),
             other => panic!("expected ask decision, got {other:?}"),
         }
 
-        let status = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let status = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "git status".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
         });
-        assert_eq!(policy.check_builtin(&status), PermissionDecision::Allow);
+        assert_eq!(policy.check_first_party(&status), PermissionDecision::Allow);
     }
 
     #[test]
@@ -894,13 +893,13 @@ mod tests {
             .with_bash_pattern_rule("git *", PermissionMode::Allow)
             .expect("rule compiles");
 
-        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let bash = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "make build".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
         });
-        match policy.check_builtin(&bash) {
+        match policy.check_first_party(&bash) {
             PermissionDecision::Deny { reason } => assert!(reason.contains("bash")),
             other => panic!("expected deny decision, got {other:?}"),
         }
@@ -928,13 +927,13 @@ mod tests {
     fn execution_mode_ask_promotes_allow_for_bash_and_apply_patch() {
         let policy = ToolPermissionPolicy::allow_all().with_execution_mode(ExecutionMode::Ask);
 
-        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let bash = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "ls".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
         });
-        match policy.check_builtin(&bash) {
+        match policy.check_first_party(&bash) {
             PermissionDecision::Ask { reason } => {
                 assert!(reason.contains("ask"));
                 assert!(reason.contains("bash"));
@@ -942,33 +941,33 @@ mod tests {
             other => panic!("expected Ask under execution_mode=ask, got {other:?}"),
         }
 
-        let apply = BuiltinToolInput::ApplyPatch(crate::message::ApplyPatchToolInput {
+        let apply = FirstPartyToolInput::ApplyPatch(crate::message::ApplyPatchToolInput {
             patch: "*** Begin Patch\n*** Add File: x.md\n+x\n*** End Patch".to_string(),
         });
-        match policy.check_builtin(&apply) {
+        match policy.check_first_party(&apply) {
             PermissionDecision::Ask { .. } => {}
             other => panic!("expected Ask for apply_patch, got {other:?}"),
         }
 
         // Read-style tools are unaffected.
-        let read = BuiltinToolInput::Read(ReadToolInput {
+        let read = FirstPartyToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
-        assert_eq!(policy.check_builtin(&read), PermissionDecision::Allow);
+        assert_eq!(policy.check_first_party(&read), PermissionDecision::Allow);
     }
 
     #[test]
     fn execution_mode_auto_does_not_promote_decisions() {
         let policy = ToolPermissionPolicy::allow_all().with_execution_mode(ExecutionMode::Auto);
-        let bash = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let bash = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "ls".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
         });
-        assert_eq!(policy.check_builtin(&bash), PermissionDecision::Allow);
+        assert_eq!(policy.check_first_party(&bash), PermissionDecision::Allow);
     }
 
     #[test]
@@ -980,13 +979,13 @@ mod tests {
             .with_bash_deny_pattern("rm -rf /*")
             .expect("deny pattern compiles");
 
-        let dangerous = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let dangerous = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "rm -rf /tmp/oops".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
         });
-        match policy.check_builtin(&dangerous) {
+        match policy.check_first_party(&dangerous) {
             PermissionDecision::Deny { reason } => {
                 assert!(reason.contains("deny pattern"));
             }
@@ -994,7 +993,7 @@ mod tests {
         }
 
         // A non-matching command still flows through the normal pipeline.
-        let safe = BuiltinToolInput::Bash(crate::message::BashToolInput {
+        let safe = FirstPartyToolInput::Bash(crate::message::BashToolInput {
             command: "rm tmpfile".to_string(),
             description: String::new(),
             timeout_ms: None,
@@ -1006,7 +1005,7 @@ mod tests {
         // Wait — apply_execution_mode runs after both bash_rules and the
         // tool-name fallback, so explicit allow gets promoted too. Let's
         // just assert it isn't Deny.
-        if let PermissionDecision::Deny { .. } = policy.check_builtin(&safe) {
+        if let PermissionDecision::Deny { .. } = policy.check_first_party(&safe) {
             panic!("rm tmpfile should not be denied")
         }
     }

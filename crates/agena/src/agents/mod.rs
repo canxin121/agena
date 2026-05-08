@@ -34,7 +34,7 @@ use thiserror::Error;
 pub enum AgentScope {
     Project,
     User,
-    Builtin,
+    FirstParty,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -264,7 +264,7 @@ fn collect_project_agent_dirs(workspace_root: &Path) -> Vec<PathBuf> {
 
 fn scope_priority(scope: AgentScope) -> u8 {
     match scope {
-        AgentScope::Builtin => 0,
+        AgentScope::FirstParty => 0,
         AgentScope::User => 1,
         AgentScope::Project => 2,
     }

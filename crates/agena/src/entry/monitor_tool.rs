@@ -1,21 +1,21 @@
-//! Builtin handler for the `monitor` tool — translates `MonitorToolInput`
+//! First-party handler for the `monitor` tool — translates `MonitorToolInput`
 //! into calls on the registry attached to the executor.
 
 use std::collections::HashMap;
 
 use crate::message::{
-    BuiltinToolOutput, MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput,
+    FirstPartyToolOutput, MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput,
 };
 
 use super::monitor::{
     MonitorError, MonitorRead, MonitorStart, MonitorStopOutcome, ReadParams, StartParams,
 };
-use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &MonitorToolInput,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     let registry = executor
         .monitor_registry()
         .ok_or_else(|| ToolError::InvalidInput("monitor registry is not enabled".to_string()))?;
@@ -95,7 +95,7 @@ fn inherited_environment() -> HashMap<String, String> {
     std::env::vars().collect()
 }
 
-pub(crate) fn render_start(started: MonitorStart) -> BuiltinExecution {
+pub(crate) fn render_start(started: MonitorStart) -> FirstPartyExecution {
     let summary = started.summary;
     let title = format!(
         "Monitor start {}",
@@ -113,7 +113,7 @@ pub(crate) fn render_start(started: MonitorStart) -> BuiltinExecution {
     let mut view = ToolExecutionView::simple(title, body);
     insert_summary_metadata(&mut view, &summary);
 
-    let output = BuiltinToolOutput::Monitor {
+    let output = FirstPartyToolOutput::Monitor {
         action: "start".to_string(),
         monitor_id: Some(summary.monitor_id.clone()),
         status: Some(summary.status),
@@ -124,10 +124,10 @@ pub(crate) fn render_start(started: MonitorStart) -> BuiltinExecution {
         dropped_lines: summary.dropped_lines,
         exit_code: summary.exit_code,
     };
-    BuiltinExecution::new(output, view)
+    FirstPartyExecution::new(output, view)
 }
 
-pub(crate) fn render_list(monitors: Vec<MonitorSummary>) -> BuiltinExecution {
+pub(crate) fn render_list(monitors: Vec<MonitorSummary>) -> FirstPartyExecution {
     let body = if monitors.is_empty() {
         "No monitors registered in this session.".to_string()
     } else {
@@ -155,7 +155,7 @@ pub(crate) fn render_list(monitors: Vec<MonitorSummary>) -> BuiltinExecution {
     view.metadata
         .insert("count".to_string(), monitors.len().to_string());
 
-    let output = BuiltinToolOutput::Monitor {
+    let output = FirstPartyToolOutput::Monitor {
         action: "list".to_string(),
         monitor_id: None,
         status: None,
@@ -166,10 +166,10 @@ pub(crate) fn render_list(monitors: Vec<MonitorSummary>) -> BuiltinExecution {
         dropped_lines: 0,
         exit_code: None,
     };
-    BuiltinExecution::new(output, view)
+    FirstPartyExecution::new(output, view)
 }
 
-pub(crate) fn render_read(read: MonitorRead) -> BuiltinExecution {
+pub(crate) fn render_read(read: MonitorRead) -> FirstPartyExecution {
     let body = format_events(&read);
     let title = format!("Monitor read {}", read.monitor_id);
     let mut view = ToolExecutionView::simple(title, body);
@@ -190,7 +190,7 @@ pub(crate) fn render_read(read: MonitorRead) -> BuiltinExecution {
             .insert("exit_code".to_string(), code.to_string());
     }
 
-    let output = BuiltinToolOutput::Monitor {
+    let output = FirstPartyToolOutput::Monitor {
         action: "read".to_string(),
         monitor_id: Some(read.monitor_id),
         status: Some(read.status),
@@ -201,10 +201,10 @@ pub(crate) fn render_read(read: MonitorRead) -> BuiltinExecution {
         dropped_lines: read.dropped_lines,
         exit_code: read.exit_code,
     };
-    BuiltinExecution::new(output, view)
+    FirstPartyExecution::new(output, view)
 }
 
-pub(crate) fn render_stop(stop: MonitorStopOutcome) -> BuiltinExecution {
+pub(crate) fn render_stop(stop: MonitorStopOutcome) -> FirstPartyExecution {
     let summary = stop.summary;
     let title = format!("Monitor stop {}", summary.monitor_id);
     let body = format!(
@@ -219,7 +219,7 @@ pub(crate) fn render_stop(stop: MonitorStopOutcome) -> BuiltinExecution {
     let mut view = ToolExecutionView::simple(title, body);
     insert_summary_metadata(&mut view, &summary);
 
-    let output = BuiltinToolOutput::Monitor {
+    let output = FirstPartyToolOutput::Monitor {
         action: "stop".to_string(),
         monitor_id: Some(summary.monitor_id.clone()),
         status: Some(summary.status),
@@ -230,7 +230,7 @@ pub(crate) fn render_stop(stop: MonitorStopOutcome) -> BuiltinExecution {
         dropped_lines: summary.dropped_lines,
         exit_code: summary.exit_code,
     };
-    BuiltinExecution::new(output, view)
+    FirstPartyExecution::new(output, view)
 }
 
 fn format_events(read: &MonitorRead) -> String {

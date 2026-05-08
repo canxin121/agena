@@ -699,13 +699,13 @@ pattern = "rm -rf /*"
 
     // Dangerous command rejected by deny pattern even though mode=ask would
     // otherwise just prompt.
-    let danger = crate::message::BuiltinToolInput::Bash(crate::message::BashToolInput {
+    let danger = crate::message::FirstPartyToolInput::Bash(crate::message::BashToolInput {
         command: "rm -rf /tmp/oops".to_string(),
         description: String::new(),
         timeout_ms: None,
         workdir: None,
     });
-    match policy.check_builtin(&danger) {
+    match policy.check_first_party(&danger) {
         crate::permission::PermissionDecision::Deny { .. } => {}
         other => panic!("expected Deny, got {other:?}"),
     }
@@ -747,24 +747,24 @@ mode = "ask"
         .expect("tool policy compiles");
     assert_eq!(policy.bash_rules().len(), 2);
 
-    let git_status = crate::message::BuiltinToolInput::Bash(crate::message::BashToolInput {
+    let git_status = crate::message::FirstPartyToolInput::Bash(crate::message::BashToolInput {
         command: "git status".to_string(),
         description: String::new(),
         timeout_ms: None,
         workdir: None,
     });
     assert_eq!(
-        policy.check_builtin(&git_status),
+        policy.check_first_party(&git_status),
         crate::permission::PermissionDecision::Allow
     );
 
-    let rm = crate::message::BuiltinToolInput::Bash(crate::message::BashToolInput {
+    let rm = crate::message::FirstPartyToolInput::Bash(crate::message::BashToolInput {
         command: "rm -rf node_modules".to_string(),
         description: String::new(),
         timeout_ms: None,
         workdir: None,
     });
-    match policy.check_builtin(&rm) {
+    match policy.check_first_party(&rm) {
         crate::permission::PermissionDecision::Ask { .. } => {}
         other => panic!("expected ask decision, got {other:?}"),
     }
@@ -992,12 +992,11 @@ default_model = "gpt-4.1-mini"
         .build_plugin_host()
         .await
         .expect("plugin host should build");
-    assert_eq!(host.plugins().len(), 10);
+    assert_eq!(host.plugins().len(), 9);
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&"agena-memory"));
     assert!(ids.contains(&crate::hooks::ShellHookPlugin::id()));
-    assert!(ids.contains(&crate::tool::builtins_plugin_id()));
-    assert!(ids.contains(&crate::tool::skills_plugin_id()));
+    assert!(ids.contains(&crate::tool::skills_fs_plugin_id()));
     assert!(ids.contains(&crate::tool::lsp_plugin_id()));
     assert!(ids.contains(&crate::tool::cron_plugin_id()));
     assert!(ids.contains(&crate::tool::fs_plugin_id()));
@@ -1037,14 +1036,13 @@ default_model = "gpt-4.1-mini"
         .build_plugin_host()
         .await
         .expect("host build accepts but skips broken plugins");
-    // The bogus cdylib entry is skipped; only the in-process built-in plugins
-    // remain.
-    assert_eq!(host.plugins().len(), 10);
+    // The bogus cdylib entry is skipped; only the in-process first-party
+    // plugins plus runtime support plugins remain.
+    assert_eq!(host.plugins().len(), 9);
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&"agena-memory"));
     assert!(ids.contains(&crate::hooks::ShellHookPlugin::id()));
-    assert!(ids.contains(&crate::tool::builtins_plugin_id()));
-    assert!(ids.contains(&crate::tool::skills_plugin_id()));
+    assert!(ids.contains(&crate::tool::skills_fs_plugin_id()));
     assert!(ids.contains(&crate::tool::lsp_plugin_id()));
     assert!(ids.contains(&crate::tool::cron_plugin_id()));
     assert!(ids.contains(&crate::tool::fs_plugin_id()));

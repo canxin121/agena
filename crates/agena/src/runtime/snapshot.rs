@@ -83,7 +83,6 @@ struct RuntimeServices {
     auth_store: RuntimeAuthStore,
     session_manager: Option<Arc<SessionManager>>,
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
-    skills_manager: Option<Arc<agena_skills::SkillsManager>>,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     /// Lives for as long as this snapshot does; aborts the event bridge
     /// task when the snapshot is dropped.
@@ -130,7 +129,6 @@ impl RuntimeServices {
         auth_store: RuntimeAuthStore,
         session_manager: Option<Arc<SessionManager>>,
         mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
-        skills_manager: Option<Arc<agena_skills::SkillsManager>>,
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
         event_bridge: Option<Arc<EventBridgeGuard>>,
         plugin_shutdown: Option<Arc<PluginShutdownGuard>>,
@@ -141,7 +139,6 @@ impl RuntimeServices {
             auth_store,
             session_manager,
             mcp_manager,
-            skills_manager,
             lsp_registry,
             _event_bridge: event_bridge,
             _plugin_shutdown: plugin_shutdown,
@@ -238,11 +235,6 @@ impl RuntimeSnapshot {
         } else {
             Some(build_mcp_manager(&resolution.config.mcp).await)
         };
-        // Construct the skill registry up-front so the bundled
-        // `agena.skills_fs` plugin (and any third-party plugin that
-        // declares `skills` in its manifest) can populate it during
-        // plugin host construction.
-        let skills_manager = Arc::new(agena_skills::SkillsManager::new());
         let plugins = if let Some(prev) = previous.as_ref() {
             let prev_host = prev.plugin_manager();
             let prev_cfg = prev.config_resolution().config.plugins.clone();
@@ -251,7 +243,6 @@ impl RuntimeSnapshot {
                     Some(prev_host),
                     Some(&prev_cfg),
                     mcp_manager.clone(),
-                    Some(Arc::clone(&skills_manager)),
                 )
                 .await
                 .map_err(AppError::from)?
@@ -261,7 +252,6 @@ impl RuntimeSnapshot {
                     None,
                     None,
                     mcp_manager.clone(),
-                    Some(Arc::clone(&skills_manager)),
                 )
                 .await
                 .map_err(AppError::from)?
@@ -284,7 +274,6 @@ impl RuntimeSnapshot {
         }
         let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
         let reusing_session_manager = existing_session_manager.is_some();
-        let skills_manager = Some(skills_manager);
         let lsp_registry = if resolution.config.lsp.servers.is_empty() {
             None
         } else {
@@ -296,7 +285,6 @@ impl RuntimeSnapshot {
                 db,
                 Arc::clone(&providers),
                 Arc::clone(&plugins),
-                skills_manager.clone(),
                 lsp_registry.clone(),
                 workspace_root,
                 &resolution,
@@ -330,7 +318,6 @@ impl RuntimeSnapshot {
             auth_store,
             session_manager,
             mcp_manager,
-            skills_manager,
             lsp_registry,
             event_bridge,
             plugin_shutdown,
@@ -364,10 +351,6 @@ impl RuntimeSnapshot {
 
     pub fn mcp_manager(&self) -> Option<Arc<agena_mcp_client::McpConnectionManager>> {
         self.services.mcp_manager.clone()
-    }
-
-    pub fn skills_manager(&self) -> Option<Arc<agena_skills::SkillsManager>> {
-        self.services.skills_manager.clone()
     }
 
     pub fn lsp_registry(&self) -> Option<Arc<agena_lsp::LspRegistry>> {
@@ -473,7 +456,6 @@ fn build_or_reconfigure_session_manager(
     db: &Arc<DatabaseConnection>,
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginHost>,
-    skills_manager: Option<Arc<agena_skills::SkillsManager>>,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
@@ -484,7 +466,6 @@ fn build_or_reconfigure_session_manager(
     if let Some(manager) = existing {
         let executor = build_tool_executor(
             plugins,
-            skills_manager,
             lsp_registry,
             workspace_root,
             resolution,
@@ -496,7 +477,6 @@ fn build_or_reconfigure_session_manager(
 
     let bootstrap_executor = build_tool_executor(
         Arc::clone(&plugins),
-        skills_manager.clone(),
         lsp_registry.clone(),
         workspace_root,
         resolution,
@@ -508,7 +488,6 @@ fn build_or_reconfigure_session_manager(
     );
     let executor = build_tool_executor(
         plugins,
-        skills_manager,
         lsp_registry,
         workspace_root,
         resolution,
@@ -528,7 +507,6 @@ fn build_session_processor(
 
 fn build_tool_executor(
     plugins: Arc<PluginHost>,
-    skills_manager: Option<Arc<agena_skills::SkillsManager>>,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
@@ -569,10 +547,6 @@ fn build_tool_executor(
 
     if let Some(manager) = session_manager {
         executor = executor.with_scheduler(build_scheduler(manager));
-    }
-
-    if let Some(mgr) = skills_manager {
-        executor = executor.with_skills_manager(mgr);
     }
 
     if let Some(registry) = lsp_registry {

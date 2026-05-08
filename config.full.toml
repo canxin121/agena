@@ -92,14 +92,14 @@ enabled = true
 #   * http    — remote service speaking JSON-RPC over POST
 #   * wasm    — WebAssembly module (requires plugin-wasm feature)
 #
-# First-party static plugins such as agena.builtin, agena.skills, and agena.lsp
-# are registered by the runtime. agena.skills provides the model-visible
-# skill_run entry; agena.lsp exposes read-only lsp_servers / lsp_diagnostics
-# entries via host/lsp.list_*.
+# First-party static plugins such as agena.fs, agena.shell, agena.web,
+# agena.workflow, agena.skills_fs, agena.lsp, and agena.cron are registered by
+# the runtime. Model-visible built-ins now come from plugin entries, not from
+# separate built-in / skill / command registries.
 #
 # Plugins that call host callbacks must declare matching host_capabilities in
-# their manifest entries. For example, host/config.read requires ReadConfig and
-# host/skill.get requires SkillsManager.
+# their manifest entries. For example, host/config.read requires ReadConfig,
+# host/entry.* requires EntryRegistry, and host/lsp.list_* requires LspRegistry.
 #
 # Plugin storage and secrets live under ~/.agena/plugin-storage by default
 # (override with the AGENA_PLUGIN_STORAGE_DIR environment variable). Storage is

@@ -1,4 +1,4 @@
-//! `enter_plan_mode` / `exit_plan_mode` builtin tools.
+//! `enter_plan_mode` / `exit_plan_mode` first-party tools.
 //!
 //! Plan mode pattern (mirrors claude-code's EnterPlanMode/ExitPlanMode):
 //!
@@ -24,10 +24,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{BuiltinToolOutput, EnterPlanModeToolInput, ExitPlanModeToolInput};
+use crate::message::{FirstPartyToolOutput, EnterPlanModeToolInput, ExitPlanModeToolInput};
 use crate::session::PlanState;
 
-use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 /// Process-wide plan state — keyed by session id.  Conceptually this
 /// belongs in `SessionRuntimeState`, but plan-mode checks happen inside
@@ -43,7 +43,7 @@ pub(super) fn execute_enter(
     executor: &ToolExecutor,
     _input: &EnterPlanModeToolInput,
     session_id: Option<i64>,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("enter_plan_mode: no session in execution context".to_string())
     })?;
@@ -84,8 +84,8 @@ pub(super) fn execute_enter(
             file_path.display()
         ),
     );
-    Ok(BuiltinExecution::new(
-        BuiltinToolOutput::EnterPlanMode {
+    Ok(FirstPartyExecution::new(
+        FirstPartyToolOutput::EnterPlanMode {
             plan_path: file_path.to_string_lossy().to_string(),
             slug,
         },
@@ -97,7 +97,7 @@ pub(super) fn execute_exit(
     executor: &ToolExecutor,
     _input: &ExitPlanModeToolInput,
     session_id: Option<i64>,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("exit_plan_mode: no session in execution context".to_string())
     })?;
@@ -118,8 +118,8 @@ pub(super) fn execute_exit(
         ),
     );
 
-    Ok(BuiltinExecution::new(
-        BuiltinToolOutput::ExitPlanMode {
+    Ok(FirstPartyExecution::new(
+        FirstPartyToolOutput::ExitPlanMode {
             approved: true,
             plan_path,
         },

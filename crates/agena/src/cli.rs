@@ -33,12 +33,10 @@ use crate::{
     error::AppError,
     memory::{MemoryStore, MemoryType},
     message::{
-        ApplyPatchToolInput, BuiltinToolInput, PartContent, StructuredObject, ToolInvocation,
+        ApplyPatchToolInput, FirstPartyToolInput, PartContent, StructuredObject, ToolInvocation,
     },
     model::ModelRef,
-    permission::{
-        PermissionPolicy, ToolPermissionPolicy,
-    },
+    permission::{PermissionPolicy, ToolPermissionPolicy},
     provider::{
         ModelCapabilities, ModelMetadata, ProviderModel,
         auth::{
@@ -1617,7 +1615,7 @@ impl AgenaCli {
             .map(Ok)
             .unwrap_or_else(std::env::current_dir)?;
         let plugins =
-            crate::tool::builtins_plugin_host(workspace.clone()).map_err(AppError::Config)?;
+            crate::tool::first_party_plugin_host(workspace.clone()).map_err(AppError::Config)?;
         let executor = ToolExecutor::new(
             workspace,
             Agent::new("cli", PermissionPolicy::allow_all())
@@ -1625,10 +1623,10 @@ impl AgenaCli {
         )
         .with_plugin_manager(plugins);
         let execution = executor
-            .execute_builtin_detailed(&BuiltinToolInput::ApplyPatch(ApplyPatchToolInput { patch }))
+            .execute_first_party_detailed(&FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput { patch }))
             .map_err(|err| AppError::Config(err.to_string()))?;
         let patch = execution.apply_patch.ok_or_else(|| {
-            AppError::Internal("apply_patch builtin did not return patch metadata".to_owned())
+            AppError::Internal("apply_patch first-party tool did not return patch metadata".to_owned())
         })?;
         if args.json {
             render_serialized(
@@ -2413,17 +2411,14 @@ impl AgenaCli {
             .session_runtime_with_workspace(args.workspace.as_ref())
             .await?;
         let snapshot = runtime.current_snapshot();
+        let plugins = snapshot.plugin_manager();
         let agent = Agent::new("mcp-server", PermissionPolicy::allow_all())
             .with_tool_policy(ToolPermissionPolicy::allow_all());
-        let skills = snapshot
-            .skills_manager()
-            .ok_or_else(|| AppError::Config("skills manager unavailable".to_string()))?;
         let executor = ToolExecutor::new(runtime.workspace_root().to_path_buf(), agent)
-            .with_plugin_manager(snapshot.plugin_manager())
-            .with_skills_manager(Arc::clone(&skills));
+            .with_plugin_manager(Arc::clone(&plugins));
         Ok(AgenaMcpBackend {
             executor,
-            skills,
+            plugins,
             session_manager: runtime.session_manager(),
             workspace_root: runtime.workspace_root().to_path_buf(),
             next_call_id: Arc::new(AtomicI64::new(1)),
@@ -2442,7 +2437,7 @@ impl AgenaCli {
 #[derive(Clone)]
 struct AgenaMcpBackend {
     executor: ToolExecutor,
-    skills: Arc<agena_skills::SkillsManager>,
+    plugins: Arc<crate::plugin::PluginHost>,
     session_manager: Option<Arc<SessionManager>>,
     workspace_root: PathBuf,
     next_call_id: Arc<AtomicI64>,
@@ -2551,37 +2546,68 @@ impl McpServerBackend for AgenaMcpBackend {
     }
 
     async fn list_prompts(&self) -> Result<Vec<PromptDescriptor>, McpServerError> {
-        Ok(self
-            .skills
-            .list()
+        let mut prompts = self
+            .plugins
+            .entry_entries()
             .into_iter()
-            .map(|skill| PromptDescriptor {
-                name: skill.frontmatter.name,
-                description: Some(skill.frontmatter.description),
+            .filter(|entry| {
+                matches!(
+                    entry.plugin_name.as_str(),
+                    "agena.workflow" | "agena.skills_fs"
+                ) && entry.decl.input_schema
+                    == crate::entry::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>()
+            })
+            .map(|entry| PromptDescriptor {
+                name: entry.exposed_name,
+                description: entry.decl.description,
                 arguments: Vec::new(),
             })
-            .collect())
+            .collect::<Vec<_>>();
+        prompts.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(prompts)
     }
 
     async fn get_prompt(&self, params: GetPromptParams) -> Result<GetPromptResult, McpServerError> {
-        let skill = self
-            .skills
-            .get(params.name.as_str())
-            .map_err(|err| McpServerError::NotFound(err.to_string()))?;
-        let mut body = skill.body;
-        if let Some(arguments) = params.arguments
-            && !arguments.is_empty()
+        let entry = self
+            .plugins
+            .lookup_entry(params.name.as_str())
+            .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
+        if !matches!(entry.handle.plugin_id.as_str(), "agena.workflow" | "agena.skills_fs")
+            || entry.decl.input_schema
+                != crate::entry::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>()
         {
-            body.push_str("\n\nArguments:\n");
-            for (key, value) in arguments {
-                body.push_str(&format!("- {key}: {value}\n"));
-            }
+            return Err(McpServerError::NotFound(params.name));
         }
+
+        let args = params.arguments.and_then(|arguments| {
+            if arguments.is_empty() {
+                None
+            } else {
+                Some(
+                    arguments
+                        .into_iter()
+                        .map(|(key, value)| format!("- {key}: {value}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            }
+        });
+        let invocation = ToolInvocation::new(
+            entry.handle.exposed_name.clone(),
+            StructuredObject::try_from(serde_json::json!({ "args": args }))
+                .map_err(McpServerError::InvalidParams)?,
+        );
+        let execution = self
+            .executor
+            .execute_invocation_detailed(&invocation, -1, -1)
+            .map_err(|err| McpServerError::Backend(err.to_string()))?;
         Ok(GetPromptResult {
-            description: Some(skill.frontmatter.description),
+            description: entry.decl.description,
             messages: vec![PromptMessage {
                 role: "user".to_owned(),
-                content: ContentBlock::Text { text: body },
+                content: ContentBlock::Text {
+                    text: execution.view.output_text,
+                },
             }],
         })
     }
@@ -2630,7 +2656,7 @@ fn mcp_tool_invocation(
     input: StructuredObject,
 ) -> Result<ToolInvocation, McpServerError> {
     let invocation = ToolInvocation::new(name.to_owned(), input);
-    if let Some(builtin) = BuiltinToolInput::from_invocation(&invocation) {
+    if let Some(builtin) = FirstPartyToolInput::from_invocation(&invocation) {
         return Ok(builtin.into_invocation());
     }
     Ok(invocation)

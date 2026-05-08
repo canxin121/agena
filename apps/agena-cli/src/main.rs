@@ -15,7 +15,6 @@ use agena::{
     },
     storage::StorageConfig,
 };
-use agena_api_server::jsonrpc::{self, AppServerError};
 use agena_api_server::jsonrpc::protocol::{
     CancelTurnParams, CancelTurnResult, CreateSessionParams, CreateSessionResult,
     ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
@@ -23,6 +22,7 @@ use agena_api_server::jsonrpc::protocol::{
     PermissionReplyParams, PermissionReplyResult, ReadMessagesParams, ReadMessagesResult,
     SessionListItem, SubmitTurnParams, SubmitTurnResult,
 };
+use agena_api_server::jsonrpc::{self, AppServerError};
 use async_trait::async_trait;
 use clap::Parser;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -290,7 +290,9 @@ fn resolve_run_options(
     max_output_tokens: Option<u32>,
 ) -> Result<SessionRunOptions, AppError> {
     let model = if let Some(model) = model {
-        runtime.current_snapshot().resolve_model_target(model, None)?
+        runtime
+            .current_snapshot()
+            .resolve_model_target(model, None)?
     } else {
         default_model(runtime)?
     };

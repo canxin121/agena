@@ -156,12 +156,11 @@ Available callbacks include:
   domain bus. The synthetic event's payload is opaque JSON; subscribers can
   match on `kind = "plugin_event"` and inspect `plugin_id` / `kind_label`
   inside the payload.
-- `ask_user(req)`, `spawn_subtask(req)`, `list_tools()`, `monitor_*(...)`, and
-  `skill_get(req)` expose first-party runtime substrate to plugins.
+- `ask_user(req)`, `spawn_subtask(req)`, `list_tools()`, `monitor_*(...)`,
+  `entry_*(...)`, `scheduler_*(...)`, `mcp_*(...)`, and the UI registry
+  callbacks expose first-party runtime services to plugins.
 - `ask_permission(req)` — currently returns `Prompt` and is not capability
   gated.
-- `execute_builtin_tool(req)` — internal legacy bridge reserved for
-  `agena.builtin`; third-party plugins should not call it.
 
 | HostClient method / JSON-RPC method | Required `HostCapability` |
 |---|---|
@@ -173,7 +172,6 @@ Available callbacks include:
 | `publish_event` / `host/event.publish` | `PublishEvent` |
 | `subscribe_events`, `unsubscribe_events` / `host/event.*` | `SubscribeEvents` |
 | `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` / `host/monitor.*` | `MonitorRegistry` |
-| `skill_get` / `host/skill.get` | `SkillsManager` |
 | `entry_register`, `entry_update`, `entry_remove`, `entry_list` / `host/entry.*` | `EntryRegistry` |
 | `storage_get`, `storage_set`, `storage_delete`, `storage_list` / `host/storage.*` | `PluginStorage` |
 | `secret_get`, `secret_set`, `secret_delete`, `secret_list` / `host/secret.*` | `PluginSecrets` |
@@ -182,7 +180,6 @@ Available callbacks include:
 | `plan_list`, `plan_get` / `host/plan.*` | `PlanRegistry` |
 | `worktree_list` / `host/worktree.list` | `WorktreeRegistry` |
 | `scheduler_list`, `scheduler_create`, `scheduler_delete` / `host/scheduler.*` | `Scheduler` |
-| `command_register`, `command_remove`, `command_list` / `host/command.*` | `CommandRegistry` |
 | `agent_register`, `agent_remove`, `agent_list` / `host/agent.*` | `AgentRegistry` |
 | `hook_list` / `host/hook.list` | `HookRegistry` |
 | `mcp_list_servers`, `mcp_add_server`, `mcp_remove_server` / `host/mcp.*` | `McpRegistry` |
@@ -193,18 +190,19 @@ For stdio / HTTP plugins, callbacks travel back over the same JSON-RPC wire
 (stdio multiplexed on stdin/stdout, HTTP via `POST /plugin-rpc/{plugin_id}`
 on the agena HTTP API server).
 
-`skill_run` is provided by the first-party static plugin `agena.skills`, not by
-the core tool catalog. It uses `skill_get` to read skill content and returns the
-same payload metadata shape as the previous built-in adapter, including
-`allowed_tools`.
+The first-party `agena.workflow` plugin owns the bundled workflow entries
+`init`, `review`, and `security-review`. The first-party `agena.skills_fs`
+plugin discovers markdown skills and markdown commands, then registers them as
+dynamic entries through `host/entry.*`.
 
 ## Dynamic entry registry
 
 Plugins that declare `HostCapability::EntryRegistry` can mutate the plugin
 host's entry registry at runtime via `entry_register`, `entry_update`,
 `entry_remove`, and `entry_list`. New entries become visible to the model
-catalog without rebuilding the host. This is the mechanism MCP, LSP, agents,
-or skills plugins should use to react to upstream catalog changes.
+catalog without rebuilding the host. This is the mechanism discovery and
+adapter plugins such as `agena.skills_fs` and `agena.mcp` use to react to
+upstream catalog changes.
 
 The registry is in-memory and session-scoped — dynamic entries are not
 persisted across restarts. Exposed-name collision handling matches static
@@ -280,15 +278,20 @@ The TUI exposes the same data through the Plugin Inspector overlay: press `P`
 from a non-composer pane or run `/plugins [query]` from the composer to filter
 plugins by id, state, manifest metadata, capabilities, or recent logs.
 
-## LSP read-only registry
+## LSP first-party plugin
 
-The first-party `agena.lsp` plugin exposes two read-only entries —
-`lsp_servers` and `lsp_diagnostics` — backed by the `host/lsp.list_*`
-callbacks (gated by `HostCapability::LspRegistry`). They surface the
-configured LSP fleet and any cached diagnostics without forcing a full
-indexing pass. Hover, definition, references, and other write/interactive
-flows still live in the built-in tools and will be plugin-ized in a future
-phase along with commands, plan/worktree/monitor/scheduler, and agents.
+The first-party `agena.lsp` plugin exposes the model-visible entries
+`lsp_servers`, `lsp_definition`, `lsp_references`, `lsp_hover`, and
+`lsp_diagnostics`.
+
+- `lsp_servers` is plugin-native and uses the `host/lsp.list_servers`
+  callback (gated by `HostCapability::LspRegistry`) to surface the configured
+  LSP fleet.
+- The other LSP entries remain normal plugin entries and currently reuse the
+  shared in-process router bridge for execution.
+
+From the model's perspective, all five names are ordinary plugin entries in the
+same catalog as the rest of the first-party runtime surface.
 
 ## Marketplace and installation
 
@@ -365,10 +368,10 @@ Timeout strings accept `ms`, `s`, `m`, `h` units. Restart policies:
 
 ## Tool naming
 
-When two plugins (or a plugin + a built-in) declare the same tool name,
-the host auto-prefixes both as `<plugin_id>__<tool>`. Built-ins always win
-the un-prefixed name. Plugins can opt into a permanent prefix via
-`PluginEntryDecl::expose_as("…")`.
+When two plugins (or a plugin plus an existing compile-time first-party entry)
+declare the same tool name, the host auto-prefixes both as
+`<plugin_id>__<tool>`. Existing exposed names keep the un-prefixed spelling.
+Plugins can opt into a permanent prefix via `PluginEntryDecl::expose_as("…")`.
 
 ## Failure isolation
 

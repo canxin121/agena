@@ -12,7 +12,7 @@ use tracing::Instrument;
 use crate::AppError;
 use crate::event::{ErrorInfo, EventKind, RunFailedEvent, RunStartedEvent};
 use crate::message::{
-    AttachmentItem, BuiltinToolOutput, ExecutionStatus, FileChangePart, Message, MessageMetadata,
+    AttachmentItem, FirstPartyToolOutput, ExecutionStatus, FileChangePart, Message, MessageMetadata,
     MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart,
     TaskSubagentType, TimeRange, TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation,
     ToolOutput, ToolResultBlock, UserInputReply, UserInputReplyKind, UserInputRequest,
@@ -2480,7 +2480,7 @@ impl SessionManager {
             execution.view.attachments.as_slice(),
             blocks.as_slice(),
         );
-        if let Some(BuiltinToolOutput::ToolSearch { loaded_tools, .. }) = tool_output.as_builtin() {
+        if let Some(FirstPartyToolOutput::ToolSearch { loaded_tools, .. }) = tool_output.as_first_party() {
             session.runtime.record_loaded_deferred_tools(&loaded_tools);
         }
         self.apply_tool_success_execution_context(&mut session, &execution);
@@ -2680,48 +2680,16 @@ impl SessionManager {
         session: &mut Session,
         execution: &ToolInvocationExecution,
     ) {
-        let Some(output) = execution.output.as_builtin() else {
+        let Some(output) = execution.output.as_first_party() else {
             return;
         };
         match output {
-            BuiltinToolOutput::SkillRun {
-                name,
-                allowed_tools,
-                model,
-                ..
-            } => {
-                session.runtime.execution.active_skill_name = Some(name.clone());
-                session.runtime.execution.system_prompt_override =
-                    Some(execution.view.output_text.clone());
-                session.runtime.set_allowed_tools(allowed_tools.clone());
-                if let Some(model_id) = model
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    let provider_id =
-                        session
-                            .runtime
-                            .execution
-                            .model_provider_id
-                            .clone()
-                            .or_else(|| {
-                                infer_session_model(session)
-                                    .ok()
-                                    .flatten()
-                                    .map(|model| model.provider_id.to_string())
-                            });
-                    session
-                        .runtime
-                        .set_model_override(provider_id, Some(model_id.to_string()));
-                }
-            }
-            BuiltinToolOutput::EnterWorktree { path, .. } => {
+            FirstPartyToolOutput::EnterWorktree { path, .. } => {
                 session
                     .runtime
                     .set_effective_workspace_root(Some(PathBuf::from(path)));
             }
-            BuiltinToolOutput::ExitWorktree { .. } => {
+            FirstPartyToolOutput::ExitWorktree { .. } => {
                 session.runtime.set_effective_workspace_root(None);
             }
             _ => {}
@@ -3131,8 +3099,8 @@ fn tool_message_extra_part_contents(
 }
 
 fn file_change_part_from_tool_output(details: &ToolOutput) -> Option<FileChangePart> {
-    match details.as_builtin() {
-        Some(BuiltinToolOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
+    match details.as_first_party() {
+        Some(FirstPartyToolOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
             Some(FileChangePart { changes })
         }
         _ => None,
@@ -3140,8 +3108,8 @@ fn file_change_part_from_tool_output(details: &ToolOutput) -> Option<FileChangeP
 }
 
 fn todo_part_from_tool_output(details: &ToolOutput) -> Option<TodoListPart> {
-    match details.as_builtin() {
-        Some(BuiltinToolOutput::TodoWrite { items }) => Some(TodoListPart { items }),
+    match details.as_first_party() {
+        Some(FirstPartyToolOutput::TodoWrite { items }) => Some(TodoListPart { items }),
         _ => None,
     }
 }
@@ -3311,7 +3279,7 @@ fn user_input_execution(
 
     Ok(ToolInvocationExecution::new(
         ToolOutput::Custom {
-            output: BuiltinToolOutput::AskUser { answers }.into_custom_output(),
+            output: FirstPartyToolOutput::AskUser { answers }.into_custom_output(),
         },
         view,
     ))
@@ -3444,10 +3412,10 @@ mod tests {
 
     use crate::agent::Agent;
     use crate::db::init_schema;
-    use crate::entry::BuiltinExecution;
+    use crate::entry::FirstPartyExecution;
     use crate::event::EventKind;
     use crate::message::{
-        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, BuiltinToolOutput, McpToolOutput,
+        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, FirstPartyToolOutput, McpToolOutput,
         TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
         ToolOutput, ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion,
         UserInputReply, UserInputReplyKind,
@@ -3742,8 +3710,8 @@ mod tests {
                             details,
                             ..
                         })) => {
-                            let answers = match details.as_builtin() {
-                                Some(BuiltinToolOutput::AskUser { answers }) => answers,
+                            let answers = match details.as_first_party() {
+                                Some(FirstPartyToolOutput::AskUser { answers }) => answers,
                                 _ => return None,
                             };
                             answers
@@ -3810,8 +3778,8 @@ mod tests {
                         _ => return false,
                     };
                     matches!(
-                        details.as_builtin(),
-                        Some(BuiltinToolOutput::ToolSearch { ref loaded_tools, .. })
+                        details.as_first_party(),
+                        Some(FirstPartyToolOutput::ToolSearch { ref loaded_tools, .. })
                             if loaded_tools.iter().any(|name| name == "apply_patch")
                     )
                 })
@@ -4194,6 +4162,91 @@ mod tests {
         (host, chunk_sent, finish)
     }
 
+    #[derive(Clone)]
+    struct SessionTestHostClient {
+        executor: ToolExecutor,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::plugin::sdk::host_api::HostClient for SessionTestHostClient {
+        async fn log(&self, _level: crate::plugin::sdk::host_api::LogLevel, _message: String, _fields: serde_json::Value) {}
+
+        async fn publish_event(&self, _env: crate::plugin::sdk::EventEnvelope) -> crate::plugin::sdk::Result<()> {
+            Ok(())
+        }
+
+        async fn subscribe_events(
+            &self,
+            _filter: crate::plugin::sdk::EventFilter,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::host_api::EventSubscription> {
+            Ok(crate::plugin::sdk::host_api::EventSubscription { id: "sub".into() })
+        }
+
+        async fn ask_permission(
+            &self,
+            _req: crate::plugin::sdk::PermissionAskInput,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::PermissionDecision> {
+            Ok(crate::plugin::sdk::PermissionDecision::Prompt)
+        }
+
+        async fn read_config(&self, _path: Option<String>) -> crate::plugin::sdk::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+
+        async fn invoke_tool(
+            &self,
+            tool: String,
+            _input: serde_json::Value,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
+            Err(crate::plugin::PluginError::new(format!("unexpected invoke_tool for {tool}")))
+        }
+
+        async fn list_tools(&self) -> crate::plugin::sdk::Result<Vec<crate::plugin::sdk::host_api::ToolDescriptor>> {
+            Ok(self
+                .executor
+                .searchable_tools()
+                .into_iter()
+                .map(|definition| {
+                    let deferred = definition.is_deferred();
+                    crate::plugin::sdk::host_api::ToolDescriptor {
+                        name: definition.name,
+                        description: Some(definition.description),
+                        search_terms: definition.search_terms,
+                        behavior: Some(
+                            match definition.behavior {
+                                crate::tool::EntryBehavior::Mutating => "mutating",
+                                crate::tool::EntryBehavior::ReadOnly => "read_only",
+                                crate::tool::EntryBehavior::Task => "task",
+                            }
+                            .to_string(),
+                        ),
+                        deferred,
+                        read_only: definition.read_only,
+                        plugin_id: match definition.source {
+                            crate::tool::EntrySource::FirstParty => None,
+                            crate::tool::EntrySource::Plugin { plugin_name } => Some(plugin_name),
+                        },
+                    }
+                })
+                .collect())
+        }
+
+        async fn todo_write(
+            &self,
+            req: crate::plugin::sdk::host_api::HostTodoWriteRequest,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
+            let context = crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
+            self.executor
+                .execute_first_party_payload_for_host(
+                    "todo_write",
+                    serde_json::to_value(req).map_err(|err| crate::plugin::PluginError::new(err.to_string()))?,
+                    context.session_id.filter(|id| *id >= 0),
+                    context.call_id.filter(|id| *id >= 0),
+                )
+                .map_err(|err| crate::plugin::PluginError::new(err.to_string()))
+        }
+    }
+
     async fn build_manager_with_provider_on_db<P>(
         root: &std::path::Path,
         db: DatabaseConnection,
@@ -4206,17 +4259,25 @@ mod tests {
     where
         P: ModelProvider + 'static,
     {
-        build_manager_with_provider_and_plugins_on_db(
+        let executor = ToolExecutor::new(
             root,
-            db,
-            permission_policy,
-            tool_policy,
-            config,
-            context_policy,
-            provider,
-            crate::tool::builtins_plugin_host(root).expect("builtins plugin host"),
-        )
-        .await
+            Agent::new("build", permission_policy.clone()).with_tool_policy(tool_policy.clone()),
+        );
+        let plugins = crate::tool::first_party_plugin_host(root).expect("first-party plugin host");
+        plugins
+            .host_handle()
+            .install_client(Arc::new(SessionTestHostClient {
+                executor: executor.clone().with_plugin_manager(Arc::clone(&plugins)),
+            }))
+            .await;
+        let executor = executor.with_plugin_manager(plugins.clone());
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+        let processor =
+            SessionProcessor::new(Arc::new(registry), ContextGovernor::new(context_policy))
+                .with_plugin_host(Arc::clone(&plugins));
+
+        SessionManager::new(db, processor, executor).with_config(config)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4946,59 +5007,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_tool_success_persists_skill_execution_context() {
-        let workspace = TempWorkspace::new();
-        let service = build_manager(
-            &workspace.root,
-            PermissionPolicy::allow_all(),
-            SessionManagerConfig::default(),
-        )
-        .await;
-
-        let mut session = service
-            .create_session(SessionCreateRequest {
-                title: "skill".to_string(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("create session");
-        session.runtime.execution.model_provider_id = Some("scripted".to_string());
-
-        let execution: ToolInvocationExecution = BuiltinExecution::new(
-            BuiltinToolOutput::SkillRun {
-                name: "demo".to_string(),
-                body_chars: 12,
-                allowed_tools: vec!["read".to_string(), "grep".to_string()],
-                model: Some("claude-sonnet-4-6".to_string()),
-            },
-            crate::entry::ToolExecutionView::simple(
-                "skill_run: demo",
-                "Follow these instructions.",
-            ),
-        )
-        .into();
-
-        service.apply_tool_success_execution_context(&mut session, &execution);
-
-        assert_eq!(
-            session.runtime.execution.active_skill_name.as_deref(),
-            Some("demo")
-        );
-        assert_eq!(
-            session.runtime.execution.system_prompt_override.as_deref(),
-            Some("Follow these instructions.")
-        );
-        assert_eq!(
-            session.runtime.allowed_tools(),
-            &["grep".to_string(), "read".to_string()]
-        );
-        assert_eq!(
-            session.runtime.model_override(),
-            Some(("scripted", "claude-sonnet-4-6"))
-        );
-    }
-
-    #[tokio::test]
     async fn apply_tool_success_updates_worktree_root() {
         let workspace = TempWorkspace::new();
         let service = build_manager(
@@ -5016,8 +5024,8 @@ mod tests {
             .await
             .expect("create session");
 
-        let entered: ToolInvocationExecution = BuiltinExecution::new(
-            BuiltinToolOutput::EnterWorktree {
+        let entered: ToolInvocationExecution = FirstPartyExecution::new(
+            FirstPartyToolOutput::EnterWorktree {
                 path: "/tmp/worktree".to_string(),
                 branch: "agena/demo".to_string(),
             },
@@ -5033,8 +5041,8 @@ mod tests {
             Some("/tmp/worktree".to_string())
         );
 
-        let exited: ToolInvocationExecution = BuiltinExecution::new(
-            BuiltinToolOutput::ExitWorktree {
+        let exited: ToolInvocationExecution = FirstPartyExecution::new(
+            FirstPartyToolOutput::ExitWorktree {
                 action: "keep".to_string(),
                 path: "/tmp/worktree".to_string(),
             },
@@ -5869,7 +5877,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let db = open_temp_database(&workspace.root, "permission-resume.db").await;
         let tool_policy =
-            ToolPermissionPolicy::allow_all().with_builtin_mode("todo_write", PermissionMode::Ask);
+            ToolPermissionPolicy::allow_all().with_first_party_mode("todo_write", PermissionMode::Ask);
         let first = build_manager_with_provider_on_db(
             &workspace.root,
             db.clone(),

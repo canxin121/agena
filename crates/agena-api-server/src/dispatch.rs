@@ -67,12 +67,8 @@ fn run_options_to_core(options: &RunOptions) -> SessionRunOptions {
 
 fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
     match error.status_code() {
-        axum::http::StatusCode::BAD_REQUEST => {
-            ServerError::BadRequest(error.message().to_owned())
-        }
-        axum::http::StatusCode::NOT_FOUND => {
-            ServerError::NotFound(error.message().to_owned())
-        }
+        axum::http::StatusCode::BAD_REQUEST => ServerError::BadRequest(error.message().to_owned()),
+        axum::http::StatusCode::NOT_FOUND => ServerError::NotFound(error.message().to_owned()),
         axum::http::StatusCode::CONFLICT => ServerError::Conflict(error.message().to_owned()),
         axum::http::StatusCode::SERVICE_UNAVAILABLE => {
             ServerError::ServiceUnavailable(error.message().to_owned())
@@ -276,39 +272,38 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         }
     };
 
-    let skills = if let Some(manager) = snapshot.skills_manager() {
-        let mut skills = manager.list();
-        skills.sort_by(|left, right| left.frontmatter.name.cmp(&right.frontmatter.name));
-        let mut commands = manager.list_commands();
-        commands.sort_by(|left, right| left.frontmatter.name.cmp(&right.frontmatter.name));
-        RuntimeSkillsResource {
-            skill_count: skills.len(),
-            command_count: commands.len(),
-            skills: skills
-                .into_iter()
-                .map(|skill| RuntimeSkillResource {
-                    name: skill.frontmatter.name,
-                    description: skill.frontmatter.description,
-                    aliases: skill.frontmatter.aliases,
-                    source_path: skill.source_path.map(|path| path.display().to_string()),
-                })
-                .collect(),
-            commands: commands
-                .into_iter()
-                .map(|skill| RuntimeSkillResource {
-                    name: skill.frontmatter.name,
-                    description: skill.frontmatter.description,
-                    aliases: skill.frontmatter.aliases,
-                    source_path: skill.source_path.map(|path| path.display().to_string()),
-                })
-                .collect(),
+    let skills = {
+        let mut workflows = Vec::new();
+        let mut commands = Vec::new();
+        for entry in snapshot.plugin_manager().entry_entries() {
+            if entry.plugin_name != "agena.skills_fs" || entry.original_name != entry.exposed_name {
+                continue;
+            }
+            let item = RuntimeSkillResource {
+                name: entry.exposed_name,
+                description: entry.decl.description.unwrap_or_default(),
+                aliases: entry
+                    .decl
+                    .search_terms
+                    .iter()
+                    .filter(|term| *term != "workflow" && *term != "command" && *term != &entry.original_name)
+                    .cloned()
+                    .collect(),
+                source_path: None,
+            };
+            if entry.decl.search_terms.iter().any(|term| term == "command") {
+                commands.push(item);
+            } else {
+                workflows.push(item);
+            }
         }
-    } else {
+        workflows.sort_by(|left, right| left.name.cmp(&right.name));
+        commands.sort_by(|left, right| left.name.cmp(&right.name));
         RuntimeSkillsResource {
-            skill_count: 0,
-            command_count: 0,
-            skills: Vec::new(),
-            commands: Vec::new(),
+            skill_count: workflows.len(),
+            command_count: commands.len(),
+            skills: workflows,
+            commands,
         }
     };
 

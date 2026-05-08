@@ -155,7 +155,7 @@ pub struct MonitorEvent {
     pub line: String,
 }
 
-/// Action discriminator for the `monitor` builtin tool.
+/// Action discriminator for the `monitor` first-party tool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MonitorToolInput {
@@ -269,11 +269,8 @@ pub struct EnterPlanModeToolInput {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 pub struct ExitPlanModeToolInput {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct SkillRunToolInput {
-    /// Skill name or alias.
-    pub name: String,
-    /// Optional free-form arguments forwarded to the skill body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct WorkflowPromptToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
 }
@@ -422,7 +419,7 @@ pub struct PowerShellToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum BuiltinToolInput {
+pub enum FirstPartyToolInput {
     Bash(BashToolInput),
     Read(ReadToolInput),
     ViewFile(ViewFileToolInput),
@@ -439,7 +436,6 @@ pub enum BuiltinToolInput {
     WebSearch(WebSearchToolInput),
     EnterPlanMode(EnterPlanModeToolInput),
     ExitPlanMode(ExitPlanModeToolInput),
-    SkillRun(SkillRunToolInput),
     EnterWorktree(EnterWorktreeToolInput),
     ExitWorktree(ExitWorktreeToolInput),
     CronCreate(CronCreateToolInput),
@@ -454,7 +450,7 @@ pub enum BuiltinToolInput {
     PowerShell(PowerShellToolInput),
 }
 
-impl BuiltinToolInput {
+impl FirstPartyToolInput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
@@ -473,7 +469,6 @@ impl BuiltinToolInput {
             Self::WebSearch(_) => "web_search",
             Self::EnterPlanMode(_) => "enter_plan_mode",
             Self::ExitPlanMode(_) => "exit_plan_mode",
-            Self::SkillRun(_) => "skill_run",
             Self::EnterWorktree(_) => "enter_worktree",
             Self::ExitWorktree(_) => "exit_worktree",
             Self::CronCreate(_) => "cron_create",
@@ -504,8 +499,8 @@ impl BuiltinToolInput {
         ToolInvocation::new(name, payload)
     }
 
-    /// Reconstruct a `BuiltinToolInput` from a [`ToolInvocation`], or `None`
-    /// if the invocation does not name a built-in tool. The look-up is
+    /// Reconstruct a `FirstPartyToolInput` from a [`ToolInvocation`], or `None`
+    /// if the invocation does not name a first-party tool. The look-up is
     /// authoritative: any name that round-trips through [`tool_name`] is
     /// accepted; anything else returns `None`.
     pub fn from_invocation(invocation: &ToolInvocation) -> Option<Self> {
@@ -538,9 +533,9 @@ impl PluginInvocation {
     }
 }
 
-/// A dynamic tool invocation: stable name + structured payload. Built-in
+/// A dynamic tool invocation: stable name + structured payload. First-party
 /// tools and plugin-supplied tools share this shape; the typed
-/// [`BuiltinToolInput`] is recovered on demand via [`Self::as_builtin`].
+/// [`FirstPartyToolInput`] is recovered on demand via [`Self::as_first_party`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolInvocation {
     pub name: String,
@@ -556,16 +551,16 @@ impl ToolInvocation {
         }
     }
 
-    /// If this invocation names a built-in tool, decode its input into a
-    /// strongly-typed [`BuiltinToolInput`].
-    pub fn as_builtin(&self) -> Option<BuiltinToolInput> {
-        BuiltinToolInput::from_invocation(self)
+    /// If this invocation names a first-party tool, decode its input into a
+    /// strongly-typed [`FirstPartyToolInput`].
+    pub fn as_first_party(&self) -> Option<FirstPartyToolInput> {
+        FirstPartyToolInput::from_invocation(self)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
-pub enum BuiltinToolOutput {
+pub enum FirstPartyToolOutput {
     Bash {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
@@ -693,13 +688,6 @@ pub enum BuiltinToolOutput {
         approved: bool,
         plan_path: String,
     },
-    SkillRun {
-        name: String,
-        body_chars: usize,
-        allowed_tools: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        model: Option<String>,
-    },
     EnterWorktree {
         path: String,
         branch: String,
@@ -773,7 +761,7 @@ pub struct WebSearchHit {
     pub snippet: Option<String>,
 }
 
-impl BuiltinToolOutput {
+impl FirstPartyToolOutput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
@@ -792,7 +780,6 @@ impl BuiltinToolOutput {
             Self::WebSearch { .. } => "web_search",
             Self::EnterPlanMode { .. } => "enter_plan_mode",
             Self::ExitPlanMode { .. } => "exit_plan_mode",
-            Self::SkillRun { .. } => "skill_run",
             Self::EnterWorktree { .. } => "enter_worktree",
             Self::ExitWorktree { .. } => "exit_worktree",
             Self::CronCreate { .. } => "cron_create",
@@ -824,8 +811,8 @@ impl BuiltinToolOutput {
     }
 
     /// Reverse of [`into_custom_output`]: try to decode a `CustomToolOutput`
-    /// emitted by a built-in tool back into the strongly-typed enum. Returns
-    /// `None` for any name that does not correspond to one of the built-in
+    /// emitted by a first-party tool back into the strongly-typed enum. Returns
+    /// `None` for any name that does not correspond to one of the first-party
     /// variants (serde rejects the unknown tag).
     pub fn from_custom(output: &CustomToolOutput) -> Option<Self> {
         let value: serde_json::Value = output.payload.clone().into();
@@ -984,11 +971,11 @@ pub enum ToolOutput {
 }
 
 impl ToolOutput {
-    /// If this output is a `Custom` carrying a built-in tool's payload,
-    /// decode it into a strongly-typed [`BuiltinToolOutput`].
-    pub fn as_builtin(&self) -> Option<BuiltinToolOutput> {
+    /// If this output is a `Custom` carrying a first-party tool's payload,
+    /// decode it into a strongly-typed [`FirstPartyToolOutput`].
+    pub fn as_first_party(&self) -> Option<FirstPartyToolOutput> {
         match self {
-            Self::Custom { output } => BuiltinToolOutput::from_custom(output),
+            Self::Custom { output } => FirstPartyToolOutput::from_custom(output),
             _ => None,
         }
     }

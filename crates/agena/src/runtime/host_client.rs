@@ -10,33 +10,30 @@ use crate::event::Scope;
 use async_trait::async_trait;
 
 use crate::message::{
-    AskUserToolInput, BuiltinToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
+    AskUserToolInput, FirstPartyToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
     ExitPlanModeToolInput, ExitWorktreeToolInput, MonitorStatus, MonitorStream, TaskSubagentType,
     TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, UserInputOption, UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
-    AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostAgentDescriptor,
+    AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor,
     HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
-    HostAgentRemoveResponse, HostCallbackContext, HostClient, HostCommandDescriptor,
-    HostCommandListResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
-    HostCommandRemoveResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
-    HostExitPlanModeRequest, HostExitWorktreeRequest, HostLspDiagnostic,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostMcpServerSpec, HostPlanEntry, HostPlanGetRequest,
-    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostAgentRemoveResponse, HostCallbackContext, HostClient, HostEnterPlanModeRequest,
+    HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest,
+    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest,
+    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
+    HostMcpServerSpec, HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse,
+    HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillDescriptor,
-    HostSkillGetRequest, HostSkillGetResponse, HostSkillListResponse, HostSkillMutationResponse,
-    HostSkillRegisterRequest, HostSkillRemoveRequest, HostStorageDeleteRequest, HostStorageEntry,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
-    HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
-    current_host_callback_context,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostTodoItem,
+    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostWorktreeEntry,
+    HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -45,14 +42,13 @@ use crate::plugin::{
 use crate::plugins::storage::{PluginSecretStore, PluginStorage, PluginStorageError};
 use crate::runtime::AgenaRuntime;
 use crate::tool::{EntrySource, MonitorError, MonitorReadParams, MonitorStartParams};
-use crate::{entry::BuiltinExecutionContext, plugins::bundled::builtin::builtin_to_invoke_output};
+use crate::{entry::FirstPartyExecutionContext, plugins::bundled::router::first_party_to_invoke_output};
 
 /// Build a `HostClient` impl for a runtime; use [`NoopHostClient`] when no
 /// runtime is available (e.g. before bootstrap completes).
 pub fn host_client_for(runtime: AgenaRuntime) -> Arc<dyn HostClient> {
     Arc::new(RuntimeHostClient {
         runtime,
-        commands: crate::commands::CustomCommandRegistry::empty(),
         agents: crate::agents::SubagentRegistry::empty(),
     })
 }
@@ -63,7 +59,6 @@ pub fn noop_host_client() -> Arc<dyn HostClient> {
 
 struct RuntimeHostClient {
     runtime: AgenaRuntime,
-    commands: crate::commands::CustomCommandRegistry,
     agents: crate::agents::SubagentRegistry,
 }
 
@@ -77,13 +72,6 @@ impl RuntimeHostClient {
 
     fn tool_executor(&self) -> Result<crate::tool::ToolExecutor, PluginError> {
         Ok(self.session_manager()?.tool_executor())
-    }
-
-    fn skills_manager(&self) -> Result<Arc<agena_skills::SkillsManager>, PluginError> {
-        self.runtime
-            .current_snapshot()
-            .skills_manager()
-            .ok_or_else(|| host_unavailable("skills manager is not enabled in this runtime"))
     }
 
     fn callback_context(&self) -> Result<HostCallbackContext, PluginError> {
@@ -184,7 +172,7 @@ fn render_tool_descriptor(definition: crate::tool::EntryDefinition) -> ToolDescr
         deferred,
         read_only: definition.read_only,
         plugin_id: match definition.source {
-            EntrySource::Builtin => None,
+            EntrySource::FirstParty => None,
             EntrySource::Plugin { plugin_name } => Some(plugin_name),
         },
     }
@@ -342,23 +330,23 @@ fn todo_item_from_host(item: HostTodoItem) -> TodoItem {
     }
 }
 
-fn workflow_builtin_output(
+fn workflow_first_party_output(
     executor: &crate::tool::ToolExecutor,
-    input: BuiltinToolInput,
+    input: FirstPartyToolInput,
     session_id: Option<i64>,
     call_id: Option<i64>,
 ) -> Result<ToolInvokeOutput, PluginError> {
-    let execution = crate::entry::orchestrator::execute_builtin(
+    let execution = crate::entry::orchestrator::execute_first_party(
         executor,
         &input,
-        BuiltinExecutionContext {
+        FirstPartyExecutionContext {
             session_id,
             call_id,
             session_context: None,
         },
     )
     .map_err(|err| PluginError::new(err.to_string()))?;
-    Ok(builtin_to_invoke_output(execution))
+    Ok(first_party_to_invoke_output(execution))
 }
 
 #[async_trait]
@@ -608,9 +596,9 @@ impl HostClient for RuntimeHostClient {
     async fn todo_write(&self, req: HostTodoWriteRequest) -> Result<ToolInvokeOutput, PluginError> {
         let executor = self.tool_executor()?;
         let context = self.callback_context()?;
-        workflow_builtin_output(
+        workflow_first_party_output(
             &executor,
-            BuiltinToolInput::TodoWrite(TodoWriteToolInput {
+            FirstPartyToolInput::TodoWrite(TodoWriteToolInput {
                 items: req.items.into_iter().map(todo_item_from_host).collect(),
             }),
             context.session_id.filter(|id| *id >= 0),
@@ -624,9 +612,9 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let executor = self.tool_executor()?;
         let context = self.callback_context()?;
-        workflow_builtin_output(
+        workflow_first_party_output(
             &executor,
-            BuiltinToolInput::EnterPlanMode(EnterPlanModeToolInput::default()),
+            FirstPartyToolInput::EnterPlanMode(EnterPlanModeToolInput::default()),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
         )
@@ -638,9 +626,9 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let executor = self.tool_executor()?;
         let context = self.callback_context()?;
-        workflow_builtin_output(
+        workflow_first_party_output(
             &executor,
-            BuiltinToolInput::ExitPlanMode(ExitPlanModeToolInput::default()),
+            FirstPartyToolInput::ExitPlanMode(ExitPlanModeToolInput::default()),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
         )
@@ -652,9 +640,9 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let executor = self.tool_executor()?;
         let context = self.callback_context()?;
-        workflow_builtin_output(
+        workflow_first_party_output(
             &executor,
-            BuiltinToolInput::EnterWorktree(EnterWorktreeToolInput {
+            FirstPartyToolInput::EnterWorktree(EnterWorktreeToolInput {
                 name: req.name,
                 path: req.path,
             }),
@@ -669,143 +657,15 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let executor = self.tool_executor()?;
         let context = self.callback_context()?;
-        workflow_builtin_output(
+        workflow_first_party_output(
             &executor,
-            BuiltinToolInput::ExitWorktree(ExitWorktreeToolInput {
+            FirstPartyToolInput::ExitWorktree(ExitWorktreeToolInput {
                 action: req.action,
                 discard_changes: req.discard_changes,
             }),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
         )
-    }
-
-    async fn execute_builtin_tool(
-        &self,
-        req: BuiltinToolRequest,
-    ) -> Result<ToolInvokeOutput, PluginError> {
-        let context = self.callback_context()?;
-        let plugin_id = context.plugin_id.as_deref().unwrap_or_default();
-        if !plugin_id.starts_with("agena.") {
-            return Err(host_unavailable(
-                "built-in host execution is reserved for first-party agena.* plugins",
-            ));
-        }
-        let executor = self.tool_executor()?;
-        executor
-            .execute_builtin_payload_for_host(
-                req.tool_name.as_str(),
-                req.input,
-                context.session_id.filter(|id| *id >= 0),
-                context.call_id.filter(|id| *id >= 0),
-            )
-            .map_err(|err| PluginError::new(err.to_string()))
-    }
-
-    async fn skill_get(
-        &self,
-        req: HostSkillGetRequest,
-    ) -> Result<HostSkillGetResponse, PluginError> {
-        let manager = self.skills_manager()?;
-        let skill = manager
-            .get(req.name.trim())
-            .map_err(|err| PluginError::new(format!("skill_get: {err}")))?;
-        Ok(HostSkillGetResponse {
-            name: skill.frontmatter.name.clone(),
-            body: skill.body.clone(),
-            allowed_tools: skill.frontmatter.allowed_tools.clone(),
-            model: skill.frontmatter.model.clone(),
-        })
-    }
-
-    async fn skill_register(
-        &self,
-        req: HostSkillRegisterRequest,
-    ) -> Result<HostSkillMutationResponse, PluginError> {
-        use crate::plugin::sdk::manifest::SkillKind;
-        let manager = self.skills_manager()?;
-        let plugin_id = current_host_callback_context()
-            .and_then(|ctx| ctx.plugin_id)
-            .ok_or_else(|| host_unavailable("skill_register requires plugin id in context"))?;
-        let entry = req.skill;
-        let skill = agena_skills::Skill {
-            frontmatter: agena_skills::SkillFrontmatter {
-                name: entry.name.clone(),
-                description: entry.description,
-                allowed_tools: entry.allowed_tools,
-                model: entry.model,
-                aliases: entry.aliases,
-            },
-            body: entry.body,
-            source_path: None,
-        };
-        match entry.kind {
-            SkillKind::Skill => manager.register(plugin_id, skill),
-            SkillKind::Command => manager.register_command(plugin_id, skill),
-        }
-        Ok(HostSkillMutationResponse {
-            generation: 0,
-            removed: false,
-        })
-    }
-
-    async fn skill_remove(
-        &self,
-        req: HostSkillRemoveRequest,
-    ) -> Result<HostSkillMutationResponse, PluginError> {
-        let manager = self.skills_manager()?;
-        let plugin_id = current_host_callback_context()
-            .and_then(|ctx| ctx.plugin_id)
-            .ok_or_else(|| host_unavailable("skill_remove requires plugin id in context"))?;
-        let removed_skill = manager.remove(&plugin_id, &req.name);
-        let removed_command = manager.remove_command(&plugin_id, &req.name);
-        Ok(HostSkillMutationResponse {
-            generation: 0,
-            removed: removed_skill || removed_command,
-        })
-    }
-
-    async fn skill_list(&self) -> Result<HostSkillListResponse, PluginError> {
-        use crate::plugin::sdk::manifest::{SkillKind, SkillManifestEntry};
-        let manager = self.skills_manager()?;
-        let mut skills: Vec<HostSkillDescriptor> = manager
-            .list_with_owners()
-            .into_iter()
-            .map(|(plugin_id, skill)| {
-                let mut entry = SkillManifestEntry::new(skill.frontmatter.name, skill.body)
-                    .description(skill.frontmatter.description)
-                    .allowed_tools(skill.frontmatter.allowed_tools)
-                    .aliases(skill.frontmatter.aliases)
-                    .kind(SkillKind::Skill);
-                if let Some(model) = skill.frontmatter.model {
-                    entry = entry.model(model);
-                }
-                HostSkillDescriptor {
-                    plugin_id,
-                    skill: entry,
-                }
-            })
-            .collect();
-        // Commands list does not preserve owner per skill in the
-        // current registry; return them tagged as `unknown` for now.
-        for skill in manager.list_commands() {
-            let mut entry = SkillManifestEntry::new(skill.frontmatter.name, skill.body)
-                .description(skill.frontmatter.description)
-                .allowed_tools(skill.frontmatter.allowed_tools)
-                .aliases(skill.frontmatter.aliases)
-                .kind(SkillKind::Command);
-            if let Some(model) = skill.frontmatter.model {
-                entry = entry.model(model);
-            }
-            skills.push(HostSkillDescriptor {
-                plugin_id: String::new(),
-                skill: entry,
-            });
-        }
-        Ok(HostSkillListResponse {
-            generation: 0,
-            skills,
-        })
     }
 
     async fn monitor_start(&self, req: MonitorStartRequest) -> Result<MonitorHandle, PluginError> {
@@ -1176,48 +1036,6 @@ impl HostClient for RuntimeHostClient {
         Ok(HostSchedulerDeleteResponse { removed })
     }
 
-    async fn command_register(&self, req: HostCommandRegisterRequest) -> Result<(), PluginError> {
-        if req.command.name.trim().is_empty() {
-            return Err(PluginError::invalid_params(
-                "command.name must not be empty",
-            ));
-        }
-        let scope = command_scope_from_str(req.command.scope.as_str());
-        let command = crate::commands::CustomCommand {
-            name: req.command.name.clone(),
-            frontmatter: crate::commands::CommandFrontmatter {
-                description: req.command.description,
-                argument_hint: None,
-                allowed_tools: req.command.allowed_tools,
-                model: req.command.model,
-                aliases: req.command.aliases,
-            },
-            body: req.command.body,
-            source_path: None,
-            scope,
-        };
-        self.commands.register_runtime(command);
-        Ok(())
-    }
-
-    async fn command_remove(
-        &self,
-        req: HostCommandRemoveRequest,
-    ) -> Result<HostCommandRemoveResponse, PluginError> {
-        let removed = self.commands.remove_runtime(&req.name);
-        Ok(HostCommandRemoveResponse { removed })
-    }
-
-    async fn command_list(&self) -> Result<HostCommandListResponse, PluginError> {
-        let commands = self
-            .commands
-            .list()
-            .into_iter()
-            .map(command_to_descriptor)
-            .collect();
-        Ok(HostCommandListResponse { commands })
-    }
-
     async fn agent_register(&self, req: HostAgentRegisterRequest) -> Result<(), PluginError> {
         if req.agent.name.trim().is_empty() {
             return Err(PluginError::invalid_params("agent.name must not be empty"));
@@ -1323,36 +1141,11 @@ impl HostClient for RuntimeHostClient {
     }
 }
 
-fn command_scope_from_str(scope: &str) -> crate::commands::CommandScope {
-    match scope {
-        "project" => crate::commands::CommandScope::Project,
-        "user" => crate::commands::CommandScope::User,
-        _ => crate::commands::CommandScope::Builtin,
-    }
-}
-
-fn command_to_descriptor(cmd: crate::commands::CustomCommand) -> HostCommandDescriptor {
-    HostCommandDescriptor {
-        name: cmd.name,
-        description: cmd.frontmatter.description,
-        allowed_tools: cmd.frontmatter.allowed_tools,
-        model: cmd.frontmatter.model,
-        aliases: cmd.frontmatter.aliases,
-        body: cmd.body,
-        scope: match cmd.scope {
-            crate::commands::CommandScope::Project => "project",
-            crate::commands::CommandScope::User => "user",
-            crate::commands::CommandScope::Builtin => "builtin",
-        }
-        .to_string(),
-    }
-}
-
 fn agent_scope_from_str(scope: &str) -> crate::agents::AgentScope {
     match scope {
         "project" => crate::agents::AgentScope::Project,
         "user" => crate::agents::AgentScope::User,
-        _ => crate::agents::AgentScope::Builtin,
+        _ => crate::agents::AgentScope::FirstParty,
     }
 }
 
@@ -1367,7 +1160,7 @@ fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostAgentDescrip
         scope: match profile.scope {
             crate::agents::AgentScope::Project => "project",
             crate::agents::AgentScope::User => "user",
-            crate::agents::AgentScope::Builtin => "builtin",
+            crate::agents::AgentScope::FirstParty => "first_party",
         }
         .to_string(),
     }

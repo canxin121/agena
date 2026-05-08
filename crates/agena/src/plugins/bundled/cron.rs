@@ -1,16 +1,17 @@
 //! First-party `agena.cron` plugin: schedules cron and one-shot wakeup jobs.
 //!
-//! Backed by the existing `ToolExecutor` cron implementation via
-//! `host.execute_builtin_tool`. The plugin owns the model-visible
-//! `cron_create / cron_list / cron_delete / schedule_wakeup` entries; the
-//! built-in plugin no longer declares them.
+//! The model-visible `cron_create / cron_list / cron_delete / schedule_wakeup`
+//! entries now belong to this plugin. Their execution currently reuses the
+//! shared in-process router bridge while the runtime keeps a single plugin-entry
+//! surface.
 
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 
 use crate::plugin::PluginError;
-use crate::plugin::sdk::host_api::{BuiltinToolRequest, HostClient};
+use crate::plugin::sdk::host_api::HostClient;
+use crate::plugins::bundled::router;
 use crate::plugin::sdk::{
     EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
     Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
@@ -65,12 +66,13 @@ impl Plugin for CronPlugin {
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         match input.tool_name.as_str() {
             "cron_create" | "cron_list" | "cron_delete" | "schedule_wakeup" => {
-                self.host()?
-                    .execute_builtin_tool(BuiltinToolRequest {
-                        tool_name: input.tool_name,
-                        input: input.input,
-                    })
-                    .await
+                let _ = self.host()?;
+                router::invoke_first_party_tool(
+                    &input.tool_name,
+                    input.input,
+                    input.session_id,
+                    input.call_id,
+                )
             }
             other => Err(PluginError::invalid_params(format!(
                 "unknown cron plugin entry '{other}'"

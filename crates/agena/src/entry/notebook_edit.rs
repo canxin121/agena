@@ -3,15 +3,15 @@ use std::fs;
 use serde_json::{Map, Value};
 
 use crate::message::{
-    BuiltinToolOutput, NotebookCellType, NotebookEditMode, NotebookEditToolInput,
+    FirstPartyToolOutput, NotebookCellType, NotebookEditMode, NotebookEditToolInput,
 };
 
-use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &NotebookEditToolInput,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     let target = executor.resolve_target_path(&input.notebook_path);
     executor.ensure_edit_permission(&target)?;
 
@@ -40,7 +40,7 @@ pub(super) fn execute(
 
     let display_path = executor.display_path(&target);
     let action = input.edit_mode.as_str();
-    let output = BuiltinToolOutput::NotebookEdit {
+    let output = FirstPartyToolOutput::NotebookEdit {
         path: display_path.clone(),
         edit_mode: action.to_string(),
         cell_index: index as u32,
@@ -58,7 +58,7 @@ pub(super) fn execute(
     view.metadata
         .insert("cell_count".to_string(), cell_count.to_string());
 
-    Ok(BuiltinExecution::new(output, view))
+    Ok(FirstPartyExecution::new(output, view))
 }
 
 fn apply_edit(cells: &mut Vec<Value>, input: &NotebookEditToolInput) -> Result<usize, ToolError> {

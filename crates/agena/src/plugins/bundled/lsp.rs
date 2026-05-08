@@ -1,9 +1,8 @@
 //! First-party `agena.lsp` plugin: read-only observability of the configured
 //! LSP servers plus the model-visible LSP entries (`lsp_definition`,
-//! `lsp_references`, `lsp_hover`, `lsp_diagnostics`). The four model entries
-//! are routed back to the built-in implementation via
-//! `host.execute_builtin_tool`; `lsp_servers` is plugin-native and uses
-//! `host.lsp_list_servers`.
+//! `lsp_references`, `lsp_hover`, `lsp_diagnostics`). `lsp_servers` is
+//! plugin-native and uses `host.lsp_list_servers`; the other LSP entries share
+//! the in-process router bridge while remaining normal plugin entries.
 
 use std::sync::{Arc, RwLock};
 
@@ -14,7 +13,8 @@ use crate::message::{
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
 };
 use crate::plugin::PluginError;
-use crate::plugin::sdk::host_api::{BuiltinToolRequest, HostClient, HostLspListServersResponse};
+use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
+use crate::plugins::bundled::router;
 use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
 use crate::plugin::sdk::{
     EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
@@ -65,7 +65,7 @@ impl Plugin for LspPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-lsp", env!("CARGO_PKG_VERSION"))
             .description(
-                "LSP read-only observability and built-in LSP tool surface as a first-party plugin.",
+                "LSP read-only observability and first-party LSP entry surface exposed as a plugin.",
             )
             .hooks(HookSubscription::TOOL_INVOKE)
             .entry(lsp_servers_decl())
@@ -113,12 +113,8 @@ impl Plugin for LspPlugin {
                 })
             }
             name @ ("lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_diagnostics") => {
-                self.host()?
-                    .execute_builtin_tool(BuiltinToolRequest {
-                        tool_name: name.to_string(),
-                        input: input.input,
-                    })
-                    .await
+                let _ = self.host()?;
+                router::invoke_first_party_tool(name, input.input, input.session_id, input.call_id)
             }
             other => Err(PluginError::invalid_params(format!(
                 "unknown lsp plugin entry '{other}'"

@@ -6,14 +6,15 @@
 
 use std::sync::Arc;
 
+use agena::model::{ModelId, ModelRef, ProviderId};
 use agena::{
     agent::Agent,
     event::{EventKind, PublishContext},
     message::PartContent,
     permission::PermissionPolicy,
     provider::{
-        CompletionFinishReason, CompletionRequest, CompletionResponse, ModelProvider, ProviderModel,
-        ProviderRegistry,
+        CompletionFinishReason, CompletionRequest, CompletionResponse, ModelProvider,
+        ProviderModel, ProviderRegistry,
     },
     session::{
         ContextGovernor, ContextPolicy, SessionManager, SessionProcessor, SessionRunOptions,
@@ -21,7 +22,6 @@ use agena::{
     },
     tool::ToolExecutor,
 };
-use agena::model::{ModelId, ModelRef, ProviderId};
 use agena_api::{
     PROTOCOL_VERSION, Scope,
     notifications::Notification,
@@ -51,7 +51,10 @@ impl ModelProvider for TestProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, agena::AppError> {
-        Ok(vec![ProviderModel::new("test", self.default_model().as_str())])
+        Ok(vec![ProviderModel::new(
+            "test",
+            self.default_model().as_str(),
+        )])
     }
 
     async fn complete(
@@ -382,7 +385,10 @@ async fn message_detail_routes_return_message_and_parts() {
         .messages
         .first()
         .expect("session should contain a user message");
-    let part = message.parts.first().expect("message should contain a part");
+    let part = message
+        .parts
+        .first()
+        .expect("message should contain a part");
 
     let response = app
         .clone()
@@ -413,7 +419,10 @@ async fn message_detail_routes_return_message_and_parts() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/v1/messages/{}/parts?mode=summary", message.id))
+                .uri(format!(
+                    "/api/v1/messages/{}/parts?mode=summary",
+                    message.id
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -586,7 +595,10 @@ async fn session_action_routes_cover_rewind_tree_checkpoints_export_and_import()
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/v1/sessions/{}/rewind-checkpoints", session.id))
+                .uri(format!(
+                    "/api/v1/sessions/{}/rewind-checkpoints",
+                    session.id
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )

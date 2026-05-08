@@ -148,15 +148,18 @@ where
                 .await
             }
             protocol::method::TURN_SUBMIT => {
-                self.dispatch::<SubmitTurnParams, SubmitTurnResult, _>(request.params, |params| async move {
-                    let result = self.backend.submit_turn(params).await?;
-                    self.events
-                        .publish(AppServerNotification::SessionStateChanged {
-                            session_id: result.session_id,
-                            status: result.status.clone(),
-                        });
-                    Ok(result)
-                })
+                self.dispatch::<SubmitTurnParams, SubmitTurnResult, _>(
+                    request.params,
+                    |params| async move {
+                        let result = self.backend.submit_turn(params).await?;
+                        self.events
+                            .publish(AppServerNotification::SessionStateChanged {
+                                session_id: result.session_id,
+                                status: result.status.clone(),
+                            });
+                        Ok(result)
+                    },
+                )
                 .await
             }
             protocol::method::PERMISSION_REPLY => {

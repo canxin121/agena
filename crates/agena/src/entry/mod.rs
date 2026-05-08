@@ -16,7 +16,6 @@ pub(crate) mod powershell;
 pub(crate) mod read;
 pub(crate) mod result;
 pub(crate) mod shell;
-pub(crate) mod skill;
 pub(crate) mod task;
 pub(crate) mod todo_write;
 pub(crate) mod tool_search;
@@ -36,7 +35,7 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    AskUserToolInput, BuiltinToolInput, BuiltinToolOutput, CustomToolOutput, Message, PartContent,
+    AskUserToolInput, FirstPartyToolInput, FirstPartyToolOutput, CustomToolOutput, Message, PartContent,
     PluginInvocation, StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput,
 };
 use crate::permission::{
@@ -56,8 +55,9 @@ use crate::plugin::{
     },
 };
 use crate::plugins::bundled::{
-    builtin as builtins, cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, mcp,
-    shell as bundled_shell, skills, skills_fs, web as bundled_web, workflow as bundled_workflow,
+    cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, mcp,
+    router as bundled_router, shell as bundled_shell, skills_fs, web as bundled_web,
+    workflow as bundled_workflow,
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
@@ -68,7 +68,7 @@ pub use monitor::{
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,
 };
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
-pub use result::{BuiltinExecution, ToolExecutionView, ToolInvocationExecution};
+pub use result::{FirstPartyExecution, ToolExecutionView, ToolInvocationExecution};
 pub use shell::{ExecutionPolicy, ShellError, ShellOutput, ShellRequest};
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 pub use worktree::{
@@ -77,34 +77,12 @@ pub use worktree::{
     registry_for_executor as worktree_registry_for_executor,
 };
 
-/// Stable id used to register the built-in plugin with a [`PluginHost`].
-pub fn builtins_plugin_id() -> &'static str {
-    builtins::BUILTIN_PLUGIN_ID
-}
-
-/// Construct the in-process plugin that exposes every built-in tool. Pass it
-/// to [`agena_plugin_host::PluginHostBuilder::register_static`] before
-/// calling `.build()`.
-pub fn new_builtins_plugin() -> impl crate::plugin::sdk::Plugin {
-    builtins::BuiltinPlugin::new()
-}
-
-pub fn skills_plugin_id() -> &'static str {
-    skills::SKILLS_PLUGIN_ID
-}
-
-pub fn new_skills_plugin() -> impl crate::plugin::sdk::Plugin {
-    skills::SkillsPlugin::new()
-}
-
 pub fn skills_fs_plugin_id() -> &'static str {
     skills_fs::SKILLS_FS_PLUGIN_ID
 }
 
-pub fn new_skills_fs_plugin(
-    manager: std::sync::Arc<agena_skills::SkillsManager>,
-) -> impl crate::plugin::sdk::Plugin {
-    skills_fs::SkillsFsPlugin::new(manager)
+pub fn new_skills_fs_plugin() -> impl crate::plugin::sdk::Plugin {
+    skills_fs::SkillsFsPlugin::new()
 }
 
 pub fn lsp_plugin_id() -> &'static str {
@@ -156,122 +134,28 @@ pub fn new_workflow_plugin() -> impl crate::plugin::sdk::Plugin {
 }
 
 /// First-party plugins (`agena.*`) are surfaced to the catalog and to model
-/// callers as built-in tools, even though their entries now live in dedicated
+/// callers as first_party tools, even though their entries now live in dedicated
 /// plugins. Third-party plugins still show up as `EntrySource::Plugin`.
 fn is_first_party_plugin(plugin_id: &str) -> bool {
     plugin_id.starts_with("agena.")
 }
 
-/// Lightweight `HostClient` used by [`builtins_plugin_host`]: routes
-/// `execute_builtin_tool` back into the in-process built-in executor that the
-/// caller installed via [`builtins::with_executor`]. Any other host callback
-/// is unavailable in this context.
-struct BuiltinsHostClient;
-
-#[async_trait::async_trait]
-impl crate::plugin::sdk::host_api::HostClient for BuiltinsHostClient {
-    async fn log(
-        &self,
-        _level: crate::plugin::sdk::host_api::LogLevel,
-        _message: String,
-        _fields: serde_json::Value,
-    ) {
-    }
-
-    async fn publish_event(
-        &self,
-        _env: crate::plugin::sdk::EventEnvelope,
-    ) -> crate::plugin::sdk::Result<()> {
-        Ok(())
-    }
-
-    async fn subscribe_events(
-        &self,
-        _filter: crate::plugin::sdk::EventFilter,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::host_api::EventSubscription> {
-        Err(crate::plugin::PluginError::new(
-            "subscribe_events is not available in the offline builtins host",
-        ))
-    }
-
-    async fn ask_permission(
-        &self,
-        _req: crate::plugin::sdk::PermissionAskInput,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::PermissionDecision> {
-        Ok(crate::plugin::sdk::PermissionDecision::Prompt)
-    }
-
-    async fn read_config(
-        &self,
-        _path: Option<String>,
-    ) -> crate::plugin::sdk::Result<serde_json::Value> {
-        Ok(serde_json::Value::Null)
-    }
-
-    async fn invoke_tool(
-        &self,
-        tool: String,
-        _input: serde_json::Value,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-        Err(crate::plugin::PluginError::new(format!(
-            "offline builtins host cannot invoke tool {tool}"
-        )))
-    }
-
-    async fn todo_write(
-        &self,
-        req: crate::plugin::sdk::host_api::HostTodoWriteRequest,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-        let context =
-            crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
-        let session_id = context.session_id.unwrap_or(-1);
-        let call_id = context.call_id.unwrap_or(-1);
-        let executor = builtins::current_executor_lookup(session_id, call_id, "todo_write")
-            .ok_or_else(|| {
-                crate::plugin::PluginError::new(
-                    "offline builtins host: no executor in scope for todo_write",
-                )
-            })?;
-        executor
-            .execute_builtin_payload_for_host(
-                "todo_write",
-                serde_json::to_value(req)
-                    .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?,
-                Some(session_id).filter(|id| *id >= 0),
-                Some(call_id).filter(|id| *id >= 0),
-            )
-            .map_err(|err| crate::plugin::PluginError::new(err.to_string()))
-    }
-
-    async fn execute_builtin_tool(
-        &self,
-        req: crate::plugin::sdk::host_api::BuiltinToolRequest,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-        let context =
-            crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
-        let session_id = context.session_id.unwrap_or(-1);
-        let call_id = context.call_id.unwrap_or(-1);
-        let executor = builtins::current_executor_lookup(session_id, call_id, &req.tool_name)
-            .ok_or_else(|| {
-                crate::plugin::PluginError::new(
-                    "offline builtins host: no executor in scope for execute_builtin_tool",
-                )
-            })?;
-        executor
-            .execute_builtin_payload_for_host(
-                req.tool_name.as_str(),
-                req.input,
-                Some(session_id).filter(|id| *id >= 0),
-                Some(call_id).filter(|id| *id >= 0),
-            )
-            .map_err(|err| crate::plugin::PluginError::new(err.to_string()))
-    }
+fn uses_local_first_party_bridge(plugin_id: &str) -> bool {
+    matches!(plugin_id, bundled_fs::FS_PLUGIN_ID | bundled_shell::SHELL_PLUGIN_ID | bundled_web::WEB_PLUGIN_ID)
 }
 
-pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
+fn plugin_invocation_uses_local_first_party_bridge(
+    plugins: &PluginHost,
+    invocation: &PluginInvocation,
+) -> bool {
+    plugins
+        .lookup_entry(invocation.entry_name.as_str())
+        .is_some_and(|resolution| uses_local_first_party_bridge(&resolution.handle.plugin_id))
+}
+
+pub fn first_party_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
     let workspace_root = workspace_root.into();
-    let plugin_id = builtins_plugin_id().to_string();
-    let skills_id = skills_plugin_id().to_string();
+    let skills_fs_id = skills_fs_plugin_id().to_string();
     let lsp_id = lsp_plugin_id().to_string();
     let cron_id = cron_plugin_id().to_string();
     let fs_id = fs_plugin_id().to_string();
@@ -280,8 +164,7 @@ pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Pl
     let workflow_id = workflow_plugin_id().to_string();
     let mut list = std::collections::BTreeMap::new();
     for id in [
-        &plugin_id,
-        &skills_id,
+        &skills_fs_id,
         &lsp_id,
         &cron_id,
         &fs_id,
@@ -308,9 +191,7 @@ pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Pl
     mcp::block_on(async move {
         PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION"))
             .with_config(config)
-            .with_host_client(Arc::new(BuiltinsHostClient))
-            .register_static(plugin_id, new_builtins_plugin())
-            .register_static(skills_id, new_skills_plugin())
+            .register_static(skills_fs_id, new_skills_fs_plugin())
             .register_static(lsp_id, new_lsp_plugin())
             .register_static(cron_id, new_cron_plugin())
             .register_static(fs_id, new_fs_plugin())
@@ -322,7 +203,6 @@ pub fn builtins_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Pl
     })
     .map_err(|err| err.to_string())
 }
-
 /// Stable id used to register configured MCP servers as plugin entries.
 pub fn mcp_plugin_id() -> &'static str {
     mcp::MCP_PLUGIN_ID
@@ -355,7 +235,7 @@ enum PermissionExecutionMode {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct BuiltinExecutionContext {
+pub(super) struct FirstPartyExecutionContext {
     pub session_id: Option<i64>,
     pub call_id: Option<i64>,
     pub session_context: Option<crate::session::SessionExecutionContext>,
@@ -371,8 +251,8 @@ pub struct StreamingToolExecution {
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
-pub enum PermissionedBuiltinExecution {
-    Executed(BuiltinExecution),
+pub enum PermissionedFirstPartyExecution {
+    Executed(FirstPartyExecution),
     Pending(crate::permission::PendingPermission),
 }
 
@@ -415,7 +295,6 @@ pub struct ToolExecutor {
     plugins: Arc<PluginHost>,
     web_search_backend: crate::config::WebSearchBackend,
     plan_registry: Option<plan::PlanRegistry>,
-    skills_manager: Option<Arc<agena_skills::SkillsManager>>,
     worktree_registry: Option<worktree::WorktreeRegistry>,
     scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
@@ -442,7 +321,6 @@ impl ToolExecutor {
             plugins: PluginHost::new_empty(),
             web_search_backend: crate::config::WebSearchBackend::DuckDuckGoHtml,
             plan_registry: None,
-            skills_manager: None,
             worktree_registry: None,
             scheduler: None,
             lsp_registry: None,
@@ -486,15 +364,6 @@ impl ToolExecutor {
 
     pub fn plan_registry(&self) -> Option<&plan::PlanRegistry> {
         self.plan_registry.as_ref()
-    }
-
-    pub fn with_skills_manager(mut self, mgr: Arc<agena_skills::SkillsManager>) -> Self {
-        self.skills_manager = Some(mgr);
-        self
-    }
-
-    pub fn skills_manager(&self) -> Option<&Arc<agena_skills::SkillsManager>> {
-        self.skills_manager.as_ref()
     }
 
     pub fn with_worktree_registry(mut self, reg: worktree::WorktreeRegistry) -> Self {
@@ -550,12 +419,12 @@ impl ToolExecutor {
                 "tool '{tool_name}' is blocked in plan mode; call exit_plan_mode first"
             ))),
             SdkPlanModePolicy::ConditionalShellReadOnly => {
-                if let Some(builtin) = self.builtin_from_invocation(invocation)? {
-                    let is_read_only = match builtin {
-                        BuiltinToolInput::Bash(payload) => {
+                if let Some(first_party) = self.first_party_from_invocation(invocation)? {
+                    let is_read_only = match first_party {
+                        FirstPartyToolInput::Bash(payload) => {
                             bash::is_read_only_command(payload.command.as_str())
                         }
-                        BuiltinToolInput::PowerShell(payload) => {
+                        FirstPartyToolInput::PowerShell(payload) => {
                             bash::is_read_only_command(payload.command.as_str())
                         }
                         _ => false,
@@ -628,7 +497,7 @@ impl ToolExecutor {
         ToolCatalog::for_model(self.model_id.as_deref())
     }
 
-    pub fn available_builtins(&self) -> Vec<ToolAvailability> {
+    pub fn available_first_party_tools(&self) -> Vec<ToolAvailability> {
         let catalog = self.tool_catalog();
         self.plugins
             .entry_entries()
@@ -638,7 +507,7 @@ impl ToolExecutor {
                 EntryDefinition::from_decl(
                     entry.exposed_name.clone(),
                     &entry.decl,
-                    EntrySource::Builtin,
+                    EntrySource::FirstParty,
                 )
             })
             .map(|definition| catalog.availability_for_definition(&self.agent, &definition))
@@ -653,7 +522,7 @@ impl ToolExecutor {
             .into_iter()
             .map(|entry| {
                 let source = if is_first_party_plugin(&entry.plugin_name) {
-                    EntrySource::Builtin
+                    EntrySource::FirstParty
                 } else {
                     EntrySource::Plugin {
                         plugin_name: entry.plugin_name.clone(),
@@ -775,29 +644,26 @@ impl ToolExecutor {
             })
     }
 
-    fn builtin_from_invocation(
+    fn first_party_from_invocation(
         &self,
         invocation: &ToolInvocation,
-    ) -> Result<Option<BuiltinToolInput>, ToolError> {
-        self.builtin_from_plugin_invocation(&PluginInvocation::from_tool_invocation(invocation))
+    ) -> Result<Option<FirstPartyToolInput>, ToolError> {
+        self.first_party_from_plugin_invocation(&PluginInvocation::from_tool_invocation(invocation))
     }
 
-    fn builtin_from_plugin_invocation(
+    fn first_party_from_plugin_invocation(
         &self,
         invocation: &PluginInvocation,
-    ) -> Result<Option<BuiltinToolInput>, ToolError> {
-        if !matches!(
-            self.plugin_invocation_source_for(invocation),
-            EntrySource::Builtin
-        ) {
+    ) -> Result<Option<FirstPartyToolInput>, ToolError> {
+        if !plugin_invocation_uses_local_first_party_bridge(&self.plugins, invocation) {
             return Ok(None);
         }
         let invocation_view =
             ToolInvocation::new(invocation.entry_name.clone(), invocation.input.clone());
-        BuiltinToolInput::from_invocation(&invocation_view)
+        FirstPartyToolInput::from_invocation(&invocation_view)
             .map(Some)
             .ok_or_else(|| {
-                ToolError::InvalidInput(format!("decode built-in input: {}", invocation.entry_name))
+                ToolError::InvalidInput(format!("decode first_party input: {}", invocation.entry_name))
             })
     }
 
@@ -838,12 +704,12 @@ impl ToolExecutor {
     fn authorize_invocation(
         &self,
         invocation: &ToolInvocation,
-        builtin: Option<&BuiltinToolInput>,
+        first_party: Option<&FirstPartyToolInput>,
     ) -> Result<(String, PermissionDecision), ToolError> {
-        if let Some(builtin) = builtin {
-            self.ensure_builtin_enabled(builtin)?;
-            let tool_name = crate::permission::builtin_name(builtin).to_string();
-            return Ok((tool_name, self.agent.authorize_builtin_tool(builtin)));
+        if let Some(first_party) = first_party {
+            self.ensure_first_party_enabled(first_party)?;
+            let tool_name = crate::permission::first_party_tool_name(first_party).to_string();
+            return Ok((tool_name, self.agent.authorize_first_party_tool(first_party)));
         }
 
         let tool_name = invocation_name(invocation);
@@ -866,23 +732,23 @@ impl ToolExecutor {
     fn plugin_resolution_for_invocation(
         &self,
         invocation: &ToolInvocation,
-        builtin: Option<&BuiltinToolInput>,
+        first_party: Option<&FirstPartyToolInput>,
     ) -> Option<crate::plugin::PluginEntryResolution> {
         self.plugin_resolution_for_plugin_invocation(
             &PluginInvocation::from_tool_invocation(invocation),
-            builtin,
+            first_party,
         )
     }
 
     fn plugin_resolution_for_plugin_invocation(
         &self,
         invocation: &PluginInvocation,
-        builtin: Option<&BuiltinToolInput>,
+        first_party: Option<&FirstPartyToolInput>,
     ) -> Option<crate::plugin::PluginEntryResolution> {
-        if let Some(builtin) = builtin {
+        if let Some(first_party) = first_party {
             return self
                 .plugins
-                .lookup_entry(crate::permission::builtin_name(builtin));
+                .lookup_entry(crate::permission::first_party_tool_name(first_party));
         }
         self.plugins.lookup_entry(invocation.entry_name.as_str())
     }
@@ -942,21 +808,21 @@ impl ToolExecutor {
         self.push_path_checks(checks, sdk_path_kind_to_access_kind(kind), &target);
     }
 
-    pub fn execute_builtin_detailed(
+    pub fn execute_first_party_detailed(
         &self,
-        input: &BuiltinToolInput,
-    ) -> Result<BuiltinExecution, ToolError> {
-        self.execute_builtin_detailed_with_context(input, BuiltinExecutionContext::default())
+        input: &FirstPartyToolInput,
+    ) -> Result<FirstPartyExecution, ToolError> {
+        self.execute_first_party_detailed_with_context(input, FirstPartyExecutionContext::default())
     }
 
-    pub fn execute_builtin_output_for_session(
+    pub fn execute_first_party_output_for_session(
         &self,
-        input: &BuiltinToolInput,
+        input: &FirstPartyToolInput,
         session_id: i64,
-    ) -> Result<BuiltinToolOutput, ToolError> {
-        self.execute_builtin_detailed_with_context(
+    ) -> Result<FirstPartyToolOutput, ToolError> {
+        self.execute_first_party_detailed_with_context(
             input,
-            BuiltinExecutionContext {
+            FirstPartyExecutionContext {
                 session_id: Some(session_id),
                 call_id: None,
                 session_context: None,
@@ -965,44 +831,45 @@ impl ToolExecutor {
         .map(|execution| execution.output)
     }
 
-    pub(crate) fn execute_builtin_payload_for_host(
+    #[cfg(test)]
+    pub(crate) fn execute_first_party_payload_for_host(
         &self,
         tool_name: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
         call_id: Option<i64>,
     ) -> Result<crate::plugin::ToolInvokeOutput, ToolError> {
-        let builtin = builtins::parse_builtin(tool_name, input).map_err(|err| {
-            ToolError::InvalidInput(format!("parse built-in tool {tool_name}: {err}"))
+        let first_party = bundled_router::parse_first_party_tool(tool_name, input).map_err(|err| {
+            ToolError::InvalidInput(format!("parse first_party tool {tool_name}: {err}"))
         })?;
-        let execution = orchestrator::execute_builtin(
+        let execution = orchestrator::execute_first_party(
             self,
-            &builtin,
-            BuiltinExecutionContext {
+            &first_party,
+            FirstPartyExecutionContext {
                 session_id,
                 call_id,
                 session_context: None,
             },
         )?;
-        Ok(builtins::builtin_to_invoke_output(
+        Ok(bundled_router::first_party_to_invoke_output(
             self.truncator.apply(execution),
         ))
     }
 
-    fn execute_builtin_detailed_with_context(
+    fn execute_first_party_detailed_with_context(
         &self,
-        input: &BuiltinToolInput,
-        context: BuiltinExecutionContext,
-    ) -> Result<BuiltinExecution, ToolError> {
+        input: &FirstPartyToolInput,
+        context: FirstPartyExecutionContext,
+    ) -> Result<FirstPartyExecution, ToolError> {
         let scoped_executor = context
             .session_context
             .as_ref()
             .map(|session_context| self.for_session_context(session_context))
             .unwrap_or_else(|| self.clone());
-        scoped_executor.ensure_builtin_enabled(input)?;
+        scoped_executor.ensure_first_party_enabled(input)?;
 
         if scoped_executor.permission_mode == PermissionExecutionMode::Enforced {
-            match scoped_executor.agent.authorize_builtin_tool(input) {
+            match scoped_executor.agent.authorize_first_party_tool(input) {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
                 PermissionDecision::Deny { reason } => {
@@ -1011,47 +878,34 @@ impl ToolExecutor {
             }
         }
 
-        let execution = scoped_executor.dispatch_builtin_via_plugin_host(input, context)?;
-        Ok(scoped_executor.truncator.apply(execution))
-    }
-
-    fn dispatch_builtin_via_plugin_host(
-        &self,
-        input: &BuiltinToolInput,
-        context: BuiltinExecutionContext,
-    ) -> Result<BuiltinExecution, ToolError> {
-        let tool_name = crate::permission::builtin_name(input).to_string();
-        let resolution = self
-            .plugins
-            .lookup_entry(&tool_name)
-            .filter(|r| is_first_party_plugin(&r.handle.plugin_id))
-            .ok_or_else(|| ToolError::UnknownTool(tool_name.clone()))?;
-
-        let payload_value = builtin_input_payload(input)?;
+        let scoped_executor = context
+            .session_context
+            .as_ref()
+            .map(|session_context| self.for_session_context(session_context))
+            .unwrap_or_else(|| self.clone());
+        let tool_name = crate::permission::first_party_tool_name(input).to_string();
         let session_id = context.session_id.unwrap_or(-1);
         let call_id = context
             .call_id
             .unwrap_or_else(|| SYNTHETIC_BUILTIN_CALL_ID.fetch_sub(1, Ordering::Relaxed));
-        let workspace_root = self
-            .effective_workspace_root(context.session_context.as_ref())
-            .to_string_lossy()
-            .to_string();
-        let response =
-            builtins::with_executor(self, session_id, call_id, tool_name.clone(), || {
-                self.plugins.invoke_tool(
-                    &resolution.handle,
-                    PluginToolInvokeInput {
-                        tool_name: tool_name.clone(),
-                        session_id,
-                        call_id,
-                        workspace_root: workspace_root.clone(),
-                        input: payload_value,
-                    },
+        let payload_value = first_party_input_payload(input)?;
+        let response = bundled_router::with_executor(
+            &scoped_executor,
+            session_id,
+            call_id,
+            tool_name.clone(),
+            || {
+                bundled_router::invoke_first_party_tool(
+                    &tool_name,
+                    payload_value.clone(),
+                    session_id,
+                    call_id,
                 )
-            })
-            .map_err(|err| builtin_plugin_error(tool_name.as_str(), err))?;
+            },
+        )
+        .map_err(|err| first_party_plugin_error(tool_name.as_str(), err))?;
 
-        let output = builtins::payload_to_builtin_envelope(response.payload.as_ref())
+        let output = bundled_router::payload_to_first_party_envelope(response.payload.as_ref())
             .map_err(|err| ToolError::Plugin(format!("decode {tool_name} output: {err}")))?;
         let view = ToolExecutionView {
             title: response.title,
@@ -1059,16 +913,16 @@ impl ToolExecutor {
             metadata: response.metadata.into_iter().collect(),
             attachments: response.attachments,
         };
-        let mut execution = BuiltinExecution::new(output.output, view);
+        let mut execution = FirstPartyExecution::new(output.output, view);
         if let Some(apply) = output.apply_patch {
             execution = execution.with_apply_patch(apply);
         }
-        Ok(execution)
+        Ok(scoped_executor.truncator.apply(execution))
     }
 
     pub fn collect_permission_checks(
         &self,
-        input: &BuiltinToolInput,
+        input: &FirstPartyToolInput,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         self.collect_permission_checks_for_invocation(&input.clone().into_invocation())
     }
@@ -1117,8 +971,8 @@ impl ToolExecutor {
         &self,
         invocation: &ToolInvocation,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
-        let builtin = self.builtin_from_invocation(invocation)?;
-        let (tool_name, decision) = self.authorize_invocation(invocation, builtin.as_ref())?;
+        let first_party = self.first_party_from_invocation(invocation)?;
+        let (tool_name, decision) = self.authorize_invocation(invocation, first_party.as_ref())?;
         let mut checks = vec![ToolPermissionCheck {
             action: PermissionAction::BuiltinTool {
                 tool_name: tool_name.clone(),
@@ -1128,7 +982,7 @@ impl ToolExecutor {
 
         let input_value = invocation_input_value(invocation);
         if let Some(resolution) =
-            self.plugin_resolution_for_invocation(invocation, builtin.as_ref())
+            self.plugin_resolution_for_invocation(invocation, first_party.as_ref())
         {
             self.collect_declared_path_checks(
                 &mut checks,
@@ -1154,7 +1008,7 @@ impl ToolExecutor {
         }
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
         if self
-            .builtin_from_plugin_invocation(&plugin_invocation)?
+            .first_party_from_plugin_invocation(&plugin_invocation)?
             .is_some()
         {
             return Ok(None);
@@ -1188,26 +1042,37 @@ impl ToolExecutor {
         tokio::spawn(async move {
             let result = match end.await {
                 Ok(Ok(end)) => (|| {
-                    let payload = end
-                        .payload
-                        .as_ref()
-                        .map(|value| parse_custom_payload(&value.to_string()))
-                        .transpose()?
-                        .unwrap_or_default();
-                    let mut execution = ToolInvocationExecution::new(
-                        ToolOutput::Custom {
-                            output: CustomToolOutput {
-                                name: tool_name,
-                                payload,
+                    let view = ToolExecutionView {
+                        title: end.title,
+                        output_text: end.output_text,
+                        metadata: end.metadata.into_iter().collect(),
+                        attachments: end.attachments,
+                    };
+                    let mut execution = if let Ok(envelope) = bundled_router::payload_to_first_party_envelope(end.payload.as_ref()) {
+                        ToolInvocationExecution::new(
+                            ToolOutput::Custom {
+                                output: envelope.output.into_custom_output(),
                             },
-                        },
-                        ToolExecutionView {
-                            title: end.title,
-                            output_text: end.output_text,
-                            metadata: end.metadata.into_iter().collect(),
-                            attachments: end.attachments,
-                        },
-                    );
+                            view,
+                        )
+                        .with_apply_patch_option(envelope.apply_patch)
+                    } else {
+                        let payload = end
+                            .payload
+                            .as_ref()
+                            .map(|value| parse_custom_payload(&value.to_string()))
+                            .transpose()?
+                            .unwrap_or_default();
+                        ToolInvocationExecution::new(
+                            ToolOutput::Custom {
+                                output: CustomToolOutput {
+                                    name: tool_name,
+                                    payload,
+                                },
+                            },
+                            view,
+                        )
+                    };
                     executor.apply_after_hooks(&invocation, session_id, call_id, &mut execution)?;
                     Ok(execution)
                 })(),
@@ -1247,11 +1112,11 @@ impl ToolExecutor {
         let _tool_span =
             tracing::info_span!("tool.call", session_id, call_id, tool = tool_name.as_str(),)
                 .entered();
-        if let Some(builtin) = self.builtin_from_plugin_invocation(&plugin_invocation)? {
+        if let Some(first_party) = self.first_party_from_plugin_invocation(&plugin_invocation)? {
             let mut execution: ToolInvocationExecution = self
-                .execute_builtin_detailed_with_context(
-                    &builtin,
-                    BuiltinExecutionContext {
+                .execute_first_party_detailed_with_context(
+                    &first_party,
+                    FirstPartyExecutionContext {
                         session_id: Some(session_id),
                         call_id: Some(call_id),
                         session_context: None,
@@ -1280,26 +1145,37 @@ impl ToolExecutor {
             )
             .map_err(|err| ToolError::Plugin(err.message))?;
 
-        let payload = response
-            .payload
-            .as_ref()
-            .map(|v| parse_custom_payload(&v.to_string()))
-            .transpose()?
-            .unwrap_or_default();
-        let mut execution = ToolInvocationExecution::new(
-            ToolOutput::Custom {
-                output: CustomToolOutput {
-                    name: plugin_invocation.entry_name.clone(),
-                    payload,
+        let view = ToolExecutionView {
+            title: response.title.clone(),
+            output_text: response.output_text.clone(),
+            metadata: response.metadata.into_iter().collect(),
+            attachments: response.attachments,
+        };
+        let mut execution = if let Ok(envelope) = bundled_router::payload_to_first_party_envelope(response.payload.as_ref()) {
+            ToolInvocationExecution::new(
+                ToolOutput::Custom {
+                    output: envelope.output.into_custom_output(),
                 },
-            },
-            ToolExecutionView {
-                title: response.title.clone(),
-                output_text: response.output_text.clone(),
-                metadata: response.metadata.into_iter().collect(),
-                attachments: response.attachments,
-            },
-        );
+                view,
+            )
+            .with_apply_patch_option(envelope.apply_patch)
+        } else {
+            let payload = response
+                .payload
+                .as_ref()
+                .map(|v| parse_custom_payload(&v.to_string()))
+                .transpose()?
+                .unwrap_or_default();
+            ToolInvocationExecution::new(
+                ToolOutput::Custom {
+                    output: CustomToolOutput {
+                        name: plugin_invocation.entry_name.clone(),
+                        payload,
+                    },
+                },
+                view,
+            )
+        };
         self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
         Ok(execution)
     }
@@ -1332,8 +1208,8 @@ impl ToolExecutor {
         Ok(patch.set.into_iter().collect())
     }
 
-    fn ensure_builtin_enabled(&self, input: &BuiltinToolInput) -> Result<(), ToolError> {
-        let tool_name = crate::permission::builtin_name(input);
+    fn ensure_first_party_enabled(&self, input: &FirstPartyToolInput) -> Result<(), ToolError> {
+        let tool_name = crate::permission::first_party_tool_name(input);
         let resolution = self
             .plugins
             .lookup_entry(tool_name)
@@ -1342,7 +1218,7 @@ impl ToolExecutor {
         let definition = EntryDefinition::from_decl(
             resolution.handle.exposed_name.clone(),
             &resolution.decl,
-            EntrySource::Builtin,
+            EntrySource::FirstParty,
         );
         let availability = self
             .tool_catalog()
@@ -1353,23 +1229,23 @@ impl ToolExecutor {
         Ok(())
     }
 
-    pub fn execute_builtin_with_permission_runtime<S>(
+    pub fn execute_first_party_with_permission_runtime<S>(
         &self,
         session_id: Option<i64>,
         runtime: &mut PermissionRuntime<S>,
-        input: &BuiltinToolInput,
-    ) -> Result<PermissionedBuiltinExecution, ToolError>
+        input: &FirstPartyToolInput,
+    ) -> Result<PermissionedFirstPartyExecution, ToolError>
     where
         S: PermissionRuleStore,
     {
-        let base = self.agent.authorize_builtin_tool(input);
+        let base = self.agent.authorize_first_party_tool(input);
         let action = PermissionAction::BuiltinTool {
-            tool_name: crate::permission::builtin_name(input).to_string(),
+            tool_name: crate::permission::first_party_tool_name(input).to_string(),
         };
         match runtime.decide_or_request_with_plugins(session_id, action, base, Some(&self.plugins))
         {
             Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Allow)) => Ok(
-                PermissionedBuiltinExecution::Executed(self.execute_builtin_detailed(input)?),
+                PermissionedFirstPartyExecution::Executed(self.execute_first_party_detailed(input)?),
             ),
             Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Deny { reason })) => {
                 Err(ToolError::PermissionDenied(reason))
@@ -1378,17 +1254,17 @@ impl ToolExecutor {
                 Err(ToolError::PermissionAsk(reason))
             }
             Ok(PermissionRuntimeDecision::Pending(request)) => {
-                Ok(PermissionedBuiltinExecution::Pending(request))
+                Ok(PermissionedFirstPartyExecution::Pending(request))
             }
             Err(err) => Err(ToolError::InvalidInput(err.to_string())),
         }
     }
 
-    pub fn execute_builtin(
+    pub fn execute_first_party(
         &self,
-        input: &BuiltinToolInput,
-    ) -> Result<(BuiltinToolOutput, Option<ApplyPatchExecution>), ToolError> {
-        let execution = self.execute_builtin_detailed(input)?;
+        input: &FirstPartyToolInput,
+    ) -> Result<(FirstPartyToolOutput, Option<ApplyPatchExecution>), ToolError> {
+        let execution = self.execute_first_party_detailed(input)?;
         Ok((execution.output, execution.apply_patch))
     }
 
@@ -1641,19 +1517,19 @@ fn plugin_invocation_name(invocation: &PluginInvocation) -> String {
 
 fn local_to_sdk_source(source: &EntrySource) -> SdkEntrySource {
     match source {
-        EntrySource::Builtin => SdkEntrySource::Builtin,
+        EntrySource::FirstParty => SdkEntrySource::FirstParty,
         EntrySource::Plugin { plugin_name } => SdkEntrySource::Plugin {
             plugin: plugin_name.clone(),
         },
     }
 }
 
-/// Serialize a `BuiltinToolInput` to the JSON shape expected by the
-/// in-process built-in plugin. The plugin parses by tool name (passed as
+/// Serialize a `FirstPartyToolInput` to the JSON shape expected by the
+/// in-process first_party plugin. The plugin parses by tool name (passed as
 /// `ToolInvokeInput::tool_name`) and consumes the inner payload only.
-fn builtin_input_payload(input: &BuiltinToolInput) -> Result<serde_json::Value, ToolError> {
+fn first_party_input_payload(input: &FirstPartyToolInput) -> Result<serde_json::Value, ToolError> {
     let value = serde_json::to_value(input)
-        .map_err(|err| ToolError::Plugin(format!("encode built-in input: {err}")))?;
+        .map_err(|err| ToolError::Plugin(format!("encode first_party input: {err}")))?;
     let mut obj = match value {
         serde_json::Value::Object(o) => o,
         other => return Ok(other),
@@ -1662,7 +1538,7 @@ fn builtin_input_payload(input: &BuiltinToolInput) -> Result<serde_json::Value, 
     Ok(serde_json::Value::Object(obj))
 }
 
-fn builtin_plugin_error(tool_name: &str, err: crate::plugin::PluginError) -> ToolError {
+fn first_party_plugin_error(tool_name: &str, err: crate::plugin::PluginError) -> ToolError {
     let prefix = format!("{tool_name}: ");
     let detail = err.message.strip_prefix(&prefix).unwrap_or(&err.message);
     if let Some(reason) = detail.strip_prefix("permission denied: ") {
@@ -1719,8 +1595,8 @@ fn collect_loaded_tool_names(
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.content.as_ref() {
             Some(PartContent::ToolExecution(ToolExecutionPart::Completed { details, .. })) => {
-                match details.as_builtin() {
-                    Some(BuiltinToolOutput::ToolSearch { loaded_tools, .. }) => Some(loaded_tools),
+                match details.as_first_party() {
+                    Some(FirstPartyToolOutput::ToolSearch { loaded_tools, .. }) => Some(loaded_tools),
                     _ => None,
                 }
             }
@@ -1882,7 +1758,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::message::{
-        ApplyPatchToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput, FileChangeKind,
+        ApplyPatchToolInput, BashToolInput, FirstPartyToolInput, FirstPartyToolOutput, FileChangeKind,
         GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput, StructuredObject,
         TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority, TodoStatus,
         TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput, ToolSearchToolInput,
@@ -1899,7 +1775,8 @@ mod tests {
     use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
-    use super::{EntrySource, ExecutionPolicy, ToolError, ToolExecutor, builtins};
+    use super::{EntrySource, ExecutionPolicy, ToolError, ToolExecutor};
+    use crate::plugins::bundled::router as bundled_router;
 
     #[derive(Debug)]
     struct TempWorkspace {
@@ -1922,13 +1799,13 @@ mod tests {
 
     fn build_executor(root: &Path) -> ToolExecutor {
         let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
-        ToolExecutor::new(root, agent).with_plugin_manager(build_builtins_plugin_manager(root))
+        ToolExecutor::new(root, agent).with_plugin_manager(build_first_party_plugin_manager(root))
     }
 
     fn build_executor_with_policy(root: &Path, policy: ExecutionPolicy) -> ToolExecutor {
         let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
         ToolExecutor::with_sandbox_policy(root, agent, policy)
-            .with_plugin_manager(build_builtins_plugin_manager(root))
+            .with_plugin_manager(build_first_party_plugin_manager(root))
     }
 
     #[derive(Debug)]
@@ -1994,12 +1871,12 @@ mod tests {
                 crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
             let session_id = context.session_id.unwrap_or(-1);
             let call_id = context.call_id.unwrap_or(-1);
-            let executor = builtins::current_executor_for_test(session_id, call_id, "todo_write")
+            let executor = bundled_router::current_executor_for_test(session_id, call_id, "todo_write")
                 .ok_or_else(|| {
                 PluginError::new("test host: no executor available for todo_write")
             })?;
             executor
-                .execute_builtin_payload_for_host(
+                .execute_first_party_payload_for_host(
                     "todo_write",
                     serde_json::to_value(req).map_err(|err| PluginError::new(err.to_string()))?,
                     Some(session_id).filter(|id| *id >= 0),
@@ -2008,27 +1885,6 @@ mod tests {
                 .map_err(|err| PluginError::new(err.to_string()))
         }
 
-        async fn execute_builtin_tool(
-            &self,
-            req: crate::plugin::sdk::host_api::BuiltinToolRequest,
-        ) -> SdkResult<ToolInvokeOutput> {
-            let context =
-                crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
-            let session_id = context.session_id.unwrap_or(-1);
-            let call_id = context.call_id.unwrap_or(-1);
-            let executor = builtins::current_executor_for_test(session_id, call_id, &req.tool_name);
-            let executor = executor.ok_or_else(|| {
-                PluginError::new("test host: no executor available for execute_builtin_tool")
-            })?;
-            executor
-                .execute_builtin_payload_for_host(
-                    req.tool_name.as_str(),
-                    req.input,
-                    Some(session_id).filter(|id| *id >= 0),
-                    Some(call_id).filter(|id| *id >= 0),
-                )
-                .map_err(|err| PluginError::new(err.to_string()))
-        }
     }
 
     #[derive(Debug, Default)]
@@ -2189,8 +2045,7 @@ mod tests {
     fn build_plugin_manager(root: &Path) -> Arc<PluginHost> {
         use std::collections::BTreeMap;
 
-        let builtin_id = super::builtins_plugin_id().to_string();
-        let skills_id = super::skills_plugin_id().to_string();
+        let skills_fs_id = super::skills_fs_plugin_id().to_string();
         let lsp_id = super::lsp_plugin_id().to_string();
         let cron_id = super::cron_plugin_id().to_string();
         let fs_id = super::fs_plugin_id().to_string();
@@ -2199,8 +2054,7 @@ mod tests {
         let workflow_id = super::workflow_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
-            &builtin_id,
-            &skills_id,
+            &skills_fs_id,
             &lsp_id,
             &cron_id,
             &fs_id,
@@ -2235,8 +2089,7 @@ mod tests {
             PluginHostBuilder::new(root, "test")
                 .with_config(config)
                 .with_host_client(Arc::new(TestToolHost))
-                .register_static(builtin_id, super::new_builtins_plugin())
-                .register_static(skills_id, super::new_skills_plugin())
+                .register_static(skills_fs_id, super::new_skills_fs_plugin())
                 .register_static(lsp_id, super::new_lsp_plugin())
                 .register_static(cron_id, super::new_cron_plugin())
                 .register_static(fs_id, super::new_fs_plugin())
@@ -2250,11 +2103,10 @@ mod tests {
         })
     }
 
-    fn build_builtins_plugin_manager(root: &Path) -> Arc<PluginHost> {
+    fn build_first_party_plugin_manager(root: &Path) -> Arc<PluginHost> {
         use std::collections::BTreeMap;
 
-        let plugin_id = super::builtins_plugin_id().to_string();
-        let skills_id = super::skills_plugin_id().to_string();
+        let skills_fs_id = super::skills_fs_plugin_id().to_string();
         let lsp_id = super::lsp_plugin_id().to_string();
         let cron_id = super::cron_plugin_id().to_string();
         let fs_id = super::fs_plugin_id().to_string();
@@ -2263,8 +2115,7 @@ mod tests {
         let workflow_id = super::workflow_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
-            &plugin_id,
-            &skills_id,
+            &skills_fs_id,
             &lsp_id,
             &cron_id,
             &fs_id,
@@ -2292,8 +2143,7 @@ mod tests {
             PluginHostBuilder::new(root, "test")
                 .with_config(config)
                 .with_host_client(Arc::new(TestToolHost))
-                .register_static(plugin_id, super::new_builtins_plugin())
-                .register_static(skills_id, super::new_skills_plugin())
+                .register_static(skills_fs_id, super::new_skills_fs_plugin())
                 .register_static(lsp_id, super::new_lsp_plugin())
                 .register_static(cron_id, super::new_cron_plugin())
                 .register_static(fs_id, super::new_fs_plugin())
@@ -2302,7 +2152,7 @@ mod tests {
                 .register_static(workflow_id, super::new_workflow_plugin())
                 .build()
                 .await
-                .expect("builtins plugin host should build")
+                .expect("first_party plugin host should build")
         })
     }
 
@@ -2318,7 +2168,7 @@ mod tests {
                 crate::message::ExecutionStatus::Completed,
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
                     call_id: 1,
-                    invocation: BuiltinToolInput::ToolSearch(ToolSearchToolInput {
+                    invocation: FirstPartyToolInput::ToolSearch(ToolSearchToolInput {
                         query: "load mutating tools".to_string(),
                         load: loaded_tools.iter().map(|name| name.to_string()).collect(),
                         limit: None,
@@ -2328,7 +2178,7 @@ mod tests {
                     blocks: Vec::new(),
                     attachments: Vec::new(),
                     details: ToolOutput::Custom {
-                        output: BuiltinToolOutput::ToolSearch {
+                        output: FirstPartyToolOutput::ToolSearch {
                             results: Vec::new(),
                             loaded_tools: loaded_tools
                                 .iter()
@@ -2356,22 +2206,22 @@ mod tests {
     }
 
     #[test]
-    fn read_builtin_returns_line_numbered_preview() {
+    fn read_first_party_returns_line_numbered_preview() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("notes.txt");
         fs::write(&file_path, "one\ntwo\nthree\n").expect("failed to seed file");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::Read(ReadToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::Read(ReadToolInput {
                 file_path: "notes.txt".to_string(),
                 offset: Some(2),
                 limit: Some(2),
             }))
-            .expect("read builtin should succeed");
+            .expect("read first_party should succeed");
 
         match result.output {
-            BuiltinToolOutput::Read {
+            FirstPartyToolOutput::Read {
                 preview,
                 truncated,
                 loaded_paths,
@@ -2387,7 +2237,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_patch_builtin_reports_typed_file_changes() {
+    fn apply_patch_first_party_reports_typed_file_changes() {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("keep.txt"), "before\n").expect("failed to seed keep.txt");
         fs::write(workspace.root.join("remove.txt"), "delete me\n")
@@ -2395,7 +2245,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::ApplyPatch(ApplyPatchToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
                 patch: "\
 *** Begin Patch
 *** Add File: added.txt
@@ -2411,7 +2261,7 @@ mod tests {
             .expect("apply_patch should succeed");
 
         match result.output {
-            BuiltinToolOutput::ApplyPatch { changes, .. } => {
+            FirstPartyToolOutput::ApplyPatch { changes, .. } => {
                 assert_eq!(changes.len(), 3);
                 assert!(changes.iter().any(|change| {
                     change.path == "added.txt" && change.kind == FileChangeKind::Added
@@ -2428,13 +2278,13 @@ mod tests {
     }
 
     #[test]
-    fn apply_patch_builtin_moves_files_and_reports_diff() {
+    fn apply_patch_first_party_moves_files_and_reports_diff() {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("old.txt"), "before\n").expect("failed to seed old.txt");
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::ApplyPatch(ApplyPatchToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
                 patch: "\
 *** Begin Patch
 *** Update File: old.txt
@@ -2453,7 +2303,7 @@ mod tests {
             "after\n"
         );
         match result.output {
-            BuiltinToolOutput::ApplyPatch {
+            FirstPartyToolOutput::ApplyPatch {
                 changes,
                 diff,
                 progress,
@@ -2476,20 +2326,20 @@ mod tests {
     }
 
     #[test]
-    fn view_file_builtin_returns_metadata_and_attachment() {
+    fn view_file_first_party_returns_metadata_and_attachment() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("pixel.png");
         fs::write(&file_path, sample_png_bytes()).expect("failed to seed png");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::ViewFile(ViewFileToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::ViewFile(ViewFileToolInput {
                 path: "pixel.png".to_string(),
             }))
             .expect("view_file should succeed");
 
         match result.output {
-            BuiltinToolOutput::ViewFile {
+            FirstPartyToolOutput::ViewFile {
                 path,
                 kind,
                 mime,
@@ -2525,20 +2375,20 @@ mod tests {
     }
 
     #[test]
-    fn view_file_builtin_attaches_generic_text_file() {
+    fn view_file_first_party_attaches_generic_text_file() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("notes.txt");
         fs::write(&file_path, "hello from agena\n").expect("failed to seed text file");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::ViewFile(ViewFileToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::ViewFile(ViewFileToolInput {
                 path: "notes.txt".to_string(),
             }))
             .expect("view_file should succeed for text file");
 
         match result.output {
-            BuiltinToolOutput::ViewFile {
+            FirstPartyToolOutput::ViewFile {
                 path,
                 kind,
                 mime,
@@ -2585,21 +2435,21 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let glob_result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::Glob(GlobToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::Glob(GlobToolInput {
                 pattern: "**/*.rs".to_string(),
                 path: Some("src".to_string()),
             }))
             .expect("glob should succeed");
 
         match glob_result.output {
-            BuiltinToolOutput::Glob { count } => {
+            FirstPartyToolOutput::Glob { count } => {
                 assert_eq!(count, Some(2));
             }
             other => panic!("expected glob output, got {other:?}"),
         }
 
         let grep_result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::Grep(GrepToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::Grep(GrepToolInput {
                 pattern: "hello".to_string(),
                 path: Some("src".to_string()),
                 include: Some("**/*.rs".to_string()),
@@ -2607,7 +2457,7 @@ mod tests {
             .expect("grep should succeed");
 
         match grep_result.output {
-            BuiltinToolOutput::Grep { matches } => {
+            FirstPartyToolOutput::Grep { matches } => {
                 assert_eq!(matches, Some(1));
             }
             other => panic!("expected grep output, got {other:?}"),
@@ -2615,26 +2465,24 @@ mod tests {
     }
 
     #[test]
-    fn task_builtin_generates_session_id() {
+    fn task_plugin_entry_generates_session_id() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
+        let invocation = FirstPartyToolInput::Task(TaskToolInput {
+            description: "inspect code".to_string(),
+            prompt: "find modules".to_string(),
+            subagent_type: TaskSubagentType::Explore,
+            task_id: None,
+            command: None,
+        })
+        .into_invocation();
 
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::Task(TaskToolInput {
-                description: "inspect code".to_string(),
-                prompt: "find modules".to_string(),
-                subagent_type: TaskSubagentType::Explore,
-                task_id: None,
-                command: None,
-            }))
-            .expect("task should succeed");
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("task plugin entry should succeed");
 
         assert_eq!(
-            result
-                .view
-                .metadata
-                .get("subagent_type")
-                .map(String::as_str),
+            result.view.metadata.get("subagent_type").map(String::as_str),
             Some("explore")
         );
         assert_eq!(
@@ -2647,20 +2495,28 @@ mod tests {
         );
 
         match result.output {
-            BuiltinToolOutput::Task { session_id, .. } => {
-                assert!(session_id.is_some());
+            ToolOutput::Custom { output } => {
+                assert_eq!(output.name, "task");
+                let payload = FirstPartyToolOutput::from_custom(&output)
+                    .expect("task output should decode as first_party payload");
+                match payload {
+                    FirstPartyToolOutput::Task { session_id, .. } => {
+                        assert!(session_id.is_some());
+                    }
+                    other => panic!("expected task payload, got {other:?}"),
+                }
             }
-            other => panic!("expected task output, got {other:?}"),
+            other => panic!("expected custom task output, got {other:?}"),
         }
     }
 
     #[test]
-    fn tool_search_builtin_discovers_and_loads_deferred_tools() {
+    fn tool_search_first_party_discovers_and_loads_deferred_tools() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::ToolSearch(ToolSearchToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::ToolSearch(ToolSearchToolInput {
                 query: "patch files".to_string(),
                 load: vec!["apply_patch".to_string()],
                 limit: None,
@@ -2668,7 +2524,7 @@ mod tests {
             .expect("tool_search should succeed");
 
         match result.output {
-            BuiltinToolOutput::ToolSearch {
+            FirstPartyToolOutput::ToolSearch {
                 results,
                 loaded_tools,
             } => {
@@ -2700,17 +2556,17 @@ mod tests {
     }
 
     #[test]
-    fn builtins_plugin_entries_drive_available_tool_catalog() {
+    fn first_partys_plugin_entries_drive_available_tool_catalog() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_builtins_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
 
         let tools = executor.available_tools();
         let read = tools
             .iter()
             .find(|tool| tool.name == "read")
             .expect("read tool should be available");
-        assert!(matches!(read.source, EntrySource::Builtin));
+        assert!(matches!(read.source, EntrySource::FirstParty));
         assert!(read.search_terms.iter().any(|term| term == "open file"));
 
         let read_count = tools.iter().filter(|tool| tool.name == "read").count();
@@ -2747,31 +2603,13 @@ mod tests {
     }
 
     #[test]
-    fn skill_run_is_backed_by_skills_plugin() {
-        let workspace = TempWorkspace::new();
-        let executor = build_executor(&workspace.root);
-        let resolution = executor
-            .plugin_manager()
-            .lookup_entry("skill_run")
-            .expect("skill_run should be registered");
-
-        assert_eq!(resolution.handle.plugin_id, super::skills_plugin_id());
-        assert!(
-            resolution
-                .decl
-                .host_capabilities
-                .contains(&HostCapability::SkillsManager)
-        );
-    }
-
-    #[test]
-    fn available_builtins_are_projected_from_builtin_plugin_entries() {
+    fn available_first_party_tools_are_projected_from_first_party_plugin_entries() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_builtins_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
 
         let available = executor
-            .available_builtins()
+            .available_first_party_tools()
             .into_iter()
             .map(|item| item.tool_name)
             .collect::<std::collections::BTreeSet<_>>();
@@ -2803,12 +2641,12 @@ mod tests {
     }
 
     #[test]
-    fn todo_write_builtin_returns_items_for_session_state() {
+    fn todo_write_first_party_returns_items_for_session_state() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::TodoWrite(TodoWriteToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::TodoWrite(TodoWriteToolInput {
                 items: vec![TodoItem {
                     content: "Implement tool_search".to_string(),
                     status: TodoStatus::InProgress,
@@ -2818,7 +2656,7 @@ mod tests {
             .expect("todo_write should succeed");
 
         match result.output {
-            BuiltinToolOutput::TodoWrite { items } => {
+            FirstPartyToolOutput::TodoWrite { items } => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0].content, "Implement tool_search");
                 assert_eq!(items[0].status, TodoStatus::InProgress);
@@ -2828,7 +2666,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_builtin_runs_command_with_read_only_policy() {
+    fn bash_first_party_runs_command_with_read_only_policy() {
         if cfg!(windows) {
             // Windows host environments can include PATH entries whose ACL cannot be audited
             // in sandbox preflight, which makes this smoke test flaky/non-portable.
@@ -2839,16 +2677,16 @@ mod tests {
         let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
 
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
                 command: "echo hello_agena".to_string(),
                 description: "smoke bash".to_string(),
                 timeout_ms: Some(30_000),
                 workdir: None,
             }))
-            .expect("bash builtin should succeed");
+            .expect("bash first_party should succeed");
 
         match &result.output {
-            BuiltinToolOutput::Bash {
+            FirstPartyToolOutput::Bash {
                 output,
                 description,
             } => {
@@ -2864,7 +2702,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_builtin_explains_no_match_exit_codes() {
+    fn bash_first_party_explains_no_match_exit_codes() {
         if cfg!(windows) {
             return;
         }
@@ -2875,16 +2713,16 @@ mod tests {
         let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
 
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
                 command: "grep missing notes.txt".to_string(),
                 description: "search missing text".to_string(),
                 timeout_ms: Some(30_000),
                 workdir: None,
             }))
-            .expect("bash builtin should succeed");
+            .expect("bash first_party should succeed");
 
         match result.output {
-            BuiltinToolOutput::Bash {
+            FirstPartyToolOutput::Bash {
                 output,
                 description,
             } => {
@@ -2913,7 +2751,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_builtin_explains_diff_exit_codes() {
+    fn bash_first_party_explains_diff_exit_codes() {
         if cfg!(windows) {
             return;
         }
@@ -2924,16 +2762,16 @@ mod tests {
         let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
 
         let result = executor
-            .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
                 command: "diff left.txt right.txt".to_string(),
                 description: "compare files".to_string(),
                 timeout_ms: Some(30_000),
                 workdir: None,
             }))
-            .expect("bash builtin should succeed");
+            .expect("bash first_party should succeed");
 
         match &result.output {
-            BuiltinToolOutput::Bash { description, .. } => {
+            FirstPartyToolOutput::Bash { description, .. } => {
                 assert!(
                     description
                         .as_deref()
@@ -2954,7 +2792,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_builtin_blocks_obvious_write_commands_in_read_only_policy() {
+    fn bash_first_party_blocks_obvious_write_commands_in_read_only_policy() {
         if cfg!(windows) {
             return;
         }
@@ -2963,7 +2801,7 @@ mod tests {
         let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
 
         let err = executor
-            .execute_builtin_detailed(&BuiltinToolInput::Bash(BashToolInput {
+            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
                 command: "echo hi > created.txt".to_string(),
                 description: "attempt write".to_string(),
                 timeout_ms: Some(30_000),
@@ -2985,7 +2823,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root).with_model_id("gpt-readonly");
 
-        let availability = executor.available_builtins();
+        let availability = executor.available_first_party_tools();
         let find = |tool_name: &str| {
             availability
                 .iter()
@@ -3058,10 +2896,10 @@ mod tests {
     }
 
     #[test]
-    fn prepare_invocation_keeps_builtin_calls_in_custom_wire_shape() {
+    fn prepare_invocation_keeps_first_party_calls_in_custom_wire_shape() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
-        let invocation = BuiltinToolInput::Read(ReadToolInput {
+        let invocation = FirstPartyToolInput::Read(ReadToolInput {
             file_path: "notes.txt".to_string(),
             offset: Some(3),
             limit: Some(5),
@@ -3070,7 +2908,7 @@ mod tests {
 
         let prepared = executor
             .prepare_invocation(&invocation, 7, 9)
-            .expect("prepare should succeed for builtin");
+            .expect("prepare should succeed for first_party");
 
         let ToolInvocation { name, input } = prepared.invocation;
         assert_eq!(name, "read");
@@ -3150,11 +2988,11 @@ mod tests {
     }
 
     #[test]
-    fn collect_permission_checks_for_builtin_invocation_uses_dynamic_plugin_paths() {
+    fn collect_permission_checks_for_first_party_invocation_uses_dynamic_plugin_paths() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_builtins_plugin_manager(&workspace.root));
-        let invocation = BuiltinToolInput::ApplyPatch(ApplyPatchToolInput {
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+        let invocation = FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
             patch: "*** Begin Patch\n*** Add File: notes.txt\n+hello\n*** Delete File: old.txt\n*** End Patch"
                 .to_string(),
         })
@@ -3162,7 +3000,7 @@ mod tests {
 
         let checks = executor
             .collect_permission_checks_for_invocation(&invocation)
-            .expect("builtin permission collection should succeed");
+            .expect("first_party permission collection should succeed");
 
         let path_actions = checks
             .iter()
@@ -3198,7 +3036,7 @@ mod tests {
 
         let execution = executor
             .execute_invocation_detailed(
-                &BuiltinToolInput::Bash(BashToolInput {
+                &FirstPartyToolInput::Bash(BashToolInput {
                     command: "printf %s \"$PLUGIN_FLAG\"".to_string(),
                     description: "print plugin env".to_string(),
                     timeout_ms: Some(30_000),
@@ -3210,8 +3048,8 @@ mod tests {
             )
             .expect("bash invocation should succeed");
 
-        match execution.output.as_builtin() {
-            Some(BuiltinToolOutput::Bash {
+        match execution.output.as_first_party() {
+            Some(FirstPartyToolOutput::Bash {
                 output,
                 description: _,
             }) => {

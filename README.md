@@ -51,12 +51,12 @@ cargo check --workspace --locked
 
 ## Unified v1 API
 
-HTTP / SSE / WS 入口现在统一收敛到：
+HTTP / SSE / WS / IPC / JSON-RPC transport 入口现在统一收敛到：
 
 - library crate：`crates/agena-api-server`
 - runnable app：`apps/agena-studio-server`
 
-这样 Web / Studio / TUI 共用同一套统一的 `v1` server surface。
+其中 `crates/agena-api-server` 按 feature 划分 transport surface（默认全部开启），统一承载 HTTP / WS / SSE / IPC / JSON-RPC；`apps/agena-cli` 与 `apps/agena-studio-server` 复用同一套导出面。
 
 启动服务：
 

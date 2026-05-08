@@ -4,11 +4,20 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
+[features]
+default = ["http", "ws", "sse", "ipc", "jsonrpc"]
+http = []
+ws = []
+sse = []
+ipc = ["ws"]
+jsonrpc = []
+
 [dependencies]
 agena = { path = "../agena" }
 agena-api = { path = "../agena-api" }
 agena-scheduler = { path = "../agena-scheduler" }
 async-stream = "0.3.6"
+async-trait = { workspace = true }
 axum = { workspace = true, features = ["ws", "macros"] }
 base64 = "0.22.1"
 chrono = { workspace = true }

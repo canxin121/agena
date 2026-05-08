@@ -1,3 +1,5 @@
+#![cfg(feature = "http")]
+
 //! Integration tests for `agena-api-server`. They construct a
 //! `SessionManager` directly (bypassing `AgenaRuntime`), wire it into
 //! `AppState::with_manager_override`, and exercise the v2 routes.

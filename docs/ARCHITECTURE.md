@@ -13,8 +13,7 @@
   - `agena` — 核心运行时（agent / session / runtime / tool / provider /
     permission / config / memory / plugins）。当前最大的 crate，未来会拆。
   - `agena-api` — 与传输层无关的 query / command 类型
-  - `agena-api-server` — 把 `agena-api` 暴露为 axum 路由
-  - `agena-app-server` / `agena-app-server-protocol` — 后台 stdio 协议
+  - `agena-api-server` — 统一 transport crate，按 feature 提供 HTTP / WS / SSE / IPC / JSON-RPC
   - `agena-client` — REST/WS 客户端 SDK
   - `agena-mcp-client` / `agena-mcp-server` — Model Context Protocol 双端
   - `agena-plugin-sdk` / `agena-plugin-host` / `agena-plugin-marketplace` —

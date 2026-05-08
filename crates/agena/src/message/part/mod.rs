@@ -18,15 +18,15 @@ pub use content::PartContent;
 pub use message_part::{MessagePart, PartStateTransitionError};
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
-    ApplyPatchToolInput, AskUserToolInput, BashToolInput, BuiltinToolInput, BuiltinToolOutput,
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, FirstPartyToolInput, FirstPartyToolOutput,
     CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput, CustomToolOutput,
     EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput,
     GlobToolInput, GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput,
     LspHoverToolInput, LspReferencesToolInput, McpToolOutput, MonitorEvent, MonitorStatus,
     MonitorStream, MonitorSummary, MonitorToolInput, NotebookCellType, NotebookEditMode,
     NotebookEditToolInput, PluginInvocation, PowerShellToolInput, ReadToolInput,
-    RequestUserInputToolInput, ScheduleWakeupToolInput, SkillRunToolInput, TaskSubagentType,
+    RequestUserInputToolInput, ScheduleWakeupToolInput, TaskSubagentType,
     TaskToolInput, TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolInvocation,
     ToolOutput, ToolResultBlock, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
-    WebSearchHit, WebSearchToolInput,
+    WebSearchHit, WebSearchToolInput, WorkflowPromptToolInput,
 };

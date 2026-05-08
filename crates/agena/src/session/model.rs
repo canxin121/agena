@@ -950,7 +950,7 @@ mod tests {
     use chrono::Utc;
 
     use crate::message::{
-        BuiltinToolInput, ExecutionStatus, MessageMetadata, MessagePart, MessageStatus,
+        FirstPartyToolInput, ExecutionStatus, MessageMetadata, MessagePart, MessageStatus,
         PartContent, TimeRange, TodoWriteToolInput, ToolExecutionPart, UserInputQuestion,
     };
     use crate::permission::{PermissionAction, PermissionRequest};
@@ -1095,7 +1095,7 @@ mod tests {
         call_id: i64,
     ) -> MessagePart {
         let invocation =
-            BuiltinToolInput::TodoWrite(TodoWriteToolInput { items: Vec::new() }).into_invocation();
+            FirstPartyToolInput::TodoWrite(TodoWriteToolInput { items: Vec::new() }).into_invocation();
         let mut part = MessagePart::with_content(
             part_id,
             message_id,

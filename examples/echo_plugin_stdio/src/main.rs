@@ -65,10 +65,7 @@ impl Plugin for EchoPlugin {
         Ok(Some(ShellEnvPatch::set("AGENA_STDIO_PLUGIN", "1")))
     }
 
-    async fn chat_params(
-        &self,
-        _: ChatParamsInput,
-    ) -> Result<Option<ChatParamsPatch>> {
+    async fn chat_params(&self, _: ChatParamsInput) -> Result<Option<ChatParamsPatch>> {
         Ok(Some(ChatParamsPatch {
             params: Some(json!({ "stop": ["\nHuman:"] })),
         }))

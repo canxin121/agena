@@ -308,8 +308,12 @@ fn update_downloads_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .app_cache_dir()
         .map_err(|err| format!("resolve desktop update download dir: {err}"))?;
     let dir = base.join(UPDATE_DOWNLOAD_DIR_NAME);
-    fs::create_dir_all(&dir)
-        .map_err(|err| format!("create desktop update download dir {}: {err}", dir.display()))?;
+    fs::create_dir_all(&dir).map_err(|err| {
+        format!(
+            "create desktop update download dir {}: {err}",
+            dir.display()
+        )
+    })?;
     Ok(dir)
 }
 

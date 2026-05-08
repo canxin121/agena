@@ -273,15 +273,14 @@ async fn spawn_backend_service(
 
     let home_env = resolve_home_env();
 
-    let mut cmd = backend_cmd
-        .args([
-            "--host",
-            cfg.backend.host.as_str(),
-            "--port",
-            &port.to_string(),
-            "--ui-dir",
-            ui_dir.to_string_lossy().as_ref(),
-        ]);
+    let mut cmd = backend_cmd.args([
+        "--host",
+        cfg.backend.host.as_str(),
+        "--port",
+        &port.to_string(),
+        "--ui-dir",
+        ui_dir.to_string_lossy().as_ref(),
+    ]);
 
     cmd = cmd.env(
         "RUST_LOG",
@@ -739,8 +738,7 @@ fn backend_start_error_info(detail: impl Into<String>) -> BackendErrorInfo {
         return BackendErrorInfo::new("ui_dist_missing", "Desktop UI assets were not found")
             .with_detail(detail)
             .with_hint(Some(
-                "Reinstall Agena Studio Desktop so bundled web assets are available."
-                    .to_string(),
+                "Reinstall Agena Studio Desktop so bundled web assets are available.".to_string(),
             ));
     }
 

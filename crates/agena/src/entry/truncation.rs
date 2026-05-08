@@ -1,6 +1,6 @@
-use crate::message::BuiltinToolOutput;
+use crate::message::FirstPartyToolOutput;
 
-use super::result::BuiltinExecution;
+use super::result::FirstPartyExecution;
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024;
 
@@ -33,24 +33,24 @@ impl ToolOutputTruncator {
         Self { policy }
     }
 
-    pub fn apply(&self, mut execution: BuiltinExecution) -> BuiltinExecution {
+    pub fn apply(&self, mut execution: FirstPartyExecution) -> FirstPartyExecution {
         execution.view.output_text =
             truncate_text(&execution.view.output_text, self.policy.max_chars);
 
         match &mut execution.output {
-            BuiltinToolOutput::Bash { output, .. }
-            | BuiltinToolOutput::PowerShell { output, .. } => {
+            FirstPartyToolOutput::Bash { output, .. }
+            | FirstPartyToolOutput::PowerShell { output, .. } => {
                 if let Some(text) = output.as_mut() {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
             }
-            BuiltinToolOutput::Read { preview, .. } => {
+            FirstPartyToolOutput::Read { preview, .. } => {
                 if let Some(text) = preview.as_mut() {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
             }
-            BuiltinToolOutput::ViewFile { .. } => {}
-            BuiltinToolOutput::ApplyPatch {
+            FirstPartyToolOutput::ViewFile { .. } => {}
+            FirstPartyToolOutput::ApplyPatch {
                 inverse_patch,
                 diff,
                 ..
@@ -58,29 +58,28 @@ impl ToolOutputTruncator {
                 *inverse_patch = truncate_text(inverse_patch, self.policy.max_chars);
                 *diff = truncate_text(diff, self.policy.max_chars);
             }
-            BuiltinToolOutput::Glob { .. }
-            | BuiltinToolOutput::Grep { .. }
-            | BuiltinToolOutput::Task { .. }
-            | BuiltinToolOutput::ToolSearch { .. }
-            | BuiltinToolOutput::TodoWrite { .. }
-            | BuiltinToolOutput::AskUser { .. }
-            | BuiltinToolOutput::Monitor { .. }
-            | BuiltinToolOutput::WebFetch { .. }
-            | BuiltinToolOutput::WebSearch { .. }
-            | BuiltinToolOutput::EnterPlanMode { .. }
-            | BuiltinToolOutput::ExitPlanMode { .. }
-            | BuiltinToolOutput::SkillRun { .. }
-            | BuiltinToolOutput::EnterWorktree { .. }
-            | BuiltinToolOutput::ExitWorktree { .. }
-            | BuiltinToolOutput::CronCreate { .. }
-            | BuiltinToolOutput::CronList { .. }
-            | BuiltinToolOutput::CronDelete { .. }
-            | BuiltinToolOutput::ScheduleWakeup { .. }
-            | BuiltinToolOutput::LspDefinition { .. }
-            | BuiltinToolOutput::LspReferences { .. }
-            | BuiltinToolOutput::LspHover { .. }
-            | BuiltinToolOutput::LspDiagnostics { .. }
-            | BuiltinToolOutput::NotebookEdit { .. } => {}
+            FirstPartyToolOutput::Glob { .. }
+            | FirstPartyToolOutput::Grep { .. }
+            | FirstPartyToolOutput::Task { .. }
+            | FirstPartyToolOutput::ToolSearch { .. }
+            | FirstPartyToolOutput::TodoWrite { .. }
+            | FirstPartyToolOutput::AskUser { .. }
+            | FirstPartyToolOutput::Monitor { .. }
+            | FirstPartyToolOutput::WebFetch { .. }
+            | FirstPartyToolOutput::WebSearch { .. }
+            | FirstPartyToolOutput::EnterPlanMode { .. }
+            | FirstPartyToolOutput::ExitPlanMode { .. }
+            | FirstPartyToolOutput::EnterWorktree { .. }
+            | FirstPartyToolOutput::ExitWorktree { .. }
+            | FirstPartyToolOutput::CronCreate { .. }
+            | FirstPartyToolOutput::CronList { .. }
+            | FirstPartyToolOutput::CronDelete { .. }
+            | FirstPartyToolOutput::ScheduleWakeup { .. }
+            | FirstPartyToolOutput::LspDefinition { .. }
+            | FirstPartyToolOutput::LspReferences { .. }
+            | FirstPartyToolOutput::LspHover { .. }
+            | FirstPartyToolOutput::LspDiagnostics { .. }
+            | FirstPartyToolOutput::NotebookEdit { .. } => {}
         }
 
         execution

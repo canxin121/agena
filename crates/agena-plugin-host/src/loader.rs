@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::config::PluginEntry;
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
+use crate::registry::{effective_host_capabilities_for_manifest, per_entry_host_capabilities};
 use crate::sdk::rpc::method;
 use crate::sdk::{InitContext, InitOutcome, PluginManifest};
 use crate::transport::{
@@ -189,6 +190,34 @@ pub async fn load_entry(
             plugin: plugin_id.to_string(),
             message: e.to_string(),
         })?;
+
+    let prefetched_manifest_value = transport
+        .dispatch(method::META_MANIFEST, serde_json::Value::Object(Default::default()))
+        .await
+        .map_err(|e| HostError::Init {
+            plugin: plugin_id.to_string(),
+            message: format!("{e}"),
+        })?;
+    let prefetched_manifest: PluginManifest = serde_json::from_value(prefetched_manifest_value)
+        .map_err(|e| HostError::Init {
+            plugin: plugin_id.to_string(),
+            message: e.to_string(),
+        })?;
+    host_handle
+        .set_plugin_capabilities(
+            plugin_id.to_string(),
+            effective_host_capabilities_for_manifest(
+                &prefetched_manifest.entries,
+                &prefetched_manifest.plugin_capabilities,
+            ),
+        )
+        .await;
+    host_handle
+        .set_plugin_entry_capabilities(
+            plugin_id.to_string(),
+            per_entry_host_capabilities(&prefetched_manifest.entries),
+        )
+        .await;
 
     let init_ctx = InitContext {
         agena_version: agena_version.to_string(),

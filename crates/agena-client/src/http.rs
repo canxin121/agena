@@ -17,8 +17,8 @@ use agena_api::{
         ListSessionsParams, ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        HealthResponse, PartLoadMode, PermissionRuleResource, RunOptions,
-        SessionExecutionResource, SessionResource, WorkspaceResource,
+        HealthResponse, PartLoadMode, PermissionRuleResource, RunOptions, SessionExecutionResource,
+        SessionResource, WorkspaceResource,
     },
 };
 
@@ -65,10 +65,7 @@ impl AgenaClient {
         Ok(serde_json::from_value(value)?)
     }
 
-    async fn get_json<T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-    ) -> Result<T, ClientError> {
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
         let response = self.http.get(self.endpoint(path)).send().await?;
         self.parse_json(response).await
     }
@@ -156,8 +153,11 @@ impl AgenaClient {
         if let serde_json::Value::Object(ref mut object) = body {
             object.insert("parts".to_string(), serde_json::to_value(params.parts)?);
         }
-        self.post_json(&format!("/api/v1/sessions/{}/turns", params.session_id), body)
-            .await
+        self.post_json(
+            &format!("/api/v1/sessions/{}/turns", params.session_id),
+            body,
+        )
+        .await
     }
 
     pub async fn continue_run(
@@ -252,10 +252,12 @@ impl AgenaClient {
     /// already exists.
     pub async fn command(&self, cmd: Command) -> Result<CommandResult, ClientError> {
         match cmd {
-            Command::CreateWorkspace(CreateWorkspaceParams { path }) => Ok(CommandResult::Workspace(
-                self.post_json("/api/v1/workspaces", serde_json::json!({ "path": path }))
-                    .await?,
-            )),
+            Command::CreateWorkspace(CreateWorkspaceParams { path }) => {
+                Ok(CommandResult::Workspace(
+                    self.post_json("/api/v1/workspaces", serde_json::json!({ "path": path }))
+                        .await?,
+                ))
+            }
             Command::UpdateWorkspace(UpdateWorkspaceParams {
                 workspace_id, path, ..
             }) => Ok(CommandResult::Workspace(
@@ -363,7 +365,8 @@ impl AgenaClient {
             )),
             Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
                 Ok(CommandResult::SessionTree(
-                    self.get_json(&format!("/api/v1/sessions/tree/{root_id}")).await?,
+                    self.get_json(&format!("/api/v1/sessions/tree/{root_id}"))
+                        .await?,
                 ))
             }
             Command::ListRewindCheckpoints(ListRewindCheckpointsParams { session_id }) => {
@@ -372,16 +375,19 @@ impl AgenaClient {
                         .await?,
                 ))
             }
-            Command::ExportSession(ExportSessionParams { session_id }) => Ok(
-                CommandResult::SessionExport {
+            Command::ExportSession(ExportSessionParams { session_id }) => {
+                Ok(CommandResult::SessionExport {
                     jsonl: self
                         .get_text(&format!("/api/v1/sessions/{session_id}/export"))
                         .await?,
-                },
-            ),
+                })
+            }
             Command::ImportSession(ImportSessionParams { jsonl }) => Ok(CommandResult::Execution(
-                self.post_json("/api/v1/sessions/import", serde_json::json!({ "jsonl": jsonl }))
-                    .await?,
+                self.post_json(
+                    "/api/v1/sessions/import",
+                    serde_json::json!({ "jsonl": jsonl }),
+                )
+                .await?,
             )),
             Command::ReplyPermission(params) => Ok(CommandResult::Execution(
                 self.reply_permission(params).await?,
@@ -389,8 +395,8 @@ impl AgenaClient {
             Command::ReplyUserInput(params) => Ok(CommandResult::Execution(
                 self.reply_user_input(params).await?,
             )),
-            Command::UpsertPermissionRule(UpsertPermissionRuleParams { action_key, mode }) => Ok(
-                CommandResult::PermissionRule(
+            Command::UpsertPermissionRule(UpsertPermissionRuleParams { action_key, mode }) => {
+                Ok(CommandResult::PermissionRule(
                     self.post_json(
                         "/api/v1/permission-rules",
                         serde_json::json!({
@@ -399,8 +405,8 @@ impl AgenaClient {
                         }),
                     )
                     .await?,
-                ),
-            ),
+                ))
+            }
             Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
                 let _: PermissionRuleResource = self
                     .delete_json(&format!("/api/v1/permission-rules/{rule_id}"))
@@ -414,16 +420,18 @@ impl AgenaClient {
     pub async fn query(&self, q: Query) -> Result<QueryResult, ClientError> {
         match q {
             Query::Health => Ok(QueryResult::Health(self.health().await?)),
-            Query::Runtime => Ok(QueryResult::Runtime(self.get_json("/api/v1/runtime").await?)),
-            Query::ListProviders => {
-                Ok(QueryResult::Providers(self.get_json("/api/v1/providers").await?))
-            }
-            Query::ListProviderModels(ListProviderModelsParams { provider_id }) => Ok(
-                QueryResult::ProviderModels(
+            Query::Runtime => Ok(QueryResult::Runtime(
+                self.get_json("/api/v1/runtime").await?,
+            )),
+            Query::ListProviders => Ok(QueryResult::Providers(
+                self.get_json("/api/v1/providers").await?,
+            )),
+            Query::ListProviderModels(ListProviderModelsParams { provider_id }) => {
+                Ok(QueryResult::ProviderModels(
                     self.get_json(&format!("/api/v1/providers/{provider_id}/models"))
                         .await?,
-                ),
-            ),
+                ))
+            }
             Query::ListWorkspaces(ListWorkspacesParams {
                 cursor,
                 limit,
@@ -451,7 +459,8 @@ impl AgenaClient {
                 ))
             }
             Query::GetWorkspace(GetWorkspaceParams { workspace_id }) => Ok(QueryResult::Workspace(
-                self.get_json(&format!("/api/v1/workspaces/{workspace_id}")).await?,
+                self.get_json(&format!("/api/v1/workspaces/{workspace_id}"))
+                    .await?,
             )),
             Query::ListSessions(ListSessionsParams {
                 cursor,
@@ -488,14 +497,15 @@ impl AgenaClient {
                 ))
             }
             Query::GetSession(GetSessionParams { session_id }) => Ok(QueryResult::Session(
-                self.get_json(&format!("/api/v1/sessions/{session_id}")).await?,
+                self.get_json(&format!("/api/v1/sessions/{session_id}"))
+                    .await?,
             )),
-            Query::GetSessionState(GetSessionParams { session_id }) => Ok(
-                QueryResult::SessionState(
+            Query::GetSessionState(GetSessionParams { session_id }) => {
+                Ok(QueryResult::SessionState(
                     self.get_json(&format!("/api/v1/sessions/{session_id}/state"))
                         .await?,
-                ),
-            ),
+                ))
+            }
             Query::ListMessages(ListMessagesParams {
                 session_id,
                 cursor,
@@ -561,12 +571,12 @@ impl AgenaClient {
                     self.parse_json(self.http.get(url).send().await?).await?,
                 ))
             }
-            Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => Ok(
-                QueryResult::PermissionRule(
+            Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => {
+                Ok(QueryResult::PermissionRule(
                     self.get_json(&format!("/api/v1/permission-rules/{rule_id}"))
                         .await?,
-                ),
-            ),
+                ))
+            }
         }
     }
 }

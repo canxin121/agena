@@ -21,23 +21,22 @@ use crate::hooks::{
     ToolInvokeStreamHandle, ToolStreamError,
 };
 use crate::host_api::{
-    AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription, HostAgentListResponse,
+    AskUserRequest, AskUserResponse, EventSubscription, HostAgentListResponse,
     HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostClient,
-    HostCommandListResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
-    HostCommandRemoveResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
-    HostEntryListResponse, HostEntryMutationResponse, HostEntryRegisterRequest,
-    HostEntryRemoveRequest, HostEntryUpdateRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostHookListResponse, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatusGetRequest,
+    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostEntryListResponse,
+    HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
+    HostEntryUpdateRequest, HostExitPlanModeRequest, HostExitWorktreeRequest,
+    HostHookListResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
-    HostSkillGetResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
-    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
+    HostStatuslineRemoveResponse, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
     HostStorageSetRequest, HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostTodoWriteRequest, HostWorktreeListResponse, LogLevel,
     MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
@@ -507,34 +506,6 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn execute_builtin_tool(
-        &self,
-        req: BuiltinToolRequest,
-    ) -> crate::error::Result<ToolInvokeOutput> {
-        self.call(
-            method::HOST_BUILTIN_EXECUTE,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn skill_get(
-        &self,
-        req: HostSkillGetRequest,
-    ) -> crate::error::Result<HostSkillGetResponse> {
-        self.call(
-            method::HOST_SKILL_GET,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
     async fn monitor_start(&self, req: MonitorStartRequest) -> crate::error::Result<MonitorHandle> {
         self.call(
             method::HOST_MONITOR_START,
@@ -848,43 +819,6 @@ impl HostClient for StdioHostClient {
             method::HOST_SCHEDULER_DELETE,
             serde_json::json!({
                 "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn command_register(&self, req: HostCommandRegisterRequest) -> crate::error::Result<()> {
-        let _: serde_json::Value = self
-            .call(
-                method::HOST_COMMAND_REGISTER,
-                serde_json::json!({
-                    "request": req,
-                    "context": crate::host_api::current_host_callback_context(),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn command_remove(
-        &self,
-        req: HostCommandRemoveRequest,
-    ) -> crate::error::Result<HostCommandRemoveResponse> {
-        self.call(
-            method::HOST_COMMAND_REMOVE,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn command_list(&self) -> crate::error::Result<HostCommandListResponse> {
-        self.call(
-            method::HOST_COMMAND_LIST,
-            serde_json::json!({
                 "context": crate::host_api::current_host_callback_context(),
             }),
         )

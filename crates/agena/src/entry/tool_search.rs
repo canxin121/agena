@@ -1,6 +1,6 @@
-use crate::message::{BuiltinToolOutput, ToolSearchToolInput};
+use crate::message::{FirstPartyToolOutput, ToolSearchToolInput};
 
-use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 const DEFAULT_LIMIT: usize = 8;
 const MAX_LIMIT: usize = 25;
@@ -38,7 +38,7 @@ impl SearchableTool {
 pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &ToolSearchToolInput,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     let catalog = executor
         .searchable_tools()
         .into_iter()
@@ -50,7 +50,7 @@ pub(crate) fn execute(
 pub(crate) fn execute_with_tools(
     catalog: &[SearchableTool],
     input: &ToolSearchToolInput,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     if input.query.trim().is_empty() && input.load.is_empty() {
         return Err(ToolError::InvalidInput(
             "tool_search requires a non-empty query or at least one tool to load".to_string(),
@@ -94,7 +94,7 @@ pub(crate) fn execute_with_tools(
         );
     }
 
-    let output = BuiltinToolOutput::ToolSearch {
+    let output = FirstPartyToolOutput::ToolSearch {
         results: results.iter().map(|tool| tool.name.clone()).collect(),
         loaded_tools,
     };
@@ -108,7 +108,7 @@ pub(crate) fn execute_with_tools(
             .insert("query".to_string(), input.query.trim().to_string());
     }
 
-    Ok(BuiltinExecution::new(output, view))
+    Ok(FirstPartyExecution::new(output, view))
 }
 
 fn search_catalog(

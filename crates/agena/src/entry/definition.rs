@@ -17,7 +17,7 @@ pub enum EntryBehavior {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EntrySource {
-    Builtin,
+    FirstParty,
     Plugin { plugin_name: String },
 }
 
@@ -54,7 +54,7 @@ pub struct EntryDefinition {
 }
 
 impl EntryDefinition {
-    pub fn builtin<T>(name: &str, description: &str, behavior: EntryBehavior) -> Self
+    pub fn first_party<T>(name: &str, description: &str, behavior: EntryBehavior) -> Self
     where
         T: JsonSchema,
     {
@@ -63,7 +63,7 @@ impl EntryDefinition {
             description: description.to_owned(),
             input_schema: json_schema_for::<T>(),
             behavior,
-            source: EntrySource::Builtin,
+            source: EntrySource::FirstParty,
             search_terms: Vec::new(),
             read_only: behavior == EntryBehavior::ReadOnly,
             concurrency_safe: behavior == EntryBehavior::ReadOnly,
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn builtin_definition_defaults_to_behavior_derived_metadata() {
-        let definition = EntryDefinition::builtin::<ReadToolInput>(
+        let definition = EntryDefinition::first_party::<ReadToolInput>(
             "inspect",
             "Inspect project state.",
             EntryBehavior::ReadOnly,
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn builder_helpers_customize_loading_and_search_terms() {
-        let definition = EntryDefinition::builtin::<BashToolInput>(
+        let definition = EntryDefinition::first_party::<BashToolInput>(
             "bash",
             "Run a shell command.",
             EntryBehavior::Mutating,
@@ -275,7 +275,7 @@ mod tests {
             .requires_user_interaction(true)
             .strict(true);
 
-        let definition = EntryDefinition::from_decl("search", &decl, EntrySource::Builtin);
+        let definition = EntryDefinition::from_decl("search", &decl, EntrySource::FirstParty);
 
         assert_eq!(definition.description, "Search tools");
         assert_eq!(definition.search_terms, vec!["discover", "catalog"]);
@@ -290,7 +290,7 @@ mod tests {
         let mut decl = PluginEntryDecl::new("read", serde_json::json!({"type": "object"}));
         decl.load_priority = SdkEntryLoadPriority::Always;
 
-        let definition = EntryDefinition::from_decl("read", &decl, EntrySource::Builtin);
+        let definition = EntryDefinition::from_decl("read", &decl, EntrySource::FirstParty);
 
         assert!(definition.read_only);
         assert!(definition.concurrency_safe);

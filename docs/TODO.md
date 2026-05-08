@@ -170,9 +170,9 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
     - [x] 新增 `crates/agena/src/tool/shell.rs`：`ExecutionPolicy { ReadOnly / WorkspaceWrite / DangerFullAccess }` + `ShellRequest` / `ShellOutput` / `ShellError` + `execute()`，含 watchdog 超时与 loader-env 清洗（`LD_PRELOAD` / `DYLD_*` / `BASH_FUNC_*` 等），6 个单测覆盖
     - [x] `tool/mod.rs` / `tool/bash.rs`：`SandboxPolicy` → `ExecutionPolicy`、`execute_sandboxed_command` → `execute_shell_command`、`ToolError::Sandbox` → `ToolError::Shell`，删除无状态 `sandbox_manager` 字段
     - [x] `agena-plugin-sdk/src/host_api.rs`：删除 `execute_sandboxed_command` 钩子与 `SandboxCommandRequest` / `SandboxCommandResponse` / `SandboxMode` 类型（零外部调用）
-    - [x] `cargo test -p agena --lib -- --test-threads=1` 367/367 通过（含 `bash_builtin_blocks_obvious_write_commands_in_read_only_policy` 关键回归测试）
+    - [x] `cargo test -p agena --lib -- --test-threads=1` 367/367 通过（含 `bash_first_party_blocks_obvious_write_commands_in_read_only_policy` 关键回归测试）
   - **第二阶段：权限层增强（进行中）** — 参考 opencode `permission.{edit,bash,read,task,...}` + Claude Code `settings.json [permissions]`
-    - [x] **bash 命令模式 allow/ask/deny**：`ToolPermissionPolicy::with_bash_pattern_rule` + `[[permission.bash]]` 配置段（`pattern` + `mode`），首匹配胜出，仅作用于 `BuiltinToolInput::Bash`，4 个单测 + 1 个端到端 config 测试
+    - [x] **bash 命令模式 allow/ask/deny**：`ToolPermissionPolicy::with_bash_pattern_rule` + `[[permission.bash]]` 配置段（`pattern` + `mode`），首匹配胜出，仅作用于 `FirstPartyToolInput::Bash`，4 个单测 + 1 个端到端 config 测试
     - [x] **执行模式 `auto` / `ask`** + **bash 全局 deny 列表**：`ExecutionMode { Auto, Ask }` 通过 `[permission] mode = "ask"` 启用，自动把 bash / apply_patch 的 Allow 决策提升为 Ask；`[[permission.bash_deny]] pattern = "rm -rf /*"` 在所有规则之前无条件 Deny；`Plan` 档由现有 plan-mode 路径覆盖（#3）；3 单测 + 1 端到端 config 测试
     - [ ] PreToolUse 钩子前置：UI/CLI 弹审批，记忆"始终允许"决策（`PermissionRuntime` 已有 AllowAlways/DenyAlways 持久化路径，待 UI 接入）
     - [ ] 把 `[permissions]` 同步进 `~/.agena/settings.json` 命名空间（目前只有 TOML config）
@@ -192,7 +192,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - [x] `LspRegistry`：`(file_extensions, root_markers)` 路由 + 懒生成进程；`server_for_path` / `client_for_path` / `client_for(name, hint_dir)`；`textDocument/publishDiagnostics` 自动入 per-uri 缓存
   - [x] 配置：`[lsp.servers.<name>]` TOML 段（command/args/env/file_extensions/root_markers/initialization_options）；`runtime::snapshot::build_lsp_registry` 启动时懒注册到 `ToolExecutor::with_lsp_registry`；apps 全部链通
   - [x] 测试：12 单测（framing / spec route / registry resolve）+ 1 inproc 端到端 initialize → definition → publishDiagnostics
-  - 待办：内置工具 `lsp_definition / lsp_references / lsp_diagnostics / lsp_hover` 接到 BuiltinToolInput；apply_patch 后自动取诊断回喂模型；`textDocument/didChange` 推送以让服务器看见编辑
+  - 待办：LSP entries `lsp_definition / lsp_references / lsp_diagnostics / lsp_hover` 接到 `FirstPartyToolInput`；apply_patch 后自动取诊断回喂模型；`textDocument/didChange` 推送以让服务器看见编辑
 
 - [ ] **#11 Worktree 生命周期对外（后端 API 完成 ✅）**
   - [x] **API 暴露**：`worktree::list_active(&registry)`（按 session 列出活跃 worktree）+ `list_managed(workspace, &registry)`（扫 `.agena/worktrees/` 并与 git/registry 交叉验证，标记 `is_stale`）+ `prune_stale(workspace, &registry)`（删除孤儿目录）

@@ -1,9 +1,9 @@
-use crate::message::{BuiltinToolOutput, TodoWriteToolInput};
+use crate::message::{FirstPartyToolOutput, TodoWriteToolInput};
 
-use super::{BuiltinExecution, ToolExecutionView};
+use super::{FirstPartyExecution, ToolExecutionView};
 
-pub(super) fn execute(input: &TodoWriteToolInput) -> BuiltinExecution {
-    let output = BuiltinToolOutput::TodoWrite {
+pub(super) fn execute(input: &TodoWriteToolInput) -> FirstPartyExecution {
+    let output = FirstPartyToolOutput::TodoWrite {
         items: input.items.clone(),
     };
 
@@ -13,7 +13,7 @@ pub(super) fn execute(input: &TodoWriteToolInput) -> BuiltinExecution {
     view.metadata
         .insert("todo_count".to_string(), input.items.len().to_string());
 
-    BuiltinExecution::new(output, view)
+    FirstPartyExecution::new(output, view)
 }
 
 fn render_todo_list(input: &TodoWriteToolInput) -> String {

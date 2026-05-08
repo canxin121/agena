@@ -3,7 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::message::BuiltinToolInput;
+use crate::message::FirstPartyToolInput;
 use crate::permission::{
     AccessKind, PermissionDecision, PermissionMode, PermissionPolicy, ToolPermissionPolicy,
 };
@@ -66,13 +66,13 @@ impl Agent {
         self
     }
 
-    pub fn authorize_builtin_tool(&self, input: &BuiltinToolInput) -> PermissionDecision {
+    pub fn authorize_first_party_tool(&self, input: &FirstPartyToolInput) -> PermissionDecision {
         if self.disable {
             return PermissionDecision::Deny {
                 reason: format!("agent '{}' is disabled", self.name),
             };
         }
-        self.tool_policy.check_builtin(input)
+        self.tool_policy.check_first_party(input)
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
@@ -118,7 +118,7 @@ pub enum AgentPolicyError {
 mod tests {
     use std::path::Path;
 
-    use crate::message::{BuiltinToolInput, ReadToolInput};
+    use crate::message::{FirstPartyToolInput, ReadToolInput};
     use crate::permission::{AccessKind, PermissionPolicy};
 
     use super::{Agent, AgentMode};
@@ -152,16 +152,16 @@ mod tests {
     }
 
     #[test]
-    fn disabled_agent_denies_builtin_tools() {
+    fn disabled_agent_denies_first_party_tools() {
         let mut agent = Agent::new("build", PermissionPolicy::allow_all());
         agent.disable = true;
-        let input = BuiltinToolInput::Read(ReadToolInput {
+        let input = FirstPartyToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
 
-        match agent.authorize_builtin_tool(&input) {
+        match agent.authorize_first_party_tool(&input) {
             crate::permission::PermissionDecision::Deny { reason } => {
                 assert!(reason.contains("disabled"));
             }

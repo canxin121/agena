@@ -25,8 +25,8 @@ use agena_api::{
     },
     pagination::PaginatedResponse,
     queries::{
-        GetSessionParams, GetWorkspaceParams, ListEventsParams,
-        ListMessagesParams, ListSessionsParams, ListWorkspacesParams, Query, QueryResult,
+        GetSessionParams, GetWorkspaceParams, ListEventsParams, ListMessagesParams,
+        ListSessionsParams, ListWorkspacesParams, Query, QueryResult,
     },
     resource::{PartLoadMode, RunOptions},
     subscribe::SubscribeRequest,
@@ -58,7 +58,8 @@ async fn spawn_server() -> (String, String, Arc<SessionManager>) {
         .await
         .expect("runtime build");
     let shared_db = Arc::new(db.clone());
-    let state = AppState::new(runtime, Arc::clone(&shared_db)).with_manager_override(Arc::clone(&manager));
+    let state =
+        AppState::new(runtime, Arc::clone(&shared_db)).with_manager_override(Arc::clone(&manager));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -165,7 +166,8 @@ api_key = "test"
         .await
         .expect("runtime build");
     let shared_db = Arc::new(db.clone());
-    let state = AppState::new(runtime, Arc::clone(&shared_db)).with_manager_override(Arc::clone(&manager));
+    let state =
+        AppState::new(runtime, Arc::clone(&shared_db)).with_manager_override(Arc::clone(&manager));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -327,7 +329,10 @@ async fn rest_command_and_query_cover_workspace_session_and_message_routes() {
         }))
         .await
         .unwrap();
-    let QueryResult::Messages(PaginatedResponse { items: messages, .. }) = messages else {
+    let QueryResult::Messages(PaginatedResponse {
+        items: messages, ..
+    }) = messages
+    else {
         panic!("expected messages query result");
     };
     assert!(!messages.is_empty());
@@ -337,7 +342,12 @@ async fn rest_command_and_query_cover_workspace_session_and_message_routes() {
         .expect("expected a message belonging to the created session")
         .clone();
     assert_eq!(message.session_id, session.id);
-    assert!(message.parts.as_ref().is_some_and(|parts| !parts.is_empty()));
+    assert!(
+        message
+            .parts
+            .as_ref()
+            .is_some_and(|parts| !parts.is_empty())
+    );
 }
 
 #[tokio::test]

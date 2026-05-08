@@ -1152,7 +1152,7 @@ mod tests {
 
     use super::*;
     use crate::event::DomainEvent;
-    use crate::message::{BuiltinToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
+    use crate::message::{FirstPartyToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::provider::{
         CompletionFinishReason, CompletionResponse, ModelProvider, ProviderModel,
@@ -1301,15 +1301,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_invocation_rejects_unloaded_builtin_tools() {
-        let tools = vec![EntryDefinition::builtin::<ReadToolInput>(
+    fn parse_tool_invocation_rejects_unloaded_first_party_tools() {
+        let tools = vec![EntryDefinition::first_party::<ReadToolInput>(
             "read",
             "Read a file.",
             crate::tool::EntryBehavior::ReadOnly,
         )];
 
         let err = parse_tool_invocation("bash", "{\"command\":\"pwd\"}", tools.as_slice())
-            .expect_err("unexpected builtin should be rejected");
+            .expect_err("unexpected first_party should be rejected");
 
         assert!(err.to_string().contains("unsupported tool call from model"));
     }
@@ -1325,8 +1325,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_invocation_accepts_builtin_arguments_with_trailing_text() {
-        let tools = vec![EntryDefinition::builtin::<GrepToolInput>(
+    fn parse_tool_invocation_accepts_first_party_arguments_with_trailing_text() {
+        let tools = vec![EntryDefinition::first_party::<GrepToolInput>(
             "grep",
             "Search files for a pattern.",
             EntryBehavior::ReadOnly,
@@ -1337,15 +1337,15 @@ mod tests {
             "{\"pattern\":\"cache marker\"}\nThen report the result.",
             tools.as_slice(),
         )
-        .expect("valid JSON prefix should parse for builtin tools");
+        .expect("valid JSON prefix should parse for first_party tools");
 
-        match invocation.as_builtin() {
-            Some(BuiltinToolInput::Grep(payload)) => {
+        match invocation.as_first_party() {
+            Some(FirstPartyToolInput::Grep(payload)) => {
                 assert_eq!(payload.pattern, "cache marker");
                 assert_eq!(payload.path, None);
                 assert_eq!(payload.include, None);
             }
-            other => panic!("expected grep builtin invocation, got {other:?}"),
+            other => panic!("expected grep first_party invocation, got {other:?}"),
         }
     }
 

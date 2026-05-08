@@ -1488,7 +1488,7 @@ mod tests {
                 "required": ["query"]
             }),
             behavior: crate::entry::EntryBehavior::ReadOnly,
-            source: crate::entry::EntrySource::Builtin,
+            source: crate::entry::EntrySource::FirstParty,
             search_terms: Vec::new(),
             read_only: true,
             concurrency_safe: true,

@@ -171,11 +171,6 @@ pub mod method {
     pub const HOST_PLAN_EXIT: &str = "host/plan.exit";
     pub const HOST_WORKTREE_ENTER: &str = "host/worktree.enter";
     pub const HOST_WORKTREE_EXIT: &str = "host/worktree.exit";
-    pub const HOST_BUILTIN_EXECUTE: &str = "host/builtin.execute";
-    pub const HOST_SKILL_GET: &str = "host/skill.get";
-    pub const HOST_SKILL_REGISTER: &str = "host/skill.register";
-    pub const HOST_SKILL_REMOVE: &str = "host/skill.remove";
-    pub const HOST_SKILL_LIST: &str = "host/skill.list";
     pub const HOST_MONITOR_START: &str = "host/monitor.start";
     pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
     pub const HOST_MONITOR_READ: &str = "host/monitor.read";
@@ -202,9 +197,6 @@ pub mod method {
     pub const HOST_SCHEDULER_LIST: &str = "host/scheduler.list";
     pub const HOST_SCHEDULER_CREATE: &str = "host/scheduler.create";
     pub const HOST_SCHEDULER_DELETE: &str = "host/scheduler.delete";
-    pub const HOST_COMMAND_REGISTER: &str = "host/command.register";
-    pub const HOST_COMMAND_REMOVE: &str = "host/command.remove";
-    pub const HOST_COMMAND_LIST: &str = "host/command.list";
     pub const HOST_AGENT_REGISTER: &str = "host/agent.register";
     pub const HOST_AGENT_REMOVE: &str = "host/agent.remove";
     pub const HOST_AGENT_LIST: &str = "host/agent.list";

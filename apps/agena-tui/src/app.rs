@@ -11,7 +11,7 @@ use std::{
 use agena::{
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
-        AttachmentKind, BuiltinToolInput, BuiltinToolOutput, FileChangeKind, MessagePart,
+        AttachmentKind, FirstPartyToolInput, FirstPartyToolOutput, FileChangeKind, MessagePart,
         PartContent, ToolExecutionPart, ToolInvocation, UserInputReply, UserInputReplyKind,
         UserInputRequest,
     },
@@ -27,7 +27,6 @@ use agena_api::{
         SessionExecutionResource, SessionResource, SessionRunState,
     },
 };
-use agena_skills::Skill;
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -170,7 +169,6 @@ pub struct App {
     status_line: Option<StatusLineState>,
     plugin_theme: Option<agena::plugin::HostThemePalette>,
     keybindings: ComposerKeyBindings,
-    user_commands: Vec<Skill>,
     /// Last time the user pressed Esc inside the composer; used to detect
     /// a double-tap that clears the input.
     last_esc_at: Option<Instant>,
@@ -479,7 +477,7 @@ struct PickerItem {
 #[derive(Debug, Clone)]
 enum PickerValue {
     Command(&'static CommandSpec),
-    UserCommand(Skill),
+    RuntimeEntry(String),
     Provider(ProviderSummaryResource),
     Model(ModelRef),
     Session(i64),
@@ -487,12 +485,6 @@ enum PickerValue {
     PermissionRuleCreate,
     PermissionRule(PermissionRuleResource),
     Inspector,
-}
-
-#[derive(Debug, Clone)]
-struct ParsedUserCommand {
-    command: Skill,
-    args: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -787,11 +779,6 @@ impl App {
         };
         let keybindings = launch.tui_config.keybindings.clone();
         let status_line = StatusLineState::new(&launch.tui_config.status_line);
-        let user_commands = {
-            let roots =
-                agena_skills::discovery::default_command_roots(launch.workspace_root.as_deref());
-            agena_skills::discovery::scan_commands(&roots).unwrap_or_default()
-        };
         let double_esc_window = Duration::from_millis(launch.tui_config.double_esc_window_ms);
         let plugin_theme = launch.tui_config.theme.as_ref().and_then(|theme_id| {
             backend
@@ -838,7 +825,6 @@ impl App {
             status_line,
             plugin_theme,
             keybindings,
-            user_commands,
             last_esc_at: None,
             double_esc_window,
         };
@@ -3198,20 +3184,13 @@ impl App {
     }
 
     fn is_local_command(&self, input: &str) -> bool {
-        commands::parse_command(input).is_some() || self.parse_user_command(input).is_some()
-    }
-
-    fn parse_user_command(&self, input: &str) -> Option<ParsedUserCommand> {
-        let (name, args) = commands::parse_invocation(input)?;
-        let command = self
-            .user_commands
-            .iter()
-            .find(|command| command.matches(name))?
-            .clone();
-        Some(ParsedUserCommand {
-            command,
-            args: args.to_string(),
-        })
+        if commands::parse_command(input).is_some() {
+            return true;
+        }
+        let Some((name, _)) = commands::parse_invocation(input) else {
+            return false;
+        };
+        self.backend.runtime_entry_exists(name)
     }
 
     /// Primary submit action (Ctrl+Enter by default). When the AI is
@@ -3308,7 +3287,7 @@ impl App {
             return;
         }
 
-        if let Some(parsed) = self.parse_user_command(draft.text.as_str()) {
+        if let Some((name, args)) = commands::parse_invocation(draft.text.as_str()) {
             if !draft.items.is_empty() {
                 self.restore_composer_draft(draft);
                 self.flash_warning(ui_text::t(
@@ -3317,8 +3296,10 @@ impl App {
                 ));
                 return;
             }
-            self.execute_user_command(parsed.command, parsed.args.as_str());
-            return;
+            if self.backend.runtime_entry_exists(name) {
+                self.execute_runtime_entry_prompt(name, args);
+                return;
+            }
         }
 
         let draft = if draft.text.starts_with("//") {
@@ -3611,16 +3592,11 @@ impl App {
                 value: PickerValue::Command(spec),
             })
             .collect::<Vec<_>>();
-        all_items.extend(
-            self.user_commands
-                .iter()
-                .cloned()
-                .map(|command| PickerItem {
-                    label: user_command_invocation(&command),
-                    detail: command.frontmatter.description.clone(),
-                    value: PickerValue::UserCommand(command),
-                }),
-        );
+        all_items.extend(self.backend.runtime_entry_rows().into_iter().map(|entry| PickerItem {
+            label: format!("/{}", entry.label),
+            detail: entry.detail,
+            value: PickerValue::RuntimeEntry(entry.label),
+        }));
         let mut overlay = PickerOverlay {
             title: ui_text::t(&self.i18n, "overlay-commands-title"),
             prompt: ui_text::t(&self.i18n, "overlay-commands-prompt"),
@@ -3948,8 +3924,8 @@ impl App {
                 commands::command_matches_query(spec, query)
                     || item.detail.to_ascii_lowercase().contains(query)
             }
-            (PickerKind::Commands, PickerValue::UserCommand(command)) => {
-                user_command_matches_query(command, query)
+            (PickerKind::Commands, PickerValue::RuntimeEntry(_)) => {
+                item.label.to_ascii_lowercase().contains(query)
                     || item.detail.to_ascii_lowercase().contains(query)
             }
             (PickerKind::WorkspaceSessions, PickerValue::Session(session_id))
@@ -3982,8 +3958,10 @@ impl App {
                     self.execute_command(spec, "");
                 }
             }
-            (PickerKind::Commands, PickerValue::UserCommand(command)) => {
-                self.prefill_user_command(&command);
+            (PickerKind::Commands, PickerValue::RuntimeEntry(entry_name)) => {
+                self.composer
+                    .set_text(format!("/{entry_name} ").trim_end().to_string());
+                self.focus = Focus::Composer;
             }
             (PickerKind::WorkspaceSessions, PickerValue::Session(session_id)) => {
                 self.open_session(
@@ -4050,21 +4028,6 @@ impl App {
             return;
         }
         self.composer.set_text(format!("/{} ", spec.name));
-        self.composer.cursor = self.composer.text().len();
-        self.focus = Focus::Composer;
-    }
-
-    fn prefill_user_command(&mut self, command: &Skill) {
-        if !self.composer.text().trim().is_empty() || !self.composer_items.is_empty() {
-            self.flash_warning(ui_text::t(
-                &self.i18n,
-                "flash-command-prefill-requires-empty-composer",
-            ));
-            self.focus = Focus::Composer;
-            return;
-        }
-        self.composer
-            .set_text(format!("/{} ", command.frontmatter.name));
         self.composer.cursor = self.composer.text().len();
         self.focus = Focus::Composer;
     }
@@ -4276,7 +4239,7 @@ impl App {
                 .backend
                 .exit_worktree(session_id, "remove".to_string(), discard_changes)
             {
-                Ok(agena::message::BuiltinToolOutput::ExitWorktree { action, path }) => {
+                Ok(agena::message::FirstPartyToolOutput::ExitWorktree { action, path }) => {
                     self.flash_success(format!("worktree {action}: {path}"));
                 }
                 Ok(_) => self.flash_success("worktree exited".to_string()),
@@ -4384,8 +4347,22 @@ impl App {
         }
     }
 
-    fn execute_user_command(&mut self, command: Skill, args: &str) {
-        let prompt = render_user_command_prompt(&command, args);
+    fn execute_runtime_entry_prompt(&mut self, entry_name: &str, args: &str) {
+        let target_session_id = self
+            .transcript
+            .session_id
+            .or_else(|| self.sessions.current_selected_id())
+            .unwrap_or(-1);
+        let prompt = match self
+            .backend
+            .runtime_entry_prompt(target_session_id, entry_name, args)
+        {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                self.flash_error(error.to_string());
+                return;
+            }
+        };
         if prompt.trim().is_empty() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
             return;
@@ -4394,11 +4371,11 @@ impl App {
             text: prompt,
             ..ComposerDraft::default()
         };
-        let target_session_id = self
+        match self
             .transcript
             .session_id
-            .or_else(|| self.sessions.current_selected_id());
-        match target_session_id {
+            .or_else(|| self.sessions.current_selected_id())
+        {
             Some(session_id) => self.request_submit_turn(session_id, draft),
             None => self.create_session(Some(draft)),
         }
@@ -4603,16 +4580,7 @@ impl App {
     }
 
     fn handle_review_command(&mut self, args: &str) {
-        let Some(command) = self
-            .user_commands
-            .iter()
-            .find(|command| command.frontmatter.name == "review")
-            .cloned()
-        else {
-            self.flash_error("review command is not available".to_string());
-            return;
-        };
-        self.execute_user_command(command, args);
+        self.execute_runtime_entry_prompt("review", args);
     }
 
     fn handle_permissions_command(&mut self, args: &str) {
@@ -4655,7 +4623,7 @@ impl App {
                         .enter_worktree(session_id, Some(argument.to_string()), None)
                 };
                 match result {
-                    Ok(agena::message::BuiltinToolOutput::EnterWorktree { path, branch }) => {
+                    Ok(agena::message::FirstPartyToolOutput::EnterWorktree { path, branch }) => {
                         self.flash_success(format!("worktree ready: {path} ({branch})"));
                     }
                     Ok(_) => self.flash_success("worktree entered".to_string()),
@@ -4675,7 +4643,7 @@ impl App {
                     .backend
                     .enter_worktree(session_id, None, Some(path.to_string()))
                 {
-                    Ok(agena::message::BuiltinToolOutput::EnterWorktree { path, branch }) => {
+                    Ok(agena::message::FirstPartyToolOutput::EnterWorktree { path, branch }) => {
                         self.flash_success(format!("worktree attached: {path} ({branch})"));
                     }
                     Ok(_) => self.flash_success("worktree attached".to_string()),
@@ -4687,7 +4655,7 @@ impl App {
                 let (mode, extra) = split_command_args_once(exit_args).unwrap_or((exit_args, ""));
                 match mode.to_ascii_lowercase().as_str() {
                     "" | "keep" => match self.backend.exit_worktree(session_id, "keep".to_string(), false) {
-                        Ok(agena::message::BuiltinToolOutput::ExitWorktree { action, path }) => {
+                        Ok(agena::message::FirstPartyToolOutput::ExitWorktree { action, path }) => {
                             self.flash_success(format!("worktree {action}: {path}"));
                         }
                         Ok(_) => self.flash_success("worktree exited".to_string()),
@@ -6406,19 +6374,7 @@ impl App {
             Overlay::Help => {
                 let area = centered_rect(area, 92, 36);
                 frame.render_widget(Clear, area);
-                let mut help_lines = ui_text::help_lines(&self.i18n);
-                if !self.user_commands.is_empty() {
-                    help_lines.push(String::new());
-                    help_lines.push(ui_text::t(&self.i18n, "help-section-user-commands"));
-                    help_lines.extend(self.user_commands.iter().map(|command| {
-                        let description = command.frontmatter.description.trim();
-                        if description.is_empty() {
-                            user_command_invocation(command)
-                        } else {
-                            format!("{} — {}", user_command_invocation(command), description)
-                        }
-                    }));
-                }
+                let help_lines = ui_text::help_lines(&self.i18n);
                 let text = help_lines
                     .into_iter()
                     .enumerate()
@@ -9012,26 +8968,26 @@ fn render_tool_execution(
 }
 
 fn apply_patch_diff(details: &agena::message::ToolOutput) -> Option<String> {
-    match details.as_builtin()? {
-        BuiltinToolOutput::ApplyPatch { diff, .. } if !diff.trim().is_empty() => Some(diff),
+    match details.as_first_party()? {
+        FirstPartyToolOutput::ApplyPatch { diff, .. } if !diff.trim().is_empty() => Some(diff),
         _ => None,
     }
 }
 
 fn tool_invocation_label(invocation: &ToolInvocation) -> String {
-    if let Some(input) = invocation.as_builtin() {
+    if let Some(input) = invocation.as_first_party() {
         return match input {
-            BuiltinToolInput::Bash(input) => format!("bash {}", input.command),
-            BuiltinToolInput::Read(input) => format!("read {}", input.file_path),
-            BuiltinToolInput::ViewFile(input) => format!("view_file {}", input.path),
-            BuiltinToolInput::ApplyPatch(_) => "apply_patch".to_string(),
-            BuiltinToolInput::Glob(input) => format!("glob {}", input.pattern),
-            BuiltinToolInput::Grep(input) => format!("grep {}", input.pattern),
-            BuiltinToolInput::Task(input) => format!("task {}", input.description),
-            BuiltinToolInput::ToolSearch(input) => format!("tool_search {}", input.query),
-            BuiltinToolInput::TodoWrite(_) => "todo_write".to_string(),
-            BuiltinToolInput::AskUser(_) => "ask_user".to_string(),
-            BuiltinToolInput::Monitor(input) => match input {
+            FirstPartyToolInput::Bash(input) => format!("bash {}", input.command),
+            FirstPartyToolInput::Read(input) => format!("read {}", input.file_path),
+            FirstPartyToolInput::ViewFile(input) => format!("view_file {}", input.path),
+            FirstPartyToolInput::ApplyPatch(_) => "apply_patch".to_string(),
+            FirstPartyToolInput::Glob(input) => format!("glob {}", input.pattern),
+            FirstPartyToolInput::Grep(input) => format!("grep {}", input.pattern),
+            FirstPartyToolInput::Task(input) => format!("task {}", input.description),
+            FirstPartyToolInput::ToolSearch(input) => format!("tool_search {}", input.query),
+            FirstPartyToolInput::TodoWrite(_) => "todo_write".to_string(),
+            FirstPartyToolInput::AskUser(_) => "ask_user".to_string(),
+            FirstPartyToolInput::Monitor(input) => match input {
                 agena::message::MonitorToolInput::Start { command, .. } => {
                     format!("monitor start {command}")
                 }
@@ -9043,50 +8999,49 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
                     format!("monitor stop {monitor_id}")
                 }
             },
-            BuiltinToolInput::WebFetch(input) => format!("web_fetch {}", input.url),
-            BuiltinToolInput::WebSearch(input) => format!("web_search {}", input.query),
-            BuiltinToolInput::EnterPlanMode(_) => "enter_plan_mode".to_string(),
-            BuiltinToolInput::ExitPlanMode(_) => "exit_plan_mode".to_string(),
-            BuiltinToolInput::SkillRun(input) => format!("skill_run {}", input.name),
-            BuiltinToolInput::EnterWorktree(input) => match (&input.name, &input.path) {
+            FirstPartyToolInput::WebFetch(input) => format!("web_fetch {}", input.url),
+            FirstPartyToolInput::WebSearch(input) => format!("web_search {}", input.query),
+            FirstPartyToolInput::EnterPlanMode(_) => "enter_plan_mode".to_string(),
+            FirstPartyToolInput::ExitPlanMode(_) => "exit_plan_mode".to_string(),
+            FirstPartyToolInput::EnterWorktree(input) => match (&input.name, &input.path) {
                 (Some(n), _) => format!("enter_worktree name={n}"),
                 (_, Some(p)) => format!("enter_worktree path={p}"),
                 _ => "enter_worktree".to_string(),
             },
-            BuiltinToolInput::ExitWorktree(input) => format!("exit_worktree {}", input.action),
-            BuiltinToolInput::CronCreate(input) => {
+            FirstPartyToolInput::ExitWorktree(input) => format!("exit_worktree {}", input.action),
+            FirstPartyToolInput::CronCreate(input) => {
                 format!("cron_create {}", input.expression)
             }
-            BuiltinToolInput::CronList(_) => "cron_list".to_string(),
-            BuiltinToolInput::CronDelete(input) => format!("cron_delete {}", input.id),
-            BuiltinToolInput::ScheduleWakeup(input) => {
+            FirstPartyToolInput::CronList(_) => "cron_list".to_string(),
+            FirstPartyToolInput::CronDelete(input) => format!("cron_delete {}", input.id),
+            FirstPartyToolInput::ScheduleWakeup(input) => {
                 format!("schedule_wakeup +{}s", input.delay_seconds)
             }
-            BuiltinToolInput::LspDefinition(input) => {
+            FirstPartyToolInput::LspDefinition(input) => {
                 format!(
                     "lsp_definition {}:{}:{}",
                     input.file_path, input.line, input.character
                 )
             }
-            BuiltinToolInput::LspReferences(input) => {
+            FirstPartyToolInput::LspReferences(input) => {
                 format!(
                     "lsp_references {}:{}:{}",
                     input.file_path, input.line, input.character
                 )
             }
-            BuiltinToolInput::LspHover(input) => {
+            FirstPartyToolInput::LspHover(input) => {
                 format!(
                     "lsp_hover {}:{}:{}",
                     input.file_path, input.line, input.character
                 )
             }
-            BuiltinToolInput::LspDiagnostics(input) => {
+            FirstPartyToolInput::LspDiagnostics(input) => {
                 format!("lsp_diagnostics {}", input.file_path)
             }
-            BuiltinToolInput::NotebookEdit(input) => {
+            FirstPartyToolInput::NotebookEdit(input) => {
                 format!("notebook_edit {}", input.notebook_path)
             }
-            BuiltinToolInput::PowerShell(input) => format!("powershell {}", input.command),
+            FirstPartyToolInput::PowerShell(input) => format!("powershell {}", input.command),
         };
     }
     let ToolInvocation { name, .. } = invocation;
@@ -10900,45 +10855,6 @@ fn split_command_args_once(value: &str) -> Option<(&str, &str)> {
     }
 }
 
-fn user_command_invocation(command: &Skill) -> String {
-    format!("/{} <args>", command.frontmatter.name)
-}
-
-fn user_command_matches_query(command: &Skill, query: &str) -> bool {
-    let query = query.trim().to_ascii_lowercase();
-    if query.is_empty() {
-        return true;
-    }
-    command
-        .frontmatter
-        .name
-        .to_ascii_lowercase()
-        .contains(query.as_str())
-        || command
-            .frontmatter
-            .aliases
-            .iter()
-            .any(|alias| alias.to_ascii_lowercase().contains(query.as_str()))
-        || command
-            .frontmatter
-            .description
-            .to_ascii_lowercase()
-            .contains(query.as_str())
-}
-
-fn render_user_command_prompt(command: &Skill, args: &str) -> String {
-    let body = command.body.trim();
-    let args = args.trim();
-    if body.contains("$ARGUMENTS") {
-        return body.replace("$ARGUMENTS", args);
-    }
-    if args.is_empty() {
-        body.to_string()
-    } else {
-        format!("{body}\n\nUser arguments:\n{args}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -10949,7 +10865,6 @@ mod tests {
             UserInputQuestion,
         },
     };
-    use agena_skills::SkillFrontmatter;
     use chrono::Utc;
     use serde_json::json;
 
@@ -10959,26 +10874,6 @@ mod tests {
             derive_session_title("\n\n  hello world  \nnext"),
             "hello world"
         );
-    }
-
-    #[test]
-    fn user_command_prompt_replaces_arguments_placeholder() {
-        let command = Skill {
-            frontmatter: SkillFrontmatter {
-                name: "fix".to_string(),
-                description: "Fix a bug".to_string(),
-                aliases: vec!["repair".to_string()],
-                ..SkillFrontmatter::default()
-            },
-            body: "Fix this: $ARGUMENTS".to_string(),
-            source_path: None,
-        };
-
-        assert_eq!(
-            render_user_command_prompt(&command, "panic on startup"),
-            "Fix this: panic on startup"
-        );
-        assert!(user_command_matches_query(&command, "repair"));
     }
 
     #[test]

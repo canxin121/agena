@@ -1,4 +1,4 @@
-//! `enter_worktree` / `exit_worktree` builtin tools.
+//! `enter_worktree` / `exit_worktree` first-party tools.
 //!
 //! Thin wrappers around the `git` CLI; we don't pull in libgit2 for the
 //! sake of keeping the dependency surface tight.  Worktrees are created
@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{BuiltinToolOutput, EnterWorktreeToolInput, ExitWorktreeToolInput};
+use crate::message::{FirstPartyToolOutput, EnterWorktreeToolInput, ExitWorktreeToolInput};
 
-use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 #[derive(Debug, Clone)]
 pub struct WorktreeSession {
@@ -39,7 +39,7 @@ pub(super) fn execute_enter(
     executor: &ToolExecutor,
     input: &EnterWorktreeToolInput,
     session_id: Option<i64>,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("enter_worktree: no session in execution context".to_string())
     })?;
@@ -75,20 +75,20 @@ pub(super) fn execute_enter(
             session.branch
         ),
     );
-    let output = BuiltinToolOutput::EnterWorktree {
+    let output = FirstPartyToolOutput::EnterWorktree {
         path: session.path.to_string_lossy().to_string(),
         branch: session.branch.clone(),
     };
 
     registry.write().insert(session_id, session);
-    Ok(BuiltinExecution::new(output, view))
+    Ok(FirstPartyExecution::new(output, view))
 }
 
 pub(super) fn execute_exit(
     executor: &ToolExecutor,
     input: &ExitWorktreeToolInput,
     session_id: Option<i64>,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("exit_worktree: no session in execution context".to_string())
     })?;
@@ -139,8 +139,8 @@ pub(super) fn execute_exit(
             session.branch
         ),
     );
-    Ok(BuiltinExecution::new(
-        BuiltinToolOutput::ExitWorktree {
+    Ok(FirstPartyExecution::new(
+        FirstPartyToolOutput::ExitWorktree {
             action: action.to_string(),
             path: session.path.to_string_lossy().to_string(),
         },

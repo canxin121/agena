@@ -6,12 +6,12 @@ use crate::message::{
 };
 use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
 use crate::plugin::sdk::{EntryBehavior as SdkEntryBehavior, PluginEntryDecl};
-use crate::plugins::bundled::router::BuiltinRouterPlugin;
+use crate::plugins::bundled::router::FirstPartyRouterPlugin;
 
 pub(crate) const FS_PLUGIN_ID: &str = "agena.fs";
 
-pub(crate) fn new_plugin() -> BuiltinRouterPlugin {
-    BuiltinRouterPlugin::new(
+pub(crate) fn new_plugin() -> FirstPartyRouterPlugin {
+    FirstPartyRouterPlugin::new(
         "agena-fs",
         "Filesystem tools (read, view_file, glob, grep, apply_patch, notebook_edit).",
         entries(),

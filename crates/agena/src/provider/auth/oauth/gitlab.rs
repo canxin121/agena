@@ -1,16 +1,21 @@
 use std::sync::OnceLock;
 
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointSet,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
-    basic::BasicClient,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointSet, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl, basic::BasicClient,
 };
 
 use crate::error::AppError;
 
 use super::super::{OAuthAuthorizeStart, OAuthTokenResponse};
 
-type GitLabOAuthClient = BasicClient<EndpointSet, oauth2::EndpointNotSet, oauth2::EndpointNotSet, oauth2::EndpointNotSet, EndpointSet>;
+type GitLabOAuthClient = BasicClient<
+    EndpointSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointNotSet,
+    EndpointSet,
+>;
 
 pub fn start_gitlab_oauth(
     instance_url: &str,

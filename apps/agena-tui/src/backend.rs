@@ -11,8 +11,8 @@ use agena::{
     event::{DomainEvent, EventKind},
     memory::MemoryStore,
     message::{
-        AttachmentItem, AttachmentKind, AttachmentSource, BuiltinToolInput, BuiltinToolOutput,
-        EnterWorktreeToolInput, ExitWorktreeToolInput, PartContent, UserInputReply,
+        AttachmentItem, AttachmentKind, AttachmentSource, FirstPartyToolInput, FirstPartyToolOutput,
+        EnterWorktreeToolInput, ExitWorktreeToolInput, PartContent, ToolInvocation, UserInputReply,
     },
     model::ModelRef,
     permission::{PermissionMode, PermissionReplyKind},
@@ -43,6 +43,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ignore::WalkBuilder;
 use mime_guess::MimeGuess;
 use sea_orm::DatabaseConnection;
+use serde_json::json;
 use tokio::sync::mpsc;
 
 const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
@@ -858,22 +859,39 @@ impl Backend {
     }
 
     pub fn skills_inspector_rows(&self) -> Vec<InspectorRow> {
-        let Some(manager) = self.runtime.current_snapshot().skills_manager() else {
-            return Vec::new();
-        };
-        let mut rows = manager
-            .list()
+        let mut rows = self
+            .runtime
+            .current_snapshot()
+            .plugin_manager()
+            .entry_entries()
             .into_iter()
-            .map(|skill| InspectorRow {
-                label: skill.frontmatter.name,
+            .filter(|entry| entry.plugin_name == "agena.skills_fs")
+            .map(|entry| InspectorRow {
+                label: entry.exposed_name,
                 detail: format!(
-                    "{}{}",
-                    skill.frontmatter.description,
-                    skill
-                        .source_path
-                        .as_ref()
-                        .map(|path| format!(" | {}", path.display()))
-                        .unwrap_or_default()
+                    "{} | {}",
+                    entry.plugin_name,
+                    entry.decl.description.unwrap_or_default()
+                ),
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.label.cmp(&right.label));
+        rows
+    }
+
+    pub fn runtime_entry_rows(&self) -> Vec<InspectorRow> {
+        let mut rows = self
+            .runtime
+            .current_snapshot()
+            .plugin_manager()
+            .entry_entries()
+            .into_iter()
+            .map(|entry| InspectorRow {
+                label: entry.exposed_name,
+                detail: format!(
+                    "{} | {}",
+                    entry.plugin_name,
+                    entry.decl.description.unwrap_or_default()
                 ),
             })
             .collect::<Vec<_>>();
@@ -1134,12 +1152,12 @@ impl Backend {
         session_id: i64,
         name: Option<String>,
         path: Option<String>,
-    ) -> Result<BuiltinToolOutput> {
+    ) -> Result<FirstPartyToolOutput> {
         let manager = self.session_manager()?;
         manager
             .tool_executor()
-            .execute_builtin_output_for_session(
-                &BuiltinToolInput::EnterWorktree(EnterWorktreeToolInput { name, path }),
+            .execute_first_party_output_for_session(
+                &FirstPartyToolInput::EnterWorktree(EnterWorktreeToolInput { name, path }),
                 session_id,
             )
             .map_err(|error| anyhow!(error.to_string()))
@@ -1150,18 +1168,46 @@ impl Backend {
         session_id: i64,
         action: String,
         discard_changes: bool,
-    ) -> Result<BuiltinToolOutput> {
+    ) -> Result<FirstPartyToolOutput> {
         let manager = self.session_manager()?;
         manager
             .tool_executor()
-            .execute_builtin_output_for_session(
-                &BuiltinToolInput::ExitWorktree(ExitWorktreeToolInput {
+            .execute_first_party_output_for_session(
+                &FirstPartyToolInput::ExitWorktree(ExitWorktreeToolInput {
                     action,
                     discard_changes,
                 }),
                 session_id,
             )
             .map_err(|error| anyhow!(error.to_string()))
+    }
+
+    pub fn runtime_entry_exists(&self, name: &str) -> bool {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .lookup_entry(name)
+            .is_some()
+    }
+
+    pub fn runtime_entry_prompt(&self, session_id: i64, name: &str, args: &str) -> Result<String> {
+        let manager = self.session_manager()?;
+        let invocation = ToolInvocation::new(
+            name.to_string(),
+            serde_json::from_value::<agena::message::StructuredObject>(json!({
+                "args": if args.trim().is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(args.trim().to_string())
+                }
+            }))
+            .map_err(|error| anyhow!(error))?,
+        );
+        let execution = manager
+            .tool_executor()
+            .execute_invocation_detailed(&invocation, session_id, -1)
+            .map_err(|error| anyhow!(error.to_string()))?;
+        Ok(execution.view.output_text)
     }
 
     pub async fn create_commit(&self, message: String) -> Result<(String, String)> {

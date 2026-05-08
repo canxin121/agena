@@ -147,11 +147,7 @@ fn normalize_config(mut cfg: DesktopConfig) -> DesktopConfig {
 
 fn normalize_optional_path(raw: Option<String>) -> Option<String> {
     let value = raw?.trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn normalize_host(raw: &str) -> String {

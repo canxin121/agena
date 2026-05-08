@@ -13,7 +13,13 @@ use super::shared::{
     OPENAI_CLIENT_ID, OPENAI_ISSUER, extract_openai_account_id, parse_device_auth_interval,
 };
 
-type OpenAiOAuthClient = BasicClient<EndpointSet, oauth2::EndpointNotSet, oauth2::EndpointNotSet, oauth2::EndpointNotSet, EndpointSet>;
+type OpenAiOAuthClient = BasicClient<
+    EndpointSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointNotSet,
+    EndpointSet,
+>;
 
 pub fn start_openai_browser_oauth(redirect_uri: &str) -> Result<OAuthAuthorizeStart, AppError> {
     let client = openai_oauth_client(Some(redirect_uri))?;

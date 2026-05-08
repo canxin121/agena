@@ -1,4 +1,4 @@
-//! `web_fetch` builtin tool — GET an absolute URL, convert HTML→Markdown,
+//! `web_fetch` first-party tool — GET an absolute URL, convert HTML→Markdown,
 //! optionally summarize via the session's default LLM provider.
 //!
 //! Cache: 15-minute TTL keyed by canonicalized URL (LRU, capped at 64).
@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use lru::LruCache;
 
-use crate::message::{BuiltinToolOutput, ToolAttachment, WebFetchToolInput};
+use crate::message::{FirstPartyToolOutput, ToolAttachment, WebFetchToolInput};
 
-use super::{BuiltinExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,7 +37,7 @@ static CACHE: LazyLock<Mutex<LruCache<String, CachedFetch>>> = LazyLock::new(|| 
 pub(super) fn execute(
     _executor: &ToolExecutor,
     input: &WebFetchToolInput,
-) -> Result<BuiltinExecution, ToolError> {
+) -> Result<FirstPartyExecution, ToolError> {
     let raw_url = input.url.trim();
     if raw_url.is_empty() {
         return Err(ToolError::Plugin(
@@ -183,7 +183,7 @@ fn make_execution(
     truncated: bool,
     cached: bool,
     _prompt: Option<&str>,
-) -> BuiltinExecution {
+) -> FirstPartyExecution {
     // NOTE: prompt-based summarization is left as a follow-up — it
     // requires re-entering the LLM provider from inside a tool dispatch,
     // which the executor doesn't currently expose synchronously.  The
@@ -193,7 +193,7 @@ fn make_execution(
     let preview = preview_text(&markdown, 4000);
     let view =
         ToolExecutionView::simple(format!("WebFetch {url}"), format!("[{status}] {preview}"));
-    let output = BuiltinToolOutput::WebFetch {
+    let output = FirstPartyToolOutput::WebFetch {
         url,
         markdown: Some(markdown),
         summary,
@@ -201,7 +201,7 @@ fn make_execution(
         cached,
         status,
     };
-    BuiltinExecution::new(output, view)
+    FirstPartyExecution::new(output, view)
 }
 
 fn preview_text(s: &str, max: usize) -> String {

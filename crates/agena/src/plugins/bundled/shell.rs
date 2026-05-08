@@ -6,14 +6,14 @@ use crate::plugin::sdk::{
     EntryBehavior as SdkEntryBehavior, EntryStreamingMode, HostCapability, PlanModePolicy,
     PluginEntryDecl,
 };
-use crate::plugins::bundled::router::BuiltinRouterPlugin;
+use crate::plugins::bundled::router::FirstPartyRouterPlugin;
 
 pub(crate) const SHELL_PLUGIN_ID: &str = "agena.shell";
 
-pub(crate) fn new_plugin() -> BuiltinRouterPlugin {
-    BuiltinRouterPlugin::new(
+pub(crate) fn new_plugin() -> FirstPartyRouterPlugin {
+    FirstPartyRouterPlugin::new(
         "agena-shell",
-        "Shell tools (bash, powershell, monitor) bridged to built-in implementations.",
+        "Shell tools (bash, powershell, monitor) routed through the shared first-party executor bridge.",
         entries(),
     )
 }

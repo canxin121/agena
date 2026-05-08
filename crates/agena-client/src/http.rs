@@ -3,11 +3,23 @@
 
 use agena_api::{
     commands::{
-        Command, CommandResult, ContinueRunParams, ReplyPermissionParams, ReplyUserInputParams,
-        SubmitTurnParams,
+        CancelTurnParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
+        CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
+        DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
+        ListRewindCheckpointsParams, ListSessionTreeParams, ReplyPermissionParams,
+        ReplyUserInputParams, ResolveWorkspaceParams, RewindSessionParams, SubmitTurnParams,
+        UnrewindSessionParams, UpdateSessionParams, UpdateWorkspaceParams,
+        UpsertPermissionRuleParams,
     },
-    queries::{ListEventsParams, PaginatedEvents, Query, QueryResult},
-    resource::{HealthResponse, RunOptions, SessionResource},
+    queries::{
+        GetMessageParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
+        ListEventsParams, ListMessagesParams, ListPermissionRulesParams, ListProviderModelsParams,
+        ListSessionsParams, ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
+    },
+    resource::{
+        HealthResponse, PartLoadMode, PermissionRuleResource, RunOptions,
+        SessionExecutionResource, SessionResource, WorkspaceResource,
+    },
 };
 
 use crate::error::ClientError;
@@ -53,15 +65,73 @@ impl AgenaClient {
         Ok(serde_json::from_value(value)?)
     }
 
-    // ─── high-level conveniences ───
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, ClientError> {
+        let response = self.http.get(self.endpoint(path)).send().await?;
+        self.parse_json(response).await
+    }
 
-    pub async fn health(&self) -> Result<HealthResponse, ClientError> {
+    async fn post_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<T, ClientError> {
         let response = self
             .http
-            .get(self.endpoint("/api/v1/health"))
+            .post(self.endpoint(path))
+            .json(&body)
             .send()
             .await?;
         self.parse_json(response).await
+    }
+
+    async fn put_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<T, ClientError> {
+        let response = self
+            .http
+            .put(self.endpoint(path))
+            .json(&body)
+            .send()
+            .await?;
+        self.parse_json(response).await
+    }
+
+    async fn delete_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, ClientError> {
+        let response = self.http.delete(self.endpoint(path)).send().await?;
+        self.parse_json(response).await
+    }
+
+    async fn post_no_body_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, ClientError> {
+        let response = self.http.post(self.endpoint(path)).send().await?;
+        self.parse_json(response).await
+    }
+
+    async fn get_text(&self, path: &str) -> Result<String, ClientError> {
+        let response = self.http.get(self.endpoint(path)).send().await?;
+        let status = response.status();
+        let text = response.text().await?;
+        if !status.is_success() {
+            let api: agena_api::error::ApiError = serde_json::from_str(&text)?;
+            return Err(ClientError::Api(api));
+        }
+        Ok(text)
+    }
+
+    // ─── high-level conveniences ───
+
+    pub async fn health(&self) -> Result<HealthResponse, ClientError> {
+        self.get_json("/api/v1/health").await
     }
 
     pub async fn create_session(
@@ -75,99 +145,70 @@ impl AgenaClient {
             "title": title.into(),
             "parent_id": parent_id,
         });
-        let response = self
-            .http
-            .post(self.endpoint("/api/v1/sessions"))
-            .json(&body)
-            .send()
-            .await?;
-        self.parse_json(response).await
+        self.post_json("/api/v1/sessions", body).await
     }
 
     pub async fn submit_turn(
         &self,
         params: SubmitTurnParams,
-    ) -> Result<SessionResource, ClientError> {
-        let body = serde_json::json!({
-            "options": params.options,
-            "parts": params.parts,
-        });
-        let response = self
-            .http
-            .post(self.endpoint(&format!("/api/v1/sessions/{}/turns", params.session_id)))
-            .json(&body)
-            .send()
-            .await?;
-        self.parse_json(response).await
+    ) -> Result<SessionExecutionResource, ClientError> {
+        let mut body = serde_json::to_value(params.options)?;
+        if let serde_json::Value::Object(ref mut object) = body {
+            object.insert("parts".to_string(), serde_json::to_value(params.parts)?);
+        }
+        self.post_json(&format!("/api/v1/sessions/{}/turns", params.session_id), body)
+            .await
     }
 
     pub async fn continue_run(
         &self,
         session_id: i64,
         options: RunOptions,
-    ) -> Result<SessionResource, ClientError> {
-        let body = serde_json::json!({ "options": options });
-        let response = self
-            .http
-            .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/continue")))
-            .json(&body)
-            .send()
-            .await?;
+    ) -> Result<SessionExecutionResource, ClientError> {
+        let body = serde_json::to_value(options.clone())?;
         let _ = ContinueRunParams {
             session_id,
             options,
         };
-        self.parse_json(response).await
+        self.post_json(&format!("/api/v1/sessions/{session_id}/continue"), body)
+            .await
     }
 
     pub async fn cancel_turn(&self, session_id: i64) -> Result<(), ClientError> {
-        let response = self
-            .http
-            .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/cancel")))
-            .send()
+        let _: serde_json::Value = self
+            .post_no_body_json(&format!("/api/v1/sessions/{session_id}/cancel"))
             .await?;
-        let _: serde_json::Value = self.parse_json(response).await?;
         Ok(())
     }
 
     pub async fn reply_permission(
         &self,
         params: ReplyPermissionParams,
-    ) -> Result<SessionResource, ClientError> {
-        let body = serde_json::json!({
-            "options": params.options,
-            "reply": params.reply,
-        });
-        let response = self
-            .http
-            .post(self.endpoint(&format!(
-                "/api/v1/sessions/{}/permission-replies",
-                params.session_id
-            )))
-            .json(&body)
-            .send()
-            .await?;
-        self.parse_json(response).await
+    ) -> Result<SessionExecutionResource, ClientError> {
+        let mut body = serde_json::to_value(params.options)?;
+        if let serde_json::Value::Object(ref mut object) = body {
+            object.insert("reply".to_string(), serde_json::to_value(params.reply)?);
+        }
+        self.post_json(
+            &format!("/api/v1/sessions/{}/permission-replies", params.session_id),
+            body,
+        )
+        .await
     }
 
     pub async fn reply_user_input(
         &self,
         params: ReplyUserInputParams,
-    ) -> Result<SessionResource, ClientError> {
-        let body = serde_json::json!({
-            "options": params.options,
-            "reply": params.reply,
-        });
-        let response = self
-            .http
-            .post(self.endpoint(&format!(
-                "/api/v1/sessions/{}/user-input-replies",
-                params.session_id
-            )))
-            .json(&body)
-            .send()
-            .await?;
-        self.parse_json(response).await
+    ) -> Result<SessionExecutionResource, ClientError> {
+        let mut body = serde_json::to_value(params.options)?;
+        if let serde_json::Value::Object(ref mut object) = body {
+            object.insert("reply".to_string(), serde_json::to_value(params.reply)?);
+        }
+        self.post_json(
+            &format!("/api/v1/sessions/{}/user-input-replies", params.session_id),
+            body,
+        )
+        .await
     }
 
     pub async fn list_events(
@@ -175,8 +216,6 @@ impl AgenaClient {
         params: ListEventsParams,
     ) -> Result<PaginatedEvents, ClientError> {
         let mut url = self.endpoint("/api/v1/events");
-        // Encode each param manually so we don't rely on serde_urlencoded
-        // for nested types (Scope is tagged, kinds is a HashSet).
         {
             let mut q = url.query_pairs_mut();
             if let Some(seq) = params.since_seq_global {
@@ -209,28 +248,325 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    /// Escape hatch: run any [`Command`] over REST. Falls back to
-    /// `submit_turn` etc. when you'd rather use the typed conveniences.
-    pub async fn command(&self, _cmd: Command) -> Result<CommandResult, ClientError> {
-        // The REST surface is route-per-command; this helper exists as a
-        // future hook for a generic `/api/v1/commands` endpoint. For now
-        // callers should use the typed methods.
-        Err(ClientError::Protocol(
-            "generic command dispatch over REST is not implemented; use typed helpers or WS".into(),
-        ))
+    /// Escape hatch: run any [`Command`] over REST where a dedicated route
+    /// already exists.
+    pub async fn command(&self, cmd: Command) -> Result<CommandResult, ClientError> {
+        match cmd {
+            Command::CreateWorkspace(CreateWorkspaceParams { path }) => Ok(CommandResult::Workspace(
+                self.post_json("/api/v1/workspaces", serde_json::json!({ "path": path }))
+                    .await?,
+            )),
+            Command::UpdateWorkspace(UpdateWorkspaceParams {
+                workspace_id, path, ..
+            }) => Ok(CommandResult::Workspace(
+                self.put_json(
+                    &format!("/api/v1/workspaces/{workspace_id}"),
+                    serde_json::json!({ "path": path }),
+                )
+                .await?,
+            )),
+            Command::DeleteWorkspace(DeleteWorkspaceParams { workspace_id }) => {
+                let _: WorkspaceResource = self
+                    .delete_json(&format!("/api/v1/workspaces/{workspace_id}"))
+                    .await?;
+                Ok(CommandResult::WorkspaceDeleted { id: workspace_id })
+            }
+            Command::ResolveWorkspace(ResolveWorkspaceParams {
+                path,
+                create_if_missing,
+            }) => Ok(CommandResult::Workspace(
+                self.post_json(
+                    "/api/v1/workspaces/resolve",
+                    serde_json::json!({
+                        "path": path,
+                        "create_if_missing": create_if_missing,
+                    }),
+                )
+                .await?,
+            )),
+            Command::CreateSession(CreateSessionParams {
+                workspace_id,
+                title,
+                parent_id,
+            }) => Ok(CommandResult::Session(
+                self.create_session(workspace_id, title, parent_id).await?,
+            )),
+            Command::UpdateSession(UpdateSessionParams {
+                session_id,
+                title,
+                parent_id,
+                ..
+            }) => Ok(CommandResult::Session(
+                self.put_json(
+                    &format!("/api/v1/sessions/{session_id}"),
+                    serde_json::json!({
+                        "title": title,
+                        "parent_id": parent_id,
+                    }),
+                )
+                .await?,
+            )),
+            Command::DeleteSession(DeleteSessionParams { session_id, .. }) => {
+                let _: SessionResource = self
+                    .delete_json(&format!("/api/v1/sessions/{session_id}"))
+                    .await?;
+                Ok(CommandResult::SessionDeleted { id: session_id })
+            }
+            Command::SubmitTurn(params) => {
+                Ok(CommandResult::Execution(self.submit_turn(params).await?))
+            }
+            Command::ContinueRun(ContinueRunParams {
+                session_id,
+                options,
+            }) => Ok(CommandResult::Execution(
+                self.continue_run(session_id, options).await?,
+            )),
+            Command::CancelTurn(CancelTurnParams { session_id }) => {
+                self.cancel_turn(session_id).await?;
+                Ok(CommandResult::Ack)
+            }
+            Command::RewindSession(RewindSessionParams {
+                session_id,
+                message_id,
+                ..
+            }) => Ok(CommandResult::Execution(
+                self.post_json(
+                    &format!("/api/v1/sessions/{session_id}/rewind"),
+                    serde_json::json!({ "message_id": message_id }),
+                )
+                .await?,
+            )),
+            Command::UnrewindSession(UnrewindSessionParams {
+                session_id,
+                message_id,
+                ..
+            }) => Ok(CommandResult::Execution(
+                self.post_json(
+                    &format!("/api/v1/sessions/{session_id}/unrewind"),
+                    serde_json::json!({ "message_id": message_id }),
+                )
+                .await?,
+            )),
+            Command::ForkSession(ForkSessionParams {
+                session_id,
+                at_message_id,
+                title,
+            }) => Ok(CommandResult::Execution(
+                self.post_json(
+                    &format!("/api/v1/sessions/{session_id}/fork"),
+                    serde_json::json!({
+                        "at_message_id": at_message_id,
+                        "title": title,
+                    }),
+                )
+                .await?,
+            )),
+            Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
+                Ok(CommandResult::SessionTree(
+                    self.get_json(&format!("/api/v1/sessions/tree/{root_id}")).await?,
+                ))
+            }
+            Command::ListRewindCheckpoints(ListRewindCheckpointsParams { session_id }) => {
+                Ok(CommandResult::RewindCheckpoints(
+                    self.get_json(&format!("/api/v1/sessions/{session_id}/rewind-checkpoints"))
+                        .await?,
+                ))
+            }
+            Command::ExportSession(ExportSessionParams { session_id }) => Ok(
+                CommandResult::SessionExport {
+                    jsonl: self
+                        .get_text(&format!("/api/v1/sessions/{session_id}/export"))
+                        .await?,
+                },
+            ),
+            Command::ImportSession(ImportSessionParams { jsonl }) => Ok(CommandResult::Execution(
+                self.post_json("/api/v1/sessions/import", serde_json::json!({ "jsonl": jsonl }))
+                    .await?,
+            )),
+            Command::ReplyPermission(params) => Ok(CommandResult::Execution(
+                self.reply_permission(params).await?,
+            )),
+            Command::ReplyUserInput(params) => Ok(CommandResult::Execution(
+                self.reply_user_input(params).await?,
+            )),
+            Command::UpsertPermissionRule(UpsertPermissionRuleParams { action_key, mode }) => Ok(
+                CommandResult::PermissionRule(
+                    self.post_json(
+                        "/api/v1/permission-rules",
+                        serde_json::json!({
+                            "action_key": action_key,
+                            "mode": mode,
+                        }),
+                    )
+                    .await?,
+                ),
+            ),
+            Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
+                let _: PermissionRuleResource = self
+                    .delete_json(&format!("/api/v1/permission-rules/{rule_id}"))
+                    .await?;
+                Ok(CommandResult::PermissionRuleDeleted { id: rule_id })
+            }
+        }
     }
 
-    /// Generic query escape hatch. Only `Query::Health` and
-    /// `Query::ListEvents` are routed for now; use typed helpers for the
-    /// rest.
+    /// Generic query escape hatch over the existing REST surface.
     pub async fn query(&self, q: Query) -> Result<QueryResult, ClientError> {
         match q {
             Query::Health => Ok(QueryResult::Health(self.health().await?)),
-            Query::ListEvents(p) => Ok(QueryResult::Events(self.list_events(p).await?)),
-            _ => Err(ClientError::Protocol(
-                "generic query dispatch over REST is not implemented; use typed helpers or WS"
-                    .into(),
+            Query::Runtime => Ok(QueryResult::Runtime(self.get_json("/api/v1/runtime").await?)),
+            Query::ListProviders => {
+                Ok(QueryResult::Providers(self.get_json("/api/v1/providers").await?))
+            }
+            Query::ListProviderModels(ListProviderModelsParams { provider_id }) => Ok(
+                QueryResult::ProviderModels(
+                    self.get_json(&format!("/api/v1/providers/{provider_id}/models"))
+                        .await?,
+                ),
+            ),
+            Query::ListWorkspaces(ListWorkspacesParams {
+                cursor,
+                limit,
+                search,
+                include_session_count,
+            }) => {
+                let mut url = self.endpoint("/api/v1/workspaces");
+                {
+                    let mut q = url.query_pairs_mut();
+                    if let Some(cursor) = cursor {
+                        q.append_pair("cursor", &cursor);
+                    }
+                    if let Some(limit) = limit {
+                        q.append_pair("limit", &limit.to_string());
+                    }
+                    if let Some(search) = search.filter(|search| !search.is_empty()) {
+                        q.append_pair("search", &search);
+                    }
+                    if include_session_count {
+                        q.append_pair("include_session_count", "true");
+                    }
+                }
+                Ok(QueryResult::Workspaces(
+                    self.parse_json(self.http.get(url).send().await?).await?,
+                ))
+            }
+            Query::GetWorkspace(GetWorkspaceParams { workspace_id }) => Ok(QueryResult::Workspace(
+                self.get_json(&format!("/api/v1/workspaces/{workspace_id}")).await?,
             )),
+            Query::ListSessions(ListSessionsParams {
+                cursor,
+                limit,
+                workspace_id,
+                parent_id,
+                roots,
+                search,
+            }) => {
+                let mut url = self.endpoint("/api/v1/sessions");
+                {
+                    let mut q = url.query_pairs_mut();
+                    if let Some(cursor) = cursor {
+                        q.append_pair("cursor", &cursor);
+                    }
+                    if let Some(limit) = limit {
+                        q.append_pair("limit", &limit.to_string());
+                    }
+                    if let Some(workspace_id) = workspace_id {
+                        q.append_pair("workspace_id", &workspace_id.to_string());
+                    }
+                    if let Some(parent_id) = parent_id {
+                        q.append_pair("parent_id", &parent_id.to_string());
+                    }
+                    if roots {
+                        q.append_pair("roots", "true");
+                    }
+                    if let Some(search) = search.filter(|search| !search.is_empty()) {
+                        q.append_pair("search", &search);
+                    }
+                }
+                Ok(QueryResult::Sessions(
+                    self.parse_json(self.http.get(url).send().await?).await?,
+                ))
+            }
+            Query::GetSession(GetSessionParams { session_id }) => Ok(QueryResult::Session(
+                self.get_json(&format!("/api/v1/sessions/{session_id}")).await?,
+            )),
+            Query::GetSessionState(GetSessionParams { session_id }) => Ok(
+                QueryResult::SessionState(
+                    self.get_json(&format!("/api/v1/sessions/{session_id}/state"))
+                        .await?,
+                ),
+            ),
+            Query::ListMessages(ListMessagesParams {
+                session_id,
+                cursor,
+                limit,
+                parts,
+            }) => {
+                let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/messages"));
+                {
+                    let mut q = url.query_pairs_mut();
+                    if let Some(cursor) = cursor {
+                        q.append_pair("cursor", &cursor);
+                    }
+                    if let Some(limit) = limit {
+                        q.append_pair("limit", &limit.to_string());
+                    }
+                    q.append_pair(
+                        "parts",
+                        match parts {
+                            PartLoadMode::None => "none",
+                            PartLoadMode::Summary => "summary",
+                            PartLoadMode::Full => "full",
+                        },
+                    );
+                }
+                Ok(QueryResult::Messages(
+                    self.parse_json(self.http.get(url).send().await?).await?,
+                ))
+            }
+            Query::GetMessage(GetMessageParams { message_id, parts }) => {
+                let mut url = self.endpoint(&format!("/api/v1/messages/{message_id}"));
+                url.query_pairs_mut().append_pair(
+                    "parts",
+                    match parts {
+                        PartLoadMode::None => "none",
+                        PartLoadMode::Summary => "summary",
+                        PartLoadMode::Full => "full",
+                    },
+                );
+                Ok(QueryResult::Message(
+                    self.parse_json(self.http.get(url).send().await?).await?,
+                ))
+            }
+            Query::ListEvents(p) => Ok(QueryResult::Events(self.list_events(p).await?)),
+            Query::ListPermissionRules(ListPermissionRulesParams {
+                cursor,
+                limit,
+                search,
+            }) => {
+                let mut url = self.endpoint("/api/v1/permission-rules");
+                {
+                    let mut q = url.query_pairs_mut();
+                    if let Some(cursor) = cursor {
+                        q.append_pair("cursor", &cursor);
+                    }
+                    if let Some(limit) = limit {
+                        q.append_pair("limit", &limit.to_string());
+                    }
+                    if let Some(search) = search.filter(|search| !search.is_empty()) {
+                        q.append_pair("search", &search);
+                    }
+                }
+                Ok(QueryResult::PermissionRules(
+                    self.parse_json(self.http.get(url).send().await?).await?,
+                ))
+            }
+            Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => Ok(
+                QueryResult::PermissionRule(
+                    self.get_json(&format!("/api/v1/permission-rules/{rule_id}"))
+                        .await?,
+                ),
+            ),
         }
     }
 }

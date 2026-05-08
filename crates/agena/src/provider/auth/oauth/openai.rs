@@ -1,6 +1,8 @@
+use std::sync::OnceLock;
+
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenResponse, TokenUrl, basic::BasicClient,
+    AuthUrl, AuthorizationCode, ClientId, CsrfToken, EndpointSet, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl, basic::BasicClient,
 };
 use serde::Deserialize;
 
@@ -10,6 +12,8 @@ use super::super::{DeviceCodeStart, OAuthAuthorizeStart, OAuthTokenResponse};
 use super::shared::{
     OPENAI_CLIENT_ID, OPENAI_ISSUER, extract_openai_account_id, parse_device_auth_interval,
 };
+
+type OpenAiOAuthClient = BasicClient<EndpointSet, oauth2::EndpointNotSet, oauth2::EndpointNotSet, oauth2::EndpointNotSet, EndpointSet>;
 
 pub fn start_openai_browser_oauth(redirect_uri: &str) -> Result<OAuthAuthorizeStart, AppError> {
     let client = openai_oauth_client(Some(redirect_uri))?;
@@ -45,7 +49,7 @@ pub async fn exchange_openai_oauth_code(
     let token = client
         .exchange_code(AuthorizationCode::new(code.to_owned()))
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.to_owned()))
-        .request_async(oauth2::reqwest::async_http_client)
+        .request_async(oauth_http_client())
         .await
         .map_err(|error| {
             AppError::Provider(format!("openai oauth token exchange failed: {error}"))
@@ -72,7 +76,7 @@ pub async fn refresh_openai_token(refresh_token: &str) -> Result<OAuthTokenRespo
 
     let token = client
         .exchange_refresh_token(&oauth2::RefreshToken::new(refresh_token.to_owned()))
-        .request_async(oauth2::reqwest::async_http_client)
+        .request_async(oauth_http_client())
         .await
         .map_err(|error| {
             AppError::Provider(format!("openai oauth token refresh failed: {error}"))
@@ -244,17 +248,16 @@ pub async fn poll_openai_headless_device_code(
     }))
 }
 
-fn openai_oauth_client(redirect_uri: Option<&str>) -> Result<BasicClient, AppError> {
-    let client = BasicClient::new(
-        ClientId::new(OPENAI_CLIENT_ID.to_owned()),
-        None,
-        AuthUrl::new(format!("{OPENAI_ISSUER}/oauth/authorize"))
-            .map_err(|error| AppError::Config(format!("invalid openai auth url: {error}")))?,
-        Some(
+fn openai_oauth_client(redirect_uri: Option<&str>) -> Result<OpenAiOAuthClient, AppError> {
+    let client = BasicClient::new(ClientId::new(OPENAI_CLIENT_ID.to_owned()))
+        .set_auth_uri(
+            AuthUrl::new(format!("{OPENAI_ISSUER}/oauth/authorize"))
+                .map_err(|error| AppError::Config(format!("invalid openai auth url: {error}")))?,
+        )
+        .set_token_uri(
             TokenUrl::new(format!("{OPENAI_ISSUER}/oauth/token"))
                 .map_err(|error| AppError::Config(format!("invalid openai token url: {error}")))?,
-        ),
-    );
+        );
 
     if let Some(redirect_uri) = redirect_uri {
         Ok(client.set_redirect_uri(
@@ -264,4 +267,14 @@ fn openai_oauth_client(redirect_uri: Option<&str>) -> Result<BasicClient, AppErr
     } else {
         Ok(client)
     }
+}
+
+fn oauth_http_client() -> &'static oauth2::reqwest::Client {
+    static CLIENT: OnceLock<oauth2::reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        oauth2::reqwest::ClientBuilder::new()
+            .redirect(oauth2::reqwest::redirect::Policy::none())
+            .build()
+            .expect("oauth reqwest client should build")
+    })
 }

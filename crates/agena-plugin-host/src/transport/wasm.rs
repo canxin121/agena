@@ -23,7 +23,7 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use wasmtime::{Engine, Instance, Linker, Module, Store, TypedFunc};
-use wasmtime_wasi::preview1::{self, WasiP1Ctx};
+use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 use crate::config::WasmSandboxConfig;
@@ -72,7 +72,7 @@ impl WasmTransport {
         let wasi = build_wasi_ctx(sandbox)?;
         let mut store = Store::new(&engine, wasi);
         let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
-        preview1::add_to_linker_sync(&mut linker, |state: &mut WasiP1Ctx| state)
+        p1::add_to_linker_sync(&mut linker, |state: &mut WasiP1Ctx| state)
             .map_err(|e| TransportError::Io(format!("link wasi preview1: {e}")))?;
         let instance = linker
             .instantiate(&mut store, &module)

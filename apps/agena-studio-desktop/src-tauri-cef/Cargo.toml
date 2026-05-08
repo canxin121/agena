@@ -29,7 +29,7 @@ flate2 = { workspace = true }
 tar = { workspace = true }
 zip = { workspace = true, default-features = false, features = ["deflate"] }
 
-tauri = { workspace = true, features = ["tray-icon", "cef"] }
+tauri = { workspace = true, features = ["tray-icon"] }
 tauri-plugin-shell = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-autostart = { workspace = true }

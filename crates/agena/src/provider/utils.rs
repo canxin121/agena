@@ -58,7 +58,7 @@ pub(crate) fn request_shape_fingerprint<T: Serialize>(value: &T) -> String {
     let bytes = serde_json::to_vec(value).unwrap_or_default();
     let mut hasher = Sha256::new();
     hasher.update(bytes.as_slice());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 // ─── URL / auth helpers ───────────────────────────────────────────────────────

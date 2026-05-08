@@ -1,11 +1,16 @@
+use std::sync::OnceLock;
+
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenResponse, TokenUrl, basic::BasicClient,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointSet,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
+    basic::BasicClient,
 };
 
 use crate::error::AppError;
 
 use super::super::{OAuthAuthorizeStart, OAuthTokenResponse};
+
+type GitLabOAuthClient = BasicClient<EndpointSet, oauth2::EndpointNotSet, oauth2::EndpointNotSet, oauth2::EndpointNotSet, EndpointSet>;
 
 pub fn start_gitlab_oauth(
     instance_url: &str,
@@ -38,7 +43,7 @@ pub async fn exchange_gitlab_oauth_code(
     let token = client
         .exchange_code(AuthorizationCode::new(code.to_owned()))
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.to_owned()))
-        .request_async(oauth2::reqwest::async_http_client)
+        .request_async(oauth_http_client())
         .await
         .map_err(|error| {
             AppError::Provider(format!("gitlab oauth token exchange failed: {error}"))
@@ -74,7 +79,7 @@ pub async fn refresh_gitlab_token(
     let client = gitlab_oauth_client(instance_url, "http://localhost", true)?;
     let token = client
         .exchange_refresh_token(&oauth2::RefreshToken::new(refresh_token.to_owned()))
-        .request_async(oauth2::reqwest::async_http_client)
+        .request_async(oauth_http_client())
         .await
         .map_err(|error| {
             AppError::Provider(format!("gitlab oauth token refresh failed: {error}"))
@@ -100,7 +105,7 @@ fn gitlab_oauth_client(
     instance_url: &str,
     redirect_uri: &str,
     include_secret: bool,
-) -> Result<BasicClient, AppError> {
+) -> Result<GitLabOAuthClient, AppError> {
     let instance = instance_url.trim_end_matches('/');
     let client_id = std::env::var("GITLAB_CLIENT_ID")
         .map_err(|_| AppError::Config("GITLAB_CLIENT_ID is not set".to_owned()))?;
@@ -108,18 +113,33 @@ fn gitlab_oauth_client(
         .then(|| std::env::var("GITLAB_CLIENT_SECRET").ok())
         .flatten();
 
-    Ok(BasicClient::new(
-        ClientId::new(client_id),
-        client_secret.map(oauth2::ClientSecret::new),
-        AuthUrl::new(format!("{instance}/oauth/authorize"))
-            .map_err(|error| AppError::Config(format!("invalid gitlab auth url: {error}")))?,
-        Some(
+    let client = BasicClient::new(ClientId::new(client_id))
+        .set_auth_uri(
+            AuthUrl::new(format!("{instance}/oauth/authorize"))
+                .map_err(|error| AppError::Config(format!("invalid gitlab auth url: {error}")))?,
+        )
+        .set_token_uri(
             TokenUrl::new(format!("{instance}/oauth/token"))
                 .map_err(|error| AppError::Config(format!("invalid gitlab token url: {error}")))?,
-        ),
-    )
-    .set_redirect_uri(
-        RedirectUrl::new(redirect_uri.to_owned())
-            .map_err(|error| AppError::Config(format!("invalid redirect uri: {error}")))?,
-    ))
+        )
+        .set_redirect_uri(
+            RedirectUrl::new(redirect_uri.to_owned())
+                .map_err(|error| AppError::Config(format!("invalid redirect uri: {error}")))?,
+        );
+
+    if let Some(client_secret) = client_secret {
+        Ok(client.set_client_secret(ClientSecret::new(client_secret)))
+    } else {
+        Ok(client)
+    }
+}
+
+fn oauth_http_client() -> &'static oauth2::reqwest::Client {
+    static CLIENT: OnceLock<oauth2::reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        oauth2::reqwest::ClientBuilder::new()
+            .redirect(oauth2::reqwest::redirect::Policy::none())
+            .build()
+            .expect("oauth reqwest client should build")
+    })
 }

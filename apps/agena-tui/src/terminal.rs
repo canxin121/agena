@@ -38,7 +38,9 @@ impl TerminalGuard {
         let stdout = io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
-        terminal.clear()?;
+        terminal
+            .clear()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
         Ok(Self {
             terminal,
@@ -56,7 +58,9 @@ impl TerminalGuard {
         }
 
         self.restored = true;
-        self.terminal.flush()?;
+        self.terminal
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         restore_stdio_terminal()
     }
 }
@@ -84,7 +88,9 @@ pub fn suspend_stdio_terminal() -> Result<()> {
 
 pub fn resume_terminal<B: RatatuiBackend>(terminal: &mut Terminal<B>) -> Result<()> {
     set_stdio_terminal()?;
-    terminal.clear()?;
+    terminal
+        .clear()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     Ok(())
 }
 

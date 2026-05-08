@@ -719,7 +719,7 @@ async function createSessionAction(parentId?: number | null) {
 async function forkCurrentSession() {
   const sessionId = selectedSessionId.value
   const workspaceId = selectedWorkspaceId.value
-  const latestEventSeq = sessionState.value?.latest_event_seq
+  const latestMessageId = messages.value.at(-1)?.id
   if (!sessionId || !workspaceId) return
 
   loading.value = true
@@ -728,7 +728,7 @@ async function forkCurrentSession() {
     const fallbackTitle = `Fork of #${sessionId}`
     const execution = await forkSession({
       sessionId,
-      ...(latestEventSeq != null ? { atEventSeq: latestEventSeq } : {}),
+      ...(latestMessageId != null ? { atMessageId: latestMessageId } : {}),
       title: newSessionTitle.value.trim() || fallbackTitle,
     })
     newSessionTitle.value = ''

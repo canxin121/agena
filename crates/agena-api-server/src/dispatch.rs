@@ -65,8 +65,20 @@ fn run_options_to_core(options: &RunOptions) -> SessionRunOptions {
     }
 }
 
-fn server_error_from_http(_error: crate::local_api::ApiError) -> ServerError {
-    ServerError::Internal("internal API call failed".into())
+fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
+    match error.status_code() {
+        axum::http::StatusCode::BAD_REQUEST => {
+            ServerError::BadRequest(error.message().to_owned())
+        }
+        axum::http::StatusCode::NOT_FOUND => {
+            ServerError::NotFound(error.message().to_owned())
+        }
+        axum::http::StatusCode::CONFLICT => ServerError::Conflict(error.message().to_owned()),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE => {
+            ServerError::ServiceUnavailable(error.message().to_owned())
+        }
+        _ => ServerError::Internal(error.message().to_owned()),
+    }
 }
 
 fn workspace_from_http(value: HttpWorkspaceResource) -> WorkspaceResource {
@@ -944,9 +956,9 @@ mod tests {
     }
 
     #[test]
-    fn server_error_from_http_yields_internal() {
-        let err = crate::local_api::ApiError::internal("boom");
+    fn server_error_from_http_preserves_bad_request() {
+        let err = crate::local_api::ApiError::bad_request("boom");
         let server_err = server_error_from_http(err);
-        assert!(matches!(server_err, ServerError::Internal(_)));
+        assert!(matches!(server_err, ServerError::BadRequest(message) if message == "boom"));
     }
 }

@@ -130,6 +130,15 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/sessions/{session_id}/messages",
             get(rest::list_messages),
         )
+        .route("/api/v1/messages/{message_id}", get(rest::get_message))
+        .route(
+            "/api/v1/messages/{message_id}/parts",
+            get(rest::list_message_parts),
+        )
+        .route(
+            "/api/v1/message-parts/{part_id}",
+            get(rest::get_message_part),
+        )
         .route(
             "/api/v1/sessions/{session_id}/turns",
             post(rest::submit_turn),

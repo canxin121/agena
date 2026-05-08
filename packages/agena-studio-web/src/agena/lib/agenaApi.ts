@@ -822,14 +822,14 @@ export function streamSessionEvents(
 
 export async function forkSession(input: {
   sessionId: number
-  atEventSeq?: number
+  atMessageId?: number
   title?: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/fork`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      ...(input.atEventSeq !== undefined ? { at_event_seq: input.atEventSeq } : {}),
+      ...(input.atMessageId !== undefined ? { at_message_id: input.atMessageId } : {}),
       ...(input.title?.trim() ? { title: input.title.trim() } : {}),
     }),
   })

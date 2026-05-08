@@ -10,12 +10,13 @@ use std::{
 
 use crate::local_api::{
     AuthApiKeyWriteRequest, AuthCredentialType, AuthProviderResource, HealthResponse,
-    MessageListQuery, PermissionRuleListQuery, PermissionRuleWriteRequest, PluginInspectResponse,
-    PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse, RuntimeReloadResponse,
-    SessionContinueRequestBody, SessionCreateRequest, SessionEventStreamQuery, SessionListQuery,
-    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
-    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
-    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
+    MessageListQuery, PartLoadMode, PermissionRuleListQuery, PermissionRuleWriteRequest,
+    PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
+    RuntimeReloadResponse, SessionContinueRequestBody, SessionCreateRequest,
+    SessionEventStreamQuery, SessionListQuery, SessionPermissionReplyRequestBody,
+    SessionReplaceRequest, SessionRewindRequestBody, SessionRunOptionsRequest, SessionTurnRequest,
+    SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery, WorkspaceListQuery,
+    WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::event::{EventStore, StoreRange};
 use agena_api::queries::{ListEventsParams, Query, QueryResult};
@@ -50,7 +51,21 @@ pub struct SessionForkRequestBody {
     #[serde(default)]
     pub at_message_id: Option<i64>,
     #[serde(default)]
+    pub at_event_seq: Option<i64>,
+    #[serde(default)]
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct MessageDetailQuery {
+    #[serde(default)]
+    pub parts: PartLoadMode,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct MessagePartsQuery {
+    #[serde(default, alias = "parts")]
+    pub mode: PartLoadMode,
 }
 
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
@@ -868,6 +883,11 @@ pub async fn fork_session(
     headers: HeaderMap,
     Json(request): Json<SessionForkRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
+    if request.at_event_seq.is_some() && request.at_message_id.is_none() {
+        return Err(ServerError::BadRequest(
+            "fork expects at_message_id; at_event_seq is no longer supported".into(),
+        ));
+    }
     let manager = state.session_manager()?;
     let session = manager
         .fork_session(agena::session::SessionForkRequest {
@@ -1095,6 +1115,50 @@ pub async fn list_messages(
     ))
 }
 
+pub async fn get_message(
+    State(state): State<AppState>,
+    Path(message_id): Path<i64>,
+    AxumQuery(query): AxumQuery<MessageDetailQuery>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let message = state
+        .service()
+        .get_message(manager.as_ref(), message_id, query.parts)
+        .await
+        .map_err(server_error_from_http)?
+        .ok_or_else(|| ServerError::NotFound(format!("message not found: {message_id}")))?;
+    Ok(Json(message))
+}
+
+pub async fn list_message_parts(
+    State(state): State<AppState>,
+    Path(message_id): Path<i64>,
+    AxumQuery(query): AxumQuery<MessagePartsQuery>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    Ok(Json(
+        state
+            .service()
+            .list_message_parts(manager.as_ref(), message_id, query.mode)
+            .await
+            .map_err(server_error_from_http)?,
+    ))
+}
+
+pub async fn get_message_part(
+    State(state): State<AppState>,
+    Path(part_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let part = state
+        .service()
+        .get_message_part(manager.as_ref(), part_id)
+        .await
+        .map_err(server_error_from_http)?
+        .ok_or_else(|| ServerError::NotFound(format!("message part not found: {part_id}")))?;
+    Ok(Json(part))
+}
+
 pub async fn list_permission_rules(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<PermissionRuleListQuery>,
@@ -1206,15 +1270,18 @@ pub async fn plugin_rpc(
 }
 
 fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
-    let status = error.into_response().status();
-    match status {
-        axum::http::StatusCode::BAD_REQUEST => ServerError::BadRequest("bad request".into()),
-        axum::http::StatusCode::NOT_FOUND => ServerError::NotFound("resource not found".into()),
-        axum::http::StatusCode::CONFLICT => ServerError::Conflict("conflict".into()),
-        axum::http::StatusCode::SERVICE_UNAVAILABLE => {
-            ServerError::ServiceUnavailable("service unavailable".into())
+    match error.status_code() {
+        axum::http::StatusCode::BAD_REQUEST => {
+            ServerError::BadRequest(error.message().to_owned())
         }
-        _ => ServerError::Internal("internal error".into()),
+        axum::http::StatusCode::NOT_FOUND => {
+            ServerError::NotFound(error.message().to_owned())
+        }
+        axum::http::StatusCode::CONFLICT => ServerError::Conflict(error.message().to_owned()),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE => {
+            ServerError::ServiceUnavailable(error.message().to_owned())
+        }
+        _ => ServerError::Internal(error.message().to_owned()),
     }
 }
 

@@ -73,6 +73,14 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub(crate) fn status_code(&self) -> StatusCode {
+        self.status
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        self.message.as_str()
+    }
 }
 
 impl From<AppError> for ApiError {
@@ -118,12 +126,6 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 impl ApiError {
-    /// Test-only accessor for `status` so we can assert the From<AppError>
-    /// mapping without parsing `IntoResponse`.
-    pub(crate) fn status_code(&self) -> StatusCode {
-        self.status
-    }
-
     /// Test-only accessor for `code`.
     pub(crate) fn error_code(&self) -> &'static str {
         self.code

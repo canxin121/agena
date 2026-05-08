@@ -7,11 +7,19 @@ use std::sync::Arc;
 use agena::{
     agent::Agent,
     event::{EventKind, PublishContext},
+    message::PartContent,
     permission::PermissionPolicy,
-    provider::ProviderRegistry,
-    session::{ContextGovernor, ContextPolicy, SessionManager, SessionProcessor},
+    provider::{
+        CompletionFinishReason, CompletionRequest, CompletionResponse, ModelProvider, ProviderModel,
+        ProviderRegistry,
+    },
+    session::{
+        ContextGovernor, ContextPolicy, SessionManager, SessionProcessor, SessionRunOptions,
+        SessionUserTurnRequest,
+    },
     tool::ToolExecutor,
 };
+use agena::model::{ModelId, ModelRef, ProviderId};
 use agena_api::{
     PROTOCOL_VERSION, Scope,
     notifications::Notification,
@@ -26,17 +34,66 @@ use http_body_util::BodyExt;
 use sea_orm::Database;
 use tower::ServiceExt;
 
-async fn build_state() -> (AppState, Arc<SessionManager>) {
+struct TestProvider;
+
+#[async_trait::async_trait]
+impl ModelProvider for TestProvider {
+    fn id(&self) -> &str {
+        "test"
+    }
+
+    fn default_model(&self) -> &ModelId {
+        static DEFAULT_MODEL: std::sync::LazyLock<ModelId> =
+            std::sync::LazyLock::new(|| ModelId::new("test-model"));
+        &DEFAULT_MODEL
+    }
+
+    async fn list_models(&self) -> Result<Vec<ProviderModel>, agena::AppError> {
+        Ok(vec![ProviderModel::new("test", self.default_model().as_str())])
+    }
+
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, agena::AppError> {
+        Ok(CompletionResponse {
+            provider_id: ProviderId::new("test"),
+            model: request.model,
+            text: "ack".to_owned(),
+            reasoning_text: None,
+            finish_reason: Some(CompletionFinishReason::Stop),
+            tool_calls: Vec::new(),
+            usage: None,
+            provider_metadata: None,
+        })
+    }
+}
+
+fn test_run_options() -> SessionRunOptions {
+    SessionRunOptions {
+        model: ModelRef::new("test", "test-model"),
+        system: None,
+        temperature: None,
+        max_output_tokens: Some(128),
+    }
+}
+
+async fn build_state() -> (AppState, Arc<SessionManager>, String) {
     let db = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
     agena::db::init_schema(db.as_ref()).await.unwrap();
+    let workspace_root = format!("/tmp/api-server-workspace-{}", uuid::Uuid::new_v4());
+    agena::db::crud::workspace::ensure_workspace_id(db.as_ref(), workspace_root.as_str())
+        .await
+        .expect("workspace should exist for manager scans");
 
-    let registry = ProviderRegistry::new();
+    let mut registry = ProviderRegistry::new();
+    registry.register(TestProvider);
     let processor = SessionProcessor::new(
         Arc::new(registry),
         ContextGovernor::new(ContextPolicy::default()),
     );
     let executor = ToolExecutor::new(
-        std::env::temp_dir(),
+        std::path::PathBuf::from(&workspace_root),
         Agent::new("api-server-test", PermissionPolicy::allow_all()),
     );
 
@@ -47,19 +104,19 @@ async fn build_state() -> (AppState, Arc<SessionManager>) {
     ));
 
     let runtime = agena::runtime::AgenaRuntime::builder()
-        .with_workspace_root(std::env::temp_dir())
+        .with_workspace_root(std::path::PathBuf::from(&workspace_root))
         .with_database_connection(db.as_ref().clone())
         .build()
         .await
         .expect("runtime build");
 
     let state = AppState::new(runtime, Arc::clone(&db)).with_manager_override(Arc::clone(&manager));
-    (state, manager)
+    (state, manager, workspace_root)
 }
 
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
-    let (state, _) = build_state().await;
+    let (state, _, _) = build_state().await;
     let app = router(state);
     let response = app
         .oneshot(
@@ -75,7 +132,7 @@ async fn health_endpoint_returns_ok() {
 
 #[tokio::test]
 async fn list_events_returns_published_events() {
-    let (state, manager) = build_state().await;
+    let (state, manager, _workspace_root) = build_state().await;
 
     // Publish a persistent (history) event — UI-only events like RunStarted
     // are no longer written to the event store. PluginEvent is an easy
@@ -120,16 +177,17 @@ async fn list_events_returns_published_events() {
 
 #[tokio::test]
 async fn session_state_endpoint_returns_execution_resource() {
-    let (state, _manager) = build_state().await;
+    let (state, _manager, workspace_root) = build_state().await;
     let app = router(state.clone());
 
     let workspace = state
         .service()
-        .create_workspace(agena_api_server::local_api::WorkspaceWriteRequest {
-            path: format!("/tmp/api-server-state-{}", uuid::Uuid::new_v4()),
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
         })
         .await
-        .expect("workspace should be created");
+        .expect("workspace should resolve");
     let session = state
         .service()
         .create_session(agena_api_server::local_api::SessionCreateRequest {
@@ -170,16 +228,17 @@ async fn session_state_endpoint_returns_execution_resource() {
 
 #[tokio::test]
 async fn fork_session_endpoint_returns_forked_execution_resource() {
-    let (state, _manager) = build_state().await;
+    let (state, _manager, workspace_root) = build_state().await;
     let app = router(state.clone());
 
     let workspace = state
         .service()
-        .create_workspace(agena_api_server::local_api::WorkspaceWriteRequest {
-            path: format!("/tmp/api-server-fork-{}", uuid::Uuid::new_v4()),
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
         })
         .await
-        .expect("workspace should be created");
+        .expect("workspace should resolve");
     let session = state
         .service()
         .create_session(agena_api_server::local_api::SessionCreateRequest {
@@ -234,8 +293,167 @@ async fn fork_session_endpoint_returns_forked_execution_resource() {
 }
 
 #[tokio::test]
+async fn message_detail_routes_return_message_and_parts() {
+    let (state, manager, workspace_root) = build_state().await;
+    let app = router(state.clone());
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "message source".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let session = manager
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: session.id,
+            options: test_run_options(),
+            parts: vec![PartContent::text("hello")],
+        })
+        .await
+        .expect("submit turn should succeed");
+    let message = session
+        .messages
+        .first()
+        .expect("session should contain a user message");
+    let part = message.parts.first().expect("message should contain a part");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/messages/{}?parts=full", message.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value.get("id").and_then(|id| id.as_i64()), Some(message.id));
+    assert_eq!(
+        value
+            .get("parts")
+            .and_then(|parts| parts.as_array())
+            .and_then(|parts| parts.first())
+            .and_then(|item| item.get("content"))
+            .and_then(|content| content.get("text"))
+            .and_then(|text| text.as_str()),
+        Some("hello")
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/messages/{}/parts?mode=summary", message.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value.as_array().map(|items| items.len()), Some(1));
+    assert!(
+        value
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("content"))
+            .is_none(),
+        "summary mode should omit content: {value:?}"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/message-parts/{}", part.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value.get("id").and_then(|id| id.as_i64()), Some(part.id));
+    assert_eq!(
+        value
+            .get("content")
+            .and_then(|content| content.get("text"))
+            .and_then(|text| text.as_str()),
+        Some("hello")
+    );
+}
+
+#[tokio::test]
+async fn fork_session_endpoint_rejects_legacy_event_seq_payload() {
+    let (state, _manager, workspace_root) = build_state().await;
+    let app = router(state.clone());
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "fork source".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/sessions/{}/fork", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"at_event_seq":1}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        value
+            .get("message")
+            .and_then(|message| message.as_str())
+            .or_else(|| {
+                value
+                    .get("error")
+                    .and_then(|error| error.get("message"))
+                    .and_then(|message| message.as_str())
+            })
+            .is_some_and(|message| message.contains("at_message_id")),
+        "body should mention at_message_id: {value:?}"
+    );
+}
+
+#[tokio::test]
 async fn ws_protocol_round_trip_command_and_subscription() {
-    let (state, manager) = build_state().await;
+    let (state, manager, _workspace_root) = build_state().await;
 
     // Drive the bus directly so we don't depend on a real provider in this
     // integration test.

@@ -1,16 +1,16 @@
 [package]
 name = "agena-api"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
-
+rust-version.workspace = true
 [dependencies]
-agena = { path = "../agena" }
-agena-scheduler = { path = "../agena-scheduler" }
+agena = { workspace = true }
+agena-scheduler = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-smol_str = { version = "0.3.2", features = ["serde"] }
+smol_str = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

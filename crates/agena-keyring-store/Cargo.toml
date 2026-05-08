@@ -1,15 +1,15 @@
 [package]
 name = "agena-keyring-store"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
-
+rust-version.workspace = true
 [dependencies]
-keyring = "3.6.3"
+keyring = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-parking_lot = "0.12.5"
+parking_lot = { workspace = true }
 
 [lints]
 workspace = true

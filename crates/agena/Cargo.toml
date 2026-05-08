@@ -1,75 +1,75 @@
 [package]
 name = "agena"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
-
+rust-version.workspace = true
 [dependencies]
-agena-mcp-client = { path = "../agena-mcp-client" }
-agena-mcp-server = { path = "../agena-mcp-server" }
-agena-lsp = { path = "../agena-lsp" }
-agena-otel = { path = "../agena-otel" }
-agena-keyring-store = { path = "../agena-keyring-store" }
-agena-scheduler = { path = "../agena-scheduler" }
-agena-skills = { path = "../agena-skills" }
-agena-plugin-host = { path = "../agena-plugin-host" }
-agena-plugin-marketplace = { path = "../agena-plugin-marketplace" }
-arc-swap = "1.7.1"
+agena-mcp-client = { workspace = true }
+agena-mcp-server = { workspace = true }
+agena-lsp = { workspace = true }
+agena-otel = { workspace = true }
+agena-keyring-store = { workspace = true }
+agena-scheduler = { workspace = true }
+agena-skills = { workspace = true }
+agena-plugin-host = { workspace = true }
+agena-plugin-marketplace = { workspace = true }
+arc-swap = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
-async-stream = "0.3.6"
-aws-config = { version = "1.8.15", default-features = true }
-aws-credential-types = "1.2.14"
-aws-smithy-eventstream = "0.60.20"
-aws-smithy-http = { version = "0.63.6", features = ["event-stream"] }
-aws-smithy-types = { version = "1.4.7", features = ["http-body-1-x"] }
-aws-sigv4 = { version = "1.4.2", default-features = false, features = ["sign-http", "http1"] }
-base64 = "0.22.1"
+async-stream = { workspace = true }
+aws-config = { workspace = true, default-features = true }
+aws-credential-types = { workspace = true }
+aws-smithy-eventstream = { workspace = true }
+aws-smithy-http = { workspace = true, features = ["event-stream"] }
+aws-smithy-types = { workspace = true, features = ["http-body-1-x"] }
+aws-sigv4 = { workspace = true }
+base64 = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
-clap_complete = "4.6.3"
-blake3 = "1.5"
-derive_more = { version = "2.1.1", features = ["display", "from", "into"] }
-gcp_auth = "0.12.6"
-globset = "0.4.16"
-http = "1.3.1"
-http-body = "1.0.1"
-http-body-util = "0.1.3"
-imagesize = "0.13.0"
-oauth2 = { version = "4.4.2", default-features = false, features = ["reqwest", "rustls-tls"] }
-mime_guess = "2.0.5"
-path-clean = "1.0.1"
+clap_complete = { workspace = true }
+blake3 = { workspace = true }
+derive_more = { workspace = true, features = ["display", "from", "into"] }
+gcp_auth = { workspace = true }
+globset = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+imagesize = { workspace = true }
+oauth2 = { workspace = true }
+mime_guess = { workspace = true }
+path-clean = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
-html2md = "0.2.15"
-lru = "0.16.2"
-parking_lot = "0.12.5"
-regex = "1.12.2"
-html_escape = { package = "html-escape", version = "0.2.13" }
-urlencoding = "2.1.3"
-sea-orm = { version = "1.1.19", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-json"] }
-sea-orm-migration = { version = "1.1.19", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
-schemars = { version = "0.8.21", features = ["derive"] }
+html2md = { workspace = true }
+lru = { workspace = true }
+parking_lot = { workspace = true }
+regex = { workspace = true }
+html_escape = { workspace = true }
+urlencoding = { workspace = true }
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+schemars = { workspace = true, features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = "0.9.34"
-futures-core = "0.3.31"
-futures-util = "0.3.31"
-sha2 = "0.10.9"
-smol_str = { version = "0.3.2", features = ["serde"] }
-strum = { version = "0.27.2", features = ["derive"] }
+serde_yaml = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+sha2 = { workspace = true }
+smol_str = { workspace = true }
+strum = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
-url = { version = "2.5.8", features = ["serde"] }
+url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
-walkdir = "2.5.0"
+walkdir = { workspace = true }
 
 [dev-dependencies]
-mockito = "1.7.0"
-tempfile = "3.23.0"
+mockito = { workspace = true }
+tempfile = { workspace = true }
 
 [features]
 default = []

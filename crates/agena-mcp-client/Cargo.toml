@@ -1,22 +1,22 @@
 [package]
 name = "agena-mcp-client"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
-
+rust-version.workspace = true
 [dependencies]
-arc-swap = "1.7.1"
+arc-swap = { workspace = true }
 async-trait = { workspace = true }
-dashmap = "6.1.0"
-eventsource-stream = "0.2.3"
-futures-util = "0.3.31"
+dashmap = { workspace = true }
+eventsource-stream = { workspace = true }
+futures-util = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "time"] }
 tracing = { workspace = true }
-url = "2.5.4"
+url = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

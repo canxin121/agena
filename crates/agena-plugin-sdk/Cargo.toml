@@ -1,21 +1,21 @@
 [package]
 name = "agena-plugin-sdk"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "Agena plugin SDK: write plugins as async traits, ship them as in-process / cdylib / stdio / http."
-
 [dependencies]
 async-trait = { workspace = true }
-bitflags = "2.6"
+bitflags = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }
 tracing = { workspace = true }
 
-abi_stable = { version = "0.11.3", optional = true }
-tokio-util = { version = "0.7", optional = true }
+abi_stable = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 hyper = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["json", "rustls"], optional = true }

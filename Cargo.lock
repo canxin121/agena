@@ -221,6 +221,7 @@ dependencies = [
  "async-trait",
  "axum",
  "futures-util",
+ "mockito",
  "reqwest 0.13.2",
  "sea-orm",
  "serde",

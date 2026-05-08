@@ -5,7 +5,8 @@ pub mod service;
 
 pub use dto::{
     AuthApiKeyWriteRequest, AuthCredentialType, AuthProviderResource, HealthResponse,
-    MessageListQuery, PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
+    MessageListQuery, PartLoadMode, PermissionRuleListQuery, PermissionRuleResource,
+    PermissionRuleWriteRequest,
     PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
     ProviderModelsResponse, ProviderSummaryResource, RuntimeAutomationResource, RuntimeLspResource,
     RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,

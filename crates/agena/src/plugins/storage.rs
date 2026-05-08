@@ -522,19 +522,19 @@ pub struct InMemorySecretStore {
 
 impl SecretStore for InMemorySecretStore {
     fn get_secret(&self, key: &str) -> Result<Option<String>, SecretStoreError> {
-        Ok(self.secrets.read().expect("poisoned").get(key).cloned())
+        let guard = self.secrets.read().unwrap_or_else(|e| e.into_inner());
+        Ok(guard.get(key).cloned())
     }
 
     fn set_secret(&self, key: &str, value: &str) -> Result<(), SecretStoreError> {
-        self.secrets
-            .write()
-            .expect("poisoned")
-            .insert(key.to_string(), value.to_string());
+        let mut guard = self.secrets.write().unwrap_or_else(|e| e.into_inner());
+        guard.insert(key.to_string(), value.to_string());
         Ok(())
     }
 
     fn delete_secret(&self, key: &str) -> Result<(), SecretStoreError> {
-        self.secrets.write().expect("poisoned").remove(key);
+        let mut guard = self.secrets.write().unwrap_or_else(|e| e.into_inner());
+        guard.remove(key);
         Ok(())
     }
 }

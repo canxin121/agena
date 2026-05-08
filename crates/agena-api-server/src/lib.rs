@@ -41,12 +41,27 @@ pub use state::AppState;
 
 use axum::{
     Router,
+    middleware::{self, Next},
     routing::{get, post},
 };
+
+/// Increment the per-process HTTP request counter and record the
+/// request duration in the latency histogram.
+async fn count_request(req: axum::extract::Request, next: Next) -> axum::response::Response {
+    rest::METRIC_HTTP_REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let start = std::time::Instant::now();
+    let response = next.run(req).await;
+    let elapsed_us = start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    rest::record_http_latency(elapsed_us);
+    response
+}
 
 /// Build the v1 axum router with every transport mounted.
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/healthz", get(rest::healthz))
+        .route("/readyz", get(rest::readyz))
+        .route("/metrics", get(rest::metrics))
         .route("/api/v1/health", get(rest::health))
         .route("/api/v1/runtime", get(rest::get_runtime_status))
         .route("/api/v1/runtime/reload", post(rest::reload_runtime))
@@ -144,6 +159,23 @@ pub fn router(state: AppState) -> Router {
             post(rest::rewind_session),
         )
         .route(
+            "/api/v1/sessions/{session_id}/unrewind",
+            post(rest::unrewind_session),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/export",
+            get(rest::export_session),
+        )
+        .route("/api/v1/sessions/import", post(rest::import_session))
+        .route(
+            "/api/v1/sessions/tree/{root_id}",
+            get(rest::list_session_tree),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/rewind-checkpoints",
+            get(rest::list_rewind_checkpoints),
+        )
+        .route(
             "/api/v1/permission-rules",
             get(rest::list_permission_rules).post(rest::create_permission_rule),
         )
@@ -157,6 +189,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/ws", get(ws::handler))
         .route("/api/v1/events/stream", get(sse::handler))
         .route("/plugin-rpc/{plugin_id}", post(rest::plugin_rpc))
+        .layer(middleware::from_fn(count_request))
         .with_state(state)
 }
 

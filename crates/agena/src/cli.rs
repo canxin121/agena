@@ -66,7 +66,31 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "agena", version, about = "Agena backend CLI")]
+#[command(
+    name = "agena",
+    version,
+    about = "Agena backend CLI",
+    long_about = "Agena is an LLM-agent runtime. The CLI runs sessions \
+                  interactively (`agena exec`), manages plugins / MCP \
+                  servers / providers, and exposes app-server / mcp-server \
+                  transports for IDE integrations.\n\n\
+                  Quick start:\n  \
+                  agena exec \"summarise the README\"\n  \
+                  agena sessions list\n  \
+                  agena plugin list\n\n\
+                  Configuration is loaded from $AGENA_CONFIG, the path passed \
+                  with --config, or `agena.toml` in the workspace. \
+                  Run `agena config show` to inspect the resolved settings.",
+    after_help = "EXAMPLES:\n  \
+                  Start a one-shot turn:\n    \
+                  agena exec \"explain crates/agena-api-server\"\n\n  \
+                  Resume the most recent session:\n    \
+                  agena resume\n\n  \
+                  Show effective config:\n    \
+                  agena config show --format toml\n\n  \
+                  Run as an MCP server over stdio:\n    \
+                  agena mcp-server --transport stdio"
+)]
 pub struct AgenaCli {
     #[arg(long, env = "AGENA_CONFIG", global = true)]
     pub config: Option<PathBuf>,
@@ -107,7 +131,6 @@ pub enum AgenaCommand {
     Plugin(PluginCommand),
     Resume(ResumeArgs),
     Review(ReviewArgs),
-    Serve(ServeCommand),
     Sessions(SessionsCommand),
     Worktree(WorktreeArgs),
 }
@@ -332,9 +355,6 @@ pub struct SessionsCommand {
     pub command: Option<SessionsSubcommand>,
 }
 
-#[derive(Debug, Clone, Args, Default)]
-pub struct ServeCommand {}
-
 #[derive(Debug, Clone, Args)]
 pub struct AppServerArgs {
     #[arg(long = "workspace", alias = "cwd")]
@@ -388,6 +408,61 @@ pub enum MemorySubcommand {
 #[derive(Debug, Clone, Subcommand)]
 pub enum SessionsSubcommand {
     List(SessionListArgs),
+    /// Reverse a prior `rewind` on the same session by re-admitting every
+    /// still-compacted message at or after `--message`.
+    Unrewind(SessionUnrewindArgs),
+    /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
+    Export(SessionExportArgs),
+    /// Replay a JSONL bundle (read from stdin) as a fresh session in the
+    /// current workspace.
+    Import(SessionImportArgs),
+    /// Print every session sharing the given tree root, in (depth, id) order.
+    Tree(SessionTreeArgs),
+    /// List rewind audit checkpoints for a session — what was dropped and when.
+    Checkpoints(SessionCheckpointsArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionCheckpointsArgs {
+    pub session_id: i64,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionUnrewindArgs {
+    pub session_id: i64,
+    #[arg(long = "message")]
+    pub message_id: i64,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionExportArgs {
+    pub session_id: i64,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionImportArgs {
+    /// Optional path. Reads from stdin if omitted.
+    #[arg(long)]
+    pub path: Option<std::path::PathBuf>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionTreeArgs {
+    pub root_id: i64,
+    /// Cap the rendered subtree at this depth relative to the root (root = 0).
+    #[arg(long)]
+    pub max_depth: Option<i64>,
+    /// Cap the number of sessions rendered. Useful for very wide trees.
+    #[arg(long)]
+    pub limit: Option<usize>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -543,8 +618,10 @@ pub struct ReviewArgs {
 #[derive(Debug, Clone, Args)]
 pub struct ForkArgs {
     pub session_id: i64,
+    /// Fork point: clones every event up to and including the last one tied
+    /// to this message id. Omit to clone the entire history.
     #[arg(long)]
-    pub at: i64,
+    pub at_message: Option<i64>,
     #[arg(long)]
     pub title: Option<String>,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
@@ -617,6 +694,22 @@ struct SessionOutput {
 struct SessionForkOutput {
     source_session_id: i64,
     forked: SessionDetail,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionUnrewindOutput {
+    session: SessionDetail,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionImportOutput {
+    session: SessionDetail,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionCheckpointsOutput {
+    session_id: i64,
+    checkpoints: Vec<crate::session::RewindCheckpoint>,
 }
 
 #[derive(Debug, Serialize)]
@@ -887,9 +980,6 @@ impl AgenaCli {
             Some(AgenaCommand::Plugin(command)) => self.run_plugin(command).await,
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
             Some(AgenaCommand::Review(args)) => self.run_review(args).await,
-            Some(AgenaCommand::Serve(_command)) => Err(AppError::Config(
-                "the HTTP server moved to the unified `apps/agena-studio-server` app; run `cargo run -p agena-studio-server -- --help` from the repository root".to_owned(),
-            )),
             Some(AgenaCommand::Sessions(command)) => self.run_sessions(command).await,
             Some(AgenaCommand::Worktree(args)) => self.run_worktree(args).await,
             None => self.run_default(loader, tracing_reload_handle).await,
@@ -1191,7 +1281,7 @@ impl AgenaCli {
                 if outdated.is_empty() {
                     println!("(all installed plugins are up to date)");
                 } else {
-                    println!("{:<32} {:<14} {}", "PLUGIN", "INSTALLED", "LATEST");
+                    println!("{:<32} {:<14} LATEST", "PLUGIN", "INSTALLED");
                     for record in outdated {
                         println!(
                             "{:<32} {:<14} {}",
@@ -1670,6 +1760,70 @@ impl AgenaCli {
                 let sessions = paginate_session_summaries(sessions, args.offset, args.limit);
                 render_serialized(args.format, &SessionListOutput { sessions })
             }
+            SessionsSubcommand::Unrewind(args) => {
+                let session = manager
+                    .unrewind_session(crate::session::SessionUnrewindRequest {
+                        expected_version: None,
+                        session_id: args.session_id,
+                        message_id: args.message_id,
+                    })
+                    .await?;
+                let latest_event_seq = latest_event_seq(&manager, session.id).await?;
+                render_serialized(
+                    args.format,
+                    &SessionUnrewindOutput {
+                        session: session_detail(&session, latest_event_seq),
+                    },
+                )
+            }
+            SessionsSubcommand::Export(args) => {
+                let bundle = manager.export_session_jsonl(args.session_id).await?;
+                Ok(bundle)
+            }
+            SessionsSubcommand::Import(args) => {
+                let bundle = match args.path {
+                    Some(path) => std::fs::read_to_string(&path).map_err(|err| {
+                        AppError::Internal(format!("read import bundle {}: {err}", path.display()))
+                    })?,
+                    None => {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        std::io::stdin()
+                            .read_to_string(&mut buf)
+                            .map_err(|err| AppError::Internal(format!("read stdin: {err}")))?;
+                        buf
+                    }
+                };
+                let session = manager.import_session_jsonl(&bundle).await?;
+                let latest_event_seq = latest_event_seq(&manager, session.id).await?;
+                render_serialized(
+                    args.format,
+                    &SessionImportOutput {
+                        session: session_detail(&session, latest_event_seq),
+                    },
+                )
+            }
+            SessionsSubcommand::Tree(args) => {
+                let mut sessions = manager.list_session_tree(args.root_id).await?;
+                if let Some(max_depth) = args.max_depth {
+                    let root_depth = sessions.first().map(|first| first.depth).unwrap_or(0);
+                    sessions.retain(|s| s.depth - root_depth <= max_depth);
+                }
+                if let Some(limit) = args.limit {
+                    sessions.truncate(limit);
+                }
+                render_serialized(args.format, &SessionListOutput { sessions })
+            }
+            SessionsSubcommand::Checkpoints(args) => {
+                let checkpoints = manager.list_rewind_checkpoints(args.session_id).await?;
+                render_serialized(
+                    args.format,
+                    &SessionCheckpointsOutput {
+                        session_id: args.session_id,
+                        checkpoints,
+                    },
+                )
+            }
         }
     }
 
@@ -2137,8 +2291,9 @@ impl AgenaCli {
         let forked = manager
             .fork_session(SessionForkRequest {
                 session_id: args.session_id,
-                at_event_seq: args.at,
+                at_message_id: args.at_message,
                 title: args.title,
+                expected_version: None,
             })
             .await?;
         let latest_event_seq = latest_event_seq(&manager, forked.id).await?;
@@ -2286,10 +2441,9 @@ impl AgenaCli {
         let snapshot = runtime.current_snapshot();
         let agent = Agent::new("mcp-server", PermissionPolicy::allow_all())
             .with_tool_policy(ToolPermissionPolicy::allow_all());
-        let skills = Arc::new(
-            agena_skills::SkillsManager::build(Some(runtime.workspace_root()))
-                .map_err(|err| AppError::Config(err.to_string()))?,
-        );
+        let skills = snapshot
+            .skills_manager()
+            .ok_or_else(|| AppError::Config("skills manager unavailable".to_string()))?;
         let executor = ToolExecutor::new(runtime.workspace_root().to_path_buf(), agent)
             .with_plugin_manager(snapshot.plugin_manager())
             .with_skills_manager(Arc::clone(&skills));
@@ -2413,6 +2567,7 @@ impl agena_app_server::AppServerBackend for AgenaAppServerBackend {
             .list_session_summaries(SessionListRequest {
                 offset: params.offset,
                 limit: params.limit,
+                include_subagents: false,
             })
             .await
             .map_err(app_backend_error)?;
@@ -2587,6 +2742,7 @@ impl McpServerBackend for AgenaMcpBackend {
                     .list_session_summaries(SessionListRequest {
                         offset: 0,
                         limit: Some(50),
+                        include_subagents: false,
                     })
                     .await
                     .map_err(|err| McpServerError::Backend(err.to_string()))?;
@@ -2844,6 +3000,7 @@ async fn list_all_session_summaries(
             .list_session_summaries(SessionListRequest {
                 offset,
                 limit: Some(page_size),
+                include_subagents: false,
             })
             .await?;
         let count = page.len() as u64;
@@ -3018,6 +3175,7 @@ async fn selected_session_id(
         .list_session_summaries(SessionListRequest {
             offset: 0,
             limit: Some(1),
+            include_subagents: false,
         })
         .await?;
     sessions
@@ -3631,7 +3789,7 @@ store_path = "{}"
             command: Some(MemorySubcommand::List(args)),
         })) = cli.command
         else {
-            panic!("expected memory list command");
+            unreachable!("expected memory list command after successful parse");
         };
         assert_eq!(args.workspace, Some(PathBuf::from(".")));
         assert_eq!(args.format, ConfigOutputFormat::Json);
@@ -3725,7 +3883,7 @@ store_path = "{}"
         ]);
 
         let Some(AgenaCommand::Exec(args)) = cli.command else {
-            panic!("expected exec command");
+            unreachable!("expected exec command after successful parse");
         };
         assert_eq!(args.workspace, Some(PathBuf::from(".")));
         assert_eq!(args.model.as_deref(), Some("openai/gpt-5"));
@@ -3756,7 +3914,7 @@ store_path = "{}"
     fn completion_command_outputs_fish_completion() {
         let cli = AgenaCli::parse_from(["agena", "completion", "fish"]);
         let Some(AgenaCommand::Completion(args)) = cli.command else {
-            panic!("expected completion command");
+            unreachable!("expected completion command after successful parse");
         };
         assert_eq!(args.shell, clap_complete::Shell::Fish);
 
@@ -3777,7 +3935,7 @@ store_path = "{}"
             "change.patch",
         ]);
         let Some(AgenaCommand::Apply(args)) = apply.command else {
-            panic!("expected apply command");
+            unreachable!("expected apply command after successful parse");
         };
         assert_eq!(args.workspace, Some(PathBuf::from(".")));
         assert_eq!(args.patch_file, PathBuf::from("change.patch"));
@@ -3785,13 +3943,13 @@ store_path = "{}"
 
         let review = AgenaCli::parse_from(["agena", "review", "--base", "develop"]);
         let Some(AgenaCommand::Review(args)) = review.command else {
-            panic!("expected review command");
+            unreachable!("expected review command after successful parse");
         };
         assert_eq!(args.base, "develop");
 
         let debug = AgenaCli::parse_from(["agena", "debug", "session", "42", "--json"]);
         let Some(AgenaCommand::Debug(command)) = debug.command else {
-            panic!("expected debug command");
+            unreachable!("expected debug command after successful parse");
         };
         let DebugSubcommand::Session(args) = command.command;
         assert_eq!(args.session_id, 42);
@@ -3800,14 +3958,14 @@ store_path = "{}"
         let app_server =
             AgenaCli::parse_from(["agena", "app-server", "--cwd", ".", "--transport", "stdio"]);
         let Some(AgenaCommand::AppServer(args)) = app_server.command else {
-            panic!("expected app-server command");
+            unreachable!("expected app-server command after successful parse");
         };
         assert_eq!(args.workspace, Some(PathBuf::from(".")));
         assert_eq!(args.transport, AppServerTransport::Stdio);
 
         let mcp_server = AgenaCli::parse_from(["agena", "mcp-server", "--cwd", "."]);
         let Some(AgenaCommand::McpServer(args)) = mcp_server.command else {
-            panic!("expected mcp-server command");
+            unreachable!("expected mcp-server command after successful parse");
         };
         assert_eq!(args.workspace, Some(PathBuf::from(".")));
     }
@@ -3816,7 +3974,7 @@ store_path = "{}"
     fn workflow_commands_parse() {
         let cost = AgenaCli::parse_from(["agena", "cost", "--last", "--format", "json"]);
         let Some(AgenaCommand::Cost(args)) = cost.command else {
-            panic!("expected cost command");
+            unreachable!("expected cost command after successful parse");
         };
         assert!(args.last);
         assert_eq!(args.format, ConfigOutputFormat::Json);
@@ -3830,26 +3988,26 @@ store_path = "{}"
             "json",
         ]);
         let Some(AgenaCommand::Permissions(args)) = permissions.command else {
-            panic!("expected permissions command");
+            unreachable!("expected permissions command after successful parse");
         };
         assert_eq!(args.search.as_deref(), Some("bash"));
         assert_eq!(args.format, ConfigOutputFormat::Json);
 
         let worktree = AgenaCli::parse_from(["agena", "worktree", "--format", "json"]);
         let Some(AgenaCommand::Worktree(args)) = worktree.command else {
-            panic!("expected worktree command");
+            unreachable!("expected worktree command after successful parse");
         };
         assert_eq!(args.format, ConfigOutputFormat::Json);
 
         let git = AgenaCli::parse_from(["agena", "git", "--format", "json"]);
         let Some(AgenaCommand::Git(args)) = git.command else {
-            panic!("expected git command");
+            unreachable!("expected git command after successful parse");
         };
         assert_eq!(args.format, ConfigOutputFormat::Json);
 
         let commit = AgenaCli::parse_from(["agena", "commit", "ship it", "--format", "json"]);
         let Some(AgenaCommand::Commit(args)) = commit.command else {
-            panic!("expected commit command");
+            unreachable!("expected commit command after successful parse");
         };
         assert_eq!(args.message, "ship it");
         assert_eq!(args.format, ConfigOutputFormat::Json);
@@ -3868,7 +4026,7 @@ store_path = "{}"
             "json",
         ]);
         let Some(AgenaCommand::Pr(args)) = pr.command else {
-            panic!("expected pr command");
+            unreachable!("expected pr command after successful parse");
         };
         assert_eq!(args.title, "ship feature");
         assert_eq!(args.body.as_deref(), Some("details"));

@@ -2,10 +2,14 @@
 name = "agena-keyring-store"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 keyring = "3.6.3"
-thiserror = "2.0.18"
+thiserror = { workspace = true }
 
 [dev-dependencies]
 parking_lot = "0.12.5"
+
+[lints]
+workspace = true

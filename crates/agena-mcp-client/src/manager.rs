@@ -402,6 +402,8 @@ mod auth_tests {
     #[test]
     fn bearer_from_env_resolves() {
         let var = "AGENA_TEST_MCP_TOKEN_RESOLVED";
+        // SAFETY: test-only env mutation; no other test reads/writes this
+        // var name (unique suffix per test).
         unsafe { std::env::set_var(var, "from-env") };
         let mut headers = HashMap::new();
         apply_http_auth(
@@ -411,6 +413,7 @@ mod auth_tests {
             None,
         );
         assert_eq!(headers[AUTH_HEADER], "Bearer from-env");
+        // SAFETY: cleanup of the same unique env var.
         unsafe { std::env::remove_var(var) };
     }
 

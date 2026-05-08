@@ -103,7 +103,7 @@ impl super::ConfigResolution {
     }
 
     pub async fn build_plugin_host(&self) -> Result<Arc<PluginHost>, ConfigError> {
-        self.build_plugin_host_with_previous_and_mcp(None, None, None)
+        self.build_plugin_host_with_previous_and_mcp(None, None, None, None)
             .await
     }
 
@@ -116,7 +116,7 @@ impl super::ConfigResolution {
         previous_host: Option<Arc<PluginHost>>,
         previous_config: Option<&agena_plugin_host::PluginsConfig>,
     ) -> Result<Arc<PluginHost>, ConfigError> {
-        self.build_plugin_host_with_previous_and_mcp(previous_host, previous_config, None)
+        self.build_plugin_host_with_previous_and_mcp(previous_host, previous_config, None, None)
             .await
     }
 
@@ -125,6 +125,7 @@ impl super::ConfigResolution {
         previous_host: Option<Arc<PluginHost>>,
         previous_config: Option<&agena_plugin_host::PluginsConfig>,
         mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
+        skills_manager: Option<Arc<agena_skills::SkillsManager>>,
     ) -> Result<Arc<PluginHost>, ConfigError> {
         let workspace_root = self
             .meta
@@ -181,6 +182,12 @@ impl super::ConfigResolution {
             builder = builder.register_static(
                 crate::tool::mcp_plugin_id(),
                 crate::tool::new_mcp_plugin(manager),
+            );
+        }
+        if let Some(manager) = skills_manager {
+            builder = builder.register_static(
+                crate::tool::skills_fs_plugin_id(),
+                crate::tool::new_skills_fs_plugin(manager),
             );
         }
         if let (Some(prev_host), Some(prev_cfg)) = (previous_host, previous_config) {

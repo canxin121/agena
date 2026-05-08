@@ -29,7 +29,7 @@ pub struct SkillFrontmatter {
 pub struct Skill {
     pub frontmatter: SkillFrontmatter,
     pub body: String,
-    /// Absolute path to the SKILL.md file (or "<bundled>" for compiled-in).
+    /// Absolute path to the SKILL.md file (or `<bundled>` for compiled-in).
     pub source_path: Option<PathBuf>,
 }
 

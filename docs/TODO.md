@@ -1,5 +1,59 @@
 # Agena 改进 TODO
 
+## 已知技术债（待规划）
+
+### Layering: agena-tui 直依赖 sea-orm
+
+`apps/agena-tui` 当前在 `main.rs:33`、`backend.rs:45,103` 直接 use
+`sea_orm::Database` / `DatabaseConnection`，违反 TUI 应只走
+`agena-client` 的分层原则。
+
+下一步：把 TUI 启动时的 DB 打开移到 `agena-api-server`/`agena-app-server`
+的对外构造函数；TUI 改用 `agena_api_server::AppState::new(...)`
+或 `agena-client` 的 in-process 客户端。
+
+### 静音的 dead_code 标注
+
+`#[allow(dead_code)]` 全仓 62 处，集中在 `session/manager.rs`、
+`session/store.rs`、`session/history/`、`entry/`。未来需逐条核查：
+1. 删除真实死代码
+2. 加 `#[cfg(test)]` 圈定测试范围
+3. 抽到独立 trait/feature
+该工作量大、易引入回归，需独立 PR 推进。
+
+### 性能：String/HashMap clone 热点
+
+`.clone()` 调用集中在：
+- `crates/agena/src/provider/` (693 处)
+- `crates/agena/src/session/` (336 处)
+- `crates/agena/src/entry/` (183 处)
+- `crates/agena/src/runtime/` (84 处)
+
+下一步：把高频拷贝的稳定 key（provider name、model id、tool name、session
+title）从 `String` 换成 `Arc<str>`；HashMap 值改用 Arc。预计能砍掉 60% 的 clone。
+
+### crate 拆分（高优先级，需独立设计）
+
+`crates/agena` 当前 ~8.4 万行，编译慢、依赖耦合重。建议按以下边界拆分：
+
+1. **`apps/agena-tui/src/app.rs`（11688 行，最大单文件）→ 切 `view/`、`state/`、`event/`、`keymap/` 四子模块**
+   - 该文件是 TUI 的完整状态机 + 渲染 + 键绑定，最易拆且 ROI 最高
+   - 现有的 `extern fn`/`pub fn` 已按 surface 划分，可作切分依据
+2. **`crates/agena/src/cli.rs`（4436 行）→ `agena-cli-core`**
+   - 按 subcommand 切：`cli/{auth,config,debug,plugin,sessions,provider,memory}.rs`
+   - 每个 subcommand 已经有独立 enum/struct，迁移成本可控
+3. **`crates/agena/src/provider/`（~1.6 万行，11 provider）→ `agena-provider-core` + 11 子 crate**
+   - 把 `registry.rs` `types.rs` `sse.rs` `credential.rs` 抽到 core
+   - 每个 `agena-provider-{anthropic,openai,gemini,bedrock,copilot,…}` 实现一个 Provider trait
+4. **`crates/agena/src/session/`（~1.7 万行）→ `agena-session`**
+   - manager / store / processor / prompt_window / history 是天然单元
+   - `session/manager.rs`（6146 行）需再拆 turn / permission / tool 三块
+5. 已是独立子目录、晋升 crate 风险最低：`permission/` `memory/` `commands/` `plugins/` `hooks/` `runtime/` `db/`
+
+风险：跨 crate trait 重新设计；workspace 编译图重排；本轮未执行。
+
+---
+
 基于对 codex / claude-code / opencode 三家的源码对比，以下为 Agena 当前缺口与改进计划。
 
 ## 一、Agena 已有能力
@@ -26,7 +80,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 - Scheduler（cron 表达式）
 - MCP 客户端（stdio / http）
 - 权限规则 store（文件级 glob / 工具级，allow / ask / deny）
-- 0 个 TODO/FIXME，代码质量高
+- 仓库 TODO/FIXME 数量较少，但并非零；新增工作以本文清单为准
 
 ---
 

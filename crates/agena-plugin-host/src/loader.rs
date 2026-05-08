@@ -390,67 +390,6 @@ pub fn manifest_summary(m: &PluginManifest) -> String {
     format!("{}@{}", m.name, m.version)
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::validate_schema_value;
-
-    #[test]
-    fn schema_validator_accepts_matching_object() {
-        let schema = json!({
-            "type": "object",
-            "required": ["token"],
-            "properties": {
-                "token": { "type": "string", "minLength": 1 },
-                "enabled": { "type": "boolean" }
-            },
-            "additionalProperties": false
-        });
-        let value = json!({
-            "token": "abc",
-            "enabled": true
-        });
-
-        validate_schema_value("$", &schema, &value).expect("value should satisfy schema");
-    }
-
-    #[test]
-    fn schema_validator_rejects_missing_required_property() {
-        let schema = json!({
-            "type": "object",
-            "required": ["token"],
-            "properties": {
-                "token": { "type": "string" }
-            }
-        });
-        let value = json!({});
-
-        let err = validate_schema_value("$", &schema, &value)
-            .expect_err("schema should reject missing required property");
-        assert!(err.contains("missing required property 'token'"));
-    }
-
-    #[test]
-    fn schema_validator_rejects_unexpected_property() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "token": { "type": "string" }
-            },
-            "additionalProperties": false
-        });
-        let value = json!({
-            "token": "abc",
-            "extra": true
-        });
-
-        let err = validate_schema_value("$", &schema, &value)
-            .expect_err("schema should reject unexpected property");
-        assert!(err.contains("unexpected property 'extra'"));
-    }
-}
-
 /// Verify the sha256 of a file against an expected hex digest. Used by both
 /// the wasm transport (for safety) and the signing helpers.
 #[cfg(any(feature = "wasm", feature = "signing"))]
@@ -515,4 +454,65 @@ pub fn verify_signature_bytes(
     verifier
         .verify(bytes, &signature)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::validate_schema_value;
+
+    #[test]
+    fn schema_validator_accepts_matching_object() {
+        let schema = json!({
+            "type": "object",
+            "required": ["token"],
+            "properties": {
+                "token": { "type": "string", "minLength": 1 },
+                "enabled": { "type": "boolean" }
+            },
+            "additionalProperties": false
+        });
+        let value = json!({
+            "token": "abc",
+            "enabled": true
+        });
+
+        validate_schema_value("$", &schema, &value).expect("value should satisfy schema");
+    }
+
+    #[test]
+    fn schema_validator_rejects_missing_required_property() {
+        let schema = json!({
+            "type": "object",
+            "required": ["token"],
+            "properties": {
+                "token": { "type": "string" }
+            }
+        });
+        let value = json!({});
+
+        let err = validate_schema_value("$", &schema, &value)
+            .expect_err("schema should reject missing required property");
+        assert!(err.contains("missing required property 'token'"));
+    }
+
+    #[test]
+    fn schema_validator_rejects_unexpected_property() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "token": { "type": "string" }
+            },
+            "additionalProperties": false
+        });
+        let value = json!({
+            "token": "abc",
+            "extra": true
+        });
+
+        let err = validate_schema_value("$", &schema, &value)
+            .expect_err("schema should reject unexpected property");
+        assert!(err.contains("unexpected property 'extra'"));
+    }
 }

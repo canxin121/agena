@@ -229,9 +229,7 @@ impl Backend {
             Ok(QueryResult::Session(session)) => Ok(Some(session)),
             Ok(other) => Err(anyhow!("unexpected query result: {:?}", other))
                 .context("failed to fetch session"),
-            Err(error) if matches!(error, agena_api_server::error::ServerError::NotFound(_)) => {
-                Ok(None)
-            }
+            Err(agena_api_server::error::ServerError::NotFound(_)) => Ok(None),
             Err(error) => Err(api_error(error).context("failed to fetch session")),
         }
     }
@@ -1124,7 +1122,10 @@ impl Backend {
     }
 
     pub async fn git_inspector_rows(&self) -> Result<Vec<InspectorRow>> {
-        let status = self.git_status().await.context("failed to load git status")?;
+        let status = self
+            .git_status()
+            .await
+            .context("failed to load git status")?;
         Ok(git_status_inspector_rows(status))
     }
 
@@ -1164,7 +1165,10 @@ impl Backend {
     }
 
     pub async fn create_commit(&self, message: String) -> Result<(String, String)> {
-        let status = self.git_status().await.context("failed to load git status")?;
+        let status = self
+            .git_status()
+            .await
+            .context("failed to load git status")?;
         if !status.git_available {
             return Err(anyhow!("git is not available in PATH"));
         }
@@ -1202,7 +1206,10 @@ impl Backend {
         base: Option<String>,
         head: Option<String>,
     ) -> Result<String> {
-        let status = self.git_status().await.context("failed to load git status")?;
+        let status = self
+            .git_status()
+            .await
+            .context("failed to load git status")?;
         if !status.git_available {
             return Err(anyhow!("git is not available in PATH"));
         }
@@ -1240,7 +1247,10 @@ impl Backend {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    async fn resolve_workspace_resource(&self, create_if_missing: bool) -> Result<WorkspaceResource> {
+    async fn resolve_workspace_resource(
+        &self,
+        create_if_missing: bool,
+    ) -> Result<WorkspaceResource> {
         match dispatch::dispatch_command(
             &self.app_state,
             ApiCommand::ResolveWorkspace(agena_api::commands::ResolveWorkspaceParams {
@@ -1335,7 +1345,12 @@ impl Backend {
         let branch = git_command_output(&workspace_root, ["branch", "--show-current"])?;
         let upstream = git_command_output(
             &workspace_root,
-            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            [
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ],
         )
         .ok()
         .and_then(|value| non_empty(Some(value.as_str())).map(ToOwned::to_owned));

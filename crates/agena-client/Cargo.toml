@@ -2,26 +2,30 @@
 name = "agena-client"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 agena-api = { path = "../agena-api" }
 agena = { path = "../agena" }
-async-trait = "0.1.89"
+async-trait = { workspace = true }
 futures-util = "0.3.31"
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "stream"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 smol_str = { version = "0.3.2", features = ["serde"] }
-thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "sync", "net", "time", "io-util"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "net", "time", "io-util"] }
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-tracing = "0.1.44"
+tracing = { workspace = true }
 url = "2.5.8"
-uuid = { version = "1.18.1", features = ["v4", "serde"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
 agena = { path = "../agena" }
 agena-api-server = { path = "../agena-api-server" }
-axum = "0.8.6"
+axum = { workspace = true }
 sea-orm = { version = "1.1.19", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-json"] }
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "test-util"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

@@ -2,22 +2,25 @@
 name = "agena-plugin-marketplace"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 agena-plugin-host = { path = "../agena-plugin-host", features = ["signing"] }
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+chrono = { workspace = true }
 flate2 = "1"
 hex = "0.4"
-reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "rustls"] }
+reqwest = { workspace = true, features = ["blocking", "rustls"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = "0.10"
 tar = "0.4"
-thiserror = "2.0.18"
+thiserror = { workspace = true }
 toml_edit = "0.23"
-tracing = "0.1.44"
-url = { version = "2.5.8", features = ["serde"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true

@@ -463,15 +463,24 @@ pub struct SessionListRequest {
     pub offset: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
+    /// When `false` (the default) the listing hides subagent sessions —
+    /// they belong to the runtime and clutter user-facing UIs. Set to
+    /// `true` to surface every session, regardless of `is_subagent`.
+    #[serde(default)]
+    pub include_subagents: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub id: i64,
     pub parent_id: Option<i64>,
+    pub depth: i64,
+    pub root_id: i64,
     pub workspace_id: i64,
     pub title: String,
     pub version: i64,
+    #[serde(default)]
+    pub is_subagent: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub message_count: u64,
@@ -484,9 +493,15 @@ pub struct SessionSummary {
 pub struct Session {
     pub id: i64,
     pub parent_id: Option<i64>,
+    #[serde(default)]
+    pub depth: i64,
+    #[serde(default)]
+    pub root_id: i64,
     pub workspace_id: i64,
     pub title: String,
     pub version: i64,
+    #[serde(default)]
+    pub is_subagent: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -504,9 +519,12 @@ impl Session {
         let mut session = Self {
             id,
             parent_id: None,
+            depth: 0,
+            root_id: id,
             workspace_id,
             title: title.into(),
             version: 1,
+            is_subagent: false,
             created_at: now,
             updated_at: now,
             messages: Vec::new(),
@@ -610,9 +628,12 @@ impl Session {
     pub(crate) fn apply_persisted_metadata(&mut self, persisted: &Session) {
         self.id = persisted.id;
         self.parent_id = persisted.parent_id;
+        self.depth = persisted.depth;
+        self.root_id = persisted.root_id;
         self.workspace_id = persisted.workspace_id;
         self.title = persisted.title.clone();
         self.version = persisted.version;
+        self.is_subagent = persisted.is_subagent;
         self.created_at = persisted.created_at;
         self.updated_at = persisted.updated_at;
         self.runtime = persisted.runtime.clone();

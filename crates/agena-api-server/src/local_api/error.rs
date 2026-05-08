@@ -79,6 +79,7 @@ impl From<AppError> for ApiError {
     fn from(value: AppError) -> Self {
         match value {
             AppError::Config(message) => Self::bad_request(message),
+            AppError::ConfigErr(error) => Self::bad_request(error.to_string()),
             AppError::Database(error) => Self::internal(error.to_string()),
             AppError::SerdeJson(error) => Self::bad_request(error.to_string()),
             AppError::Http(error) => Self::internal(error.to_string()),
@@ -92,6 +93,13 @@ impl From<AppError> for ApiError {
                 code: "provider_http_error",
                 message: body,
             },
+            AppError::Conflict {
+                session_id,
+                expected,
+                current,
+            } => Self::conflict(format!(
+                "session {session_id} version conflict: expected {expected}, current {current}"
+            )),
         }
     }
 }
@@ -105,5 +113,70 @@ impl IntoResponse for ApiError {
             },
         };
         (self.status, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+impl ApiError {
+    /// Test-only accessor for `status` so we can assert the From<AppError>
+    /// mapping without parsing `IntoResponse`.
+    pub(crate) fn status_code(&self) -> StatusCode {
+        self.status
+    }
+
+    /// Test-only accessor for `code`.
+    pub(crate) fn error_code(&self) -> &'static str {
+        self.code
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_app_error_maps_to_bad_request() {
+        let err: ApiError = AppError::Config("bad".into()).into();
+        assert_eq!(err.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(err.error_code(), "bad_request");
+    }
+
+    #[test]
+    fn database_app_error_maps_to_internal() {
+        let err: ApiError = AppError::Database(sea_orm::DbErr::Custom("boom".into())).into();
+        assert_eq!(err.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err.error_code(), "internal_error");
+    }
+
+    #[test]
+    fn invalid_role_maps_to_internal() {
+        let err: ApiError = AppError::InvalidRole("ghost".into()).into();
+        assert_eq!(err.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn http_status_app_error_preserves_status() {
+        let err: ApiError = AppError::HttpStatus {
+            provider: "anthropic".into(),
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: "rate limited".into(),
+            kind: agena::error::ProviderErrorKind::ApiError,
+            retryable: true,
+        }
+        .into();
+        assert_eq!(err.status_code(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.error_code(), "provider_http_error");
+    }
+
+    #[test]
+    fn conflict_app_error_maps_to_conflict() {
+        let err: ApiError = AppError::Conflict {
+            session_id: 1,
+            expected: 1,
+            current: 2,
+        }
+        .into();
+        assert_eq!(err.status_code(), StatusCode::CONFLICT);
+        assert_eq!(err.error_code(), "conflict");
     }
 }

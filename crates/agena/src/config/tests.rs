@@ -182,6 +182,9 @@ fn env_telemetry_config_enables_otlp_exporter() {
 
 #[test]
 fn example_config_parses_successfully() {
+    // The shipped minimal example only configures one provider and no
+    // modes; the richer assertions are exercised against config.full.toml
+    // by the integration test in tests/config_examples.rs.
     let path = write_temp_config(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../config.example.toml"
@@ -194,9 +197,8 @@ fn example_config_parses_successfully() {
         })
         .expect("example config should load");
 
-    assert_eq!(resolution.meta.active_mode.unwrap().to_string(), "dev");
-    assert!(resolution.config.providers.contains_key("openai"));
-    assert!(resolution.config.providers.contains_key("prod-openai"));
+    assert!(resolution.config.providers.contains_key("anthropic"));
+    assert!(resolution.meta.active_mode.is_none());
 }
 
 #[test]

@@ -10,8 +10,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ManagedCredential, ModelProvider, ProviderModel, ResponseFormat,
-        ThinkingRequest, should_retry_credential, sse, utils, wire_message,
+        ManagedCredential, ModelProvider, ProviderModel, ResponseFormat, ThinkingRequest,
+        should_retry_credential, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -321,6 +321,7 @@ impl ModelProvider for GeminiProvider {
             .collect())
     }
 
+    #[tracing::instrument(skip_all, fields(provider = "gemini", model = %request.model))]
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
@@ -418,6 +419,7 @@ impl ModelProvider for GeminiProvider {
         })
     }
 
+    #[tracing::instrument(skip_all, fields(provider = "gemini", model = %request.model))]
     async fn complete_stream(
         &self,
         request: CompletionRequest,
@@ -606,10 +608,7 @@ struct GeminiGenerateRequest {
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<GeminiTool>>,
-    #[serde(
-        rename = "toolConfig",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "toolConfig", skip_serializing_if = "Option::is_none")]
     tool_config: Option<GeminiToolConfig>,
 }
 
@@ -1497,8 +1496,8 @@ mod tests {
             load_priority: crate::entry::EntryLoadPriority::Standard,
             strict: false,
         };
-        let tools = build_gemini_tools(std::slice::from_ref(&definition))
-            .expect("tools should be present");
+        let tools =
+            build_gemini_tools(std::slice::from_ref(&definition)).expect("tools should be present");
         assert_eq!(tools.len(), 1);
         let decl = &tools[0].function_declarations[0];
         assert_eq!(decl.name, "lookup");
@@ -1513,10 +1512,7 @@ mod tests {
             .and_then(|v| v.as_object())
             .expect("query property");
         assert!(!query.contains_key("format"));
-        assert_eq!(
-            query.get("type").and_then(|v| v.as_str()),
-            Some("string")
-        );
+        assert_eq!(query.get("type").and_then(|v| v.as_str()), Some("string"));
     }
 
     #[tokio::test]
@@ -1682,8 +1678,10 @@ mod tests {
                 call_id: 7,
                 invocation: ToolInvocation {
                     name: "lookup".to_owned(),
-                    input: crate::message::StructuredObject::try_from(serde_json::json!({"q": "rust"}))
-                        .expect("structured object"),
+                    input: crate::message::StructuredObject::try_from(
+                        serde_json::json!({"q": "rust"}),
+                    )
+                    .expect("structured object"),
                 },
                 output_text: String::new(),
                 blocks: Vec::new(),

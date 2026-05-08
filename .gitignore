@@ -1,4 +1,5 @@
 target/
+examples/*/target/
 artifacts/agena-studio/
 artifacts/t/
 packages/agena-studio-web/node_modules/

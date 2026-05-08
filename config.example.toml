@@ -1,262 +1,37 @@
-mode = "dev"
-
-[tracing]
-filter = "info"
-
-[telemetry]
-enabled = false
-service_name = "agena"
-# otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
+# Minimal Agena configuration — the smallest viable config to boot the
+# runtime against a single provider.
+#
+# For the full feature surface (hooks, telemetry, plugin registries,
+# permission rules, MCP servers, web search backends, …) see
+# `config.full.toml` in the repo root.
 
 [auth]
-# auto prefers the OS keyring and falls back to store_path when keyring is unavailable.
+# `auto` prefers the OS keyring and falls back to store_path when
+# the keyring is unavailable.
 store_backend = "auto"
-# store_path = "~/.agena/auth.json"
 
-[runtime.provider_http]
-timeout_secs = 120
-connect_timeout_secs = 15
+# At least one provider must be configured. Pick the LLM endpoint you
+# have credentials for and remove the others.
 
-[runtime.request_retry]
-max_retries = 1
-base_delay_ms = 250
-max_delay_ms = 2000
+[providers.anthropic]
+kind = "anthropic"
+base_url = "https://api.anthropic.com/v1"
+default_model = "claude-sonnet-4-6"
+api_key_env = "ANTHROPIC_API_KEY"
 
-[runtime.stream_replay]
-max_retries_after_output = 1
-max_tracked_events = 2048
-
-[runtime.reload]
-enabled = true
-poll_interval_secs = 2
-
-[runtime.janitor]
-enabled = true
-interval_secs = 30
-
-[runtime.session_cache]
-max_sessions = 128
-ttl_secs = 900
-max_bytes = 67108864
-
-[permission]
-default_read = "allow"
-default_write = "deny"
-default_external_directory = "deny"
-
-[memory.project_instructions]
-enabled = true
-include_global = true
-
-# User-configurable hooks. Each hook can run a local shell command or POST JSON
-# to an HTTP endpoint. Hook stdout may return a JSON patch for events that
-# support mutation, such as `user_prompt_submit` or `pre_tool_use`.
-#
-# Supported event names:
-#   user_prompt_submit, pre_tool_use, post_tool_use, post_tool_use_failure,
-#   stop, session_start, session_end, notification
-#
-# [[hooks]]
-# event = "user_prompt_submit"
-# command = "python3 .agena/hooks/enrich_prompt.py"
-# timeout_ms = 3000
-#
-# [[hooks]]
-# event = "pre_tool_use"
-# command = "python3 .agena/hooks/check_tool.py"
-# timeout_ms = 5000
-# matcher = { tool = "bash" }
-#
-# [[hooks]]
-# event = "post_tool_use"
-# url = "http://127.0.0.1:8080/agena-hook"
-# timeout_ms = 2000
-#
-# [[hooks]]
-# event = "notification"
-# command = "notify-send \"$AGENA_NOTIFICATION_TITLE\" \"$AGENA_NOTIFICATION_MESSAGE\""
-# timeout_ms = 2000
-
-[plugins]
-enabled = true
-# Optional global timeout overlay applied to every plugin (per-plugin
-# `timeouts = { ... }` keys override these). Values like "5s", "2m", "200ms".
-# timeouts = { tool_invoke = "60s", permission_ask = "10s" }
-
-# Each entry under `[plugins.list.<id>]` declares a plugin. The `kind`
-# discriminator picks the transport. Supported kinds:
-#
-#   * static  — compiled-in via `PluginHostBuilder::register_static`
-#   * cdylib  — local dynamic library (`abi_stable`-based ABI)
-#   * stdio   — subprocess speaking JSON-RPC over its stdin/stdout
-#   * http    — remote service speaking JSON-RPC over POST
-#   * wasm    — WebAssembly module (requires plugin-wasm feature)
-#
-# First-party static plugins such as agena.builtin, agena.skills, and agena.lsp
-# are registered by the runtime. agena.skills provides the model-visible
-# skill_run entry; agena.lsp exposes read-only lsp_servers / lsp_diagnostics
-# entries via host/lsp.list_*.
-#
-# Plugins that call host callbacks must declare matching host_capabilities in
-# their manifest entries. For example, host/config.read requires ReadConfig and
-# host/skill.get requires SkillsManager.
-#
-# Plugin storage and secrets live under ~/.agena/plugin-storage by default
-# (override with the AGENA_PLUGIN_STORAGE_DIR environment variable). Storage is
-# plain JSON keyed by (plugin_id, namespace, key); secrets go to the OS keyring
-# under the agena.plugin service. Set [plugins.storage] to override:
-#
-# [plugins.storage]
-# # root_path = "/var/lib/agena/plugin-storage"
-# # secrets_backend = "auto"   # auto | keyring | file
-# # fallback_to_file = true
-#
-# Stdio plugins respect [plugins.list.<id>.restart] for backoff/retry and the
-# host tracks their pid + restart history. Plugins that declare
-# HostCapability::PluginStatus can query host/plugin.status.list /
-# host/plugin.status.get for daemon health.
-#
-# Examples (commented out — copy and adapt as needed):
-#
-# [plugins.list.echo]
-# kind = "cdylib"
-# path = "examples/echo_plugin/target/debug/libagena_echo_plugin.so"
-# options = { uppercase = true }
-#
-# [plugins.list.lint]
-# kind = "stdio"
-# command = "node"
-# args = ["./plugins/lint/index.js"]
-# env = { LINT_LEVEL = "warn" }
-# restart = { policy = "on-failure", min_backoff = "1s", max_backoff = "30s", max_retries = 5 }
-# options = { project = "rust" }
-#
-# [plugins.list.cloud-policy]
-# kind = "http"
-# url = "https://policy.example.com/agena/rpc"
-# auth = { kind = "bearer", token_env = "AGENA_POLICY_TOKEN" }
-# options = { org_id = "acme" }
-
-[providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
-default_model = "gpt-4.1-mini"
-api_key_env = "OPENAI_API_KEY"
-api_mode = "auto"
-stream_mode = "sse"
-
-# Per-provider thinking-depth presets (name → budget_tokens).
-# Set default_thinking to one of the preset names to apply it to every request
-# that doesn't already specify request.thinking.
-# Use "disabled" as the default_thinking value to explicitly suppress thinking.
-#
-# Example — OpenAI o-series with named reasoning levels:
-#
-# [providers.openai-reasoning]
+# [providers.openai]
 # kind = "openai"
 # base_url = "https://api.openai.com/v1"
-# default_model = "o3-mini"
+# default_model = "gpt-4o"
 # api_key_env = "OPENAI_API_KEY"
-# default_thinking = "standard"
-#
-# [providers.openai-reasoning.thinking_depths]
-# light    = 3000
-# standard = 10000
-# deep     = 30000
-#
-# Example — Anthropic with named thinking levels:
-#
-# [providers.anthropic]
-# kind = "anthropic"
-# base_url = "https://api.anthropic.com/v1"
-# default_model = "claude-sonnet-4-5"
-# api_key_env = "ANTHROPIC_API_KEY"
-# default_thinking = "standard"
-#
-# [providers.anthropic.thinking_depths]
-# light    = 3000
-# standard = 10000
-# deep     = 30000
 
-# Built-in / models.dev preset examples:
-#
-# [providers.ollama]
-# kind = "preset"
-# default_model = "qwen3:14b"
-#
-# [providers.lmstudio]
-# kind = "preset"
-# default_model = "local-model"
-#
-# [providers.openrouter]
-# kind = "preset"
-#
-# [providers.deepseek]
-# kind = "preset"
-#
-# [providers.xai]
-# kind = "preset"
-#
-# [providers.groq]
-# kind = "preset"
-#
-# [providers.mistral]
-# kind = "preset"
-#
-# [providers."github-copilot"]
-# kind = "preset"
-#
-# [providers."google-vertex"]
-# kind = "preset"
+# [providers.gemini]
+# kind = "gemini"
+# base_url = "https://generativelanguage.googleapis.com/v1beta"
+# default_model = "gemini-2.5-pro"
+# api_key_env = "GEMINI_API_KEY"
 
-[providers.codex]
-kind = "codex"
-default_model = "gpt-5.3-codex"
-auth_provider_id = "openai"
-
-[providers."github-copilot"]
-kind = "copilot"
-auth_provider_id = "github-copilot"
-
-[providers.ollama]
-kind = "ollama"
-base_url = "http://localhost:11434"
-default_model = "qwen3:14b"
-
-[providers."prod-openai"]
-kind = "alias"
-target_provider_id = "openai"
-default_model = "gpt-5"
-
-[[providers."prod-openai".capability_overrides]]
-model = "gpt-5"
-image_input = "unsupported"
-
-[providers.gitlab]
-kind = "gitlab"
-instance_url = "https://gitlab.com"
-ai_gateway_url = "https://cloud.gitlab.com"
-default_model = "claude-sonnet-4-5"
-auth_provider_id = "gitlab"
-
-[providers."google-vertex"]
-kind = "google_vertex"
-base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
-default_model = "google/gemini-2.5-flash"
-access_token_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
-
-[modes.dev.tracing]
-filter = "debug"
-
-[modes.dev.providers.openai]
-default_model = "gpt-4.1-mini"
-
-[modes.prod.permission]
-default_write = "ask"
-
-[modes.prod.providers.openai]
-default_model = "gpt-5"
-api_mode = "responses"
-
-[modes.prod.providers.ollama]
-enabled = false
+[permissions]
+# `prompt` asks before every tool action; `allow` runs trusted tools
+# without prompting; `deny` is dry-run.
+default_mode = "prompt"

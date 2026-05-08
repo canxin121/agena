@@ -110,7 +110,7 @@ async fn spawn_test_server() -> String {
 
 async fn spawn_callback_server(state: Arc<CallbackServerState>) -> String {
     let app = Router::new()
-        .route("/plugin-rpc/:plugin_id", post(handle_callback))
+        .route("/plugin-rpc/{plugin_id}", post(handle_callback))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local = listener.local_addr().unwrap();

@@ -63,6 +63,7 @@ where
     /// plugin returning `Decide(Allow|Deny)` short-circuits the runtime; a
     /// plugin returning `Defer` lets the next plugin or the default base
     /// decision win.
+    #[tracing::instrument(skip_all, fields(session_id))]
     pub fn decide_or_request_with_plugins(
         &mut self,
         session_id: Option<i64>,

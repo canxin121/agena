@@ -57,7 +57,7 @@ use crate::plugin::{
 };
 use crate::plugins::bundled::{
     builtin as builtins, cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, mcp,
-    shell as bundled_shell, skills, web as bundled_web, workflow as bundled_workflow,
+    shell as bundled_shell, skills, skills_fs, web as bundled_web, workflow as bundled_workflow,
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
@@ -95,6 +95,16 @@ pub fn skills_plugin_id() -> &'static str {
 
 pub fn new_skills_plugin() -> impl crate::plugin::sdk::Plugin {
     skills::SkillsPlugin::new()
+}
+
+pub fn skills_fs_plugin_id() -> &'static str {
+    skills_fs::SKILLS_FS_PLUGIN_ID
+}
+
+pub fn new_skills_fs_plugin(
+    manager: std::sync::Arc<agena_skills::SkillsManager>,
+) -> impl crate::plugin::sdk::Plugin {
+    skills_fs::SkillsFsPlugin::new(manager)
 }
 
 pub fn lsp_plugin_id() -> &'static str {
@@ -782,10 +792,8 @@ impl ToolExecutor {
         ) {
             return Ok(None);
         }
-        let invocation_view = ToolInvocation::new(
-            invocation.entry_name.clone(),
-            invocation.input.clone(),
-        );
+        let invocation_view =
+            ToolInvocation::new(invocation.entry_name.clone(), invocation.input.clone());
         BuiltinToolInput::from_invocation(&invocation_view)
             .map(Some)
             .ok_or_else(|| {
@@ -1223,6 +1231,17 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        let result = self.execute_invocation_detailed_inner(invocation, session_id, call_id);
+        crate::metrics::record_tool_execution(result.is_ok());
+        result
+    }
+
+    fn execute_invocation_detailed_inner(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+    ) -> Result<ToolInvocationExecution, ToolError> {
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
         let tool_name = plugin_invocation_name(&plugin_invocation);
         let _tool_span =
@@ -1519,7 +1538,7 @@ impl ToolExecutor {
         session_context: Option<&crate::session::SessionExecutionContext>,
     ) -> String {
         let workspace_root = self.effective_workspace_root(session_context);
-        if let Ok(relative) = path.strip_prefix(&workspace_root) {
+        if let Ok(relative) = path.strip_prefix(workspace_root) {
             let normalized = normalize_path_for_display(relative);
             if normalized.is_empty() {
                 return ".".to_string();
@@ -3075,13 +3094,10 @@ mod tests {
             .prepare_invocation(&invocation, 7, 9)
             .expect("prepare should preserve plugin entry invocation");
 
-        match prepared.invocation {
-            ToolInvocation { name, input } => {
-                assert_eq!(name, "mcp:docs:search");
-                let payload = serde_json::Value::from(input);
-                assert_eq!(payload["query"], "plugin host");
-            }
-        }
+        let ToolInvocation { name, input } = prepared.invocation;
+        assert_eq!(name, "mcp:docs:search");
+        let payload = serde_json::Value::from(input);
+        assert_eq!(payload["query"], "plugin host");
     }
 
     #[test]

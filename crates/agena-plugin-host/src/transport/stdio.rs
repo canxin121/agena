@@ -130,6 +130,7 @@ impl StdioTransport {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn spawn_with_policy_and_status(
         command: &str,
         args: &[String],
@@ -453,10 +454,17 @@ impl Inner {
                 });
             }
             Frame::Notification(notif) => {
-                let inner = Arc::clone(self);
-                tokio::spawn(async move {
-                    inner.handle_notification(notif).await;
-                });
+                if matches!(
+                    notif.method.as_str(),
+                    method::TOOL_STREAM_CHUNK | method::TOOL_STREAM_END | method::TOOL_STREAM_ERROR
+                ) {
+                    self.clone().handle_notification(notif).await;
+                } else {
+                    let inner = Arc::clone(self);
+                    tokio::spawn(async move {
+                        inner.handle_notification(notif).await;
+                    });
+                }
             }
         }
     }

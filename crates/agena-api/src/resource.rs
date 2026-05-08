@@ -187,9 +187,13 @@ pub struct WorkspaceResource {
 pub struct SessionResource {
     pub id: i64,
     pub parent_id: Option<i64>,
+    pub depth: i64,
+    pub root_id: i64,
     pub workspace_id: i64,
     pub title: String,
     pub version: i64,
+    #[serde(default)]
+    pub is_subagent: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub message_count: u64,
@@ -203,9 +207,12 @@ impl From<SessionSummary> for SessionResource {
         Self {
             id: value.id,
             parent_id: value.parent_id,
+            depth: value.depth,
+            root_id: value.root_id,
             workspace_id: value.workspace_id,
             title: value.title,
             version: value.version,
+            is_subagent: value.is_subagent,
             created_at: value.created_at,
             updated_at: value.updated_at,
             message_count: value.message_count,
@@ -365,3 +372,41 @@ pub use agena::message::{UserInputReply, UserInputRequest};
 pub use agena::permission::{PermissionMode, PermissionReply, PermissionRequest};
 pub use agena::provider::ProviderModel;
 pub use agena::role::Role;
+
+/// Wire form of a rewind audit checkpoint exposed via the Command protocol.
+/// Mirrors `agena::session::RewindCheckpoint` with a stable serde shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewindCheckpointResource {
+    pub schema: u32,
+    pub at_ms: i64,
+    pub target_message_id: i64,
+    pub dropped: Vec<RewindCheckpointEntryResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewindCheckpointEntryResource {
+    pub message_id: i64,
+    pub role: String,
+    pub preview: String,
+}
+
+impl From<agena::session::RewindCheckpoint> for RewindCheckpointResource {
+    fn from(value: agena::session::RewindCheckpoint) -> Self {
+        Self {
+            schema: value.schema,
+            at_ms: value.at_ms,
+            target_message_id: value.target_message_id,
+            dropped: value.dropped.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<agena::session::RewindCheckpointEntry> for RewindCheckpointEntryResource {
+    fn from(value: agena::session::RewindCheckpointEntry) -> Self {
+        Self {
+            message_id: value.message_id,
+            role: value.role,
+            preview: value.preview,
+        }
+    }
+}

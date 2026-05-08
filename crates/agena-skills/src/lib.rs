@@ -2,6 +2,11 @@
 //! ("skills") packaged as `SKILL.md` files with a YAML frontmatter
 //! header.
 //!
+//! This crate is plumbing only: it parses skills off disk and exposes
+//! a [`SkillsManager`] registry. The actual integration with the plugin
+//! host (filesystem scanning, manifest-declared skills, etc.) lives
+//! inside `agena` as the bundled `SkillsFsPlugin`.
+//!
 //! Discovery roots, in priority order:
 //!
 //! 1. `<workspace>/.agena/skills/`
@@ -11,18 +16,6 @@
 //!
 //! User slash commands are discovered from `<workspace>/.agena/commands/*.md`
 //! and `~/.agena/commands/*.md` with the same frontmatter format.
-//!
-//! A skill is a directory with a `SKILL.md` that looks like:
-//!
-//! ```markdown
-//! ---
-//! name: review
-//! description: Review the current branch
-//! allowed_tools: ["Read", "Glob", "Grep", "Bash(git *)"]
-//! model: claude-sonnet-4-6
-//! ---
-//! Body of the skill (becomes the system message injection).
-//! ```
 
 pub mod bundled;
 pub mod discovery;

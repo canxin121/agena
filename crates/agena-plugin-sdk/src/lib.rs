@@ -24,7 +24,8 @@ pub use hooks::*;
 pub use host_api::{HostClient, NoopHostClient};
 pub use manifest::{
     EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,
-    InputPathSpec, PathKind, PlanModePolicy, PluginEntryDecl, PluginManifest, TransportKind,
+    InputPathSpec, PathKind, PlanModePolicy, PluginEntryDecl, PluginManifest, SkillKind,
+    SkillManifestEntry, TransportKind,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
 

@@ -121,6 +121,12 @@ If-Match: "7"
 
 ## Endpoints
 
+### Operational probes (unprefixed)
+
+- `GET /healthz` — liveness probe; returns `200 ok` without touching state. k8s-friendly.
+- `GET /readyz` — readiness probe; returns `200 ready` once a runtime snapshot is loaded, otherwise `503 loading`.
+- `GET /metrics` — Prometheus text format. Currently exposes `agena_runtime_generation` and `agena_build_info{version}`; planned: HTTP latency, provider call counts, session counts.
+
 ### Health / Provider
 
 - `GET /api/v1/health`

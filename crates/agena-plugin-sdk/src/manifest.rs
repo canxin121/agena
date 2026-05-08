@@ -21,8 +21,98 @@ pub struct PluginManifest {
     pub hooks: HookSubscription,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<PluginEntryDecl>,
+    /// Static skill declarations. Each becomes a [`Skill`](agena_skills::Skill)-equivalent
+    /// entry in the host's `SkillRegistry` when the plugin is loaded. Plugins
+    /// that need dynamic skill discovery (filesystem scanning etc.) should use
+    /// [`HostClient::skill_register`] from `init` instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<SkillManifestEntry>,
+    /// Plugin-level host capabilities. Useful for plugins that need to
+    /// call host APIs without exposing any tool entry (e.g. a skill
+    /// discovery plugin that registers skills via `skill_register` from
+    /// `init`).  These are merged into the effective capability set
+    /// alongside the per-entry declarations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_capabilities: Vec<HostCapability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options_schema: Option<serde_json::Value>,
+}
+
+/// A skill declared statically in a plugin manifest.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillManifestEntry {
+    pub name: String,
+    #[serde(default)]
+    pub kind: SkillKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// The skill body — markdown text injected as the tool output when
+    /// `skill_run` invokes this skill.
+    pub body: String,
+}
+
+/// Distinguishes a regular skill (LLM workflow exposed via `skill_run`)
+/// from a slash-command markdown that the user types as `/foo` in a
+/// chat session.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillKind {
+    #[default]
+    Skill,
+    Command,
+}
+
+impl SkillManifestEntry {
+    pub fn new(name: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: SkillKind::Skill,
+            description: String::new(),
+            allowed_tools: Vec::new(),
+            model: None,
+            aliases: Vec::new(),
+            body: body.into(),
+        }
+    }
+
+    pub fn kind(mut self, kind: SkillKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    pub fn allowed_tools<I, S>(mut self, tools: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allowed_tools = tools.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    pub fn aliases<I, S>(mut self, aliases: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.aliases = aliases.into_iter().map(Into::into).collect();
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -133,6 +223,7 @@ pub enum HostCapability {
     PlanRegistry,
     WorktreeRegistry,
     SkillsManager,
+    SkillRegistry,
     LspRegistry,
     EntryRegistry,
     PluginStorage,
@@ -299,6 +390,8 @@ impl PluginManifest {
                 transports: Vec::new(),
                 hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
                 entries: Vec::new(),
+                skills: Vec::new(),
+                plugin_capabilities: Vec::new(),
                 options_schema: None,
             },
         }
@@ -333,6 +426,35 @@ impl PluginManifestBuilder {
 
     pub fn entries(mut self, entries: impl IntoIterator<Item = PluginEntryDecl>) -> Self {
         self.inner.entries.extend(entries);
+        self
+    }
+
+    pub fn skill(mut self, skill: SkillManifestEntry) -> Self {
+        self.inner.skills.push(skill);
+        self
+    }
+
+    pub fn skills(mut self, skills: impl IntoIterator<Item = SkillManifestEntry>) -> Self {
+        self.inner.skills.extend(skills);
+        self
+    }
+
+    pub fn plugin_capability(mut self, capability: HostCapability) -> Self {
+        if !self.inner.plugin_capabilities.contains(&capability) {
+            self.inner.plugin_capabilities.push(capability);
+        }
+        self
+    }
+
+    pub fn plugin_capabilities(
+        mut self,
+        capabilities: impl IntoIterator<Item = HostCapability>,
+    ) -> Self {
+        for capability in capabilities {
+            if !self.inner.plugin_capabilities.contains(&capability) {
+                self.inner.plugin_capabilities.push(capability);
+            }
+        }
         self
     }
 

@@ -342,6 +342,7 @@ impl ModelProvider for AnthropicProvider {
             .collect())
     }
 
+    #[tracing::instrument(skip_all, fields(provider = "anthropic", model = %request.model))]
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
@@ -474,6 +475,7 @@ impl ModelProvider for AnthropicProvider {
         })
     }
 
+    #[tracing::instrument(skip_all, fields(provider = "anthropic", model = %request.model))]
     async fn complete_stream(
         &self,
         request: CompletionRequest,

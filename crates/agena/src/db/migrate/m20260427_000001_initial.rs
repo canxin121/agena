@@ -63,6 +63,14 @@ impl MigrationTrait for Migration {
                 .if_not_exists()
                 .to_owned(),
             Index::create()
+                .name("idx_agena_session_root_id")
+                .table(entities::session::Entity)
+                .col(entities::session::Column::RootId)
+                .col(entities::session::Column::Depth)
+                .col(entities::session::Column::Id)
+                .if_not_exists()
+                .to_owned(),
+            Index::create()
                 .name("idx_agena_session_workspace_id_updated")
                 .table(entities::session::Entity)
                 .col(entities::session::Column::WorkspaceId)

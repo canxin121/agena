@@ -171,11 +171,11 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         })?;
         for dep in &version.dependencies {
             // Skip already-installed deps that satisfy the requirement.
-            if let Some(record) = installed.records.get(&dep.plugin_id) {
-                if dep_satisfied(&record.version, &dep.version_req) {
-                    visited.insert(dep.plugin_id.clone());
-                    continue;
-                }
+            if let Some(record) = installed.records.get(&dep.plugin_id)
+                && dep_satisfied(&record.version, &dep.version_req)
+            {
+                visited.insert(dep.plugin_id.clone());
+                continue;
             }
             // Otherwise recurse, picking the highest matching version.
             let dep_version = pick_version_for_req(index, &dep.plugin_id, &dep.version_req)
@@ -673,8 +673,8 @@ pub struct OutdatedRecord {
     pub latest_version: String,
 }
 
-fn select_version<'a>(
-    versions: &'a [PluginVersion],
+fn select_version(
+    versions: &[PluginVersion],
     requested: Option<&str>,
     target: &str,
 ) -> Option<PluginVersion> {

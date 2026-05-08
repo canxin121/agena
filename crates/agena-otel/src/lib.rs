@@ -1,3 +1,10 @@
+//! OpenTelemetry integration: configures `tracing-subscriber` with an
+//! optional OTLP HTTP exporter and exposes `TelemetryConfig` for the
+//! main `agena` config layer.
+//!
+//! When `telemetry.enabled = false` (the default) only the local fmt
+//! layer is installed; turning it on adds an OTLP tracer.
+
 use std::collections::BTreeMap;
 
 use opentelemetry::trace::TracerProvider as _;

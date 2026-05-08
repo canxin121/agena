@@ -10,6 +10,8 @@ pub enum ProviderErrorKind {
 pub enum AppError {
     #[error("configuration error: {0}")]
     Config(String),
+    #[error(transparent)]
+    ConfigErr(Box<crate::config::ConfigError>),
     #[error("provider error: {0}")]
     Provider(String),
     #[error("database error: {0}")]
@@ -39,6 +41,15 @@ pub enum AppError {
     },
     #[error("invalid role value in storage: {0}")]
     InvalidRole(String),
+    #[error(
+        "session {session_id} version conflict: expected {expected}, current {current} \
+         (a concurrent writer raced ahead — reload and retry)"
+    )]
+    Conflict {
+        session_id: i64,
+        expected: i64,
+        current: i64,
+    },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -64,6 +75,6 @@ impl AppError {
 
 impl From<crate::config::ConfigError> for AppError {
     fn from(value: crate::config::ConfigError) -> Self {
-        Self::Config(value.to_string())
+        Self::ConfigErr(Box::new(value))
     }
 }

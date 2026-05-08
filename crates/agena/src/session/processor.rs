@@ -324,11 +324,14 @@ impl SessionProcessor {
             &mut run.completion,
         )
         .await;
-        let mut stream = self
+        let stream_result = self
             .provider_registry
             .complete_stream(&run.model, run.completion.clone())
             .instrument(processor_span.clone())
-            .await?;
+            .await;
+        crate::metrics::record_provider_stream();
+        crate::metrics::record_provider_call(stream_result.is_ok());
+        let mut stream = stream_result?;
 
         let assistant_message_id = run.next_message_id;
         run.next_message_id += 1;
@@ -543,9 +546,11 @@ impl SessionProcessor {
             // Even on failure the buffer has accumulated state we can still
             // commit; downstream callers may inspect it for diagnostics.
             let history_items = turn_buffer
-                .commit(&mut crate::session::history::SequentialIdAllocator::starting_at(
-                    run.next_message_id.saturating_add(1),
-                ))
+                .commit(
+                    &mut crate::session::history::SequentialIdAllocator::starting_at(
+                        run.next_message_id.saturating_add(1),
+                    ),
+                )
                 .unwrap_or_default();
             return Ok(SessionRunResult {
                 assistant_message_id,
@@ -578,9 +583,11 @@ impl SessionProcessor {
             .map_err(|err| AppError::Internal(err.to_string()))?;
 
         let history_items = turn_buffer
-            .commit(&mut crate::session::history::SequentialIdAllocator::starting_at(
-                run.next_message_id.saturating_add(1),
-            ))
+            .commit(
+                &mut crate::session::history::SequentialIdAllocator::starting_at(
+                    run.next_message_id.saturating_add(1),
+                ),
+            )
             .map_err(|err| AppError::Internal(err.to_string()))?;
 
         Ok(SessionRunResult {
@@ -1192,11 +1199,7 @@ mod tests {
     #[async_trait]
     impl crate::event::EventBus<EventKind> for MirrorBus {
         async fn publish(&self, event: DomainEvent) -> Result<(), crate::event::BusError> {
-            self.store
-                .events
-                .lock()
-                .expect("test bus lock")
-                .push(event);
+            self.store.events.lock().expect("test bus lock").push(event);
             Ok(())
         }
 

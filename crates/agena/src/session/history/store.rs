@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use sea_orm::{ActiveValue, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveValue, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter,
+};
 
 use crate::db::entities::session_snapshot;
-use crate::event::{DomainEvent, EventFilter, EventKind, EventPublisher, PublishContext, Scope, StoreRange};
+use crate::event::{
+    DomainEvent, EventFilter, EventKind, EventPublisher, PublishContext, Scope, StoreRange,
+};
 use crate::message::Message;
 use crate::session::SessionRuntimeState;
 
@@ -42,7 +46,9 @@ impl SessionHistoryStore {
         let snapshot = self.load_snapshot(session_id).await.ok().flatten();
 
         let after_seq = snapshot.as_ref().map(|s| s.last_seq).unwrap_or(0);
-        let mut events = self.list_session_events_after(session_id, after_seq).await?;
+        let mut events = self
+            .list_session_events_after(session_id, after_seq)
+            .await?;
         let aborted = self.abort_hanging_turns(session_id, &events).await?;
         events.extend(aborted);
 
@@ -52,9 +58,8 @@ impl SessionHistoryStore {
                 // idempotent on top of the materialised messages because
                 // every projection event we replay either adds a new
                 // message or updates one already present.
-                let payload: SnapshotPayload = serde_json::from_value(model.view).map_err(
-                    |err| DbErr::Custom(format!("decode session snapshot: {err}")),
-                )?;
+                let payload: SnapshotPayload = serde_json::from_value(model.view)
+                    .map_err(|err| DbErr::Custom(format!("decode session snapshot: {err}")))?;
                 let tail: SessionView = fold_history::<SessionViewBuilder>(events.as_slice())
                     .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?
                     .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?;
@@ -121,19 +126,44 @@ impl SessionHistoryStore {
         let view_json = serde_json::to_value(payload)
             .map_err(|err| DbErr::Custom(format!("encode session snapshot: {err}")))?;
         let now_ms = Utc::now().timestamp_millis();
+        let backend = self.db.get_database_backend();
+
+        // Try INSERT first. If a row already exists, fall back to a
+        // monotonically-guarded UPDATE: only overwrite when our `last_seq`
+        // is strictly newer than the persisted one. Two concurrent loads
+        // can both reach this point — the older fold would otherwise stomp
+        // on a newer fold and silently demote the cached projection.
         let active = session_snapshot::ActiveModel {
             session_id: ActiveValue::Set(session_id),
             last_seq: ActiveValue::Set(last_seq),
-            view: ActiveValue::Set(view_json),
+            view: ActiveValue::Set(view_json.clone()),
             updated_at_ms: ActiveValue::Set(now_ms),
         };
-        // Upsert: try insert, fall back to update on conflict.
-        match session_snapshot::Entity::insert(active.clone()).exec(&self.db).await {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                session_snapshot::Entity::update(active).exec(&self.db).await.map(|_| ())
-            }
+        if session_snapshot::Entity::insert(active)
+            .exec(&self.db)
+            .await
+            .is_ok()
+        {
+            return Ok(());
         }
+
+        use sea_orm::Statement;
+        let stmt = Statement::from_sql_and_values(
+            backend,
+            "UPDATE agena_session_snapshots \
+             SET last_seq = ?, view_json = ?, updated_at_ms = ? \
+             WHERE session_id = ? AND last_seq < ?",
+            [
+                last_seq.into(),
+                view_json.into(),
+                now_ms.into(),
+                session_id.into(),
+                last_seq.into(),
+            ],
+        );
+        // rows_affected == 0 just means a newer snapshot already won; that
+        // is the desired no-op outcome, not an error.
+        self.db.execute(stmt).await.map(|_| ())
     }
 
     pub(crate) async fn list_session_events(
@@ -239,6 +269,40 @@ impl SessionHistoryStore {
             .publish_batch(built)
             .await
             .map_err(|err| DbErr::Custom(format!("publish history batch failed: {err}")))
+    }
+
+    /// Persist a batch of events for a session **without** broadcasting them
+    /// on the in-process bus. Used by replay-only flows (fork copy, import
+    /// replay) so subscribers don't observe historical reconstructions as
+    /// fresh activity.
+    pub(crate) async fn append_items_silent(
+        &self,
+        session_id: i64,
+        kinds: Vec<EventKind>,
+    ) -> Result<Vec<DomainEvent>, DbErr> {
+        if kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ctx = PublishContext::for_session(session_id);
+        let built: Vec<DomainEvent> = kinds
+            .into_iter()
+            .map(|kind| self.publisher.build(ctx.clone(), kind))
+            .collect();
+        self.publisher
+            .append_batch_silent(built)
+            .await
+            .map_err(|err| DbErr::Custom(format!("append silent history batch failed: {err}")))
+    }
+
+    /// Drop the cached projection snapshot for a session. Called after
+    /// timeline-mutating operations (rewind/unrewind/fork-copy) so the next
+    /// `load_projection` re-folds from the authoritative event log.
+    pub(crate) async fn invalidate_snapshot(&self, session_id: i64) -> Result<(), DbErr> {
+        session_snapshot::Entity::delete_many()
+            .filter(session_snapshot::Column::SessionId.eq(session_id))
+            .exec(&self.db)
+            .await
+            .map(|_| ())
     }
 }
 

@@ -125,7 +125,7 @@ If-Match: "7"
 
 - `GET /healthz` — liveness probe; returns `200 ok` without touching state. k8s-friendly.
 - `GET /readyz` — readiness probe; returns `200 ready` once a runtime snapshot is loaded, otherwise `503 loading`.
-- `GET /metrics` — Prometheus text format. Currently exposes `agena_runtime_generation` and `agena_build_info{version}`; planned: HTTP latency, provider call counts, session counts.
+- `GET /metrics` — Prometheus text format. Currently exposes `agena_runtime_generation`, `agena_runtime_reloads_total`, `agena_http_requests_total`, `agena_http_request_duration_seconds` histogram, provider/tool/session counters and gauges, plus `agena_build_info{version}`.
 
 ### Health / Provider
 
@@ -238,8 +238,16 @@ If-Match: "7"
     - `idle_timeout_ms`
 - `POST /api/v1/sessions/{session_id}/turns`
 - `POST /api/v1/sessions/{session_id}/continue`
+- `POST /api/v1/sessions/{session_id}/fork`
+- `POST /api/v1/sessions/{session_id}/cancel`
 - `POST /api/v1/sessions/{session_id}/permission-replies`
 - `POST /api/v1/sessions/{session_id}/user-input-replies`
+- `POST /api/v1/sessions/{session_id}/rewind`
+- `POST /api/v1/sessions/{session_id}/unrewind`
+- `GET /api/v1/sessions/{session_id}/export`
+- `POST /api/v1/sessions/import`
+- `GET /api/v1/sessions/tree/{root_id}`
+- `GET /api/v1/sessions/{session_id}/rewind-checkpoints`
 
 ### Message
 

@@ -34,6 +34,7 @@ import {
   type TimelineEventRecord,
   type WorkspaceResource,
 } from '@/agena/lib/agenaApi'
+import { applySessionEvent, sortMessages, type ChatEventState } from './chatPageModel'
 
 const route = useRoute()
 const runtime = ref<RuntimeStatus | null>(null)
@@ -176,7 +177,7 @@ function syncEventStream() {
           latest_event_seq: Math.max(sessionState.value.latest_event_seq ?? 0, event.seq),
         }
       }
-      if (applySessionEvent(event)) {
+      if (applyChatSessionEvent(event)) {
         scheduleConversationRefresh()
       }
     },
@@ -323,202 +324,20 @@ function scrollToMessage(messageId: number) {
   target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
-function sortMessages(items: MessageResource[]): MessageResource[] {
-  return [...items].sort((left, right) => {
-    const leftTime = Date.parse(left.created_at)
-    const rightTime = Date.parse(right.created_at)
-    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
-      return leftTime - rightTime
-    }
-    return left.id - right.id
-  })
-}
-
-function sortMessageParts(items: MessagePart[]): MessagePart[] {
-  return [...items].sort((left, right) => {
-    if (left.part_index !== right.part_index) {
-      return left.part_index - right.part_index
-    }
-    return left.id - right.id
-  })
-}
-
-function applyMessagePartUpdatedEvent(payload: Record<string, unknown>): boolean {
-  const sessionId = selectedSessionId.value
-  const messageId = readFiniteNumber(payload.message_id)
-  const messageRole = readString(payload.message_role) as MessageResource['role'] | null
-  const messageState = readString(payload.message_state)
-  const messageCreatedAt = readString(payload.message_created_at)
-  const part = asRecord(payload.part) as MessagePart | null
-
-  if (!sessionId || messageId === null || !messageRole || !messageState || !messageCreatedAt || !part) {
-    return true
-  }
-
-  const nextMessages = messages.value.slice()
-  const messageIndex = nextMessages.findIndex((message) => message.id === messageId)
-  if (messageIndex < 0) {
-    nextMessages.push({
-      id: messageId,
-      session_id: sessionId,
-      role: messageRole,
-      state: messageState,
-      created_at: messageCreatedAt,
-      updated_at: messageCreatedAt,
-      metadata: {},
-      usage: null,
-      finish: null,
-      part_count: 1,
-      parts: [part],
-    })
-    messages.value = sortMessages(nextMessages)
-    return part.status !== 'pending' || messageState !== 'pending'
-  }
-
-  const existing = nextMessages[messageIndex]
-  const nextParts = Array.isArray(existing.parts) ? existing.parts.slice() : []
-  const partIndex = nextParts.findIndex((item) => item.id === part.id)
-  if (partIndex >= 0) {
-    nextParts[partIndex] = part
-  } else {
-    nextParts.push(part)
-  }
-
-  nextMessages[messageIndex] = {
-    ...existing,
-    role: messageRole,
-    state: messageState,
-    created_at: messageCreatedAt,
-    part_count: Math.max(existing.part_count, nextParts.length),
-    parts: sortMessageParts(nextParts),
-  }
-  messages.value = sortMessages(nextMessages)
-  return part.status !== 'pending' || messageState !== 'pending'
-}
-
-function applyMessagePartDeltaEvent(payload: Record<string, unknown>): boolean {
-  const messageId = readFiniteNumber(payload.message_id)
-  const partId = readFiniteNumber(payload.part_id)
-  const field = readString(payload.field)
-  const delta = typeof payload.delta === 'string' ? payload.delta : ''
-
-  if (messageId === null || partId === null || !field) {
-    return true
-  }
-  if (field !== 'text') {
-    return true
-  }
-
-  const nextMessages = messages.value.slice()
-  const messageIndex = nextMessages.findIndex((message) => message.id === messageId)
-  if (messageIndex < 0) {
-    return true
-  }
-
-  const existing = nextMessages[messageIndex]
-  const nextParts = Array.isArray(existing.parts) ? existing.parts.slice() : []
-  const targetIndex = nextParts.findIndex((part) => part.id === partId)
-  if (targetIndex < 0) {
-    return true
-  }
-
-  const target = nextParts[targetIndex]
-  const content = asRecord(target.content)
-  if (!content || content.type !== 'text') {
-    return true
-  }
-
-  nextParts[targetIndex] = {
-    ...target,
-    content: {
-      ...content,
-      text: `${typeof content.text === 'string' ? content.text : ''}${delta}`,
-    },
-  }
-  nextMessages[messageIndex] = {
-    ...existing,
-    parts: sortMessageParts(nextParts),
-  }
-  messages.value = sortMessages(nextMessages)
-  return false
-}
-
-function appendTimelineEvent(event: SessionEventRecord) {
-  const record: TimelineEventRecord = {
-    event_id: event.event_id,
-    session_id: event.session_id,
-    seq_global: event.seq,
-    causation_id: event.causation_id,
-    correlation_id: event.correlation_id,
-    created_at: event.created_at,
-    kind: event.event_type,
-    payload: event.payload,
-  }
-  if (timelineEvents.value.some((item) => item.seq_global === record.seq_global)) {
-    return
-  }
-  timelineEvents.value = [...timelineEvents.value, record].sort((left, right) => left.seq_global - right.seq_global)
-}
-
-function patchSessionStateFromEvent(event: SessionEventRecord, payload: Record<string, unknown>): boolean {
-  if (!sessionState.value) return true
-  appendTimelineEvent(event)
-
-  switch (event.event_type) {
-    case 'run_started':
-    case 'turn_started':
-      sessionState.value = {
-        ...sessionState.value,
-        blocked: false,
-        run_state: 'awaiting_model',
-      }
-      return false
-    case 'turn_completed':
-    case 'assistant_message_completed':
-      sessionState.value = {
-        ...sessionState.value,
-        blocked: false,
-        run_state: 'idle',
-      }
-      return false
-    case 'run_failed':
-    case 'turn_aborted':
-      sessionState.value = {
-        ...sessionState.value,
-        blocked: true,
-        run_state: readString(payload.run_state) || sessionState.value.run_state,
-      }
-      return false
-    case 'message_revised':
-      return true
-    default:
-      return false
-  }
-}
-
-function applySessionEvent(event: SessionEventRecord): boolean {
-  const payload = asRecord(event.payload)
-  if (!payload) return true
-
-  switch (event.event_type) {
-    case 'message_part_updated':
-      appendTimelineEvent(event)
-      return applyMessagePartUpdatedEvent(payload)
-    case 'message_part_delta':
-      return applyMessagePartDeltaEvent(payload)
-    case 'user_message_appended':
-    case 'run_started':
-    case 'run_failed':
-    case 'turn_started':
-    case 'turn_completed':
-    case 'turn_aborted':
-    case 'assistant_message_completed':
-    case 'message_revised':
-      return patchSessionStateFromEvent(event, payload)
-    default:
-      appendTimelineEvent(event)
-      return true
-  }
+function applyChatSessionEvent(event: SessionEventRecord): boolean {
+  const result = applySessionEvent(
+    {
+      messages: messages.value,
+      timelineEvents: timelineEvents.value,
+      sessionState: sessionState.value,
+      selectedSessionId: selectedSessionId.value,
+    } satisfies ChatEventState,
+    event,
+  )
+  messages.value = result.state.messages
+  timelineEvents.value = result.state.timelineEvents
+  sessionState.value = result.state.sessionState
+  return result.shouldRefresh
 }
 
 function readUserAnswer(requestId: string, questionId: string): string {

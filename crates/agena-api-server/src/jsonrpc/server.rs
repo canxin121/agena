@@ -1,18 +1,5 @@
-//! stdio-based application protocol server. Speaks
-//! `agena-app-server-protocol` over a child-process pipe; used by
-//! `agena app-server` and the desktop app embedding.
-//!
-//! See `agena-api-server` for the HTTP/WS surface.
-
 use std::sync::Arc;
 
-use agena_app_server_protocol::{
-    self as protocol, AppServerNotification, CancelTurnParams, CancelTurnResult,
-    CreateSessionParams, CreateSessionResult, InboundMessage, JsonRpcError, JsonRpcRequest,
-    JsonRpcResponse, ListSessionsParams, ListSessionsResult, PermissionReplyParams,
-    PermissionReplyResult, ReadMessagesParams, ReadMessagesResult, SubmitTurnParams,
-    SubmitTurnResult,
-};
 use async_trait::async_trait;
 use axum::{
     Router,
@@ -26,6 +13,13 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt},
     sync::broadcast,
+};
+
+use super::protocol::{
+    self, AppServerNotification, CancelTurnParams, CancelTurnResult, CreateSessionParams,
+    CreateSessionResult, InboundMessage, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
+    ListSessionsParams, ListSessionsResult, PermissionReplyParams, PermissionReplyResult,
+    ReadMessagesParams, ReadMessagesResult, SubmitTurnParams, SubmitTurnResult,
 };
 
 #[derive(Debug, Error)]
@@ -154,18 +148,15 @@ where
                 .await
             }
             protocol::method::TURN_SUBMIT => {
-                self.dispatch::<SubmitTurnParams, SubmitTurnResult, _>(
-                    request.params,
-                    |params| async move {
-                        let result = self.backend.submit_turn(params).await?;
-                        self.events
-                            .publish(AppServerNotification::SessionStateChanged {
-                                session_id: result.session_id,
-                                status: result.status.clone(),
-                            });
-                        Ok(result)
-                    },
-                )
+                self.dispatch::<SubmitTurnParams, SubmitTurnResult, _>(request.params, |params| async move {
+                    let result = self.backend.submit_turn(params).await?;
+                    self.events
+                        .publish(AppServerNotification::SessionStateChanged {
+                            session_id: result.session_id,
+                            status: result.status.clone(),
+                        });
+                    Ok(result)
+                })
                 .await
             }
             protocol::method::PERMISSION_REPLY => {
@@ -315,7 +306,7 @@ fn to_json_rpc_error(error: AppServerError) -> JsonRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_app_server_protocol::{RequestId, SessionListItem};
+    use crate::jsonrpc::protocol::{RequestId, SessionListItem};
     use chrono::Utc;
     use serde_json::json;
 
@@ -419,7 +410,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert!(response.error.is_none());
+        assert_eq!(response.id, RequestId::String("turn".to_owned()));
         assert_eq!(response.result.unwrap()["text"], "hello");
     }
 }

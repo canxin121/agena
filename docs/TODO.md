@@ -8,9 +8,9 @@
 `sea_orm::Database` / `DatabaseConnection`，违反 TUI 应只走
 `agena-client` 的分层原则。
 
-下一步：把 TUI 启动时的 DB 打开移到 `agena-api-server`/`agena-app-server`
-的对外构造函数；TUI 改用 `agena_api_server::AppState::new(...)`
-或 `agena-client` 的 in-process 客户端。
+下一步：把 TUI 启动时的 DB 打开移到 `agena-api-server` 的对外构造函数；
+TUI 改用 `agena_api_server::AppState::new(...)` 或 `agena-client` 的
+in-process 客户端。
 
 ### 静音的 dead_code 标注
 

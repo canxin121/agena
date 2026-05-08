@@ -1,9 +1,9 @@
 //! # agena-api-server
 //!
-//! axum-based v1 API server. Wires the unified [`agena_api`] protocol over
-//! REST + WebSocket + SSE + Unix-socket transports, all backed by the same
-//! `agena::session::SessionManager` and the unified
-//! [`agena::event::EventPublisher`] / [`agena_event::EventBus`].
+//! Unified transport crate for Agena surfaces. It wires the shared [`agena_api`]
+//! protocol and adjacent local protocols over feature-gated transports including
+//! HTTP/REST, WebSocket, SSE, Unix-socket IPC, and JSON-RPC app-server entrypoints,
+//! all backed by the same `agena::session::SessionManager` and unified event bus.
 //!
 //! ## Layout
 //!
@@ -30,23 +30,33 @@
 
 pub mod dispatch;
 pub mod error;
+#[cfg(feature = "ipc")]
 pub mod ipc;
+#[cfg(feature = "jsonrpc")]
+pub mod jsonrpc;
 pub mod local_api;
+#[cfg(feature = "http")]
 pub mod rest;
+#[cfg(feature = "sse")]
 pub mod sse;
 pub mod state;
+#[cfg(feature = "ws")]
 pub mod ws;
 
 pub use state::AppState;
 
+use axum::Router;
+#[cfg(any(feature = "http", feature = "ws", feature = "sse"))]
+use axum::routing::get;
+#[cfg(feature = "http")]
 use axum::{
-    Router,
     middleware::{self, Next},
-    routing::{get, post},
+    routing::post,
 };
 
 /// Increment the per-process HTTP request counter and record the
 /// request duration in the latency histogram.
+#[cfg(feature = "http")]
 async fn count_request(req: axum::extract::Request, next: Next) -> axum::response::Response {
     rest::METRIC_HTTP_REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let start = std::time::Instant::now();
@@ -58,155 +68,172 @@ async fn count_request(req: axum::extract::Request, next: Next) -> axum::respons
 
 /// Build the v1 axum router with every transport mounted.
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/healthz", get(rest::healthz))
-        .route("/readyz", get(rest::readyz))
-        .route("/metrics", get(rest::metrics))
-        .route("/api/v1/health", get(rest::health))
-        .route("/api/v1/runtime", get(rest::get_runtime_status))
-        .route("/api/v1/runtime/reload", post(rest::reload_runtime))
-        .route("/api/v1/plugins", get(rest::list_plugins))
-        .route("/api/v1/plugins/{plugin_id}", get(rest::get_plugin))
-        .route(
-            "/api/v1/plugins/{plugin_id}/logs",
-            get(rest::list_plugin_logs),
-        )
-        .route("/api/v1/auth/providers", get(rest::list_auth_providers))
-        .route(
-            "/api/v1/auth/providers/{provider_id}",
-            get(rest::get_auth_provider).delete(rest::delete_auth_provider),
-        )
-        .route(
-            "/api/v1/auth/providers/{provider_id}/api-key",
-            axum::routing::put(rest::set_auth_provider_api_key),
-        )
-        .route(
-            "/api/v1/auth/providers/{provider_id}/refresh",
-            post(rest::refresh_auth_provider),
-        )
-        .route("/api/v1/providers", get(rest::list_providers))
-        .route(
-            "/api/v1/providers/{provider_id}/models",
-            get(rest::list_provider_models),
-        )
-        .route(
-            "/api/v1/workspaces",
-            get(rest::list_workspaces).post(rest::create_workspace),
-        )
-        .route("/api/v1/workspaces/resolve", post(rest::resolve_workspace))
-        .route(
-            "/api/v1/workspaces/{workspace_id}",
-            get(rest::get_workspace)
-                .put(rest::replace_workspace)
-                .delete(rest::delete_workspace),
-        )
-        .route(
-            "/api/v1/workspaces/{workspace_id}/files",
-            get(rest::list_workspace_files),
-        )
-        .route(
-            "/api/v1/sessions",
-            get(rest::list_sessions).post(rest::create_session),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}",
-            get(rest::get_session)
-                .put(rest::replace_session)
-                .delete(rest::delete_session),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/state",
-            get(rest::get_session_state),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/events",
-            get(rest::list_session_events),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/events/stream",
-            get(rest::stream_session_events),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/messages",
-            get(rest::list_messages),
-        )
-        .route("/api/v1/messages/{message_id}", get(rest::get_message))
-        .route(
-            "/api/v1/messages/{message_id}/parts",
-            get(rest::list_message_parts),
-        )
-        .route(
-            "/api/v1/message-parts/{part_id}",
-            get(rest::get_message_part),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/turns",
-            post(rest::submit_turn),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/continue",
-            post(rest::continue_run),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/fork",
-            post(rest::fork_session),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/cancel",
-            post(rest::cancel_turn),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/permission-replies",
-            post(rest::reply_permission),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/user-input-replies",
-            post(rest::reply_user_input),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/rewind",
-            post(rest::rewind_session),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/unrewind",
-            post(rest::unrewind_session),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/export",
-            get(rest::export_session),
-        )
-        .route("/api/v1/sessions/import", post(rest::import_session))
-        .route(
-            "/api/v1/sessions/tree/{root_id}",
-            get(rest::list_session_tree),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/rewind-checkpoints",
-            get(rest::list_rewind_checkpoints),
-        )
-        .route(
-            "/api/v1/permission-rules",
-            get(rest::list_permission_rules).post(rest::create_permission_rule),
-        )
-        .route(
-            "/api/v1/permission-rules/{rule_id}",
-            get(rest::get_permission_rule)
-                .put(rest::replace_permission_rule)
-                .delete(rest::delete_permission_rule),
-        )
-        .route("/api/v1/events", get(rest::list_events))
-        .route("/api/v1/ws", get(ws::handler))
-        .route("/api/v1/events/stream", get(sse::handler))
-        .route("/plugin-rpc/{plugin_id}", post(rest::plugin_rpc))
-        .layer(middleware::from_fn(count_request))
-        .with_state(state)
+    #[cfg(feature = "http")]
+    let router = {
+        let router = Router::new();
+        router
+            .route("/healthz", get(rest::healthz))
+            .route("/readyz", get(rest::readyz))
+            .route("/metrics", get(rest::metrics))
+            .route("/api/v1/health", get(rest::health))
+            .route("/api/v1/runtime", get(rest::get_runtime_status))
+            .route("/api/v1/runtime/reload", post(rest::reload_runtime))
+            .route("/api/v1/plugins", get(rest::list_plugins))
+            .route("/api/v1/plugins/{plugin_id}", get(rest::get_plugin))
+            .route(
+                "/api/v1/plugins/{plugin_id}/logs",
+                get(rest::list_plugin_logs),
+            )
+            .route("/api/v1/auth/providers", get(rest::list_auth_providers))
+            .route(
+                "/api/v1/auth/providers/{provider_id}",
+                get(rest::get_auth_provider).delete(rest::delete_auth_provider),
+            )
+            .route(
+                "/api/v1/auth/providers/{provider_id}/api-key",
+                axum::routing::put(rest::set_auth_provider_api_key),
+            )
+            .route(
+                "/api/v1/auth/providers/{provider_id}/refresh",
+                post(rest::refresh_auth_provider),
+            )
+            .route("/api/v1/providers", get(rest::list_providers))
+            .route(
+                "/api/v1/providers/{provider_id}/models",
+                get(rest::list_provider_models),
+            )
+            .route(
+                "/api/v1/workspaces",
+                get(rest::list_workspaces).post(rest::create_workspace),
+            )
+            .route("/api/v1/workspaces/resolve", post(rest::resolve_workspace))
+            .route(
+                "/api/v1/workspaces/{workspace_id}",
+                get(rest::get_workspace)
+                    .put(rest::replace_workspace)
+                    .delete(rest::delete_workspace),
+            )
+            .route(
+                "/api/v1/workspaces/{workspace_id}/files",
+                get(rest::list_workspace_files),
+            )
+            .route(
+                "/api/v1/sessions",
+                get(rest::list_sessions).post(rest::create_session),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}",
+                get(rest::get_session)
+                    .put(rest::replace_session)
+                    .delete(rest::delete_session),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/state",
+                get(rest::get_session_state),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/events",
+                get(rest::list_session_events),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/events/stream",
+                get(rest::stream_session_events),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/messages",
+                get(rest::list_messages),
+            )
+            .route("/api/v1/messages/{message_id}", get(rest::get_message))
+            .route(
+                "/api/v1/messages/{message_id}/parts",
+                get(rest::list_message_parts),
+            )
+            .route(
+                "/api/v1/message-parts/{part_id}",
+                get(rest::get_message_part),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/turns",
+                post(rest::submit_turn),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/continue",
+                post(rest::continue_run),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/fork",
+                post(rest::fork_session),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/cancel",
+                post(rest::cancel_turn),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/permission-replies",
+                post(rest::reply_permission),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/user-input-replies",
+                post(rest::reply_user_input),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/rewind",
+                post(rest::rewind_session),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/unrewind",
+                post(rest::unrewind_session),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/export",
+                get(rest::export_session),
+            )
+            .route("/api/v1/sessions/import", post(rest::import_session))
+            .route(
+                "/api/v1/sessions/tree/{root_id}",
+                get(rest::list_session_tree),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/rewind-checkpoints",
+                get(rest::list_rewind_checkpoints),
+            )
+            .route(
+                "/api/v1/permission-rules",
+                get(rest::list_permission_rules).post(rest::create_permission_rule),
+            )
+            .route(
+                "/api/v1/permission-rules/{rule_id}",
+                get(rest::get_permission_rule)
+                    .put(rest::replace_permission_rule)
+                    .delete(rest::delete_permission_rule),
+            )
+            .route("/api/v1/events", get(rest::list_events))
+            .route("/plugin-rpc/{plugin_id}", post(rest::plugin_rpc))
+            .layer(middleware::from_fn(count_request))
+    };
+
+    #[cfg(not(feature = "http"))]
+    let router = Router::new();
+
+    #[cfg(feature = "ws")]
+    let router = router.route("/api/v1/ws", get(ws::handler));
+
+    #[cfg(feature = "sse")]
+    let router = router.route("/api/v1/events/stream", get(sse::handler));
+
+    router.with_state(state)
 }
 
 /// Build the streaming-only transport router for hosts that already mount
 /// overlapping REST endpoints via another API surface.
 pub fn transport_router(state: AppState) -> Router {
-    Router::new()
-        .route("/api/v1/ws", get(ws::handler))
-        .route("/api/v1/events/stream", get(sse::handler))
-        .with_state(state)
+    let router = Router::new();
+
+    #[cfg(feature = "ws")]
+    let router = router.route("/api/v1/ws", get(ws::handler));
+
+    #[cfg(feature = "sse")]
+    let router = router.route("/api/v1/events/stream", get(sse::handler));
+
+    router.with_state(state)
 }

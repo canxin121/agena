@@ -12,7 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 agena = { path = "../../crates/agena" }
+agena-api-server = { path = "../../crates/agena-api-server", features = ["jsonrpc"] }
 agena-otel = { path = "../../crates/agena-otel" }
+async-trait = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }

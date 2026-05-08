@@ -7,8 +7,8 @@ This VS Code extension was a thin proof-of-concept around the original
 ## What's missing
 
 - Uses `agena exec` directly via child process; should migrate to
-  `apps/agena-app-server` over the v1 protocol or to the in-process
-  `agena-client` SDK.
+  the JSON-RPC app-server surface exported from `crates/agena-api-server`
+  or to the in-process `agena-client` SDK.
 - No support for streaming responses.
 - No permission UI / approval flow integration.
 

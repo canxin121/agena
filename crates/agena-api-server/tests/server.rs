@@ -131,6 +131,59 @@ async fn health_endpoint_returns_ok() {
 }
 
 #[tokio::test]
+async fn operational_probes_and_metrics_return_expected_shapes() {
+    let (state, _, _) = build_state().await;
+    let app = router(state);
+
+    let healthz = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(healthz.status(), StatusCode::OK);
+    let healthz_body = healthz.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(String::from_utf8_lossy(&healthz_body), "ok");
+
+    let readyz = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readyz.status(), StatusCode::OK);
+    let readyz_body = readyz.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(String::from_utf8_lossy(&readyz_body), "ready");
+
+    let metrics = app
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metrics.status(), StatusCode::OK);
+    let metrics_body = metrics.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&metrics_body);
+    assert!(text.contains("agena_runtime_generation"));
+    assert!(text.contains("agena_http_requests_total"));
+    assert!(text.contains("agena_http_request_duration_seconds_bucket"));
+    assert!(text.contains("agena_provider_calls_total"));
+    assert!(text.contains("agena_session_active"));
+    assert!(text.contains("agena_build_info"));
+}
+
+#[tokio::test]
 async fn list_events_returns_published_events() {
     let (state, manager, _workspace_root) = build_state().await;
 
@@ -448,6 +501,134 @@ async fn fork_session_endpoint_rejects_legacy_event_seq_payload() {
             })
             .is_some_and(|message| message.contains("at_message_id")),
         "body should mention at_message_id: {value:?}"
+    );
+}
+
+#[tokio::test]
+async fn session_action_routes_cover_rewind_tree_checkpoints_export_and_import() {
+    let (state, manager, workspace_root) = build_state().await;
+    let app = router(state.clone());
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "action source".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let session = manager
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: session.id,
+            options: test_run_options(),
+            parts: vec![PartContent::text("first")],
+        })
+        .await
+        .expect("first turn should succeed");
+    let rewind_target = session.messages.first().expect("expected first message").id;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/sessions/{}/rewind", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"message_id":{rewind_target}}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/sessions/{}/unrewind", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"message_id":{rewind_target}}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/sessions/tree/{}", session.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let tree_body = response.into_body().collect().await.unwrap().to_bytes();
+    let tree: serde_json::Value = serde_json::from_slice(&tree_body).unwrap();
+    assert!(tree.as_array().is_some_and(|items| !items.is_empty()));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/sessions/{}/rewind-checkpoints", session.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let export = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/sessions/{}/export", session.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(export.status(), StatusCode::OK);
+    let export_body = export.into_body().collect().await.unwrap().to_bytes();
+    let jsonl = String::from_utf8_lossy(&export_body).to_string();
+    assert!(!jsonl.trim().is_empty());
+
+    let import = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/sessions/import")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "jsonl": jsonl }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(import.status(), StatusCode::OK);
+    let import_body = import.into_body().collect().await.unwrap().to_bytes();
+    let imported: serde_json::Value = serde_json::from_slice(&import_body).unwrap();
+    assert_ne!(
+        imported
+            .get("session")
+            .and_then(|session| session.get("id"))
+            .and_then(|id| id.as_i64()),
+        Some(session.id)
     );
 }
 

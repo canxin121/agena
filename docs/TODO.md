@@ -210,6 +210,8 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 - [ ] **#13 TUI Phase 2/3**：ratatui slash-command 弹层、cost 面板、并行 subagent 树视图、Vim 模式
 - [x] **#14 Provider 补充（部分）** ✅ ：内置 `ollama` / `lmstudio` 本地 preset（OpenAI 兼容、`OLLAMA_HOST` / `LMSTUDIO_HOST` 自动识别）。仍待补：xAI Grok、Mistral 专用 preset。
 - [ ] **#16 Cost / Token 透出（后端已完成 ✅）**：
+
+> 注：本轮已补齐 `agena-client` REST SDK parity、`http-api-server` probes/session 路由测试，以及 Studio Chat 关键纯逻辑测试；这些改进已落到代码和测试中，后续 roadmap 仅保留仍未完成的能力接线项。
   - [x] `session::cost::summarize(messages) -> SessionCostSummary`：聚合 assistant 消息的 `MessageUsage`，按 `(provider, model)` 分组、含 turns / input / output / reasoning / cache_write / cache_read tokens 与 USD cost；提供 `one_line()` 给状态栏直显；6 单测覆盖
   - 待办：`/cost` slash 命令接入、TUI 状态栏 token 计数、按 provider 价格估算（pricing table）
 

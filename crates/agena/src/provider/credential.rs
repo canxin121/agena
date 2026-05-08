@@ -375,7 +375,7 @@ impl CredentialSource {
 fn prompt_cache_secret_fingerprint(secret: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(secret.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 fn google_adc_prompt_cache_scope(provider_id: &str) -> String {

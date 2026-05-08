@@ -855,7 +855,9 @@ impl App {
         let mut ticker = interval(Duration::from_millis(UI_TICK_MS));
 
         loop {
-            terminal.draw(|frame| self.draw(frame))?;
+            terminal
+                .draw(|frame| self.draw(frame))
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
             tokio::select! {
                 maybe_event = async {
@@ -5595,7 +5597,9 @@ impl App {
         terminal: &mut Terminal<B>,
     ) -> Result<()> {
         self.composer.flush_all_pending_input();
-        terminal.flush()?;
+        terminal
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         terminal::suspend_stdio_terminal()?;
         let result = edit_text(self.composer.text());
         terminal::resume_terminal(terminal)?;
@@ -5618,7 +5622,9 @@ impl App {
         terminal: &mut Terminal<B>,
         path: &Path,
     ) -> Result<()> {
-        terminal.flush()?;
+        terminal
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         terminal::suspend_stdio_terminal()?;
         let result = open_path(path);
         terminal::resume_terminal(terminal)?;
@@ -5728,7 +5734,9 @@ impl App {
             return Ok(());
         }
 
-        terminal.flush()?;
+        terminal
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         terminal::suspend_stdio_terminal()?;
         let result = open_path(path.as_path());
         terminal::resume_terminal(terminal)?;
@@ -5753,7 +5761,9 @@ impl App {
             return Ok(());
         }
 
-        terminal.flush()?;
+        terminal
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         terminal::suspend_stdio_terminal()?;
         let result = page_text(text.as_str());
         terminal::resume_terminal(terminal)?;

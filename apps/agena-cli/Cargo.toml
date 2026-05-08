@@ -1,19 +1,19 @@
 [package]
 name = "agena-cli"
-version = "0.1.0"
-edition = "2024"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 description = "Agena command-line application"
-
 [[bin]]
 name = "agena"
 doc = false
 path = "src/main.rs"
 
 [dependencies]
-agena = { path = "../../crates/agena" }
-agena-api-server = { path = "../../crates/agena-api-server", features = ["jsonrpc"] }
-agena-otel = { path = "../../crates/agena-otel" }
+agena = { workspace = true }
+agena-api-server = { workspace = true, features = ["jsonrpc"] }
+agena-otel = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

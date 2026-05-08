@@ -1,57 +1,42 @@
 [package]
-name = "agena-studio-desktop"
-version = "0.1.0"
+name = "agena-studio-desktop-cef"
+version.workspace = true
 description = "Agena Studio Desktop (Tauri wrapper, CEF)"
-authors = ["Agena Studio Contributors"]
-edition = "2024"
-license = "MIT"
-
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 [lib]
+name = "agena_studio_desktop"
 path = "../src-tauri/src/lib.rs"
 
 [[bin]]
-name = "agena-studio-desktop"
+name = "agena-studio-desktop-cef"
 path = "../src-tauri/src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { workspace = true, features = [] }
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-toml = "1.0.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
 
-tokio = { version = "1", features = ["sync", "time"] }
-reqwest = { version = "0.13", default-features = true, features = ["json"] }
-flate2 = "1.1.4"
-tar = "0.4.44"
-zip = { version = "8.0.0", default-features = false, features = ["deflate"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+reqwest = { workspace = true, default-features = true, features = ["json"] }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true, default-features = false, features = ["deflate"] }
 
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-shell = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "feat/cef" }
-tauri-plugin-opener = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "feat/cef" }
-tauri-plugin-autostart = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "feat/cef" }
-tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "feat/cef" }
+tauri = { workspace = true, features = ["tray-icon", "cef"] }
+tauri-plugin-shell = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-autostart = { workspace = true }
+tauri-plugin-single-instance = { workspace = true }
 
 [features]
-cef = ["tauri/cef"]
+cef = []
 
-# This manifest is for building the experimental CEF variant.
-# It uses Tauri upstream `feat/cef` plus matching plugin sources.
-[patch.crates-io]
-tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-plugin = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-utils = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-macros = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-runtime = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-
-[profile.release]
-panic = "abort"
-codegen-units = 1
-lto = true
-strip = true
-
-[workspace]
+[lints]
+workspace = true

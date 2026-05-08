@@ -1,11 +1,11 @@
 [package]
 name = "agena-studio-desktop"
-version = "0.1.0"
+version.workspace = true
 description = "Agena Studio Desktop (Tauri wrapper)"
-authors = ["Agena Studio Contributors"]
-edition = "2024"
-license = "MIT"
-
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 [lib]
 path = "src/lib.rs"
 
@@ -14,38 +14,28 @@ name = "agena-studio-desktop"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { workspace = true, features = [] }
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "1.0.0"
-thiserror = "2"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
 
-tokio = { version = "1", features = ["sync", "time"] }
-reqwest = { version = "0.13", default-features = true, features = ["json"] }
-flate2 = "1.1.4"
-tar = "0.4.44"
-zip = { version = "8.0.0", default-features = false, features = ["deflate"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+reqwest = { workspace = true, default-features = true, features = ["json"] }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true, default-features = false, features = ["deflate"] }
 
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-shell = "2"
-tauri-plugin-opener = "2"
-tauri-plugin-autostart = "2"
-tauri-plugin-single-instance = "2"
+tauri = { workspace = true, features = ["tray-icon"] }
+tauri-plugin-shell = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-autostart = { workspace = true }
+tauri-plugin-single-instance = { workspace = true }
 
 [features]
-# Reserved for the experimental CEF variant (built from `apps/agena-studio-desktop/src-tauri-cef/`).
-# Declared here to avoid `unexpected cfg` warnings from `#[cfg(feature = "cef")]`.
 cef = []
 
-[profile.release]
-panic = "abort"
-codegen-units = 1
-lto = true
-strip = true
-
-# The repository root workspace is focused on shared crates and server apps.
-# Desktop packaging lives in this local workspace so Tauri/system dependency
-# builds stay opt-in.
-[workspace]
+[lints]
+workspace = true

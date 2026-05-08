@@ -1,9 +1,9 @@
 [package]
 name = "agena-api-server"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
-
+rust-version.workspace = true
 [features]
 default = ["http", "ws", "sse", "ipc", "jsonrpc"]
 http = []
@@ -13,34 +13,34 @@ ipc = ["ws"]
 jsonrpc = []
 
 [dependencies]
-agena = { path = "../agena" }
-agena-api = { path = "../agena-api" }
-agena-scheduler = { path = "../agena-scheduler" }
-async-stream = "0.3.6"
+agena = { workspace = true }
+agena-api = { workspace = true }
+agena-scheduler = { workspace = true }
+async-stream = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["ws", "macros"] }
-base64 = "0.22.1"
+base64 = { workspace = true }
 chrono = { workspace = true }
-futures-util = "0.3.31"
-path-clean = "1.0.1"
+futures-util = { workspace = true }
+path-clean = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sea-orm = { version = "1.1.19", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-json"] }
-smol_str = { version = "0.3.2", features = ["serde"] }
+sea-orm = { workspace = true }
+smol_str = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util"] }
-tokio-stream = { version = "0.1.16", features = ["sync"] }
+tokio-stream = { workspace = true, features = ["sync"] }
 tower = { workspace = true, features = ["util"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-sea-orm = { version = "1.1.19", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-json"] }
+sea-orm = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tower = { workspace = true, features = ["util"] }
 hyper = { workspace = true }
-http-body-util = "0.1"
+http-body-util = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,11 +1,11 @@
 [package]
 name = "agena-mcp-server"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
-
+rust-version.workspace = true
 [dependencies]
-agena-mcp-client = { path = "../agena-mcp-client" }
+agena-mcp-client = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

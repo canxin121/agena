@@ -1,18 +1,18 @@
 [package]
 name = "agena-skills"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
-
+rust-version.workspace = true
 [dependencies]
 serde = { workspace = true }
-serde_yaml = "0.9.34"
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-walkdir = "2.5.0"
+walkdir = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.23.0"
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

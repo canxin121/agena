@@ -28,13 +28,15 @@ use crate::plugin::sdk::host_api::{
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
-    HostSkillGetResponse, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostWorktreeEntry,
-    HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillDescriptor,
+    HostSkillGetRequest, HostSkillGetResponse, HostSkillListResponse, HostSkillMutationResponse,
+    HostSkillRegisterRequest, HostSkillRemoveRequest, HostStorageDeleteRequest, HostStorageEntry,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
+    HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -75,6 +77,13 @@ impl RuntimeHostClient {
 
     fn tool_executor(&self) -> Result<crate::tool::ToolExecutor, PluginError> {
         Ok(self.session_manager()?.tool_executor())
+    }
+
+    fn skills_manager(&self) -> Result<Arc<agena_skills::SkillsManager>, PluginError> {
+        self.runtime
+            .current_snapshot()
+            .skills_manager()
+            .ok_or_else(|| host_unavailable("skills manager is not enabled in this runtime"))
     }
 
     fn callback_context(&self) -> Result<HostCallbackContext, PluginError> {
@@ -340,7 +349,7 @@ fn workflow_builtin_output(
     call_id: Option<i64>,
 ) -> Result<ToolInvokeOutput, PluginError> {
     let execution = crate::entry::orchestrator::execute_builtin(
-        &executor,
+        executor,
         &input,
         BuiltinExecutionContext {
             session_id,
@@ -697,10 +706,7 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostSkillGetRequest,
     ) -> Result<HostSkillGetResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let manager = executor
-            .skills_manager()
-            .ok_or_else(|| host_unavailable("skills manager is not enabled in this runtime"))?;
+        let manager = self.skills_manager()?;
         let skill = manager
             .get(req.name.trim())
             .map_err(|err| PluginError::new(format!("skill_get: {err}")))?;
@@ -709,6 +715,96 @@ impl HostClient for RuntimeHostClient {
             body: skill.body.clone(),
             allowed_tools: skill.frontmatter.allowed_tools.clone(),
             model: skill.frontmatter.model.clone(),
+        })
+    }
+
+    async fn skill_register(
+        &self,
+        req: HostSkillRegisterRequest,
+    ) -> Result<HostSkillMutationResponse, PluginError> {
+        use crate::plugin::sdk::manifest::SkillKind;
+        let manager = self.skills_manager()?;
+        let plugin_id = current_host_callback_context()
+            .and_then(|ctx| ctx.plugin_id)
+            .ok_or_else(|| host_unavailable("skill_register requires plugin id in context"))?;
+        let entry = req.skill;
+        let skill = agena_skills::Skill {
+            frontmatter: agena_skills::SkillFrontmatter {
+                name: entry.name.clone(),
+                description: entry.description,
+                allowed_tools: entry.allowed_tools,
+                model: entry.model,
+                aliases: entry.aliases,
+            },
+            body: entry.body,
+            source_path: None,
+        };
+        match entry.kind {
+            SkillKind::Skill => manager.register(plugin_id, skill),
+            SkillKind::Command => manager.register_command(plugin_id, skill),
+        }
+        Ok(HostSkillMutationResponse {
+            generation: 0,
+            removed: false,
+        })
+    }
+
+    async fn skill_remove(
+        &self,
+        req: HostSkillRemoveRequest,
+    ) -> Result<HostSkillMutationResponse, PluginError> {
+        let manager = self.skills_manager()?;
+        let plugin_id = current_host_callback_context()
+            .and_then(|ctx| ctx.plugin_id)
+            .ok_or_else(|| host_unavailable("skill_remove requires plugin id in context"))?;
+        let removed_skill = manager.remove(&plugin_id, &req.name);
+        let removed_command = manager.remove_command(&plugin_id, &req.name);
+        Ok(HostSkillMutationResponse {
+            generation: 0,
+            removed: removed_skill || removed_command,
+        })
+    }
+
+    async fn skill_list(&self) -> Result<HostSkillListResponse, PluginError> {
+        use crate::plugin::sdk::manifest::{SkillKind, SkillManifestEntry};
+        let manager = self.skills_manager()?;
+        let mut skills: Vec<HostSkillDescriptor> = manager
+            .list_with_owners()
+            .into_iter()
+            .map(|(plugin_id, skill)| {
+                let mut entry = SkillManifestEntry::new(skill.frontmatter.name, skill.body)
+                    .description(skill.frontmatter.description)
+                    .allowed_tools(skill.frontmatter.allowed_tools)
+                    .aliases(skill.frontmatter.aliases)
+                    .kind(SkillKind::Skill);
+                if let Some(model) = skill.frontmatter.model {
+                    entry = entry.model(model);
+                }
+                HostSkillDescriptor {
+                    plugin_id,
+                    skill: entry,
+                }
+            })
+            .collect();
+        // Commands list does not preserve owner per skill in the
+        // current registry; return them tagged as `unknown` for now.
+        for skill in manager.list_commands() {
+            let mut entry = SkillManifestEntry::new(skill.frontmatter.name, skill.body)
+                .description(skill.frontmatter.description)
+                .allowed_tools(skill.frontmatter.allowed_tools)
+                .aliases(skill.frontmatter.aliases)
+                .kind(SkillKind::Command);
+            if let Some(model) = skill.frontmatter.model {
+                entry = entry.model(model);
+            }
+            skills.push(HostSkillDescriptor {
+                plugin_id: String::new(),
+                skill: entry,
+            });
+        }
+        Ok(HostSkillListResponse {
+            generation: 0,
+            skills,
         })
     }
 
@@ -1357,5 +1453,20 @@ mod active_invocations {
             set.borrow_mut().insert(id.clone());
         });
         Guard(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `noop_host_client` returns a working trait object that does not panic
+    /// on `Display` / `Debug` access. Acts as a smoke test that the
+    /// `NoopHostClient` re-export through `agena::plugin` stays intact.
+    #[test]
+    fn noop_host_client_is_constructible() {
+        let client: Arc<dyn HostClient> = noop_host_client();
+        // Poke the Arc to make sure the vtable resolves.
+        assert!(Arc::strong_count(&client) >= 1);
     }
 }

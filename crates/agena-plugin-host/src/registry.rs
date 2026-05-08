@@ -94,10 +94,10 @@ impl PluginEntryRegistry {
         plugin_name: &str,
         exposed_name: &str,
     ) -> Option<PluginEntry> {
-        if !self
+        if self
             .by_exposed
             .get(exposed_name)
-            .is_some_and(|entry| entry.plugin_name == plugin_name)
+            .is_none_or(|entry| entry.plugin_name != plugin_name)
         {
             return None;
         }
@@ -180,6 +180,23 @@ pub fn effective_host_capabilities(decls: &[PluginEntryDecl]) -> Vec<HostCapabil
             if !capabilities.contains(capability) {
                 capabilities.push(*capability);
             }
+        }
+    }
+    capabilities
+}
+
+/// Same as [`effective_host_capabilities`] but additionally folds in
+/// manifest-level `plugin_capabilities`. Used by the host to authorize
+/// plugins that need host capabilities without exposing any tool entry
+/// (e.g. background skill discovery plugins).
+pub fn effective_host_capabilities_for_manifest(
+    decls: &[PluginEntryDecl],
+    plugin_capabilities: &[HostCapability],
+) -> Vec<HostCapability> {
+    let mut capabilities = effective_host_capabilities(decls);
+    for capability in plugin_capabilities {
+        if !capabilities.contains(capability) {
+            capabilities.push(*capability);
         }
     }
     capabilities

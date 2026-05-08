@@ -1330,9 +1330,12 @@ fn session_resource(
     Ok(SessionResource {
         id: model.id,
         parent_id: model.parent_id,
+        depth: model.depth,
+        root_id: model.root_id,
         workspace_id: model.workspace_id,
         title: model.title.clone(),
         version: model.version,
+        is_subagent: model.is_subagent,
         created_at: timestamp_millis_to_utc(model.created_at_ms)?,
         updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
         message_count,

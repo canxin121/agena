@@ -6,5 +6,6 @@ pub mod mcp;
 pub mod router;
 pub mod shell;
 pub mod skills;
+pub mod skills_fs;
 pub mod web;
 pub mod workflow;

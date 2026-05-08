@@ -7,11 +7,15 @@ description = "Agena command-line application"
 
 [[bin]]
 name = "agena"
+doc = false
 path = "src/main.rs"
 
 [dependencies]
 agena = { path = "../../crates/agena" }
 agena-otel = { path = "../../crates/agena-otel" }
-clap = { version = "4.5.51", features = ["derive"] }
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
-tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
+clap = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+
+[lints]
+workspace = true

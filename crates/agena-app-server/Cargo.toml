@@ -2,18 +2,21 @@
 name = "agena-app-server"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 agena-app-server-protocol = { path = "../agena-app-server-protocol" }
-async-trait = "0.1.89"
-chrono = { version = "0.4.42", features = ["serde"] }
-axum = { version = "0.8.6", features = ["ws"] }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
 futures-util = "0.3.31"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["io-util", "macros", "rt-multi-thread", "sync"] }
-tracing = "0.1.44"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "sync"] }
 
 [dev-dependencies]
-tokio = { version = "1.50.0", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

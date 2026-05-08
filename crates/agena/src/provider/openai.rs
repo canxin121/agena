@@ -1296,6 +1296,7 @@ impl ModelProvider for OpenAiProvider {
             .collect())
     }
 
+    #[tracing::instrument(skip_all, fields(provider = "openai", model = %request.model))]
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
 
@@ -1364,6 +1365,7 @@ impl ModelProvider for OpenAiProvider {
         })
     }
 
+    #[tracing::instrument(skip_all, fields(provider = "openai", model = %request.model))]
     async fn complete_stream(
         &self,
         request: CompletionRequest,
@@ -2399,8 +2401,12 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-4o-mini");
+        let provider = OpenAiProvider::new(
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "gpt-4o-mini",
+        );
 
         let mut stream = provider
             .complete_stream(CompletionRequest {

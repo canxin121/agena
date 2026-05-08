@@ -17,7 +17,8 @@ use crate::error::{HostError, TransportError};
 use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
 use crate::logs::{PluginLogEntry, PluginLogStore};
 use crate::registry::{
-    PluginEntry as RegistryPluginEntry, PluginEntryRegistry, effective_host_capabilities,
+    PluginEntry as RegistryPluginEntry, PluginEntryRegistry,
+    effective_host_capabilities_for_manifest,
 };
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, BuiltinToolRequest, EventSubscription,
@@ -35,14 +36,15 @@ use crate::sdk::host_api::{
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSkillGetRequest,
-    HostSkillGetResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
-    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStatuslineSegment,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostTodoWriteRequest, HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostSkillGetResponse, HostSkillRegisterRequest, HostSkillRemoveRequest,
+    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
+    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
+    HostThemeRemoveRequest, HostThemeRemoveResponse, HostTodoWriteRequest,
+    HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
+    SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -1362,6 +1364,19 @@ impl PluginHost {
         Arc::clone(&self._host_handle)
     }
 
+    /// Walk every loaded plugin and forward its manifest-declared skills
+    /// to the host's skill registry via `host.skill.register`. Call this
+    /// after the runtime-backed `HostClient` has been installed (manifest
+    /// skills cannot be registered while the host is still running with
+    /// the bootstrap `NoopHostClient`).
+    pub async fn register_all_manifest_skills(&self) {
+        for plugin in &self.plugins {
+            if !plugin.manifest.skills.is_empty() {
+                register_manifest_skills(&self._host_handle, plugin).await;
+            }
+        }
+    }
+
     pub fn statusline_segments(&self) -> Vec<HostStatuslineSegment> {
         self._host_handle.statusline_list_response().segments
     }
@@ -1605,7 +1620,10 @@ impl PluginHostBuilder {
                 host_handle
                     .set_plugin_capabilities(
                         reused.id.clone(),
-                        effective_host_capabilities(&reused.manifest.entries),
+                        effective_host_capabilities_for_manifest(
+                            &reused.manifest.entries,
+                            &reused.manifest.plugin_capabilities,
+                        ),
                     )
                     .await;
                 host_handle
@@ -1651,7 +1669,10 @@ impl PluginHostBuilder {
                     host_handle
                         .set_plugin_capabilities(
                             plugin.id.clone(),
-                            effective_host_capabilities(&plugin.manifest.entries),
+                            effective_host_capabilities_for_manifest(
+                                &plugin.manifest.entries,
+                                &plugin.manifest.plugin_capabilities,
+                            ),
                         )
                         .await;
                     host_handle
@@ -2368,6 +2389,54 @@ impl HostHandle {
                         let out = host_api::with_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.skill_get(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_SKILL_REGISTER => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::SkillRegistry,
+                        )
+                        .await?;
+                        let p: HostSkillRegisterParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.skill_register(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_SKILL_REMOVE => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::SkillRegistry,
+                        )
+                        .await?;
+                        let p: HostSkillRemoveParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.skill_remove(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_SKILL_LIST => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::SkillRegistry,
+                        )
+                        .await?;
+                        let _p: HostSkillListParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.skill_list(),
                         )
                         .await?;
                         serde_json::to_value(&out)
@@ -3162,12 +3231,11 @@ impl HostHandle {
     }
 
     fn theme_remove(&self, plugin_id: &str, id: &str) -> bool {
-        if let Ok(mut guard) = self.themes.write() {
-            if let Some(existing) = guard.get(id)
-                && existing.plugin_id == plugin_id
-            {
-                return guard.remove(id).is_some();
-            }
+        if let Ok(mut guard) = self.themes.write()
+            && let Some(existing) = guard.get(id)
+            && existing.plugin_id == plugin_id
+        {
+            return guard.remove(id).is_some();
         }
         false
     }
@@ -3298,6 +3366,29 @@ struct HostBuiltinExecuteParams {
 #[derive(serde::Deserialize)]
 struct HostSkillGetParams {
     request: HostSkillGetRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostSkillRegisterParams {
+    request: HostSkillRegisterRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostSkillRemoveParams {
+    request: HostSkillRemoveRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostSkillListParams {
+    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -3589,6 +3680,35 @@ fn scoped_context(
     context
 }
 
+/// Forward every skill declared in a plugin's manifest into the host's
+/// skill registry via `host.skill.register`. Logged-and-continue on
+/// failure so a misconfigured skill does not prevent the plugin from
+/// loading.
+async fn register_manifest_skills(host_handle: &Arc<HostHandle>, plugin: &LoadedPlugin) {
+    let inner = host_handle.inner.read().await.clone();
+    for skill in &plugin.manifest.skills {
+        let context = HostCallbackContext {
+            plugin_id: Some(plugin.id.clone()),
+            ..Default::default()
+        };
+        let result = host_api::with_host_callback_context(
+            context,
+            inner.skill_register(crate::sdk::host_api::HostSkillRegisterRequest {
+                skill: skill.clone(),
+            }),
+        )
+        .await;
+        if let Err(err) = result {
+            tracing::warn!(
+                target: "agena_plugin_host",
+                plugin = %plugin.id,
+                skill = %skill.name,
+                "manifest skill registration failed: {err}"
+            );
+        }
+    }
+}
+
 fn callback_context_from_params(params: &serde_json::Value) -> Option<HostCallbackContext> {
     params
         .as_object()?
@@ -3777,6 +3897,33 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.skill_get(req)).await
+    }
+
+    async fn skill_register(
+        &self,
+        req: HostSkillRegisterRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostSkillMutationResponse> {
+        self.require_capability(method::HOST_SKILL_REGISTER, HostCapability::SkillRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.skill_register(req)).await
+    }
+
+    async fn skill_remove(
+        &self,
+        req: HostSkillRemoveRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostSkillMutationResponse> {
+        self.require_capability(method::HOST_SKILL_REMOVE, HostCapability::SkillRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.skill_remove(req)).await
+    }
+
+    async fn skill_list(&self) -> crate::sdk::Result<crate::sdk::host_api::HostSkillListResponse> {
+        self.require_capability(method::HOST_SKILL_LIST, HostCapability::SkillRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.skill_list()).await
     }
 
     async fn monitor_start(&self, req: MonitorStartRequest) -> crate::sdk::Result<MonitorHandle> {

@@ -8,9 +8,22 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: i64,
     pub parent_id: Option<i64>,
+    /// Distance to the tree root in `parent_id` chain. Root sessions have `0`.
+    /// Filled by the store on creation/fork; never recomputed lazily.
+    pub depth: i64,
+    /// Id of the topmost session in this `parent_id` chain (or `id` itself if
+    /// the session has no parent). Lets `WHERE root_id = ?` pull the entire
+    /// session tree in one query.
+    pub root_id: i64,
     pub workspace_id: i64,
     pub title: String,
     pub version: i64,
+    /// `true` for sessions spawned via the subagent pathway (Task tool /
+    /// `spawn_subtask`). Used by list/tree queries to hide implementation
+    /// detail from the user-facing session list while still letting tools
+    /// or the runtime see the full graph.
+    #[sea_orm(default_value = false)]
+    pub is_subagent: bool,
     #[sea_orm(column_name = "runtime_state_json", column_type = "JsonBinary")]
     pub runtime_state: Option<crate::session::SessionRuntimeState>,
     pub created_at_ms: i64,
@@ -27,6 +40,17 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Workspace,
+    /// Self-referencing parent → child link. `ON DELETE CASCADE` ensures
+    /// removing a session also removes the entire descendant subtree, so
+    /// child rows never end up dangling against a missing `parent_id`.
+    #[sea_orm(
+        belongs_to = "Entity",
+        from = "Column::ParentId",
+        to = "Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    SelfParent,
 }
 
 impl Related<workspace::Entity> for Entity {

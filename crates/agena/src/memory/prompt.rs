@@ -55,7 +55,14 @@ pub fn build_memory_prompt_section(workspace_root: &Path) -> String {
         tracing::debug!("memory: failed to create memory dir: {}", e);
     }
 
-    let entrypoint_content = std::fs::read_to_string(mem_dir.entrypoint()).unwrap_or_default();
+    let entrypoint_content = match std::fs::read_to_string(mem_dir.entrypoint()) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            tracing::warn!("memory: failed to read MEMORY.md: {}", err);
+            String::new()
+        }
+    };
     let mem_dir_display = mem_dir.path().display();
 
     let types_section = r#"## Types of memory

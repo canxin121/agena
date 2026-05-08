@@ -144,7 +144,39 @@ pub enum SystemNoticeKind {
     CompactionSummary,
     ContextInjection,
     ToolPolicyHint,
+    /// Audit marker emitted alongside a `rewind_to_message` operation.
+    /// The notice text is a JSON [`RewindCheckpoint`] payload describing the
+    /// messages that were dropped from the prompt window so a UI can show
+    /// "you rewound past these N messages — undo?" without re-folding.
+    /// Projection drops these from the visible transcript.
+    RewindCheckpoint,
     Other,
+}
+
+/// Payload carried as JSON inside a `SystemNoticeAppended` whose kind is
+/// `RewindCheckpoint`. Stable wire format keyed on schema for forward
+/// compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RewindCheckpoint {
+    /// Format version. Increment on breaking changes.
+    pub schema: u32,
+    /// Millisecond UTC timestamp of when the rewind happened.
+    pub at_ms: i64,
+    /// The message id the user rewound *to* (inclusive — this and everything
+    /// after it were compacted).
+    pub target_message_id: i64,
+    /// Per-message audit entries for every message that was compacted. Order
+    /// matches the original transcript order.
+    pub dropped: Vec<RewindCheckpointEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RewindCheckpointEntry {
+    pub message_id: i64,
+    pub role: String,
+    /// Truncated preview of the message body (≤256 chars). Full content is
+    /// still recoverable from the underlying event log if needed.
+    pub preview: String,
 }
 
 /// Annotation that overlays a previously-appended message — used by prompt
@@ -163,6 +195,10 @@ pub enum RevisionKind {
     /// be dropped from the transcript. The summary itself arrives as a
     /// `SystemNoticeAppended` with kind `CompactionSummary`.
     Compacted,
+    /// Reverses a prior `Compacted` revision on the same target message,
+    /// re-admitting it into the transcript. Used by the un-rewind flow so a
+    /// rewind can be undone without losing the pre-existing event log.
+    Uncompacted,
     /// A tool result on the target message has been pruned; the projection
     /// substitutes `replacement` for the original output.
     ToolResultPruned {
@@ -188,6 +224,7 @@ mod tests {
     fn message_revised_round_trip() {
         for kind in [
             RevisionKind::Compacted,
+            RevisionKind::Uncompacted,
             RevisionKind::ToolResultPruned {
                 call_id: ToolCallId::new("call_x"),
                 replacement: "[pruned]".into(),

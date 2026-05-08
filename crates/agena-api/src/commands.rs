@@ -31,6 +31,14 @@ pub enum Command {
     ContinueRun(ContinueRunParams),
     CancelTurn(CancelTurnParams),
     RewindSession(RewindSessionParams),
+    UnrewindSession(UnrewindSessionParams),
+
+    // ── tree / fork / portability ──
+    ForkSession(ForkSessionParams),
+    ListSessionTree(ListSessionTreeParams),
+    ListRewindCheckpoints(ListRewindCheckpointsParams),
+    ExportSession(ExportSessionParams),
+    ImportSession(ImportSessionParams),
 
     // ── interactive replies ──
     ReplyPermission(ReplyPermissionParams),
@@ -43,11 +51,15 @@ pub enum Command {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "result", content = "data", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)] // protocol-shaped enum; boxing breaks wire format
 pub enum CommandResult {
     Workspace(WorkspaceResource),
     WorkspaceDeleted { id: i64 },
     Session(SessionResource),
     SessionDeleted { id: i64 },
+    SessionTree(Vec<SessionResource>),
+    SessionExport { jsonl: String },
+    RewindCheckpoints(Vec<crate::resource::RewindCheckpointResource>),
     Execution(SessionExecutionResource),
     PermissionRule(crate::resource::PermissionRuleResource),
     PermissionRuleDeleted { id: i64 },
@@ -137,6 +149,53 @@ pub struct RewindSessionParams {
     pub message_id: i64,
     #[serde(default)]
     pub expected_version: Option<i64>,
+}
+
+/// Reverses a prior [`RewindSessionParams`] on the same session by re-admitting
+/// every still-compacted message at or after `message_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrewindSessionParams {
+    pub session_id: i64,
+    pub message_id: i64,
+    #[serde(default)]
+    pub expected_version: Option<i64>,
+}
+
+/// Clone a session's history into a new child session.
+///
+/// `at_message_id = None` clones the entire history; otherwise the fork stops
+/// at (and includes) the last event tied to that message id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkSessionParams {
+    pub session_id: i64,
+    #[serde(default)]
+    pub at_message_id: Option<i64>,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// List every session sharing the given tree root, in `(depth, id)` order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListSessionTreeParams {
+    pub root_id: i64,
+}
+
+/// List every persisted rewind audit checkpoint for a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListRewindCheckpointsParams {
+    pub session_id: i64,
+}
+
+/// Export a session as a portable JSONL bundle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportSessionParams {
+    pub session_id: i64,
+}
+
+/// Replay a JSONL bundle into the current workspace as a fresh session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportSessionParams {
+    pub jsonl: String,
 }
 
 // ─── interactive replies ────────────────────────────────────────────────

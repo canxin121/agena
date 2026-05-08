@@ -528,6 +528,9 @@ mod tests {
         buf.begin_assistant(&mut ids);
         let id: ToolCallId = "call_anon".into();
         buf.start_tool_call(id.clone()).unwrap();
-        assert_eq!(buf.commit(&mut allocator()), Err(TurnBufferError::ToolCallMissingName(id)));
+        assert_eq!(
+            buf.commit(&mut allocator()),
+            Err(TurnBufferError::ToolCallMissingName(id))
+        );
     }
 }

@@ -9,6 +9,7 @@ pub mod event;
 pub mod hooks;
 pub mod memory;
 pub mod message;
+pub mod metrics;
 pub mod model;
 pub mod permission;
 pub use agena_plugin_host as plugin;

@@ -1,3 +1,9 @@
+//! Server side of Model Context Protocol (MCP). Lets the agena runtime
+//! expose itself as an MCP backend so external clients (IDE plugins,
+//! other agents) can list / invoke tools over JSON-RPC.
+//!
+//! See `agena-mcp-client` for the client-side implementation.
+
 use std::sync::Arc;
 
 use agena_mcp_client::protocol::{

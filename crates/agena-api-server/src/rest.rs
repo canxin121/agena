@@ -8,8 +8,6 @@ use std::{
     sync::Arc,
 };
 
-use agena::event::{EventStore, StoreRange};
-use agena_api::queries::{ListEventsParams, Query, QueryResult};
 use crate::local_api::{
     AuthApiKeyWriteRequest, AuthCredentialType, AuthProviderResource, HealthResponse,
     MessageListQuery, PermissionRuleListQuery, PermissionRuleWriteRequest, PluginInspectResponse,
@@ -19,6 +17,8 @@ use crate::local_api::{
     SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
     WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
+use agena::event::{EventStore, StoreRange};
+use agena_api::queries::{ListEventsParams, Query, QueryResult};
 use async_stream::stream;
 use axum::{
     Json,
@@ -45,8 +45,10 @@ pub struct SessionEventListCompatQuery {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SessionForkRequestBody {
+    /// Fork point. `None` clones the entire history; otherwise clones
+    /// every event up to and including the last one tied to this message id.
     #[serde(default)]
-    pub at_event_seq: Option<i64>,
+    pub at_message_id: Option<i64>,
     #[serde(default)]
     pub title: Option<String>,
 }
@@ -59,6 +61,175 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
         loaded_at: snapshot.loaded_at(),
         database_connected: true,
     }))
+}
+
+/// Lightweight liveness probe — returns 200 OK with a static body.
+/// No application state is touched. Suitable for k8s livenessProbe.
+pub async fn healthz() -> impl IntoResponse {
+    (axum::http::StatusCode::OK, "ok")
+}
+
+/// Readiness probe — returns 200 once the runtime snapshot is loaded.
+pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    let snapshot = state.runtime().current_snapshot();
+    if snapshot.generation() > 0 {
+        (axum::http::StatusCode::OK, "ready")
+    } else {
+        (axum::http::StatusCode::SERVICE_UNAVAILABLE, "loading")
+    }
+}
+
+/// Process-wide counters surfaced via `/metrics`. These are intentionally
+/// lightweight (raw atomics + bucket histograms, no real meter provider)
+/// until `agena-otel` exposes a meter API.
+pub(crate) static METRIC_HTTP_REQUESTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static METRIC_RUNTIME_RELOADS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static METRIC_HTTP_DURATION_SUM_MICROS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+/// Buckets in microseconds: 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, 5s, 10s, +Inf
+pub(crate) static HTTP_LATENCY_BUCKETS_US: [u64; 9] = [
+    1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000,
+];
+pub(crate) static METRIC_HTTP_LATENCY_BUCKETS: [std::sync::atomic::AtomicU64; 10] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
+pub(crate) static METRIC_PROCESS_START_UNIX: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// Record one HTTP request latency observation. Called by the
+/// request-counting middleware in `lib.rs`.
+pub(crate) fn record_http_latency(elapsed_us: u64) {
+    use std::sync::atomic::Ordering;
+    METRIC_HTTP_DURATION_SUM_MICROS.fetch_add(elapsed_us, Ordering::Relaxed);
+    let mut bucket = HTTP_LATENCY_BUCKETS_US.len();
+    for (idx, threshold) in HTTP_LATENCY_BUCKETS_US.iter().enumerate() {
+        if elapsed_us <= *threshold {
+            bucket = idx;
+            break;
+        }
+    }
+    METRIC_HTTP_LATENCY_BUCKETS[bucket].fetch_add(1, Ordering::Relaxed);
+}
+
+fn process_start_unix() -> u64 {
+    *METRIC_PROCESS_START_UNIX.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default()
+    })
+}
+
+/// Minimal Prometheus-style metrics endpoint. Exposes a handful of process
+/// counters today plus an HTTP latency histogram; richer metrics (provider
+/// tokens, session active counts) should land via `agena-otel` once a
+/// real meter provider is wired up.
+pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    use std::sync::atomic::Ordering;
+    let snapshot = state.runtime().current_snapshot();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let uptime = now.saturating_sub(process_start_unix());
+    let core_snap = agena::metrics::snapshot();
+
+    // Histogram body — Prometheus expects cumulative counts.
+    let mut hist = String::new();
+    let mut cumulative: u64 = 0;
+    for (idx, threshold) in HTTP_LATENCY_BUCKETS_US.iter().enumerate() {
+        cumulative += METRIC_HTTP_LATENCY_BUCKETS[idx].load(Ordering::Relaxed);
+        let upper_seconds = (*threshold as f64) / 1_000_000.0;
+        hist.push_str(&format!(
+            "agena_http_request_duration_seconds_bucket{{le=\"{:}\"}} {}\n",
+            upper_seconds, cumulative
+        ));
+    }
+    cumulative +=
+        METRIC_HTTP_LATENCY_BUCKETS[HTTP_LATENCY_BUCKETS_US.len()].load(Ordering::Relaxed);
+    hist.push_str(&format!(
+        "agena_http_request_duration_seconds_bucket{{le=\"+Inf\"}} {}\n",
+        cumulative
+    ));
+    let total_count = cumulative;
+    let total_sum_us = METRIC_HTTP_DURATION_SUM_MICROS.load(Ordering::Relaxed);
+    hist.push_str(&format!(
+        "agena_http_request_duration_seconds_sum {}\n",
+        (total_sum_us as f64) / 1_000_000.0
+    ));
+    hist.push_str(&format!(
+        "agena_http_request_duration_seconds_count {}\n",
+        total_count
+    ));
+
+    let body = format!(
+        "# HELP agena_runtime_generation monotonically-increasing config generation\n\
+         # TYPE agena_runtime_generation counter\n\
+         agena_runtime_generation {generation}\n\
+         # HELP agena_runtime_reloads_total total runtime reloads observed\n\
+         # TYPE agena_runtime_reloads_total counter\n\
+         agena_runtime_reloads_total {reloads}\n\
+         # HELP agena_http_requests_total total HTTP requests handled by api-server\n\
+         # TYPE agena_http_requests_total counter\n\
+         agena_http_requests_total {requests}\n\
+         # HELP agena_http_request_duration_seconds HTTP request duration histogram\n\
+         # TYPE agena_http_request_duration_seconds histogram\n\
+         {hist}\
+         # HELP agena_provider_calls_total total provider complete/complete_stream calls\n\
+         # TYPE agena_provider_calls_total counter\n\
+         agena_provider_calls_total {provider_calls}\n\
+         # HELP agena_provider_calls_error_total provider calls that returned an error\n\
+         # TYPE agena_provider_calls_error_total counter\n\
+         agena_provider_calls_error_total {provider_errors}\n\
+         # HELP agena_provider_stream_total provider streaming calls observed\n\
+         # TYPE agena_provider_stream_total counter\n\
+         agena_provider_stream_total {provider_streams}\n\
+         # HELP agena_tool_executions_total total tool invocations\n\
+         # TYPE agena_tool_executions_total counter\n\
+         agena_tool_executions_total {tool_total}\n\
+         # HELP agena_tool_executions_error_total tool invocations that failed\n\
+         # TYPE agena_tool_executions_error_total counter\n\
+         agena_tool_executions_error_total {tool_errors}\n\
+         # HELP agena_session_active sessions currently being processed\n\
+         # TYPE agena_session_active gauge\n\
+         agena_session_active {session_active}\n\
+         # HELP agena_process_uptime_seconds process uptime in seconds\n\
+         # TYPE agena_process_uptime_seconds gauge\n\
+         agena_process_uptime_seconds {uptime}\n\
+         # HELP agena_build_info build info (always 1)\n\
+         # TYPE agena_build_info gauge\n\
+         agena_build_info{{version=\"{version}\"}} 1\n",
+        generation = snapshot.generation(),
+        reloads = METRIC_RUNTIME_RELOADS.load(Ordering::Relaxed),
+        requests = METRIC_HTTP_REQUESTS.load(Ordering::Relaxed),
+        hist = hist,
+        provider_calls = core_snap.provider_calls_total,
+        provider_errors = core_snap.provider_calls_error,
+        provider_streams = core_snap.provider_stream_total,
+        tool_total = core_snap.tool_executions_total,
+        tool_errors = core_snap.tool_executions_error,
+        session_active = core_snap.session_active,
+        uptime = uptime,
+        version = env!("CARGO_PKG_VERSION"),
+    );
+    (
+        axum::http::StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
+        body,
+    )
 }
 
 pub async fn get_runtime_status(
@@ -74,6 +245,7 @@ pub async fn reload_runtime(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
     let report = state.runtime().reload().await.map_err(ServerError::Core)?;
+    METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(Json(RuntimeReloadResponse {
         cause: "manual",
         previous_generation: report.previous_generation,
@@ -448,6 +620,7 @@ pub async fn get_session_state(
     Ok(Json(resource))
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn create_session(
     State(state): State<AppState>,
     Json(request): Json<SessionCreateRequest>,
@@ -692,23 +865,16 @@ pub async fn continue_run(
 pub async fn fork_session(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
+    headers: HeaderMap,
     Json(request): Json<SessionForkRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    let at_event_seq = match request.at_event_seq {
-        Some(seq) => seq,
-        None => state
-            .service()
-            .latest_session_event_seq(manager.as_ref(), session_id)
-            .await
-            .map_err(server_error_from_http)?
-            .unwrap_or(0),
-    };
     let session = manager
         .fork_session(agena::session::SessionForkRequest {
             session_id,
-            at_event_seq,
+            at_message_id: request.at_message_id,
             title: request.title,
+            expected_version: if_match_version(&headers)?,
         })
         .await
         .map_err(ServerError::Core)?;
@@ -807,20 +973,103 @@ pub async fn rewind_session(
     headers: HeaderMap,
     Json(request): Json<SessionRewindRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
-    if let Some(expected_version) = if_match_version(&headers)? {
-        state
-            .service()
-            .assert_session_version(session_id, expected_version)
-            .await
-            .map_err(server_error_from_http)?;
-    }
-
+    let expected_version = if_match_version(&headers)?;
     let manager = state.session_manager()?;
     let session = manager
         .rewind_session(agena::session::SessionRewindRequest {
             session_id,
             message_id: request.message_id,
+            expected_version,
         })
+        .await
+        .map_err(ServerError::Core)?;
+    let resource = state
+        .service()
+        .session_execution_resource(manager.as_ref(), &session)
+        .await
+        .map_err(server_error_from_http)?;
+    Ok(Json(resource))
+}
+
+pub async fn unrewind_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    headers: HeaderMap,
+    Json(request): Json<SessionRewindRequestBody>,
+) -> Result<impl IntoResponse, ServerError> {
+    let expected_version = if_match_version(&headers)?;
+    let manager = state.session_manager()?;
+    let session = manager
+        .unrewind_session(agena::session::SessionUnrewindRequest {
+            session_id,
+            message_id: request.message_id,
+            expected_version,
+        })
+        .await
+        .map_err(ServerError::Core)?;
+    let resource = state
+        .service()
+        .session_execution_resource(manager.as_ref(), &session)
+        .await
+        .map_err(server_error_from_http)?;
+    Ok(Json(resource))
+}
+
+pub async fn list_session_tree(
+    State(state): State<AppState>,
+    Path(root_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let summaries = manager
+        .list_session_tree(root_id)
+        .await
+        .map_err(ServerError::Core)?;
+    let resources: Vec<crate::local_api::dto::SessionResource> =
+        summaries.into_iter().map(Into::into).collect();
+    Ok(Json(resources))
+}
+
+pub async fn list_rewind_checkpoints(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let checkpoints = manager
+        .list_rewind_checkpoints(session_id)
+        .await
+        .map_err(ServerError::Core)?;
+    let resources: Vec<agena_api::resource::RewindCheckpointResource> =
+        checkpoints.into_iter().map(Into::into).collect();
+    Ok(Json(resources))
+}
+
+pub async fn export_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let jsonl = manager
+        .export_session_jsonl(session_id)
+        .await
+        .map_err(ServerError::Core)?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/x-ndjson")],
+        jsonl,
+    ))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionImportRequestBody {
+    pub jsonl: String,
+}
+
+pub async fn import_session(
+    State(state): State<AppState>,
+    Json(request): Json<SessionImportRequestBody>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let session = manager
+        .import_session_jsonl(&request.jsonl)
         .await
         .map_err(ServerError::Core)?;
     let resource = state
@@ -959,12 +1208,8 @@ pub async fn plugin_rpc(
 fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
     let status = error.into_response().status();
     match status {
-        axum::http::StatusCode::BAD_REQUEST => {
-            ServerError::BadRequest("bad request".into())
-        }
-        axum::http::StatusCode::NOT_FOUND => {
-            ServerError::NotFound("resource not found".into())
-        }
+        axum::http::StatusCode::BAD_REQUEST => ServerError::BadRequest("bad request".into()),
+        axum::http::StatusCode::NOT_FOUND => ServerError::NotFound("resource not found".into()),
         axum::http::StatusCode::CONFLICT => ServerError::Conflict("conflict".into()),
         axum::http::StatusCode::SERVICE_UNAVAILABLE => {
             ServerError::ServiceUnavailable("service unavailable".into())

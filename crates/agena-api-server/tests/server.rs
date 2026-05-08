@@ -196,7 +196,7 @@ async fn fork_session_endpoint_returns_forked_execution_resource() {
                 .method("POST")
                 .uri(format!("/api/v1/sessions/{}/fork", session.id))
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"at_event_seq":0,"title":"fork child"}"#))
+                .body(Body::from(r#"{"title":"fork child"}"#))
                 .unwrap(),
         )
         .await

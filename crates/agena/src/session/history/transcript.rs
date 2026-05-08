@@ -595,6 +595,9 @@ impl HistoryFold for ProviderTranscriptBuilder {
                 RevisionKind::Compacted => {
                     self.compacted_messages.insert(*target_message_id);
                 }
+                RevisionKind::Uncompacted => {
+                    self.compacted_messages.remove(target_message_id);
+                }
                 RevisionKind::ToolResultPruned {
                     call_id,
                     replacement,

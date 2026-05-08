@@ -4,6 +4,15 @@
 
 use std::collections::HashMap;
 
+use crate::local_api::{
+    PermissionRuleListQuery, PermissionRuleResource as HttpPermissionRuleResource,
+    PermissionRuleWriteRequest, SessionAutomationResource as HttpSessionAutomationResource,
+    SessionCreateRequest as HttpSessionCreateRequest,
+    SessionExecutionContextResource as HttpSessionExecutionContextResource,
+    SessionExecutionResource as HttpSessionExecutionResource, SessionListQuery,
+    SessionReplaceRequest, SessionResource as HttpSessionResource, WorkspaceListQuery,
+    WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource, WorkspaceWriteRequest,
+};
 use agena::event::{EventStore, StoreRange};
 use agena::{
     event::EventKind,
@@ -17,8 +26,10 @@ use agena_api::{
     commands::{
         CancelTurnParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
-        DeleteWorkspaceParams, ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RewindSessionParams, SubmitTurnParams, UpdateSessionParams, UpdateWorkspaceParams,
+        DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
+        ListRewindCheckpointsParams, ListSessionTreeParams, ReplyPermissionParams,
+        ReplyUserInputParams, ResolveWorkspaceParams, RewindSessionParams, SubmitTurnParams,
+        UnrewindSessionParams, UpdateSessionParams, UpdateWorkspaceParams,
         UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
@@ -35,15 +46,6 @@ use agena_api::{
         SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
         SessionResource, SessionRunState, WorkspaceResource,
     },
-};
-use crate::local_api::{
-    PermissionRuleListQuery, PermissionRuleResource as HttpPermissionRuleResource,
-    PermissionRuleWriteRequest, SessionAutomationResource as HttpSessionAutomationResource,
-    SessionCreateRequest as HttpSessionCreateRequest,
-    SessionExecutionContextResource as HttpSessionExecutionContextResource,
-    SessionExecutionResource as HttpSessionExecutionResource, SessionListQuery,
-    SessionReplaceRequest, SessionResource as HttpSessionResource, WorkspaceListQuery,
-    WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource, WorkspaceWriteRequest,
 };
 
 use crate::{error::ServerError, state::AppState};
@@ -81,9 +83,12 @@ fn session_from_http(value: HttpSessionResource) -> SessionResource {
     SessionResource {
         id: value.id,
         parent_id: value.parent_id,
+        depth: value.depth,
+        root_id: value.root_id,
         workspace_id: value.workspace_id,
         title: value.title,
         version: value.version,
+        is_subagent: value.is_subagent,
         created_at: value.created_at,
         updated_at: value.updated_at,
         message_count: value.message_count,
@@ -487,19 +492,83 @@ pub async fn dispatch_command(
             message_id,
             expected_version,
         }) => {
-            if let Some(expected_version) = expected_version {
-                state
-                    .service()
-                    .assert_session_version(session_id, expected_version)
-                    .await
-                    .map_err(server_error_from_http)?;
-            }
             let session = manager
                 .rewind_session(agena::session::SessionRewindRequest {
                     session_id,
                     message_id,
+                    expected_version,
                 })
                 .await?;
+            let resource = state
+                .service()
+                .session_execution_resource(manager.as_ref(), &session)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::Execution(session_execution_from_http(
+                resource,
+            )))
+        }
+        Command::UnrewindSession(UnrewindSessionParams {
+            session_id,
+            message_id,
+            expected_version,
+        }) => {
+            let session = manager
+                .unrewind_session(agena::session::SessionUnrewindRequest {
+                    session_id,
+                    message_id,
+                    expected_version,
+                })
+                .await?;
+            let resource = state
+                .service()
+                .session_execution_resource(manager.as_ref(), &session)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::Execution(session_execution_from_http(
+                resource,
+            )))
+        }
+        Command::ForkSession(ForkSessionParams {
+            session_id,
+            at_message_id,
+            title,
+        }) => {
+            let session = manager
+                .fork_session(agena::session::SessionForkRequest {
+                    session_id,
+                    at_message_id,
+                    title,
+                    expected_version: None,
+                })
+                .await?;
+            let resource = state
+                .service()
+                .session_execution_resource(manager.as_ref(), &session)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::Execution(session_execution_from_http(
+                resource,
+            )))
+        }
+        Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
+            let summaries = manager.list_session_tree(root_id).await?;
+            let resources: Vec<SessionResource> =
+                summaries.into_iter().map(SessionResource::from).collect();
+            Ok(CommandResult::SessionTree(resources))
+        }
+        Command::ListRewindCheckpoints(ListRewindCheckpointsParams { session_id }) => {
+            let checkpoints = manager.list_rewind_checkpoints(session_id).await?;
+            Ok(CommandResult::RewindCheckpoints(
+                checkpoints.into_iter().map(Into::into).collect(),
+            ))
+        }
+        Command::ExportSession(ExportSessionParams { session_id }) => {
+            let jsonl = manager.export_session_jsonl(session_id).await?;
+            Ok(CommandResult::SessionExport { jsonl })
+        }
+        Command::ImportSession(ImportSessionParams { jsonl }) => {
+            let session = manager.import_session_jsonl(&jsonl).await?;
             let resource = state
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
@@ -836,5 +905,48 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 })?;
             Ok(QueryResult::PermissionRule(permission_rule_from_http(rule)))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena::model::ModelRef;
+    use agena_api::resource::RunOptions;
+
+    #[test]
+    fn run_options_to_core_uses_default_when_model_absent() {
+        let options = RunOptions {
+            model: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let core = run_options_to_core(&options);
+        assert!(!core.model.provider_id.as_str().is_empty());
+        assert!(!core.model.model_id.as_str().is_empty());
+    }
+
+    #[test]
+    fn run_options_to_core_round_trips_explicit_model() {
+        let options = RunOptions {
+            model: Some(ModelRef::new("anthropic", "claude-sonnet-4-6")),
+            system: Some("be concise".into()),
+            temperature: Some(0.7),
+            max_output_tokens: Some(256),
+        };
+        let core = run_options_to_core(&options);
+        assert_eq!(core.model.provider_id.as_str(), "anthropic");
+        assert_eq!(core.model.model_id.as_str(), "claude-sonnet-4-6");
+        assert_eq!(core.system.as_deref(), Some("be concise"));
+        assert_eq!(core.temperature, Some(0.7));
+        assert_eq!(core.max_output_tokens, Some(256));
+    }
+
+    #[test]
+    fn server_error_from_http_yields_internal() {
+        let err = crate::local_api::ApiError::internal("boom");
+        let server_err = server_error_from_http(err);
+        assert!(matches!(server_err, ServerError::Internal(_)));
     }
 }

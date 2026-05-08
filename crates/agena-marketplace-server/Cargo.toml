@@ -2,13 +2,16 @@
 name = "agena-marketplace-server"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [features]
 default = []
-server = ["dep:axum", "dep:tokio", "dep:serde", "dep:serde_json"]
+server = ["dep:axum", "dep:tokio", "dep:serde_json"]
 
 [dependencies]
-axum = { version = "0.7", optional = true }
-serde = { version = "1.0.228", features = ["derive"], optional = true }
-serde_json = { version = "1.0.149", optional = true }
-tokio = { version = "1.50.0", features = ["net"], optional = true }
+axum = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["net"], optional = true }
+
+[lints]
+workspace = true

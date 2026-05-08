@@ -123,6 +123,7 @@ impl Drop for PluginShutdownGuard {
 }
 
 impl RuntimeServices {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         providers: Arc<ProviderRegistry>,
         plugins: Arc<PluginHost>,
@@ -237,6 +238,11 @@ impl RuntimeSnapshot {
         } else {
             Some(build_mcp_manager(&resolution.config.mcp).await)
         };
+        // Construct the skill registry up-front so the bundled
+        // `agena.skills_fs` plugin (and any third-party plugin that
+        // declares `skills` in its manifest) can populate it during
+        // plugin host construction.
+        let skills_manager = Arc::new(agena_skills::SkillsManager::new());
         let plugins = if let Some(prev) = previous.as_ref() {
             let prev_host = prev.plugin_manager();
             let prev_cfg = prev.config_resolution().config.plugins.clone();
@@ -245,12 +251,18 @@ impl RuntimeSnapshot {
                     Some(prev_host),
                     Some(&prev_cfg),
                     mcp_manager.clone(),
+                    Some(Arc::clone(&skills_manager)),
                 )
                 .await
                 .map_err(AppError::from)?
         } else {
             resolution
-                .build_plugin_host_with_previous_and_mcp(None, None, mcp_manager.clone())
+                .build_plugin_host_with_previous_and_mcp(
+                    None,
+                    None,
+                    mcp_manager.clone(),
+                    Some(Arc::clone(&skills_manager)),
+                )
                 .await
                 .map_err(AppError::from)?
         };
@@ -272,9 +284,7 @@ impl RuntimeSnapshot {
         }
         let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
         let reusing_session_manager = existing_session_manager.is_some();
-        let skills_manager = agena_skills::SkillsManager::build(Some(workspace_root))
-            .ok()
-            .map(Arc::new);
+        let skills_manager = Some(skills_manager);
         let lsp_registry = if resolution.config.lsp.servers.is_empty() {
             None
         } else {

@@ -554,53 +554,65 @@ impl CompiledHook {
         let timeout = self.timeout;
         let url = url.to_string();
 
-        // The plugin host calls our async hook impls from a tokio runtime;
-        // running a dedicated blocking client on a worker thread keeps the
-        // dispatch synchronous (matching the shell branch) without touching
-        // the async runtime.
+        // Hooks are dispatched from async plugin impls. We spin a dedicated
+        // single-thread runtime so the async reqwest call cannot stall the
+        // caller's runtime. The dispatch stays synchronous to match
+        // `run_shell` semantics.
         let result = std::thread::scope(|scope| {
             let handle = scope.spawn(move || {
-                let client = match reqwest::blocking::Client::builder()
-                    .timeout(timeout)
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
                     .build()
                 {
-                    Ok(client) => client,
+                    Ok(rt) => rt,
                     Err(err) => {
                         tracing::warn!(
                             target: "agena::hooks",
-                            "failed to build hook http client: {err}"
+                            "failed to build hook runtime: {err}"
                         );
                         return None;
                     }
                 };
-                let response = match client.post(&url).json(&body).send() {
-                    Ok(r) => r,
-                    Err(err) => {
+                runtime.block_on(async move {
+                    let client = match reqwest::Client::builder().timeout(timeout).build() {
+                        Ok(client) => client,
+                        Err(err) => {
+                            tracing::warn!(
+                                target: "agena::hooks",
+                                "failed to build hook http client: {err}"
+                            );
+                            return None;
+                        }
+                    };
+                    let response = match client.post(&url).json(&body).send().await {
+                        Ok(r) => r,
+                        Err(err) => {
+                            tracing::warn!(
+                                target: "agena::hooks",
+                                "hook http POST failed: {err} (url: {url})"
+                            );
+                            return None;
+                        }
+                    };
+                    if !response.status().is_success() {
                         tracing::warn!(
                             target: "agena::hooks",
-                            "hook http POST failed: {err} (url: {url})"
+                            "hook http endpoint returned status {} (url: {url})",
+                            response.status()
                         );
                         return None;
                     }
-                };
-                if !response.status().is_success() {
-                    tracing::warn!(
-                        target: "agena::hooks",
-                        "hook http endpoint returned status {} (url: {url})",
-                        response.status()
-                    );
-                    return None;
-                }
-                match response.text() {
-                    Ok(text) => Some(text),
-                    Err(err) => {
-                        tracing::warn!(
-                            target: "agena::hooks",
-                            "failed to read hook http response: {err}"
-                        );
-                        None
+                    match response.text().await {
+                        Ok(text) => Some(text),
+                        Err(err) => {
+                            tracing::warn!(
+                                target: "agena::hooks",
+                                "failed to read hook http response: {err}"
+                            );
+                            None
+                        }
                     }
-                }
+                })
             });
             handle.join().ok().flatten()
         });

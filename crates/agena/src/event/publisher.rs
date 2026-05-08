@@ -132,6 +132,27 @@ where
         Ok(events)
     }
 
+    /// Persist a batch without broadcasting to the bus. Used by replay-only
+    /// flows (session fork, JSONL import) where the events are historical
+    /// reconstructions, not live activity that subscribers should react to.
+    pub async fn append_batch_silent(
+        &self,
+        events: Vec<DomainEvent<K>>,
+    ) -> Result<Vec<DomainEvent<K>>, PublishError> {
+        if events.is_empty() {
+            return Ok(events);
+        }
+        let persistent: Vec<DomainEvent<K>> = events
+            .iter()
+            .filter(|e| e.kind.is_persistent())
+            .cloned()
+            .collect();
+        if !persistent.is_empty() {
+            self.store.append_batch(&persistent).await?;
+        }
+        Ok(events)
+    }
+
     /// Re-initialise the sequence allocator from the store's high watermark.
     /// Call this once at startup, before any events are produced.
     pub async fn resume_from_store(&self) -> Result<(), EventStoreError> {

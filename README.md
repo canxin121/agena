@@ -74,9 +74,14 @@ cargo run -p agena-studio-server -- --help
 
 说明：
 
-- `cargo run -- serve` 在 core crate 中已不再真正启动服务，而是给出迁移提示
+- HTTP server 入口位于 `apps/agena-studio-server`，使用 `cargo run -p agena-studio-server -- --help`
 - 仓库根目录执行 `cargo test` 默认覆盖 `agena`
 - 执行 `cargo test --workspace` 会覆盖当前 workspace 内的统一 server / client / app 包
+- 工程化检查：
+  - `cargo fmt --all --check` — 风格 (`rustfmt.toml`)
+  - `cargo clippy --workspace --all-targets -- -D warnings` — lint (`clippy.toml`)
+  - `cargo deny check` — 依赖许可证 / advisories (`deny.toml`)
+  - `cargo audit` — RustSec advisories
 
 已提供的资源接口：
 

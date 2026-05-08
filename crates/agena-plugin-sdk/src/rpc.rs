@@ -173,6 +173,9 @@ pub mod method {
     pub const HOST_WORKTREE_EXIT: &str = "host/worktree.exit";
     pub const HOST_BUILTIN_EXECUTE: &str = "host/builtin.execute";
     pub const HOST_SKILL_GET: &str = "host/skill.get";
+    pub const HOST_SKILL_REGISTER: &str = "host/skill.register";
+    pub const HOST_SKILL_REMOVE: &str = "host/skill.remove";
+    pub const HOST_SKILL_LIST: &str = "host/skill.list";
     pub const HOST_MONITOR_START: &str = "host/monitor.start";
     pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
     pub const HOST_MONITOR_READ: &str = "host/monitor.read";

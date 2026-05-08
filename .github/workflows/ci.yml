@@ -7,21 +7,81 @@ on:
       - master
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  rust-workspace:
+  fmt:
+    name: rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          components: rustfmt
+      - run: cargo fmt --all --check
 
-      - uses: dtolnay/rust-toolchain@stable
-
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Cargo Check
-        run: cargo check --workspace --locked
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --locked
+      - run: cargo test --workspace --locked
+      - name: build examples
+        run: |
+          cargo build --manifest-path examples/echo_plugin/Cargo.toml --locked
+          cargo build --manifest-path examples/echo_plugin_stdio/Cargo.toml --locked
 
-      - name: Cargo Test
-        run: cargo test --workspace --locked
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check bans licenses sources advisories
+
+  audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ignore: "RUSTSEC-2023-0071,RUSTSEC-2026-0098,RUSTSEC-2026-0099,RUSTSEC-2026-0104,RUSTSEC-2024-0014,RUSTSEC-2024-0436,RUSTSEC-2025-0134,RUSTSEC-2026-0002,RUSTSEC-2026-0097"
+
+  lockfile:
+    name: lockfile freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+      - run: cargo update --workspace --locked
 
   agena-studio-web:
     runs-on: ubuntu-latest
@@ -40,7 +100,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
 
       - uses: oven-sh/setup-bun@v2
         with:

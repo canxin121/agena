@@ -13,6 +13,7 @@ pub(crate) use event::{
     SystemNoticeKind, ToolCallCompleted, ToolCallIssued, TurnAbortReason, TurnAborted,
     TurnCompleted, TurnStarted, UserMessageAppended,
 };
+pub use event::{RewindCheckpoint, RewindCheckpointEntry};
 #[allow(unused_imports)]
 pub(crate) use projection::{HistoryFold, fold_history};
 pub(crate) use store::SessionHistoryStore;

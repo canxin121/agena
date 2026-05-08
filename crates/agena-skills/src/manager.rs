@@ -1,79 +1,142 @@
-use std::path::Path;
 use std::sync::RwLock;
 
-use crate::bundled;
-use crate::discovery::{default_command_roots, default_roots, scan, scan_commands};
 use crate::error::{SkillError, SkillResult};
 use crate::skill::Skill;
 
-/// Cached pool of discovered + bundled skills.
+/// Aggregating registry of skills owned by one or more plugins.
+///
+/// `SkillsManager` no longer scans the filesystem on its own — that
+/// responsibility now lives in the bundled `SkillsFsPlugin` (and any
+/// third-party plugin that wants to discover skills its own way). The
+/// registry is populated through [`SkillsManager::register`] and read
+/// back via [`SkillsManager::list`] / [`SkillsManager::get`] (and the
+/// command equivalents).
 pub struct SkillsManager {
-    inner: RwLock<Vec<Skill>>,
-    commands: RwLock<Vec<Skill>>,
+    inner: RwLock<Vec<OwnedSkill>>,
+    commands: RwLock<Vec<OwnedSkill>>,
+}
+
+#[derive(Debug, Clone)]
+struct OwnedSkill {
+    plugin_id: String,
+    skill: Skill,
+}
+
+impl Default for SkillsManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SkillsManager {
-    /// Build a manager.  Discovery is performed eagerly so callers see a
-    /// stable view of available skills.  Workspace path is optional —
-    /// global/bundled skills still load without one.
-    pub fn build(workspace: Option<&Path>) -> SkillResult<Self> {
-        let roots = default_roots(workspace);
-        let command_roots = default_command_roots(workspace);
-        let mut all = scan(&roots)?;
-        let commands = scan_commands(&command_roots)?;
-        // Bundled last so user-defined skills with the same name win.
-        for b in bundled::all()? {
-            if !all.iter().any(|s| s.frontmatter.name == b.frontmatter.name) {
-                all.push(b);
-            }
+    /// Build an empty registry. Use [`SkillsManager::register`] to add
+    /// skills (typically from a plugin's `init` hook).
+    pub fn new() -> Self {
+        Self {
+            inner: RwLock::new(Vec::new()),
+            commands: RwLock::new(Vec::new()),
         }
-        Ok(Self {
-            inner: RwLock::new(all),
-            commands: RwLock::new(commands),
-        })
+    }
+
+    /// Register a skill under the given plugin id. Replaces any prior
+    /// registration of the same name owned by the same plugin.
+    pub fn register(&self, plugin_id: impl Into<String>, skill: Skill) {
+        let plugin_id = plugin_id.into();
+        let mut g = self.inner.write().unwrap();
+        if let Some(slot) = g.iter_mut().find(|owned| {
+            owned.plugin_id == plugin_id && owned.skill.frontmatter.name == skill.frontmatter.name
+        }) {
+            slot.skill = skill;
+        } else {
+            g.push(OwnedSkill { plugin_id, skill });
+        }
+    }
+
+    /// Register a slash-command-style skill.
+    pub fn register_command(&self, plugin_id: impl Into<String>, skill: Skill) {
+        let plugin_id = plugin_id.into();
+        let mut g = self.commands.write().unwrap();
+        if let Some(slot) = g.iter_mut().find(|owned| {
+            owned.plugin_id == plugin_id && owned.skill.frontmatter.name == skill.frontmatter.name
+        }) {
+            slot.skill = skill;
+        } else {
+            g.push(OwnedSkill { plugin_id, skill });
+        }
+    }
+
+    /// Remove a skill owned by this plugin. Returns `true` if a record
+    /// was removed.
+    pub fn remove(&self, plugin_id: &str, name: &str) -> bool {
+        let mut g = self.inner.write().unwrap();
+        let before = g.len();
+        g.retain(|owned| !(owned.plugin_id == plugin_id && owned.skill.frontmatter.name == name));
+        g.len() != before
+    }
+
+    /// Remove a slash command owned by this plugin.
+    pub fn remove_command(&self, plugin_id: &str, name: &str) -> bool {
+        let mut g = self.commands.write().unwrap();
+        let before = g.len();
+        g.retain(|owned| !(owned.plugin_id == plugin_id && owned.skill.frontmatter.name == name));
+        g.len() != before
+    }
+
+    /// Drop every skill owned by `plugin_id` (both regular and command).
+    pub fn remove_owned_by(&self, plugin_id: &str) {
+        if let Ok(mut g) = self.inner.write() {
+            g.retain(|owned| owned.plugin_id != plugin_id);
+        }
+        if let Ok(mut g) = self.commands.write() {
+            g.retain(|owned| owned.plugin_id != plugin_id);
+        }
     }
 
     pub fn list(&self) -> Vec<Skill> {
-        self.inner.read().unwrap().clone()
+        self.inner
+            .read()
+            .unwrap()
+            .iter()
+            .map(|owned| owned.skill.clone())
+            .collect()
+    }
+
+    pub fn list_with_owners(&self) -> Vec<(String, Skill)> {
+        self.inner
+            .read()
+            .unwrap()
+            .iter()
+            .map(|owned| (owned.plugin_id.clone(), owned.skill.clone()))
+            .collect()
     }
 
     pub fn list_commands(&self) -> Vec<Skill> {
-        self.commands.read().unwrap().clone()
+        self.commands
+            .read()
+            .unwrap()
+            .iter()
+            .map(|owned| owned.skill.clone())
+            .collect()
     }
 
     /// Resolve a skill by name or alias.
     pub fn get(&self, name: &str) -> SkillResult<Skill> {
-        let g = self.inner.read().unwrap();
-        g.iter()
-            .find(|s| s.matches(name))
-            .cloned()
+        self.inner
+            .read()
+            .unwrap()
+            .iter()
+            .find(|owned| owned.skill.matches(name))
+            .map(|owned| owned.skill.clone())
             .ok_or_else(|| SkillError::NotFound(name.to_string()))
     }
 
     pub fn get_command(&self, name: &str) -> SkillResult<Skill> {
-        let g = self.commands.read().unwrap();
-        g.iter()
-            .find(|s| s.matches(name))
-            .cloned()
+        self.commands
+            .read()
+            .unwrap()
+            .iter()
+            .find(|owned| owned.skill.matches(name))
+            .map(|owned| owned.skill.clone())
             .ok_or_else(|| SkillError::NotFound(name.to_string()))
-    }
-
-    /// Replace the cache by re-scanning the discovery roots.
-    pub fn reload(&self, workspace: Option<&Path>) -> SkillResult<()> {
-        let roots = default_roots(workspace);
-        let command_roots = default_command_roots(workspace);
-        let mut next = scan(&roots)?;
-        let next_commands = scan_commands(&command_roots)?;
-        for b in bundled::all()? {
-            if !next
-                .iter()
-                .any(|s| s.frontmatter.name == b.frontmatter.name)
-            {
-                next.push(b);
-            }
-        }
-        *self.inner.write().unwrap() = next;
-        *self.commands.write().unwrap() = next_commands;
-        Ok(())
     }
 }

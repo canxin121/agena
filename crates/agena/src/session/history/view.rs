@@ -30,9 +30,7 @@ use crate::{
         ToolInvocation, ToolOutput,
     },
     role::Role,
-    session::{
-        ids::{MessageId, ToolCallId, TurnId},
-    },
+    session::ids::{MessageId, ToolCallId, TurnId},
 };
 
 use super::{
@@ -352,6 +350,13 @@ impl SessionViewBuilder {
     }
 
     fn handle_system_notice(&mut self, payload: &SystemNoticeAppended) {
+        // RewindCheckpoint notices are pure audit metadata — they ride on the
+        // event stream so callers can list "you rewound past these messages"
+        // without scanning every event, but they must not appear in the
+        // user-facing transcript.
+        if matches!(payload.kind, SystemNoticeKind::RewindCheckpoint) {
+            return;
+        }
         // System notices are not bound to a turn; they finalize immediately
         // into the projection.
         let part_id = self.alloc_part_id();
@@ -460,6 +465,9 @@ impl HistoryFold for SessionViewBuilder {
                 RevisionKind::Compacted => {
                     self.compacted_messages.insert(*target_message_id);
                 }
+                RevisionKind::Uncompacted => {
+                    self.compacted_messages.remove(target_message_id);
+                }
                 RevisionKind::ToolResultPruned { .. } | RevisionKind::AttachmentStripped { .. } => {
                     // The session view shows the latest state of each message
                     // — the on-disk message bodies have already been rewritten
@@ -494,10 +502,7 @@ impl HistoryFold for SessionViewBuilder {
         }
 
         let messages: Vec<Message> = finalized.into_values().collect();
-        Ok(SessionView {
-            messages,
-            last_seq,
-        })
+        Ok(SessionView { messages, last_seq })
     }
 }
 
@@ -547,6 +552,7 @@ fn system_notice_tag(kind: SystemNoticeKind) -> &'static str {
         SystemNoticeKind::CompactionSummary => "system_notice:compaction_summary",
         SystemNoticeKind::ContextInjection => "system_notice:context_injection",
         SystemNoticeKind::ToolPolicyHint => "system_notice:tool_policy_hint",
+        SystemNoticeKind::RewindCheckpoint => "system_notice:rewind_checkpoint",
         SystemNoticeKind::Other => "system_notice:other",
     }
 }

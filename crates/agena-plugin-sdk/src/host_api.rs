@@ -94,6 +94,31 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Register a skill at runtime, owned by the calling plugin. Replaces any
+    /// existing skill of the same name owned by this plugin. Skills declared
+    /// in the plugin manifest are registered automatically by the host on
+    /// load — use this only for skills discovered dynamically (e.g. by
+    /// scanning the filesystem).
+    async fn skill_register(
+        &self,
+        _req: HostSkillRegisterRequest,
+    ) -> Result<HostSkillMutationResponse> {
+        Err(unavailable())
+    }
+
+    /// Remove a skill previously registered by this plugin.
+    async fn skill_remove(
+        &self,
+        _req: HostSkillRemoveRequest,
+    ) -> Result<HostSkillMutationResponse> {
+        Err(unavailable())
+    }
+
+    /// List every skill known to the host's skill registry.
+    async fn skill_list(&self) -> Result<HostSkillListResponse> {
+        Err(unavailable())
+    }
+
     /// Long-lived background process registry — start.
     async fn monitor_start(&self, _req: MonitorStartRequest) -> Result<MonitorHandle> {
         Err(unavailable())
@@ -560,6 +585,35 @@ pub struct HostSkillGetResponse {
     pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSkillRegisterRequest {
+    pub skill: crate::manifest::SkillManifestEntry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSkillRemoveRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostSkillMutationResponse {
+    pub generation: u64,
+    pub removed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSkillDescriptor {
+    pub plugin_id: String,
+    pub skill: crate::manifest::SkillManifestEntry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostSkillListResponse {
+    pub generation: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<HostSkillDescriptor>,
 }
 
 // ---------------- monitor ----------------

@@ -26,9 +26,9 @@ pub struct RegistryArtifact {
 pub fn router(snapshot: RegistrySnapshot) -> Router {
     Router::new()
         .route("/index.json", get(index))
-        .route("/plugin/:plugin_id/manifest.json", get(plugin_manifest))
+        .route("/plugin/{plugin_id}/manifest.json", get(plugin_manifest))
         .route(
-            "/plugin/:plugin_id/versions/:version/:artifact",
+            "/plugin/{plugin_id}/versions/{version}/{artifact}",
             get(plugin_artifact),
         )
         .with_state(Arc::new(snapshot))

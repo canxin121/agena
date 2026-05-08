@@ -387,7 +387,7 @@ pub struct OllamaProviderOptions {
     pub default_model: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct HttpProviderConfig<T> {
     pub base_url: String,
     pub default_model: String,
@@ -396,6 +396,27 @@ pub struct HttpProviderConfig<T> {
     pub extra_headers: BTreeMap<String, String>,
     pub default_thinking: Option<ThinkingRequest>,
     pub options: T,
+}
+
+impl<T: fmt::Debug> fmt::Debug for HttpProviderConfig<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpProviderConfig")
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .field("api_key", &redacted(self.api_key.as_deref()))
+            .field("api_key_env", &self.api_key_env)
+            .field("extra_headers", &self.extra_headers)
+            .field("default_thinking", &self.default_thinking)
+            .field("options", &self.options)
+            .finish()
+    }
+}
+
+fn redacted(value: Option<&str>) -> &'static str {
+    match value {
+        Some(s) if !s.is_empty() => "***redacted***",
+        _ => "<none>",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -428,7 +449,7 @@ pub struct CodexProviderOptions {
     pub auth_provider_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GitlabProviderOptions {
     pub instance_url: String,
     pub ai_gateway_url: String,
@@ -438,6 +459,21 @@ pub struct GitlabProviderOptions {
     pub api_key_env: Option<String>,
     pub ai_gateway_headers: BTreeMap<String, String>,
     pub feature_flags: BTreeMap<String, bool>,
+}
+
+impl fmt::Debug for GitlabProviderOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GitlabProviderOptions")
+            .field("instance_url", &self.instance_url)
+            .field("ai_gateway_url", &self.ai_gateway_url)
+            .field("default_model", &self.default_model)
+            .field("auth_provider_id", &self.auth_provider_id)
+            .field("api_key", &redacted(self.api_key.as_deref()))
+            .field("api_key_env", &self.api_key_env)
+            .field("ai_gateway_headers", &self.ai_gateway_headers)
+            .field("feature_flags", &self.feature_flags)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -456,7 +492,7 @@ pub struct AmazonBedrockProviderOptions {
     pub auth: BedrockAuthConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum BedrockAuthConfig {
     Bearer {
@@ -469,6 +505,33 @@ pub enum BedrockAuthConfig {
         secret_access_key: Option<String>,
         session_token: Option<String>,
     },
+}
+
+impl fmt::Debug for BedrockAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bearer {
+                api_key,
+                api_key_env,
+            } => f
+                .debug_struct("Bearer")
+                .field("api_key", &redacted(api_key.as_deref()))
+                .field("api_key_env", api_key_env)
+                .finish(),
+            Self::Sigv4 {
+                profile,
+                access_key_id,
+                secret_access_key,
+                session_token,
+            } => f
+                .debug_struct("Sigv4")
+                .field("profile", profile)
+                .field("access_key_id", &redacted(access_key_id.as_deref()))
+                .field("secret_access_key", &redacted(secret_access_key.as_deref()))
+                .field("session_token", &redacted(session_token.as_deref()))
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -488,12 +551,23 @@ pub enum GoogleVertexAuthConfig {
     Adc,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct CloudflareAiGatewayProviderOptions {
     pub base_url: String,
     pub default_model: String,
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
+}
+
+impl fmt::Debug for CloudflareAiGatewayProviderOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CloudflareAiGatewayProviderOptions")
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .field("api_key", &redacted(self.api_key.as_deref()))
+            .field("api_key_env", &self.api_key_env)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
@@ -673,7 +747,7 @@ pub struct WebToolsConfig {
     pub search: WebSearchConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct WebSearchConfig {
     pub backend: WebSearchBackendKind,
@@ -682,6 +756,17 @@ pub struct WebSearchConfig {
     pub tavily_api_key: Option<String>,
     pub exa_api_key: Option<String>,
     pub brave_api_key: Option<String>,
+}
+
+impl fmt::Debug for WebSearchConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WebSearchConfig")
+            .field("backend", &self.backend)
+            .field("tavily_api_key", &redacted(self.tavily_api_key.as_deref()))
+            .field("exa_api_key", &redacted(self.exa_api_key.as_deref()))
+            .field("brave_api_key", &redacted(self.brave_api_key.as_deref()))
+            .finish()
+    }
 }
 
 impl Default for WebSearchConfig {
@@ -706,12 +791,32 @@ pub enum WebSearchBackendKind {
 
 /// Resolved variant used at runtime — bundles each backend with the
 /// credentials it actually needs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum WebSearchBackend {
     Tavily { api_key: String },
     Exa { api_key: String },
     Brave { api_key: String },
     DuckDuckGoHtml,
+}
+
+impl fmt::Debug for WebSearchBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tavily { api_key } => f
+                .debug_struct("Tavily")
+                .field("api_key", &redacted(Some(api_key)))
+                .finish(),
+            Self::Exa { api_key } => f
+                .debug_struct("Exa")
+                .field("api_key", &redacted(Some(api_key)))
+                .finish(),
+            Self::Brave { api_key } => f
+                .debug_struct("Brave")
+                .field("api_key", &redacted(Some(api_key)))
+                .finish(),
+            Self::DuckDuckGoHtml => f.debug_struct("DuckDuckGoHtml").finish(),
+        }
+    }
 }
 
 impl WebSearchBackend {

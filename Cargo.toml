@@ -23,3 +23,74 @@ members = [
     "crates/agena-scheduler",
     "crates/agena-skills",
 ]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.93"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# async / runtime
+tokio = { version = "1.50.0", default-features = false }
+async-trait = "0.1.89"
+futures = "0.3.31"
+
+# error / utility
+anyhow = "1.0.100"
+thiserror = "2.0.18"
+secrecy = { version = "0.10.3", features = ["serde"] }
+
+# logging / tracing
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false }
+
+# serde / encoding
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+toml = "0.9.8"
+
+# datetime / ids
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde"] }
+uuid = { version = "1.18.1", features = ["v4", "serde"] }
+
+# CLI
+clap = { version = "4.5.54", features = ["derive", "env"] }
+
+# HTTP / web
+axum = { version = "0.8.8" }
+hyper = "1.5"
+tower = { version = "0.5" }
+tower-http = { version = "0.6.8" }
+reqwest = { version = "0.13.2", default-features = false }
+
+[workspace.lints.rust]
+unused_must_use = "deny"
+
+[workspace.lints.rustdoc]
+# Many private-item-link / unresolved-link warnings on internal modules;
+# documented as TODO to fix incrementally.
+broken_intra_doc_links = "allow"
+private_intra_doc_links = "allow"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "allow"
+print_stderr = "allow"
+unwrap_used = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3
+
+# Smaller, slower-to-build profile for shipping artifacts (CLI / desktop).
+# Use with `cargo build --profile dist`.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+panic = "abort"
+strip = "symbols"
+debug = false
+incremental = false

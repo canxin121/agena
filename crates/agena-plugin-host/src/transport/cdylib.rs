@@ -15,7 +15,15 @@ pub struct CdylibTransport {
     module: AgenaPluginCdylib_Ref,
 }
 
+// SAFETY: `AgenaPluginCdylib_Ref` is a `RootModule` reference returned by
+// abi_stable's `load_from_file`. Once loaded the underlying dylib is leaked
+// for the process lifetime (abi_stable does not unload), so the inner
+// pointer remains valid across threads. The plugin contract requires every
+// exported function to be Send + Sync, so it is safe to share `Self`
+// across threads.
 unsafe impl Send for CdylibTransport {}
+// SAFETY: see above — the plugin contract guarantees thread-safe entry
+// points and the loaded module is never unloaded.
 unsafe impl Sync for CdylibTransport {}
 
 impl CdylibTransport {

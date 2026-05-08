@@ -1,3 +1,9 @@
+//! stdio-based application protocol server. Speaks
+//! `agena-app-server-protocol` over a child-process pipe; used by
+//! `agena app-server` and the desktop app embedding.
+//!
+//! See `agena-api-server` for the HTTP/WS surface.
+
 use std::sync::Arc;
 
 use agena_app_server_protocol::{

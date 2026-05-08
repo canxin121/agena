@@ -787,9 +787,11 @@ impl App {
         };
         let keybindings = launch.tui_config.keybindings.clone();
         let status_line = StatusLineState::new(&launch.tui_config.status_line);
-        let user_commands = agena_skills::SkillsManager::build(launch.workspace_root.as_deref())
-            .map(|manager| manager.list_commands())
-            .unwrap_or_default();
+        let user_commands = {
+            let roots =
+                agena_skills::discovery::default_command_roots(launch.workspace_root.as_deref());
+            agena_skills::discovery::scan_commands(&roots).unwrap_or_default()
+        };
         let double_esc_window = Duration::from_millis(launch.tui_config.double_esc_window_ms);
         let plugin_theme = launch.tui_config.theme.as_ref().and_then(|theme_id| {
             backend
@@ -4699,9 +4701,8 @@ impl App {
                             "flash-command-usage",
                             &crate::fl_args!("usage" => "/worktree exit [keep|remove [force]]"),
                         ));
-                        return;
                     }
-                };
+                }
             }
             _ => self.flash_warning(self.i18n.text_args(
                 "flash-command-usage",
@@ -5131,20 +5132,20 @@ impl App {
 
         let mut parts = Vec::new();
         parts.push(format!("state={}", session_workflow_state_label(execution)));
-        if let Some(agent_profile) = execution.execution.agent_profile.as_deref() {
-            if !agent_profile.trim().is_empty() {
-                parts.push(format!("agent={agent_profile}"));
-            }
+        if let Some(agent_profile) = execution.execution.agent_profile.as_deref()
+            && !agent_profile.trim().is_empty()
+        {
+            parts.push(format!("agent={agent_profile}"));
         }
-        if let Some(skill_name) = execution.execution.active_skill_name.as_deref() {
-            if !skill_name.trim().is_empty() {
-                parts.push(format!("skill={skill_name}"));
-            }
+        if let Some(skill_name) = execution.execution.active_skill_name.as_deref()
+            && !skill_name.trim().is_empty()
+        {
+            parts.push(format!("skill={skill_name}"));
         }
-        if let Some(task_id) = execution.execution.task_id.as_deref() {
-            if !task_id.trim().is_empty() {
-                parts.push(format!("task={task_id}"));
-            }
+        if let Some(task_id) = execution.execution.task_id.as_deref()
+            && !task_id.trim().is_empty()
+        {
+            parts.push(format!("task={task_id}"));
         }
         if execution.execution.model_provider_id.is_some() || execution.execution.model_id.is_some()
         {
@@ -5156,10 +5157,10 @@ impl App {
             let model = execution.execution.model_id.as_deref().unwrap_or("default");
             parts.push(format!("model={provider}/{model}"));
         }
-        if let Some(workspace_root) = execution.execution.effective_workspace_root.as_deref() {
-            if !workspace_root.trim().is_empty() {
-                parts.push(format!("cwd={workspace_root}"));
-            }
+        if let Some(workspace_root) = execution.execution.effective_workspace_root.as_deref()
+            && !workspace_root.trim().is_empty()
+        {
+            parts.push(format!("cwd={workspace_root}"));
         }
         if !execution.execution.allowed_tools.is_empty() {
             parts.push(format!("tools={}", execution.execution.allowed_tools.len()));
@@ -11671,9 +11672,12 @@ mod tests {
         SessionResource {
             id,
             parent_id,
+            depth: 0,
+            root_id: id,
             workspace_id: 1,
             title: title.to_string(),
             version: 1,
+            is_subagent: false,
             created_at: updated_at,
             updated_at,
             message_count: 0,

@@ -1506,7 +1506,7 @@ impl App {
                     return false;
                 };
                 if let PickerValue::PermissionRule(rule) = item.value {
-                    self.open_delete_permission_rule_confirm(&rule, dialog.input.text());
+                    self.open_revoke_permission_rule_confirm(&rule, dialog.input.text());
                     true
                 } else {
                     false
@@ -3588,7 +3588,7 @@ impl App {
         }));
     }
 
-    fn open_delete_permission_rule_confirm(
+    fn open_revoke_permission_rule_confirm(
         &mut self,
         rule: &PermissionRuleResource,
         return_query: &str,
@@ -4270,7 +4270,7 @@ impl App {
                 Ok(handle) => match handle.block_on(self.backend.revoke_permission_rule(rule_id)) {
                     Ok(_) => {
                         self.flash_success(self.i18n.text_args(
-                            "flash-permission-rule-deleted",
+                            "flash-permission-rule-revoked",
                             &crate::fl_args!("name" => label),
                         ));
                         self.open_permission_rule_picker(return_query.as_str());
@@ -9163,16 +9163,24 @@ fn permission_overlay_choice(selected: usize) -> PermissionOverlayChoice {
             scope: Some(PermissionScope::Workspace),
         },
         3 => PermissionOverlayChoice {
+            kind: PermissionReplyKind::AllowAlways,
+            scope: Some(PermissionScope::Global),
+        },
+        4 => PermissionOverlayChoice {
             kind: PermissionReplyKind::DenyOnce,
             scope: None,
         },
-        4 => PermissionOverlayChoice {
+        5 => PermissionOverlayChoice {
             kind: PermissionReplyKind::DenyAlways,
             scope: Some(PermissionScope::Session),
         },
-        _ => PermissionOverlayChoice {
+        6 => PermissionOverlayChoice {
             kind: PermissionReplyKind::DenyAlways,
             scope: Some(PermissionScope::Workspace),
+        },
+        _ => PermissionOverlayChoice {
+            kind: PermissionReplyKind::DenyAlways,
+            scope: Some(PermissionScope::Global),
         },
     }
 }
@@ -9185,17 +9193,23 @@ fn permission_overlay_choice_label(i18n: &I18n, choice: PermissionOverlayChoice)
         (PermissionReplyKind::AllowAlways, Some(PermissionScope::Workspace)) => {
             "Allow always (workspace)".to_string()
         }
+        (PermissionReplyKind::AllowAlways, Some(PermissionScope::Global)) => {
+            "Allow always (global)".to_string()
+        }
         (PermissionReplyKind::DenyAlways, Some(PermissionScope::Session)) => {
             "Deny always (session)".to_string()
         }
         (PermissionReplyKind::DenyAlways, Some(PermissionScope::Workspace)) => {
             "Deny always (workspace)".to_string()
         }
+        (PermissionReplyKind::DenyAlways, Some(PermissionScope::Global)) => {
+            "Deny always (global)".to_string()
+        }
         _ => ui_text::permission_reply_label(i18n, choice.kind),
     }
 }
 
-fn permission_overlay_choices(i18n: &I18n) -> [String; 6] {
+fn permission_overlay_choices(i18n: &I18n) -> [String; 8] {
     [
         permission_overlay_choice_label(i18n, permission_overlay_choice(0)),
         permission_overlay_choice_label(i18n, permission_overlay_choice(1)),
@@ -9203,6 +9217,8 @@ fn permission_overlay_choices(i18n: &I18n) -> [String; 6] {
         permission_overlay_choice_label(i18n, permission_overlay_choice(3)),
         permission_overlay_choice_label(i18n, permission_overlay_choice(4)),
         permission_overlay_choice_label(i18n, permission_overlay_choice(5)),
+        permission_overlay_choice_label(i18n, permission_overlay_choice(6)),
+        permission_overlay_choice_label(i18n, permission_overlay_choice(7)),
     ]
 }
 
@@ -11150,8 +11166,8 @@ fn render_permission_rule_preview(input: &str) -> String {
 
 fn permission_rule_edit_help() -> String {
     [
-        "tool <tool_name> <allow|ask|deny> [qualifier=<text>] [scope=session|workspace] [session=<id>]",
-        "path <read|write|read_write> <target_path> <allow|ask|deny> [scope=session|workspace] [session=<id>] [workspace_root=<path>]",
+        "tool <tool_name> <allow|ask|deny> [qualifier=<text>] [scope=session|workspace|global] [session=<id>]",
+        "path <read|write|read_write> <target_path> <allow|ask|deny> [scope=session|workspace|global] [session=<id>] [workspace_root=<path>]",
     ]
     .join("\n")
 }
@@ -11265,7 +11281,8 @@ fn parse_permission_scope_token(token: &str) -> std::result::Result<&'static str
     match token.to_ascii_lowercase().as_str() {
         "session" => Ok("session"),
         "workspace" => Ok("workspace"),
-        _ => Err("scope must be session or workspace".to_string()),
+        "global" => Ok("global"),
+        _ => Err("scope must be session, workspace, or global".to_string()),
     }
 }
 
@@ -11459,6 +11476,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_permission_rule_input_supports_global_scope() {
+        let draft = parse_permission_rule_input("tool bash allow scope=global")
+            .expect("global permission rule input should parse");
+        assert_eq!(draft.subject_kind, PermissionRuleSubjectKind::BuiltinTool);
+        assert_eq!(draft.tool_name, "bash");
+        assert_eq!(draft.scope, "global");
+        assert_eq!(draft.session_id, "");
+        assert_eq!(draft.mode, PermissionMode::Allow);
+    }
+
+    #[test]
     fn parse_permission_rule_input_rejects_invalid_mode() {
         let error = parse_permission_rule_input("tool git maybe scope=workspace")
             .expect_err("invalid mode should fail");
@@ -11484,16 +11512,24 @@ mod tests {
             Some(PermissionScope::Workspace)
         );
         assert_eq!(
-            permission_overlay_choice(3).kind,
-            PermissionReplyKind::DenyOnce
+            permission_overlay_choice(3).scope,
+            Some(PermissionScope::Global)
         );
         assert_eq!(
             permission_overlay_choice(4).kind,
+            PermissionReplyKind::DenyOnce
+        );
+        assert_eq!(
+            permission_overlay_choice(5).kind,
             PermissionReplyKind::DenyAlways
         );
         assert_eq!(
-            permission_overlay_choice(9).scope,
+            permission_overlay_choice(6).scope,
             Some(PermissionScope::Workspace)
+        );
+        assert_eq!(
+            permission_overlay_choice(9).scope,
+            Some(PermissionScope::Global)
         );
     }
 

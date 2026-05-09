@@ -647,6 +647,107 @@ async fn session_action_routes_cover_rewind_tree_checkpoints_export_and_import()
 }
 
 #[tokio::test]
+async fn permission_rule_crud_routes_expose_operator_metadata() {
+    let (state, _manager, _workspace_root) = build_state().await;
+    let app = router(state.clone());
+
+    let create_rule = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/permission-rules")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "subject_kind": "builtin_tool",
+                        "tool_name": "bash",
+                        "qualifier": "git status*",
+                        "scope": "global",
+                        "mode": "allow"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_rule.status(), StatusCode::OK);
+    let created_body = create_rule.into_body().collect().await.unwrap().to_bytes();
+    let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+    let rule_id = created
+        .get("id")
+        .and_then(|id| id.as_i64())
+        .expect("rule id");
+    assert_eq!(
+        created.get("operator").and_then(|value| value.as_str()),
+        Some("http_api")
+    );
+    assert_eq!(
+        created.get("scope").and_then(|value| value.as_str()),
+        Some("global")
+    );
+
+    let replace_rule = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/permission-rules/{rule_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "subject_kind": "builtin_tool",
+                        "tool_name": "bash",
+                        "qualifier": "git diff*",
+                        "scope": "workspace",
+                        "mode": "deny"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replace_rule.status(), StatusCode::OK);
+    let replaced_body = replace_rule.into_body().collect().await.unwrap().to_bytes();
+    let replaced: serde_json::Value = serde_json::from_slice(&replaced_body).unwrap();
+    assert_eq!(
+        replaced.get("operator").and_then(|value| value.as_str()),
+        Some("http_api")
+    );
+    assert_eq!(
+        replaced.get("source").and_then(|value| value.as_str()),
+        Some("api")
+    );
+    assert_eq!(
+        replaced.get("scope").and_then(|value| value.as_str()),
+        Some("workspace")
+    );
+
+    let revoked_rule = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/permission-rules/{rule_id}/revoke"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "reason": "no longer needed" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoked_rule.status(), StatusCode::OK);
+    let revoked_body = revoked_rule.into_body().collect().await.unwrap().to_bytes();
+    let revoked: serde_json::Value = serde_json::from_slice(&revoked_body).unwrap();
+    assert_eq!(
+        revoked.get("revoked_by").and_then(|value| value.as_str()),
+        Some("http_api")
+    );
+}
+
+#[tokio::test]
 async fn ws_protocol_round_trip_command_and_subscription() {
     let (state, manager, _workspace_root) = build_state().await;
 

@@ -271,7 +271,7 @@ export type PermissionRequest = {
   reason: string
   explanation?: string
   source?: string | null
-  scope?: 'session' | 'workspace' | null
+  scope?: 'session' | 'workspace' | 'global' | null
   operator?: string | null
   created_at: string
 }
@@ -537,7 +537,7 @@ export async function createPermissionRule(input: {
   pathAccessKind?: string
   workspaceRoot?: string
   targetPath?: string
-  scope?: 'session' | 'workspace'
+  scope?: 'session' | 'workspace' | 'global'
   sessionId?: number
   mode: PermissionMode
 }): Promise<PermissionRuleResource> {
@@ -568,7 +568,7 @@ export async function updatePermissionRule(input: {
   pathAccessKind?: string
   workspaceRoot?: string
   targetPath?: string
-  scope?: 'session' | 'workspace'
+  scope?: 'session' | 'workspace' | 'global'
   sessionId?: number
   mode: PermissionMode
 }): Promise<PermissionRuleResource> {
@@ -915,7 +915,7 @@ export async function replyPermission(input: {
   requestId: string
   kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always'
   reason?: string
-  scope?: 'session' | 'workspace'
+  scope?: 'session' | 'workspace' | 'global'
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/permission-replies`, {
     method: 'POST',

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import {
   createPermissionRule,
+  replyPermission,
   revokePermissionRule,
   deleteProviderCredential,
   fetchRuntimeStatus,
@@ -37,6 +38,12 @@ import {
   type TimelineEventRecord,
   type WorkspaceResource,
 } from '@/agena/lib/agenaApi'
+import {
+  permissionActionView,
+  permissionExplainability,
+  permissionReplyPreview,
+  permissionRiskLabel,
+} from '@/agena/lib/permissionFormatting'
 import {
   buildAuthProviderFacts,
   buildExecutionFacts,
@@ -88,7 +95,7 @@ const actionMessage = ref('')
 const drafts = reactive<Record<string, string>>({})
 const permissionSearch = ref('')
 const permissionModeFilter = ref<'all' | PermissionMode>('all')
-const permissionScopeFilter = ref<'all' | 'session' | 'workspace'>('all')
+const permissionScopeFilter = ref<'all' | 'session' | 'workspace' | 'global'>('all')
 const permissionSubjectFilter = ref<'all' | 'builtin_tool' | 'path_access'>('all')
 const permissionStatusFilter = ref<'all' | 'active' | 'revoked'>('active')
 const permissionDraft = reactive<{
@@ -98,7 +105,7 @@ const permissionDraft = reactive<{
   pathAccessKind: string
   workspaceRoot: string
   targetPath: string
-  scope: 'session' | 'workspace'
+  scope: 'session' | 'workspace' | 'global'
   sessionId: string
   mode: PermissionMode
 }>({
@@ -370,6 +377,9 @@ function permissionRuleScopeLabel(rule: PermissionRuleResource): string {
   if (rule.scope === 'workspace') {
     return rule.workspace_id == null ? 'workspace' : `workspace #${rule.workspace_id}`
   }
+  if (rule.scope === 'global') {
+    return 'global'
+  }
   return rule.scope
 }
 
@@ -408,7 +418,7 @@ function editPermissionRule(rule: PermissionRuleResource) {
   permissionDraft.pathAccessKind = rule.path_access_kind || 'read'
   permissionDraft.workspaceRoot = rule.workspace_root || ''
   permissionDraft.targetPath = rule.target_path || ''
-  permissionDraft.scope = rule.scope === 'session' ? 'session' : 'workspace'
+  permissionDraft.scope = rule.scope === 'session' ? 'session' : rule.scope === 'global' ? 'global' : 'workspace'
   permissionDraft.sessionId = rule.session_id == null ? '' : String(rule.session_id)
   permissionDraft.mode = rule.mode
   editingPermissionRuleId.value = rule.id
@@ -495,6 +505,29 @@ async function revokePermissionRuleAction(rule: PermissionRuleResource) {
     actionMessage.value = `Revoked permission rule for ${permissionRuleLabel(rule)}.`
     if (editingPermissionRuleId.value === rule.id) resetPermissionDraft()
     await load()
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+async function approvePermission(
+  requestId: string,
+  kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always',
+  scope?: 'session' | 'workspace' | 'global',
+) {
+  const sessionId = selectedSessionId.value
+  if (!sessionId) return
+  actionMessage.value = ''
+  actionError.value = ''
+  try {
+    sessionExecution.value = await replyPermission({
+      sessionId,
+      requestId,
+      kind,
+      scope,
+    })
+    actionMessage.value = `Sent permission reply: ${kind.replaceAll('_', ' ')}.`
+    await loadSessionExecution(sessionId)
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : String(err)
   }
@@ -701,6 +734,7 @@ onBeforeUnmount(() => {
                 <option value="all">all</option>
                 <option value="workspace">workspace</option>
                 <option value="session">session</option>
+                <option value="global">global</option>
               </select>
             </div>
             <div class="field">
@@ -796,6 +830,7 @@ onBeforeUnmount(() => {
               <select id="permission-scope" v-model="permissionDraft.scope" class="select">
                 <option value="workspace">workspace</option>
                 <option value="session">session</option>
+                <option value="global">global</option>
               </select>
             </div>
             <div class="field">
@@ -894,6 +929,75 @@ onBeforeUnmount(() => {
           </div>
           <p v-else-if="workflowLoading" class="muted" style="margin-top: 12px">Loading execution state…</p>
           <p v-else class="muted" style="margin-top: 12px">Select a session to inspect workflow execution state.</p>
+        </section>
+
+        <section class="card">
+          <div class="page-header" style="align-items: flex-start">
+            <div>
+              <h3>Pending Permissions</h3>
+              <p class="muted">Approve or deny pending requests directly from the runtime workflow inspector.</p>
+            </div>
+            <span class="badge">{{ sessionExecution?.pending_permission_requests.length || 0 }}</span>
+          </div>
+          <div v-if="sessionExecution?.pending_permission_requests?.length" class="list">
+            <div
+              v-for="request in sessionExecution.pending_permission_requests"
+              :key="request.request_id"
+              class="list-item"
+            >
+              <div>
+                <strong>{{ permissionActionView(request.action).title }}</strong>
+              </div>
+              <div class="muted mono">request_id={{ request.request_id }}</div>
+              <div class="muted">{{ request.reason }}</div>
+              <div class="muted">risk={{ permissionRiskLabel(request.action) }}</div>
+              <div v-if="request.explanation" class="muted">{{ request.explanation }}</div>
+              <div
+                v-if="permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).summary"
+                class="muted"
+              >
+                {{ permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).summary }}
+              </div>
+              <div
+                v-if="permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).details.length"
+                class="muted mono"
+              >
+                {{ permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).details.join(' · ') }}
+              </div>
+              <div class="muted mono">{{ permissionActionView(request.action).details.join(' · ') }}</div>
+              <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
+                <button class="button primary" @click="approvePermission(request.request_id, 'allow_once')">
+                  Allow Once
+                </button>
+                <button class="button" @click="approvePermission(request.request_id, 'allow_always', 'session')">
+                  Allow Always (Session)
+                </button>
+                <button class="button" @click="approvePermission(request.request_id, 'allow_always', 'workspace')">
+                  Allow Always (Workspace)
+                </button>
+                <button class="button" @click="approvePermission(request.request_id, 'allow_always', 'global')">
+                  Allow Always (Global)
+                </button>
+                <button class="button danger" @click="approvePermission(request.request_id, 'deny_once')">
+                  Deny Once
+                </button>
+                <button class="button danger" @click="approvePermission(request.request_id, 'deny_always', 'session')">
+                  Deny Always (Session)
+                </button>
+                <button class="button danger" @click="approvePermission(request.request_id, 'deny_always', 'workspace')">
+                  Deny Always (Workspace)
+                </button>
+                <button class="button danger" @click="approvePermission(request.request_id, 'deny_always', 'global')">
+                  Deny Always (Global)
+                </button>
+              </div>
+              <div class="muted">
+                once={{ permissionReplyPreview() }} · session={{ permissionReplyPreview('session') }} · workspace={{ permissionReplyPreview('workspace') }} · global={{ permissionReplyPreview('global') }}
+              </div>
+            </div>
+          </div>
+          <p v-else-if="workflowLoading" class="muted">Loading pending permissions…</p>
+          <p v-else class="muted">No pending permission requests for the selected session.</p>
         </section>
 
         <section class="card">

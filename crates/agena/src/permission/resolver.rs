@@ -74,6 +74,7 @@ fn persisted_rule_explanation(rule: &PersistedPermissionRule) -> String {
             Some(workspace_id) => format!("workspace-scoped rule for workspace #{workspace_id}"),
             None => "workspace-scoped rule".to_string(),
         },
+        PermissionScope::Global => "global rule".to_string(),
     };
     format!("matched {subject} from {}", rule.source)
 }
@@ -139,6 +140,31 @@ mod tests {
             }
         );
         assert!(resolution.explanation.contains("session-scoped rule"));
+    }
+
+    #[test]
+    fn global_rule_explanation_is_rendered() {
+        let rule = PersistedPermissionRule {
+            action_key: "tool".to_string(),
+            mode: PermissionMode::Allow,
+            scope: PermissionScope::Global,
+            session_id: None,
+            workspace_id: None,
+            source: "managed".to_string(),
+            reason: None,
+            operator: None,
+            revoked_at_ms: None,
+            revoked_reason: None,
+            revoked_by: None,
+        };
+        let resolution = resolve_permission_with_persisted_rule(
+            PermissionDecision::Ask {
+                reason: "needs approval".to_string(),
+            },
+            Some(&rule),
+        );
+        assert_eq!(resolution.decision, PermissionDecision::Allow);
+        assert!(resolution.explanation.contains("global rule"));
     }
 
     #[test]

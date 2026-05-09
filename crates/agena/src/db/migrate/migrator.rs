@@ -4,6 +4,7 @@ use super::event_migration::EventsMigration;
 use super::m20260427_000001_initial;
 use super::m20260509_000002_permission_rule_scope;
 use super::m20260509_000003_permission_rule_revoke;
+use super::m20260509_000004_permission_rule_global_scope;
 
 pub struct Migrator;
 
@@ -14,6 +15,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260427_000001_initial::Migration),
             Box::new(m20260509_000002_permission_rule_scope::Migration),
             Box::new(m20260509_000003_permission_rule_revoke::Migration),
+            Box::new(m20260509_000004_permission_rule_global_scope::Migration),
             Box::new(EventsMigration),
         ]
     }

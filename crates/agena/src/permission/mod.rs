@@ -1,6 +1,5 @@
 mod request;
 mod resolver;
-mod runtime;
 mod store;
 
 use globset::{Glob, GlobMatcher};
@@ -19,10 +18,7 @@ pub use request::{
 pub use resolver::{
     PermissionResolution, PermissionResolutionSource, resolve_permission_with_persisted_rule,
 };
-pub use runtime::{PermissionRuntime, PermissionRuntimeDecision, PermissionRuntimeError};
-pub use store::{
-    PermissionRuleStore, PermissionStoreError, PersistedPermissionRule, decide_from_mode,
-};
+pub use store::{PersistedPermissionRule, decide_from_mode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

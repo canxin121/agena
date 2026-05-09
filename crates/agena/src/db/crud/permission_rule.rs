@@ -99,6 +99,22 @@ where
         return Ok(Some(item));
     }
 
+    if let Some(item) = entities::permission_rule::Entity::find()
+        .filter(entities::permission_rule::Column::ActionKey.eq(action_key))
+        .filter(
+            entities::permission_rule::Column::Scope.eq(scope_to_string(PermissionScope::Global)),
+        )
+        .filter(entities::permission_rule::Column::SessionId.is_null())
+        .filter(entities::permission_rule::Column::WorkspaceId.is_null())
+        .filter(entities::permission_rule::Column::RevokedAtMs.is_null())
+        .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
+        .order_by_desc(entities::permission_rule::Column::Id)
+        .one(db)
+        .await?
+    {
+        return Ok(Some(item));
+    }
+
     Ok(None)
 }
 
@@ -123,6 +139,7 @@ pub fn scope_to_string(scope: PermissionScope) -> String {
     match scope {
         PermissionScope::Session => "session".to_string(),
         PermissionScope::Workspace => "workspace".to_string(),
+        PermissionScope::Global => "global".to_string(),
     }
 }
 
@@ -130,7 +147,19 @@ pub fn scope_from_string(value: &str) -> Result<PermissionScope, ()> {
     match value {
         "session" => Ok(PermissionScope::Session),
         "workspace" => Ok(PermissionScope::Workspace),
+        "global" => Ok(PermissionScope::Global),
         _ => Err(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_round_trips_global() {
+        assert_eq!(scope_to_string(PermissionScope::Global), "global");
+        assert_eq!(scope_from_string("global"), Ok(PermissionScope::Global));
     }
 }
 

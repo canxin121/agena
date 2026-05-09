@@ -1277,6 +1277,7 @@ fn permission_scope_label(scope: PermissionScope) -> String {
     match scope {
         PermissionScope::Session => "session".to_string(),
         PermissionScope::Workspace => "workspace".to_string(),
+        PermissionScope::Global => "global".to_string(),
     }
 }
 

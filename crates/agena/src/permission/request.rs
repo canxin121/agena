@@ -10,6 +10,7 @@ use strum::{AsRefStr, Display, EnumString};
 pub enum PermissionScope {
     Session,
     Workspace,
+    Global,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

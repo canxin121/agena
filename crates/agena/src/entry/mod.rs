@@ -38,10 +38,7 @@ use crate::message::{
     AskUserToolInput, CustomToolOutput, FirstPartyToolInput, FirstPartyToolOutput, Message,
     PartContent, PluginInvocation, StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput,
 };
-use crate::permission::{
-    AccessKind, PermissionAction, PermissionDecision, PermissionRuleStore, PermissionRuntime,
-    PermissionRuntimeDecision,
-};
+use crate::permission::{AccessKind, PermissionAction, PermissionDecision};
 use crate::plugin::{
     EntryDefinitionInput as PluginEntryDefinitionInput, EntrySource as SdkEntrySource, PluginHost,
     PluginHostBuilder, ToolAfterInput as PluginToolAfterInput,
@@ -254,12 +251,6 @@ pub struct StreamingToolExecution {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum PermissionedFirstPartyExecution {
-    Executed(FirstPartyExecution),
-    Pending(crate::permission::PendingPermission),
-}
-
 #[derive(Debug, Error)]
 pub enum ToolError {
     #[error("permission denied: {0}")]
@@ -1245,37 +1236,6 @@ impl ToolExecutor {
             return Err(ToolError::UnsupportedInvocation(availability.tool_name));
         }
         Ok(())
-    }
-
-    pub fn execute_first_party_with_permission_runtime<S>(
-        &self,
-        session_id: Option<i64>,
-        runtime: &mut PermissionRuntime<S>,
-        input: &FirstPartyToolInput,
-    ) -> Result<PermissionedFirstPartyExecution, ToolError>
-    where
-        S: PermissionRuleStore,
-    {
-        let base = self.agent.authorize_first_party_tool(input);
-        let action = crate::permission::builtin_tool_action(input, Some(&self.agent.tool_policy));
-        match runtime.decide_or_request_with_plugins(session_id, action, base, Some(&self.plugins))
-        {
-            Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Allow)) => {
-                Ok(PermissionedFirstPartyExecution::Executed(
-                    self.execute_first_party_detailed(input)?,
-                ))
-            }
-            Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Deny { reason })) => {
-                Err(ToolError::PermissionDenied(reason))
-            }
-            Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Ask { reason })) => {
-                Err(ToolError::PermissionAsk(reason))
-            }
-            Ok(PermissionRuntimeDecision::Pending(request)) => {
-                Ok(PermissionedFirstPartyExecution::Pending(request))
-            }
-            Err(err) => Err(ToolError::InvalidInput(err.to_string())),
-        }
     }
 
     pub fn execute_first_party(

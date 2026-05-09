@@ -345,5 +345,6 @@ fn app_permission_scope(scope: PermissionRememberScope) -> PermissionScope {
     match scope {
         PermissionRememberScope::Session => PermissionScope::Session,
         PermissionRememberScope::Workspace => PermissionScope::Workspace,
+        PermissionRememberScope::Global => PermissionScope::Global,
     }
 }

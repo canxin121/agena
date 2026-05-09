@@ -140,6 +140,7 @@ pub enum PermissionDecision {
 pub enum PermissionRememberScope {
     Session,
     Workspace,
+    Global,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -186,7 +186,22 @@ export type PermissionMode = 'allow' | 'ask' | 'deny'
 export type PermissionRuleResource = {
   id: number
   action_key: string
+  subject_kind: string
+  tool_name?: string | null
+  qualifier?: string | null
+  path_access_kind?: string | null
+  workspace_root?: string | null
+  target_path?: string | null
   mode: PermissionMode
+  scope: string
+  session_id?: number | null
+  workspace_id?: number | null
+  source: string
+  reason?: string | null
+  operator?: string | null
+  revoked_at?: string | null
+  revoked_reason?: string | null
+  revoked_by?: string | null
   created_at: string
   updated_at: string
 }
@@ -254,6 +269,10 @@ export type PermissionRequest = {
   session_id?: number | null
   action: Record<string, unknown>
   reason: string
+  explanation?: string
+  source?: string | null
+  scope?: 'session' | 'workspace' | null
+  operator?: string | null
   created_at: string
 }
 
@@ -511,25 +530,71 @@ export async function listPermissionRules(search = ''): Promise<PermissionRuleRe
 }
 
 export async function createPermissionRule(input: {
-  actionKey: string
+  actionKey?: string
+  subjectKind?: 'builtin_tool' | 'path_access'
+  toolName?: string
+  qualifier?: string
+  pathAccessKind?: string
+  workspaceRoot?: string
+  targetPath?: string
+  scope?: 'session' | 'workspace'
+  sessionId?: number
   mode: PermissionMode
 }): Promise<PermissionRuleResource> {
   return await apiJson<PermissionRuleResource>('/api/v1/permission-rules', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ action_key: input.actionKey, mode: input.mode }),
+    body: JSON.stringify({
+      ...(input.actionKey ? { action_key: input.actionKey } : {}),
+      ...(input.subjectKind ? { subject_kind: input.subjectKind } : {}),
+      ...(input.toolName ? { tool_name: input.toolName } : {}),
+      ...(input.qualifier ? { qualifier: input.qualifier } : {}),
+      ...(input.pathAccessKind ? { path_access_kind: input.pathAccessKind } : {}),
+      ...(input.workspaceRoot ? { workspace_root: input.workspaceRoot } : {}),
+      ...(input.targetPath ? { target_path: input.targetPath } : {}),
+      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
+      mode: input.mode,
+    }),
   })
 }
 
 export async function updatePermissionRule(input: {
   id: number
-  actionKey: string
+  actionKey?: string
+  subjectKind?: 'builtin_tool' | 'path_access'
+  toolName?: string
+  qualifier?: string
+  pathAccessKind?: string
+  workspaceRoot?: string
+  targetPath?: string
+  scope?: 'session' | 'workspace'
+  sessionId?: number
   mode: PermissionMode
 }): Promise<PermissionRuleResource> {
   return await apiJson<PermissionRuleResource>(`/api/v1/permission-rules/${input.id}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ action_key: input.actionKey, mode: input.mode }),
+    body: JSON.stringify({
+      ...(input.actionKey ? { action_key: input.actionKey } : {}),
+      ...(input.subjectKind ? { subject_kind: input.subjectKind } : {}),
+      ...(input.toolName ? { tool_name: input.toolName } : {}),
+      ...(input.qualifier ? { qualifier: input.qualifier } : {}),
+      ...(input.pathAccessKind ? { path_access_kind: input.pathAccessKind } : {}),
+      ...(input.workspaceRoot ? { workspace_root: input.workspaceRoot } : {}),
+      ...(input.targetPath ? { target_path: input.targetPath } : {}),
+      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
+      mode: input.mode,
+    }),
+  })
+}
+
+export async function revokePermissionRule(id: number, reason?: string): Promise<PermissionRuleResource> {
+  return await apiJson<PermissionRuleResource>(`/api/v1/permission-rules/${id}/revoke`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(reason ? { reason } : {}),
   })
 }
 
@@ -850,6 +915,7 @@ export async function replyPermission(input: {
   requestId: string
   kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always'
   reason?: string
+  scope?: 'session' | 'workspace'
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/permission-replies`, {
     method: 'POST',
@@ -859,6 +925,7 @@ export async function replyPermission(input: {
         request_id: input.requestId,
         kind: input.kind,
         ...(input.reason ? { reason: input.reason } : {}),
+        ...(input.scope ? { scope: input.scope } : {}),
       },
     }),
   })

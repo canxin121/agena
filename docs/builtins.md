@@ -1,4 +1,8 @@
-# Agena built-in plugin-entry inventory
+# Agena in-tree plugin-entry inventory
+
+- **Document version:** plugin-entry-only runtime
+- **Language:** English
+- **Mirror:** `docs/builtins.zh-CN.md`
 
 This document records the extension surfaces that ship **in-tree** with the `agena` binary.
 
@@ -7,8 +11,8 @@ It focuses on compile-time surfaces that are part of the product itself:
 - first-party plugins registered by the runtime
 - compile-time model-visible plugin entries
 - bundled workflow markdown compiled into the binary
-- built-in TUI slash commands
-- built-in provider implementations
+- in-tree TUI slash commands
+- in-tree provider implementations
 
 It does **not** try to inventory runtime-generated surfaces whose names depend on user files or config, such as:
 
@@ -28,12 +32,12 @@ The main source files for this document are:
 - `crates/agena/src/plugins/bundled/` — first-party plugin implementations
 - `crates/agena/src/plugins/bundled/skills_fs.rs` — discovery plugin that registers dynamic entries from skills/commands markdown
 - `crates/agena-skills/src/bundled/` — bundled workflow markdown compiled with `include_str!`
-- `apps/agena-tui/src/commands.rs` — built-in slash command list
-- `crates/agena/src/provider/` — built-in provider implementations
+- `apps/agena-tui/src/commands.rs` — in-tree slash command list
+- `crates/agena/src/provider/` — in-tree provider implementations
 
 ---
 
-## 1. Built-in first-party plugins
+## 1. In-tree first-party plugins
 
 These plugins are compiled into the binary and registered statically by `ResolvedConfig::build_plugin_host_with_previous_and_mcp()` in `crates/agena/src/config/registry.rs`.
 
@@ -264,13 +268,13 @@ The canonical compile-time runtime entries for these workflows come from `agena.
 
 ---
 
-## 5. Built-in TUI slash commands
+## 5. In-tree TUI slash commands
 
-Built-in slash commands are defined as the static `COMMANDS` array in `apps/agena-tui/src/commands.rs`.
+The in-tree slash commands are defined in `apps/agena-tui/src/commands.rs`.
 
 These are compile-time commands implemented by the TUI itself. Local UI commands stay local, while runtime workflow commands such as `/review` dispatch through the runtime entry registry.
 
-At the time of writing there are **52 built-in slash commands**.
+For the current command set, treat `apps/agena-tui/src/commands.rs` as the source of truth.
 
 ### 5.1 Session and navigation commands
 
@@ -351,13 +355,13 @@ At the time of writing there are **52 built-in slash commands**.
 
 ---
 
-## 6. Built-in provider implementations
+## 6. In-tree provider implementations
 
 Provider implementations are compiled into `crates/agena/src/provider/` and assembled by the provider registry in `crates/agena/src/config/registry.rs` and `crates/agena/src/provider/registry.rs`.
 
-These are not model tools, but they are built-in extension surfaces because they define the in-tree model backends the runtime can instantiate.
+These are not model tools, but they are in-tree extension surfaces because they define the model backends the runtime can instantiate.
 
-### 6.1 Built-in provider backends
+### 6.1 In-tree provider backends
 
 | Provider implementation | Source file |
 |---|---|
@@ -376,7 +380,7 @@ These are not model tools, but they are built-in extension surfaces because they
 
 ### 6.2 Provider registry vs runtime-added providers
 
-This document only covers the built-in provider implementations above.
+This document only covers the in-tree provider implementations above.
 
 It does **not** cover:
 
@@ -388,7 +392,7 @@ It does **not** cover:
 
 ## 7. Explicit exclusions
 
-To keep this document focused on compile-time built-ins, the following are intentionally excluded.
+To keep this document focused on compile-time in-tree surfaces, the following are intentionally excluded.
 
 ### 7.1 Disk-discovered markdown skills and commands
 
@@ -398,11 +402,11 @@ They are runtime content, not fixed compile-time entry names.
 
 ### 7.2 MCP-generated entries
 
-`agena.mcp` is a built-in plugin implementation, but its exposed entry names depend on configured MCP servers at runtime.
+`agena.mcp` is an in-tree first-party plugin implementation, but its exposed entry names depend on configured MCP servers at runtime.
 
 ### 7.3 Configured shell hooks
 
-`agena-shell-hooks` is built in, but the hook commands it executes come from user config. They are runtime configuration, not fixed built-in surfaces.
+`agena-shell-hooks` is in-tree, but the hook commands it executes come from user config. They are runtime configuration, not fixed compile-time surfaces.
 
 ---
 
@@ -415,7 +419,7 @@ When updating this document, verify these places:
 3. `crates/agena/src/plugins/bundled/*.rs` for model-visible entry names
 4. `crates/agena/src/plugins/bundled/skills_fs.rs` for dynamic discovery behavior
 5. `crates/agena-skills/src/bundled/` for bundled workflow markdown
-6. `apps/agena-tui/src/commands.rs` for built-in slash commands
+6. `apps/agena-tui/src/commands.rs` for in-tree slash commands
 7. `apps/agena-tui/locales/en-US/main.ftl` for command summaries
 8. `crates/agena/src/provider/mod.rs` and `crates/agena/src/provider/` for in-tree provider implementations
 
@@ -424,7 +428,7 @@ If a new first-party plugin is added, decide whether it belongs in:
 - compile-time model-visible entries
 - runtime-generated entry surfaces
 - bundled workflow content
-- built-in slash commands
-- built-in providers
+- in-tree slash commands
+- in-tree providers
 
 and update this document accordingly.

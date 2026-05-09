@@ -40,9 +40,23 @@ ttl_secs = 900
 max_bytes = 67108864
 
 [permission]
+# Path permissions apply to first-party tools.
 default_read = "allow"
 default_write = "deny"
 default_external_directory = "deny"
+
+# `auto` preserves static allow/deny defaults; `ask` upgrades mutable tool
+# decisions like bash/apply_patch into interactive approval.
+mode = "auto"
+
+# First matching bash rule wins before the execution mode fallback.
+# [[permission.bash]]
+# pattern = "git status*"
+# mode = "allow"
+
+# Hard deny patterns always win.
+# [[permission.bash_deny]]
+# pattern = "rm -rf /*"
 
 [memory.project_instructions]
 enabled = true

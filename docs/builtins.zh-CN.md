@@ -1,4 +1,8 @@
-# Agena 内置 plugin-entry 能力清单
+# Agena in-tree plugin-entry inventory（简体中文）
+
+- **Document version:** plugin-entry-only runtime
+- **Language:** 简体中文
+- **Mirror:** `docs/builtins.md`
 
 本文档记录的是 **随 `agena` 二进制一起交付的 in-tree 扩展面**。
 
@@ -7,8 +11,8 @@
 - 由运行时静态注册的 first-party plugins
 - 编译期固定存在、对模型可见的 plugin entries
 - 编译进二进制的 bundled workflow markdown
-- 内置 TUI slash commands
-- 内置 provider 实现
+- in-tree TUI slash commands
+- in-tree provider 实现
 
 它 **不** 试图枚举那些名字依赖用户文件或配置、只在运行时生成的能力，例如：
 
@@ -28,12 +32,12 @@
 - `crates/agena/src/plugins/bundled/` —— first-party plugin 的具体实现
 - `crates/agena/src/plugins/bundled/skills_fs.rs` —— 扫描 skills/commands markdown 并注册 dynamic entries 的 discovery plugin
 - `crates/agena-skills/src/bundled/` —— 通过 `include_str!` 编译进去的 bundled workflow markdown
-- `apps/agena-tui/src/commands.rs` —— 内置 slash command 列表
-- `crates/agena/src/provider/` —— 内置 provider 实现
+- `apps/agena-tui/src/commands.rs` —— in-tree slash command 列表
+- `crates/agena/src/provider/` —— in-tree provider 实现
 
 ---
 
-## 1. 内置 first-party plugins
+## 1. In-tree first-party plugins
 
 这些 plugin 都是编译进二进制的，并由 `ResolvedConfig::build_plugin_host_with_previous_and_mcp()` 在 `crates/agena/src/config/registry.rs` 中静态注册。
 
@@ -264,13 +268,13 @@ bundled workflow markdown 位于 `crates/agena-skills/src/bundled/`，并通过 
 
 ---
 
-## 5. 内置 TUI slash commands
+## 5. In-tree TUI slash commands
 
-内置 slash commands 定义在 `apps/agena-tui/src/commands.rs` 的静态 `COMMANDS` 数组中。
+in-tree slash commands 定义在 `apps/agena-tui/src/commands.rs` 中。
 
 这些命令是 TUI 自身在编译期就实现好的能力。纯 UI / 本地命令继续留在本地，而 `/review` 这类 workflow 命令则通过 runtime entry registry 分发。
 
-截至当前代码，共有 **52 个内置 slash commands**。
+当前命令集合请以 `apps/agena-tui/src/commands.rs` 为准。
 
 ### 5.1 会话与导航类命令
 
@@ -351,13 +355,13 @@ bundled workflow markdown 位于 `crates/agena-skills/src/bundled/`，并通过 
 
 ---
 
-## 6. 内置 provider 实现
+## 6. In-tree provider 实现
 
 provider 实现位于 `crates/agena/src/provider/` 下，并通过 `crates/agena/src/config/registry.rs` 与 `crates/agena/src/provider/registry.rs` 中的 provider registry 组装。
 
-它们不是 model tools，但依然属于“内置扩展面”，因为它们定义了运行时可实例化的 in-tree model backends。
+它们不是 model tools，但依然属于 in-tree 扩展面，因为它们定义了运行时可实例化的 model backends。
 
-### 6.1 内置 provider backends
+### 6.1 In-tree provider backends
 
 | Provider 实现 | 源码文件 |
 |---|---|
@@ -376,7 +380,7 @@ provider 实现位于 `crates/agena/src/provider/` 下，并通过 `crates/agena
 
 ### 6.2 provider registry 与 runtime-added providers 的边界
 
-本文只覆盖上面这些内置 provider 实现。
+本文只覆盖上面这些 in-tree provider 实现。
 
 本文不覆盖：
 
@@ -388,7 +392,7 @@ provider 实现位于 `crates/agena/src/provider/` 下，并通过 `crates/agena
 
 ## 7. 明确排除项
 
-为了让文档始终聚焦在“编译内置”而不是“运行时内容”，下面这些能力被有意排除。
+为了让文档始终聚焦在“编译期 in-tree 能力”而不是“运行时内容”，下面这些能力被有意排除。
 
 ### 7.1 磁盘发现的 markdown skills 与 commands
 
@@ -398,11 +402,11 @@ markdown discovery 系统会把这些文件交给 `agena.skills_fs`，再通过 
 
 ### 7.2 MCP 动态生成的 entries
 
-`agena.mcp` 是内置 plugin 实现，但它暴露出来的具体 entry 名称依赖运行时配置的 MCP servers。
+`agena.mcp` 是 in-tree first-party plugin 实现，但它暴露出来的具体 entry 名称依赖运行时配置的 MCP servers。
 
 ### 7.3 配置驱动的 shell hooks
 
-`agena-shell-hooks` 是内置的，但它执行的 hook 命令来自用户配置，因此不属于固定内置能力。
+`agena-shell-hooks` 是 in-tree 的，但它执行的 hook 命令来自用户配置，因此不属于固定编译期能力。
 
 ---
 
@@ -415,7 +419,7 @@ markdown discovery 系统会把这些文件交给 `agena.skills_fs`，再通过 
 3. `crates/agena/src/plugins/bundled/*.rs` —— 对模型可见的 entry 名称
 4. `crates/agena/src/plugins/bundled/skills_fs.rs` —— dynamic discovery 行为
 5. `crates/agena-skills/src/bundled/` —— bundled workflow markdown
-6. `apps/agena-tui/src/commands.rs` —— 内置 slash commands 列表
+6. `apps/agena-tui/src/commands.rs` —— in-tree slash commands 列表
 7. `apps/agena-tui/locales/en-US/main.ftl` —— command summaries
 8. `crates/agena/src/provider/mod.rs` 与 `crates/agena/src/provider/` —— in-tree provider 实现
 
@@ -424,7 +428,7 @@ markdown discovery 系统会把这些文件交给 `agena.skills_fs`，再通过 
 - 编译期固定的 model-visible entries
 - 运行时动态生成的 entry surfaces
 - bundled workflow 内容
-- 内置 slash commands
-- 内置 providers
+- in-tree slash commands
+- in-tree providers
 
 然后同步更新本文档。

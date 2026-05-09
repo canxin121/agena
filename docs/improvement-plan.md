@@ -269,7 +269,7 @@
   - 支持 prompts/list/get 映射 skills / slash commands。
 - 验收标准：
   - stdio transport 可被 MCP inspector 调用。
-  - builtin tool schema 正确。
+  - first-party entry schema 正确。
 - 建议提交信息：
   - `feat(mcp): add agena mcp server crate`
 
@@ -493,17 +493,19 @@
 - 建议提交信息：
   - `feat(skills): load user slash commands from markdown`
 
-### 12.2 Slash command registry
+### 12.2 Slash command dispatch
 
-- 目标：内置命令与用户命令统一注册、补全、执行。
+- 目标：本地 UI slash commands 与 runtime entry dispatch 明确分层。
 - 主要文件：
   - `apps/agena-tui/src/commands.rs`
-  - `crates/agena-skills/`
+  - `apps/agena-tui/src/app.rs`
+  - `crates/agena/src/plugins/bundled/skills_fs.rs`
 - 验收标准：
-  - `/help` 能列出用户命令。
-  - alias 可用。
+  - `/help` 能列出本地 UI 命令。
+  - `/review` 等 workflow 命令通过 runtime entry registry 分发。
+  - markdown-discovered commands 以 dynamic entries 形式暴露。
 - 建议提交信息：
-  - `feat(tui): unify slash command registry`
+  - `refactor(tui): split local slash commands from runtime entry dispatch`
 
 ## 阶段 13：Studio Web
 
@@ -747,7 +749,7 @@
 32. `feat(tui): add collapsible tool cards`
 33. `feat(tui): support image attachments`
 34. `feat(skills): load user slash commands from markdown`
-35. `feat(tui): unify slash command registry`
+35. `refactor(tui): split local slash commands from runtime entry dispatch`
 36. `feat(studio): add permission request UI`
 37. `feat(studio): add settings pages`
 38. `feat(studio): add file tree and diff viewer`

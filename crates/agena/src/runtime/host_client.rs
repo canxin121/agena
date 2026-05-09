@@ -10,30 +10,29 @@ use crate::event::Scope;
 use async_trait::async_trait;
 
 use crate::message::{
-    AskUserToolInput, FirstPartyToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-    ExitPlanModeToolInput, ExitWorktreeToolInput, MonitorStatus, MonitorStream, TaskSubagentType,
+    AskUserToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
+    ExitWorktreeToolInput, FirstPartyToolInput, MonitorStatus, MonitorStream, TaskSubagentType,
     TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, UserInputOption, UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
-    AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor,
-    HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
-    HostAgentRemoveResponse, HostCallbackContext, HostClient, HostEnterPlanModeRequest,
-    HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest,
-    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostMcpServerSpec, HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse,
-    HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentListResponse,
+    HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostCallbackContext,
+    HostClient, HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
+    HostExitWorktreeRequest, HostLspDiagnostic, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostPlanEntry, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostTodoItem,
-    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostWorktreeEntry,
-    HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostStorageDeleteRequest,
+    HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest,
+    HostStorageListResponse, HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus,
+    HostTodoWriteRequest, HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent,
+    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -42,7 +41,9 @@ use crate::plugin::{
 use crate::plugins::storage::{PluginSecretStore, PluginStorage, PluginStorageError};
 use crate::runtime::AgenaRuntime;
 use crate::tool::{EntrySource, MonitorError, MonitorReadParams, MonitorStartParams};
-use crate::{entry::FirstPartyExecutionContext, plugins::bundled::router::first_party_to_invoke_output};
+use crate::{
+    entry::FirstPartyExecutionContext, plugins::bundled::router::first_party_to_invoke_output,
+};
 
 /// Build a `HostClient` impl for a runtime; use [`NoopHostClient`] when no
 /// runtime is available (e.g. before bootstrap completes).

@@ -28,9 +28,9 @@ use agena_api::{
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
         ListRewindCheckpointsParams, ListSessionTreeParams, ReplyPermissionParams,
-        ReplyUserInputParams, ResolveWorkspaceParams, RewindSessionParams, SubmitTurnParams,
-        UnrewindSessionParams, UpdateSessionParams, UpdateWorkspaceParams,
-        UpsertPermissionRuleParams,
+        ReplyUserInputParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
+        RewindSessionParams, SubmitTurnParams, UnrewindSessionParams, UpdateSessionParams,
+        UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
@@ -177,7 +177,22 @@ fn permission_rule_from_http(
     agena_api::resource::PermissionRuleResource {
         id: value.id,
         action_key: value.action_key,
+        subject_kind: value.subject_kind,
+        tool_name: value.tool_name,
+        qualifier: value.qualifier,
+        path_access_kind: value.path_access_kind,
+        workspace_root: value.workspace_root,
+        target_path: value.target_path,
         mode: value.mode,
+        scope: value.scope,
+        session_id: value.session_id,
+        workspace_id: value.workspace_id,
+        source: value.source,
+        reason: value.reason,
+        operator: value.operator,
+        revoked_at: value.revoked_at,
+        revoked_reason: value.revoked_reason,
+        revoked_by: value.revoked_by,
         created_at: value.created_at,
         updated_at: value.updated_at,
     }
@@ -286,7 +301,9 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
                     .decl
                     .search_terms
                     .iter()
-                    .filter(|term| *term != "workflow" && *term != "command" && *term != &entry.original_name)
+                    .filter(|term| {
+                        *term != "workflow" && *term != "command" && *term != &entry.original_name
+                    })
                     .cloned()
                     .collect(),
                 source_path: None,
@@ -663,10 +680,42 @@ pub async fn dispatch_command(
                 .map_err(server_error_from_http)?;
             Ok(CommandResult::SessionDeleted { id: session_id })
         }
-        Command::UpsertPermissionRule(UpsertPermissionRuleParams { action_key, mode }) => {
+        Command::UpsertPermissionRule(UpsertPermissionRuleParams {
+            action_key,
+            subject_kind,
+            tool_name,
+            qualifier,
+            path_access_kind,
+            workspace_root,
+            target_path,
+            scope,
+            session_id,
+            mode,
+        }) => {
             let rule = state
                 .service()
-                .create_permission_rule(PermissionRuleWriteRequest { action_key, mode })
+                .create_permission_rule(PermissionRuleWriteRequest {
+                    action_key,
+                    subject_kind,
+                    tool_name,
+                    qualifier,
+                    path_access_kind,
+                    workspace_root,
+                    target_path,
+                    scope,
+                    session_id,
+                    mode,
+                })
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::PermissionRule(permission_rule_from_http(
+                rule,
+            )))
+        }
+        Command::RevokePermissionRule(RevokePermissionRuleParams { rule_id, reason }) => {
+            let rule = state
+                .service()
+                .revoke_permission_rule(rule_id, reason)
                 .await
                 .map_err(server_error_from_http)?;
             Ok(CommandResult::PermissionRule(permission_rule_from_http(

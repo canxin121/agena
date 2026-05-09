@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{FirstPartyToolOutput, EnterPlanModeToolInput, ExitPlanModeToolInput};
+use crate::message::{EnterPlanModeToolInput, ExitPlanModeToolInput, FirstPartyToolOutput};
 use crate::session::PlanState;
 
 use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};

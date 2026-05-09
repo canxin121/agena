@@ -484,6 +484,11 @@ impl HistoryFold for SessionViewBuilder {
             | EventKind::CommandBegin(_)
             | EventKind::CommandOutputDelta(_)
             | EventKind::CommandEnd(_)
+            | EventKind::PermissionRequested(_)
+            | EventKind::PermissionReplied(_)
+            | EventKind::PermissionRuleCreated(_)
+            | EventKind::PermissionRuleUpdated(_)
+            | EventKind::PermissionRuleRevoked(_)
             | EventKind::PluginEvent(_) => {}
         }
         Ok(())

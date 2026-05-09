@@ -46,6 +46,7 @@ pub enum Command {
 
     // ── permission rules ──
     UpsertPermissionRule(UpsertPermissionRuleParams),
+    RevokePermissionRule(RevokePermissionRuleParams),
     DeletePermissionRule(DeletePermissionRuleParams),
 }
 
@@ -220,8 +221,32 @@ pub struct ReplyUserInputParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpsertPermissionRuleParams {
-    pub action_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_access_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
     pub mode: PermissionMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevokePermissionRuleParams {
+    pub rule_id: i64,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

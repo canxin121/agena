@@ -1,4 +1,5 @@
 mod request;
+mod resolver;
 mod runtime;
 mod store;
 
@@ -15,8 +16,13 @@ pub use request::{
     PendingPermission, PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
     PermissionScope,
 };
+pub use resolver::{
+    PermissionResolution, PermissionResolutionSource, resolve_permission_with_persisted_rule,
+};
 pub use runtime::{PermissionRuntime, PermissionRuntimeDecision, PermissionRuntimeError};
-pub use store::{PermissionRuleStore, PermissionStoreError, decide_from_mode};
+pub use store::{
+    PermissionRuleStore, PermissionStoreError, PersistedPermissionRule, decide_from_mode,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +110,48 @@ impl BashPatternRule {
     }
 }
 
+pub fn bash_rule_qualifier(command: &str, rules: &[BashPatternRule]) -> Option<String> {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    rules
+        .iter()
+        .find(|rule| rule.matcher.is_match(normalized))
+        .map(|rule| rule.pattern.clone())
+}
+
+pub fn bash_permission_qualifier(
+    command: &str,
+    policy: Option<&ToolPermissionPolicy>,
+) -> Option<String> {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    policy
+        .and_then(|policy| {
+            bash_rule_qualifier(normalized, policy.bash_deny_rules())
+                .or_else(|| bash_rule_qualifier(normalized, policy.bash_rules()))
+        })
+        .or_else(|| Some(normalized.to_string()))
+}
+
+pub fn builtin_tool_action(
+    input: &FirstPartyToolInput,
+    policy: Option<&ToolPermissionPolicy>,
+) -> PermissionAction {
+    let tool_name = first_party_tool_name(input).to_string();
+    let qualifier = match input {
+        FirstPartyToolInput::Bash(bash) => bash_permission_qualifier(bash.command.as_str(), policy),
+        _ => None,
+    };
+    PermissionAction::BuiltinTool {
+        tool_name,
+        qualifier,
+    }
+}
+
 impl ToolPermissionPolicy {
     pub fn new(default_mode: PermissionMode) -> Self {
         Self {
@@ -128,8 +176,13 @@ impl ToolPermissionPolicy {
         self.execution_mode
     }
 
-    pub fn with_first_party_mode(mut self, first_party_tool_name: &'static str, mode: PermissionMode) -> Self {
-        self.tool_modes.insert(first_party_tool_name.to_string(), mode);
+    pub fn with_first_party_mode(
+        mut self,
+        first_party_tool_name: &'static str,
+        mode: PermissionMode,
+    ) -> Self {
+        self.tool_modes
+            .insert(first_party_tool_name.to_string(), mode);
         self
     }
 

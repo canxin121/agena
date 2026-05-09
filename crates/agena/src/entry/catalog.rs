@@ -78,7 +78,9 @@ impl ToolCatalog {
     pub fn first_party_definitions(&self) -> Vec<EntryDefinition> {
         first_party_decls()
             .into_iter()
-            .map(|decl| EntryDefinition::from_decl(decl.name.clone(), &decl, EntrySource::FirstParty))
+            .map(|decl| {
+                EntryDefinition::from_decl(decl.name.clone(), &decl, EntrySource::FirstParty)
+            })
             .filter(|definition| self.is_behavior_enabled(definition.behavior))
             .collect()
     }
@@ -152,11 +154,9 @@ mod tests {
             EntryBehavior::ReadOnly,
             "third_party",
         );
-        let mutating_first_party = EntryDefinition::first_party::<crate::message::ApplyPatchToolInput>(
-            "apply_patch",
-            "patch files",
-            EntryBehavior::Mutating,
-        );
+        let mutating_first_party = EntryDefinition::first_party::<
+            crate::message::ApplyPatchToolInput,
+        >("apply_patch", "patch files", EntryBehavior::Mutating);
         let task_plugin = EntryDefinition::plugin(
             "third_party_task",
             "delegate work",

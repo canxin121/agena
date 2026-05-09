@@ -17,6 +17,8 @@ pub enum PermissionScope {
 pub enum PermissionAction {
     BuiltinTool {
         tool_name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        qualifier: Option<String>,
     },
     PathAccess {
         access_kind: String,
@@ -31,6 +33,14 @@ pub struct PermissionRequest {
     pub session_id: Option<i64>,
     pub action: PermissionAction,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub explanation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<PermissionScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

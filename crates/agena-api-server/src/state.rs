@@ -20,9 +20,13 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(runtime: AgenaRuntime, db: Arc<DatabaseConnection>) -> Self {
+        let workspace_root = runtime.workspace_root().display().to_string();
+        let publisher = runtime
+            .session_manager()
+            .map(|manager| manager.event_publisher());
         Self {
             runtime,
-            service: ApiService::new(db),
+            service: ApiService::new(db, workspace_root, publisher),
             manager_override: None,
         }
     }

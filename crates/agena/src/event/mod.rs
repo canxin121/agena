@@ -27,7 +27,8 @@ pub use sequence::SequenceAllocator;
 pub use client::{
     CommandBeginEvent, CommandContext, CommandEndEvent, CommandOutputDeltaEvent,
     CommandOutputStream, ErrorInfo, MessagePartDeltaEvent, MessagePartUpdatedEvent, PartDeltaField,
-    RunFailedEvent, RunStartedEvent, StreamErrorEvent,
+    PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent, RunFailedEvent,
+    RunStartedEvent, StreamErrorEvent,
 };
 
 pub use kind::{

@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use crate::message::{
-    FirstPartyToolOutput, MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput,
+    FirstPartyToolOutput, MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary,
+    MonitorToolInput,
 };
 
 use super::monitor::{

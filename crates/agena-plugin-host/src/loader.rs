@@ -192,7 +192,10 @@ pub async fn load_entry(
         })?;
 
     let prefetched_manifest_value = transport
-        .dispatch(method::META_MANIFEST, serde_json::Value::Object(Default::default()))
+        .dispatch(
+            method::META_MANIFEST,
+            serde_json::Value::Object(Default::default()),
+        )
         .await
         .map_err(|e| HostError::Init {
             plugin: plugin_id.to_string(),

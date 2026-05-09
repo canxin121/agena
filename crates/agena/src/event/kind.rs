@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::client::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, MessagePartDeltaEvent,
-    MessagePartUpdatedEvent, RunFailedEvent, RunStartedEvent, StreamErrorEvent,
+    MessagePartUpdatedEvent, PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
+    RunFailedEvent, RunStartedEvent, StreamErrorEvent,
 };
 use crate::session::history::{
     AssistantMessageCompleted, MessageRevised, SystemNoticeAppended, ToolCallCompleted,
@@ -28,6 +29,11 @@ pub enum EventKind {
     CommandBegin(CommandBeginEvent),
     CommandOutputDelta(CommandOutputDeltaEvent),
     CommandEnd(CommandEndEvent),
+    PermissionRequested(PermissionRequestedEvent),
+    PermissionReplied(PermissionRepliedEvent),
+    PermissionRuleCreated(PermissionRuleEvent),
+    PermissionRuleUpdated(PermissionRuleEvent),
+    PermissionRuleRevoked(PermissionRuleEvent),
 
     // --- append-only history ---
     TurnStarted(TurnStarted),
@@ -65,6 +71,11 @@ impl EventKind {
             Self::CommandBegin(_) => "command_begin",
             Self::CommandOutputDelta(_) => "command_output_delta",
             Self::CommandEnd(_) => "command_end",
+            Self::PermissionRequested(_) => "permission_requested",
+            Self::PermissionReplied(_) => "permission_replied",
+            Self::PermissionRuleCreated(_) => "permission_rule_created",
+            Self::PermissionRuleUpdated(_) => "permission_rule_updated",
+            Self::PermissionRuleRevoked(_) => "permission_rule_revoked",
             Self::TurnStarted(_) => "turn_started",
             Self::TurnCompleted(_) => "turn_completed",
             Self::TurnAborted(_) => "turn_aborted",
@@ -120,6 +131,12 @@ pub const UI_KINDS: &[&str] = &[
 
 /// Persistent history kind tags (written to SQLite and replayable).
 pub const HISTORY_KINDS: &[&str] = &[
+    "message_part_updated",
+    "permission_requested",
+    "permission_replied",
+    "permission_rule_created",
+    "permission_rule_updated",
+    "permission_rule_revoked",
     "turn_started",
     "turn_completed",
     "turn_aborted",
@@ -128,7 +145,6 @@ pub const HISTORY_KINDS: &[&str] = &[
     "tool_call_issued",
     "tool_call_completed",
     "system_notice_appended",
-    "message_part_updated",
     "message_revised",
     "plugin_event",
 ];
@@ -144,6 +160,11 @@ pub const ALL_KINDS: &[&str] = &[
     "command_begin",
     "command_output_delta",
     "command_end",
+    "permission_requested",
+    "permission_replied",
+    "permission_rule_created",
+    "permission_rule_updated",
+    "permission_rule_revoked",
     "turn_started",
     "turn_completed",
     "turn_aborted",

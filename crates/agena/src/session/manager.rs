@@ -3276,12 +3276,12 @@ async fn persisted_rule_for_reply(
     let scope = reply.scope.unwrap_or(PermissionScope::Session);
     let action_key = permission_action_key(action)?;
     let workspace_id = match scope {
-        PermissionScope::Session => None,
+        PermissionScope::Session | PermissionScope::Global => None,
         PermissionScope::Workspace => Some(store.current_workspace_id().await?),
     };
     let session_rule_id = match scope {
         PermissionScope::Session => Some(session_id),
-        PermissionScope::Workspace => None,
+        PermissionScope::Workspace | PermissionScope::Global => None,
     };
     Ok(Some(PersistedPermissionRule {
         action_key,
@@ -3302,6 +3302,7 @@ fn permission_scope_label(scope: PermissionScope) -> String {
     match scope {
         PermissionScope::Session => "session".to_string(),
         PermissionScope::Workspace => "workspace".to_string(),
+        PermissionScope::Global => "global".to_string(),
     }
 }
 

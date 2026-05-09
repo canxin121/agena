@@ -730,10 +730,10 @@ impl ApiService {
             scope,
             session_id: match scope {
                 PermissionScope::Session => request.session_id,
-                PermissionScope::Workspace => None,
+                PermissionScope::Workspace | PermissionScope::Global => None,
             },
             workspace_id: match scope {
-                PermissionScope::Session => None,
+                PermissionScope::Session | PermissionScope::Global => None,
                 PermissionScope::Workspace => Some(workspace_id),
             },
             source: "api".to_string(),
@@ -788,10 +788,10 @@ impl ApiService {
         active.scope = Set(permission_scope_to_string(scope));
         active.session_id = Set(match scope {
             PermissionScope::Session => request.session_id,
-            PermissionScope::Workspace => None,
+            PermissionScope::Workspace | PermissionScope::Global => None,
         });
         active.workspace_id = Set(match scope {
-            PermissionScope::Session => None,
+            PermissionScope::Session | PermissionScope::Global => None,
             PermissionScope::Workspace => Some(workspace_id),
         });
         active.updated_at_ms = Set(now_ms);
@@ -1494,6 +1494,7 @@ fn permission_scope_from_request(value: Option<&str>) -> ApiResult<PermissionSco
     match value.unwrap_or("workspace") {
         "session" => Ok(PermissionScope::Session),
         "workspace" => Ok(PermissionScope::Workspace),
+        "global" => Ok(PermissionScope::Global),
         other => Err(ApiError::bad_request(format!(
             "unsupported permission scope: {other}"
         ))),
@@ -1504,6 +1505,7 @@ fn permission_scope_to_string(scope: PermissionScope) -> String {
     match scope {
         PermissionScope::Session => "session".to_string(),
         PermissionScope::Workspace => "workspace".to_string(),
+        PermissionScope::Global => "global".to_string(),
     }
 }
 

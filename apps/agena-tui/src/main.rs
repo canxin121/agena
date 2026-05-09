@@ -135,7 +135,6 @@ impl AgenaTuiCli {
             LaunchOptions {
                 initial_session_id: command.session,
                 initial_session_search: command.search,
-                workspace_root: Some(workspace_root),
                 tui_config,
             },
             i18n,

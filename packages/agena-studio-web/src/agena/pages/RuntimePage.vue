@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 
 import {
   createPermissionRule,
-  deletePermissionRule,
+  revokePermissionRule,
   deleteProviderCredential,
   fetchRuntimeStatus,
   getPlugin,
@@ -87,8 +87,29 @@ const actionError = ref('')
 const actionMessage = ref('')
 const drafts = reactive<Record<string, string>>({})
 const permissionSearch = ref('')
-const permissionDraft = reactive<{ actionKey: string; mode: PermissionMode }>({
-  actionKey: '',
+const permissionModeFilter = ref<'all' | PermissionMode>('all')
+const permissionScopeFilter = ref<'all' | 'session' | 'workspace'>('all')
+const permissionSubjectFilter = ref<'all' | 'builtin_tool' | 'path_access'>('all')
+const permissionStatusFilter = ref<'all' | 'active' | 'revoked'>('active')
+const permissionDraft = reactive<{
+  subjectKind: 'builtin_tool' | 'path_access'
+  toolName: string
+  qualifier: string
+  pathAccessKind: string
+  workspaceRoot: string
+  targetPath: string
+  scope: 'session' | 'workspace'
+  sessionId: string
+  mode: PermissionMode
+}>({
+  subjectKind: 'builtin_tool',
+  toolName: '',
+  qualifier: '',
+  pathAccessKind: 'read',
+  workspaceRoot: '',
+  targetPath: '',
+  scope: 'workspace',
+  sessionId: '',
   mode: 'ask',
 })
 const editingPermissionRuleId = ref<number | null>(null)
@@ -101,6 +122,16 @@ const timelineSummaries = computed(() => buildTimelineSummary(sessionTimeline.va
 
 const skillCommands = computed<RuntimeSkill[]>(() => runtime.value?.operator.skills.commands ?? [])
 const discoveredSkills = computed<RuntimeSkill[]>(() => runtime.value?.operator.skills.skills ?? [])
+const filteredPermissionRules = computed(() => {
+  return permissionRules.value.filter((rule) => {
+    if (permissionModeFilter.value !== 'all' && rule.mode !== permissionModeFilter.value) return false
+    if (permissionScopeFilter.value !== 'all' && rule.scope !== permissionScopeFilter.value) return false
+    if (permissionSubjectFilter.value !== 'all' && rule.subject_kind !== permissionSubjectFilter.value) return false
+    if (permissionStatusFilter.value === 'active' && rule.revoked_at) return false
+    if (permissionStatusFilter.value === 'revoked' && !rule.revoked_at) return false
+    return true
+  })
+})
 
 async function load() {
   loading.value = true
@@ -310,33 +341,144 @@ async function refreshCredential(providerId: string) {
 }
 
 function resetPermissionDraft() {
-  permissionDraft.actionKey = ''
+  permissionDraft.subjectKind = 'builtin_tool'
+  permissionDraft.toolName = ''
+  permissionDraft.qualifier = ''
+  permissionDraft.pathAccessKind = 'read'
+  permissionDraft.workspaceRoot = ''
+  permissionDraft.targetPath = ''
+  permissionDraft.scope = 'workspace'
+  permissionDraft.sessionId = ''
   permissionDraft.mode = 'ask'
   editingPermissionRuleId.value = null
 }
 
+function permissionRuleLabel(rule: PermissionRuleResource): string {
+  if (rule.subject_kind === 'builtin_tool') {
+    return rule.qualifier?.trim() ? `${rule.tool_name} · ${rule.qualifier}` : rule.tool_name || rule.action_key
+  }
+  if (rule.subject_kind === 'path_access') {
+    return `${rule.path_access_kind || 'path'} · ${rule.target_path || rule.action_key}`
+  }
+  return rule.action_key
+}
+
+function permissionRuleScopeLabel(rule: PermissionRuleResource): string {
+  if (rule.scope === 'session') {
+    return rule.session_id == null ? 'session' : `session #${rule.session_id}`
+  }
+  if (rule.scope === 'workspace') {
+    return rule.workspace_id == null ? 'workspace' : `workspace #${rule.workspace_id}`
+  }
+  return rule.scope
+}
+
+function permissionRuleFacts(rule: PermissionRuleResource): string[] {
+  const facts = [
+    `scope=${permissionRuleScopeLabel(rule)}`,
+    `source=${rule.source}`,
+    `status=${rule.revoked_at ? 'revoked' : 'active'}`,
+  ]
+  if (rule.operator) facts.push(`operator=${rule.operator}`)
+  if (rule.reason) facts.push(`reason=${rule.reason}`)
+  if (rule.revoked_at) facts.push(`revoked_at=${rule.revoked_at}`)
+  if (rule.revoked_reason) facts.push(`revoked_reason=${rule.revoked_reason}`)
+  if (rule.revoked_by) facts.push(`revoked_by=${rule.revoked_by}`)
+  return facts
+}
+
+function permissionRulePreview(rule: PermissionRuleResource): string {
+  if (rule.subject_kind === 'builtin_tool') {
+    const qualifier = rule.qualifier?.trim()
+    return qualifier ? `tool=${rule.tool_name} · qualifier=${qualifier}` : `tool=${rule.tool_name}`
+  }
+  return [
+    `access=${rule.path_access_kind || 'path_access'}`,
+    rule.workspace_root ? `workspace=${rule.workspace_root}` : null,
+    rule.target_path ? `target=${rule.target_path}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 function editPermissionRule(rule: PermissionRuleResource) {
-  permissionDraft.actionKey = rule.action_key
+  permissionDraft.subjectKind = rule.subject_kind === 'path_access' ? 'path_access' : 'builtin_tool'
+  permissionDraft.toolName = rule.tool_name || ''
+  permissionDraft.qualifier = rule.qualifier || ''
+  permissionDraft.pathAccessKind = rule.path_access_kind || 'read'
+  permissionDraft.workspaceRoot = rule.workspace_root || ''
+  permissionDraft.targetPath = rule.target_path || ''
+  permissionDraft.scope = rule.scope === 'session' ? 'session' : 'workspace'
+  permissionDraft.sessionId = rule.session_id == null ? '' : String(rule.session_id)
   permissionDraft.mode = rule.mode
   editingPermissionRuleId.value = rule.id
 }
 
 async function savePermissionRule() {
-  const actionKey = permissionDraft.actionKey.trim()
-  if (!actionKey) return
+  const toolName = permissionDraft.toolName.trim()
+  const qualifier = permissionDraft.qualifier.trim()
+  const targetPath = permissionDraft.targetPath.trim()
+  if (permissionDraft.subjectKind === 'builtin_tool' && !toolName) return
+  if (permissionDraft.subjectKind === 'path_access' && !targetPath) return
+
+  const payload = {
+    subjectKind: permissionDraft.subjectKind,
+    toolName: permissionDraft.subjectKind === 'builtin_tool' ? toolName : undefined,
+    qualifier: permissionDraft.subjectKind === 'builtin_tool' && qualifier ? qualifier : undefined,
+    pathAccessKind: permissionDraft.subjectKind === 'path_access' ? permissionDraft.pathAccessKind : undefined,
+    workspaceRoot:
+      permissionDraft.subjectKind === 'path_access' && permissionDraft.workspaceRoot.trim()
+        ? permissionDraft.workspaceRoot.trim()
+        : undefined,
+    targetPath: permissionDraft.subjectKind === 'path_access' ? targetPath : undefined,
+    scope: permissionDraft.scope,
+    sessionId:
+      permissionDraft.scope === 'session' && permissionDraft.sessionId.trim()
+        ? Number(permissionDraft.sessionId.trim())
+        : undefined,
+    mode: permissionDraft.mode,
+  } as const
+
   actionMessage.value = ''
   actionError.value = ''
   try {
     if (editingPermissionRuleId.value) {
       await updatePermissionRule({
         id: editingPermissionRuleId.value,
-        actionKey,
-        mode: permissionDraft.mode,
+        ...payload,
       })
-      actionMessage.value = `Updated permission rule for ${actionKey}.`
+      actionMessage.value = `Updated permission rule for ${permissionRuleLabel({
+        id: editingPermissionRuleId.value,
+        action_key: '',
+        subject_kind: payload.subjectKind,
+        tool_name: payload.toolName ?? null,
+        qualifier: payload.qualifier ?? null,
+        path_access_kind: payload.pathAccessKind ?? null,
+        workspace_root: payload.workspaceRoot ?? null,
+        target_path: payload.targetPath ?? null,
+        mode: payload.mode,
+        scope: payload.scope,
+        source: 'api',
+        created_at: '',
+        updated_at: '',
+      } as PermissionRuleResource)}.`
     } else {
-      await createPermissionRule({ actionKey, mode: permissionDraft.mode })
-      actionMessage.value = `Created permission rule for ${actionKey}.`
+      await createPermissionRule(payload)
+      actionMessage.value = `Created permission rule for ${permissionRuleLabel({
+        id: 0,
+        action_key: '',
+        subject_kind: payload.subjectKind,
+        tool_name: payload.toolName ?? null,
+        qualifier: payload.qualifier ?? null,
+        path_access_kind: payload.pathAccessKind ?? null,
+        workspace_root: payload.workspaceRoot ?? null,
+        target_path: payload.targetPath ?? null,
+        mode: payload.mode,
+        scope: payload.scope,
+        source: 'api',
+        created_at: '',
+        updated_at: '',
+      } as PermissionRuleResource)}.`
     }
     resetPermissionDraft()
     await load()
@@ -345,12 +487,12 @@ async function savePermissionRule() {
   }
 }
 
-async function removePermissionRule(rule: PermissionRuleResource) {
+async function revokePermissionRuleAction(rule: PermissionRuleResource) {
   actionMessage.value = ''
   actionError.value = ''
   try {
-    await deletePermissionRule(rule.id)
-    actionMessage.value = `Deleted permission rule for ${rule.action_key}.`
+    await revokePermissionRule(rule.id)
+    actionMessage.value = `Revoked permission rule for ${permissionRuleLabel(rule)}.`
     if (editingPermissionRuleId.value === rule.id) resetPermissionDraft()
     await load()
   } catch (err) {
@@ -528,7 +670,7 @@ onBeforeUnmount(() => {
           <div class="page-header" style="align-items: flex-start">
             <div>
               <h3>Permission Rules</h3>
-              <p class="muted">Persist allow / ask / deny decisions by action key.</p>
+              <p class="muted">Persist allow / ask / deny decisions as structured tool/path rules with scope and source metadata.</p>
             </div>
             <button class="button ghost" :disabled="loading" @click="load">Refresh</button>
           </div>
@@ -546,13 +688,47 @@ onBeforeUnmount(() => {
 
           <div class="grid two" style="margin-top: 12px">
             <div class="field">
-              <label class="label" for="permission-action-key">Action Key</label>
-              <input
-                id="permission-action-key"
-                v-model="permissionDraft.actionKey"
-                class="input mono"
-                placeholder="Tool:action"
-              />
+              <label class="label" for="permission-status-filter">Status</label>
+              <select id="permission-status-filter" v-model="permissionStatusFilter" class="select">
+                <option value="active">active</option>
+                <option value="revoked">revoked</option>
+                <option value="all">all</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label" for="permission-scope-filter">Scope</label>
+              <select id="permission-scope-filter" v-model="permissionScopeFilter" class="select">
+                <option value="all">all</option>
+                <option value="workspace">workspace</option>
+                <option value="session">session</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label" for="permission-mode-filter">Mode</label>
+              <select id="permission-mode-filter" v-model="permissionModeFilter" class="select">
+                <option value="all">all</option>
+                <option value="allow">allow</option>
+                <option value="ask">ask</option>
+                <option value="deny">deny</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label" for="permission-subject-filter">Subject</label>
+              <select id="permission-subject-filter" v-model="permissionSubjectFilter" class="select">
+                <option value="all">all</option>
+                <option value="builtin_tool">builtin_tool</option>
+                <option value="path_access">path_access</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid two" style="margin-top: 12px">
+            <div class="field">
+              <label class="label" for="permission-subject-kind">Subject</label>
+              <select id="permission-subject-kind" v-model="permissionDraft.subjectKind" class="select">
+                <option value="builtin_tool">builtin_tool</option>
+                <option value="path_access">path_access</option>
+              </select>
             </div>
             <div class="field">
               <label class="label" for="permission-mode">Mode</label>
@@ -564,6 +740,76 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
+          <div v-if="permissionDraft.subjectKind === 'builtin_tool'" class="grid two" style="margin-top: 12px">
+            <div class="field">
+              <label class="label" for="permission-tool-name">Tool Name</label>
+              <input
+                id="permission-tool-name"
+                v-model="permissionDraft.toolName"
+                class="input mono"
+                placeholder="bash"
+              />
+            </div>
+            <div class="field">
+              <label class="label" for="permission-qualifier">Qualifier</label>
+              <input
+                id="permission-qualifier"
+                v-model="permissionDraft.qualifier"
+                class="input mono"
+                placeholder="git status *"
+              />
+            </div>
+          </div>
+
+          <div v-else class="grid two" style="margin-top: 12px">
+            <div class="field">
+              <label class="label" for="permission-path-access-kind">Path Access</label>
+              <select id="permission-path-access-kind" v-model="permissionDraft.pathAccessKind" class="select">
+                <option value="read">read</option>
+                <option value="write">write</option>
+                <option value="external_directory">external_directory</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label" for="permission-target-path">Target Path</label>
+              <input
+                id="permission-target-path"
+                v-model="permissionDraft.targetPath"
+                class="input mono"
+                placeholder="src/**"
+              />
+            </div>
+            <div class="field" style="grid-column: 1 / -1;">
+              <label class="label" for="permission-workspace-root">Workspace Root Override</label>
+              <input
+                id="permission-workspace-root"
+                v-model="permissionDraft.workspaceRoot"
+                class="input mono"
+                placeholder="optional workspace root override"
+              />
+            </div>
+          </div>
+
+          <div class="grid two" style="margin-top: 12px">
+            <div class="field">
+              <label class="label" for="permission-scope">Scope</label>
+              <select id="permission-scope" v-model="permissionDraft.scope" class="select">
+                <option value="workspace">workspace</option>
+                <option value="session">session</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label" for="permission-session-id">Session ID</label>
+              <input
+                id="permission-session-id"
+                v-model="permissionDraft.sessionId"
+                class="input mono"
+                placeholder="required for session scope"
+                :disabled="permissionDraft.scope !== 'session'"
+              />
+            </div>
+          </div>
+
           <div class="button-row" style="margin-top: 12px">
             <button class="button primary" @click="savePermissionRule">
               {{ editingPermissionRuleId ? 'Update Rule' : 'Create Rule' }}
@@ -571,22 +817,29 @@ onBeforeUnmount(() => {
             <button class="button" @click="resetPermissionDraft">Reset</button>
           </div>
 
-          <div v-if="permissionRules.length" class="list" style="margin-top: 12px">
-            <div v-for="rule in permissionRules" :key="rule.id" class="list-item">
+          <div v-if="filteredPermissionRules.length" class="list" style="margin-top: 12px">
+            <div v-for="rule in filteredPermissionRules" :key="rule.id" class="list-item">
               <div class="page-header" style="align-items: flex-start">
                 <div>
-                  <strong class="mono">{{ rule.action_key }}</strong>
+                  <strong class="mono">{{ permissionRuleLabel(rule) }}</strong>
+                  <div class="muted">{{ permissionRulePreview(rule) }}</div>
                   <div class="muted">updated {{ rule.updated_at }}</div>
+                  <div class="muted mono">{{ permissionRuleFacts(rule).join(' · ') }}</div>
                 </div>
-                <span class="badge">{{ rule.mode }}</span>
+                <div class="button-row">
+                  <span class="badge">{{ rule.mode }}</span>
+                  <span class="badge">{{ rule.revoked_at ? 'revoked' : 'active' }}</span>
+                </div>
               </div>
               <div class="button-row" style="margin-top: 10px">
-                <button class="button" @click="editPermissionRule(rule)">Edit</button>
-                <button class="button danger" @click="removePermissionRule(rule)">Delete</button>
+                <button class="button" :disabled="Boolean(rule.revoked_at)" @click="editPermissionRule(rule)">Edit</button>
+                <button class="button danger" :disabled="Boolean(rule.revoked_at)" @click="revokePermissionRuleAction(rule)">
+                  Revoke
+                </button>
               </div>
             </div>
           </div>
-          <p v-else class="muted" style="margin-top: 12px">No permission rules found.</p>
+          <p v-else class="muted" style="margin-top: 12px">No permission rules matched the current filters.</p>
         </section>
       </div>
     </template>

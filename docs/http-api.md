@@ -274,7 +274,59 @@ If-Match: "7"
 - `POST /api/v1/permission-rules`
 - `GET /api/v1/permission-rules/{rule_id}`
 - `PUT /api/v1/permission-rules/{rule_id}`
+- `POST /api/v1/permission-rules/{rule_id}/revoke`
 - `DELETE /api/v1/permission-rules/{rule_id}`
+
+`permission-rules` 已升级为结构化资源，不再只围绕裸 `action_key` 工作。资源包含：
+
+- `subject_kind`
+  - `builtin_tool`
+  - `path_access`
+- `tool_name` / `qualifier`
+- `path_access_kind` / `workspace_root` / `target_path`
+- `mode`
+  - `allow`
+  - `ask`
+  - `deny`
+- `scope`
+  - `session`
+  - `workspace`
+- `session_id` / `workspace_id`
+- `source` / `reason` / `operator`
+- `revoked_at` / `revoked_reason` / `revoked_by`
+
+创建 / 更新请求示例：
+
+```json
+{
+  "subject_kind": "builtin_tool",
+  "tool_name": "bash",
+  "qualifier": "git status*",
+  "scope": "workspace",
+  "mode": "allow"
+}
+```
+
+路径规则示例：
+
+```json
+{
+  "subject_kind": "path_access",
+  "path_access_kind": "write",
+  "target_path": "src/**",
+  "scope": "session",
+  "session_id": 42,
+  "mode": "deny"
+}
+```
+
+撤销请求示例：
+
+```json
+{
+  "reason": "rule no longer needed"
+}
+```
 
 ## Notes
 
@@ -283,6 +335,8 @@ If-Match: "7"
 - `message part` 详情被拆成单独资源，避免列表接口把大块 JSON 全部捞出来
 - 执行类接口返回的是轻量的 `session execution resource`，不会把整段 message history 再次塞回来
 - `pending_permission_requests` / `pending_user_input_requests` 直接给出待回复对象，前端可按 `request_id` 回调后续接口
+- `pending_permission_requests[].scope` 会暴露当前请求允许记忆的作用域（`session` / `workspace`）；`AllowAlways` / `DenyAlways` 会按 reply 的 scope 落成持久化规则
+- `permission-rules/{id}/revoke` 会保留规则审计字段，而不是物理删除；前端应优先使用 revoke 关闭 remembered rule
 - `events/stream` 默认从“当前最新事件之后”开始推送；如需补历史增量，请显式传 `after_seq`
 - public HTTP API 不暴露 message 写接口；消息写入统一通过 `turns` 和后续 runtime reply 接口完成
 - `sessions/{id}/state` 是前端刷新恢复入口，避免重新解析整段消息才能知道当前是否 blocked

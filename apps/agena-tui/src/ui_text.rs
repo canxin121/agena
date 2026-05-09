@@ -181,10 +181,16 @@ pub fn permission_reply_label(i18n: &I18n, kind: PermissionReplyKind) -> String 
 
 pub fn permission_summary(i18n: &I18n, permission: &PermissionRequestPart) -> String {
     match permission.reply.as_ref() {
-        None => i18n.text_args(
-            "permission-summary-pending",
-            &fl_args!("reason" => permission.request.reason.as_str()),
-        ),
+        None => {
+            let mut summary = i18n.text_args(
+                "permission-summary-pending",
+                &fl_args!("reason" => permission.request.reason.as_str()),
+            );
+            if !permission.request.explanation.trim().is_empty() {
+                summary.push_str(format!(" — {}", permission.request.explanation).as_str());
+            }
+            summary
+        }
         Some(reply) => {
             let reason = reply
                 .reason

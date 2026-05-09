@@ -7,15 +7,17 @@ use std::{
 };
 
 use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
+use agena::permission::PermissionScope;
 use agena::{
     event::{DomainEvent, EventKind},
     memory::MemoryStore,
     message::{
-        AttachmentItem, AttachmentKind, AttachmentSource, FirstPartyToolInput, FirstPartyToolOutput,
-        EnterWorktreeToolInput, ExitWorktreeToolInput, PartContent, ToolInvocation, UserInputReply,
+        AttachmentItem, AttachmentKind, AttachmentSource, EnterWorktreeToolInput,
+        ExitWorktreeToolInput, FirstPartyToolInput, FirstPartyToolOutput, PartContent,
+        ToolInvocation, UserInputReply,
     },
     model::ModelRef,
-    permission::{PermissionMode, PermissionReplyKind},
+    permission::PermissionReplyKind,
     provider::ProviderModel,
     runtime::AgenaRuntime,
     tool,
@@ -23,13 +25,13 @@ use agena::{
 use agena_api::{
     commands::{
         Command as ApiCommand, CommandResult, ContinueRunParams, CreateSessionParams,
-        DeletePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
-        RewindSessionParams, SubmitTurnParams, UpdateSessionParams, UpsertPermissionRuleParams,
+        ReplyPermissionParams, ReplyUserInputParams, RewindSessionParams, SubmitTurnParams,
+        UpdateSessionParams, UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,
     queries::{
-        GetPermissionRuleParams, GetSessionParams, ListMessagesParams, ListPermissionRulesParams,
-        ListSessionsParams, Query, QueryResult,
+        GetSessionParams, ListMessagesParams, ListPermissionRulesParams, ListSessionsParams, Query,
+        QueryResult,
     },
     resource::{
         MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
@@ -643,6 +645,7 @@ impl Backend {
         session_id: i64,
         request_id: String,
         kind: PermissionReplyKind,
+        scope: Option<PermissionScope>,
         request: RunOptions,
     ) -> Result<SessionExecutionResource> {
         match dispatch::dispatch_command(
@@ -654,7 +657,7 @@ impl Backend {
                     request_id,
                     kind,
                     reason: None,
-                    scope: None,
+                    scope,
                 },
             }),
         )
@@ -974,15 +977,11 @@ impl Backend {
 
     pub async fn create_permission_rule(
         &self,
-        action_key: String,
-        mode: PermissionMode,
+        params: UpsertPermissionRuleParams,
     ) -> Result<PermissionRuleResource> {
-        match dispatch::dispatch_command(
-            &self.app_state,
-            ApiCommand::UpsertPermissionRule(UpsertPermissionRuleParams { action_key, mode }),
-        )
-        .await
-        .map_err(api_error)?
+        match dispatch::dispatch_command(&self.app_state, ApiCommand::UpsertPermissionRule(params))
+            .await
+            .map_err(api_error)?
         {
             CommandResult::PermissionRule(rule) => Ok(rule),
             other => Err(anyhow!("unexpected command result: {:?}", other)),
@@ -993,16 +992,12 @@ impl Backend {
     pub async fn replace_permission_rule(
         &self,
         rule_id: i64,
-        action_key: String,
-        mode: PermissionMode,
+        params: UpsertPermissionRuleParams,
     ) -> Result<PermissionRuleResource> {
         let _ = rule_id;
-        match dispatch::dispatch_command(
-            &self.app_state,
-            ApiCommand::UpsertPermissionRule(UpsertPermissionRuleParams { action_key, mode }),
-        )
-        .await
-        .map_err(api_error)?
+        match dispatch::dispatch_command(&self.app_state, ApiCommand::UpsertPermissionRule(params))
+            .await
+            .map_err(api_error)?
         {
             CommandResult::PermissionRule(rule) => Ok(rule),
             other => Err(anyhow!("unexpected command result: {:?}", other)),
@@ -1010,28 +1005,21 @@ impl Backend {
         .context("failed to replace permission rule")
     }
 
-    pub async fn delete_permission_rule(&self, rule_id: i64) -> Result<PermissionRuleResource> {
-        let existing = match dispatch::dispatch_query(
-            &self.app_state,
-            Query::GetPermissionRule(GetPermissionRuleParams { rule_id }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            QueryResult::PermissionRule(rule) => rule,
-            other => return Err(anyhow!("unexpected query result: {:?}", other)),
-        };
+    pub async fn revoke_permission_rule(&self, rule_id: i64) -> Result<PermissionRuleResource> {
         match dispatch::dispatch_command(
             &self.app_state,
-            ApiCommand::DeletePermissionRule(DeletePermissionRuleParams { rule_id }),
+            ApiCommand::RevokePermissionRule(agena_api::commands::RevokePermissionRuleParams {
+                rule_id,
+                reason: None,
+            }),
         )
         .await
         .map_err(api_error)?
         {
-            CommandResult::PermissionRuleDeleted { .. } => Ok(existing),
+            CommandResult::PermissionRule(rule) => Ok(rule),
             other => Err(anyhow!("unexpected command result: {:?}", other)),
         }
-        .context("failed to delete permission rule")
+        .context("failed to revoke permission rule")
     }
 
     pub fn config_inspector_rows(&self) -> Vec<InspectorRow> {

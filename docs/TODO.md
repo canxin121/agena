@@ -68,8 +68,8 @@ title）从 `String` 换成 `Arc<str>`；HashMap 值改用 Arc。预计能砍掉
 **Provider（13 家，领先同类）**
 OpenAI / OpenAI-compatible / Codex(Responses) / Anthropic / Gemini / Bedrock / Vertex / Cloudflare AI Gateway / GitHub Copilot（device code） / GitLab OAuth / opencode 中继
 
-**Tool（22 个 builtin + MCP + Skill + Plugin）**
-bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / task / monitor / monitor_tool / todo_write / ask_user / cron / plan / worktree / skill / subtask / tool_search / orchestrator …
+**Tool（plugin entries + MCP + runtime-generated entries）**
+bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / task / monitor / todo_write / ask_user / cron_create / cron_list / cron_delete / schedule_wakeup / enter_plan_mode / exit_plan_mode / enter_worktree / exit_worktree / tool_search …
 
 **Session / Context**
 - ContextGovernor + ContextPolicy + PromptWindow + history/transcript + history/view
@@ -99,7 +99,7 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 | Skill 系统 | ✅ | ✅ 17+ | ✅ | ✅ |
 | Memory（CLAUDE.md） | ✅ 两阶段 | ✅ MEMORY.md 索引 + AGENA/AGENTS/CLAUDE.md 链式 | ✅ AGENTS.md | ✅ store 编程 API + AGENA/AGENTS/CLAUDE.md 链式查找已完成（#5 后端） |
 | MCP（OAuth+动态注册） | ✅ | ✅ | ✅ | ⚠️ HTTP auth + token store + tools/list_changed 已完成（#9），完整 OAuth 自动流待补 |
-| LSP 集成 | ❌ | ❌ | ✅ **招牌** | ⚠️ `agena-lsp` crate + 配置 + 注册表已完成（#10），builtin tools 待办 |
+| LSP 集成 | ❌ | ❌ | ✅ **招牌** | ⚠️ `agena-lsp` crate + 配置 + 注册表已完成（#10），plugin-owned LSP entries 待继续增强 |
 | Worktree | ❌ | ✅ | ✅ | ⚠️ 后端 list/prune API 已完成（#11），TUI/CLI 接入待办 |
 | Resume / share | ✅ | ✅ | ✅ snapshot+share | ⚠️ 后端 ShareBundle / SessionSummary / 路径脱敏完成（#12），CLI/HTTP UI 待办 |
 | TUI | ✅ ratatui | ✅ Ink+Vim | ✅ Solid+OpenTUI | ⚠️ Phase 2 推进中 |
@@ -123,14 +123,15 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - 待办：
     - 内置 Prompt hook 形态（让 hook 调用一个内部小 LLM 子任务）
     - `~/.agena/settings.json` 命名空间镜像（目前 `agena.toml` 已就位）
-    - PreToolUse 审批 UI（`PermissionRuntime` 后端已就绪，hook 已能 deny → 待 TUI/CLI 接入弹窗）
+    - PreToolUse 审批 UI（`PermissionRuntime` 后端已就绪；Web/TUI 已有基础审批与规则管理，CLI/TUI 命令面板级弹窗仍可继续打磨）
 
-- [ ] **#2 Slash Commands 中央 dispatcher + 自定义命令（自定义命令后端已完成 ✅）**
-  - [x] **自定义命令加载器**（`crates/agena/src/commands/`）：扫 `.agena/commands/*.md`（向上 walk）+ `~/.agena/commands/*.md`，frontmatter 支持 `description / argument-hint / allowed_tools / model / aliases`，body 支持 `$1..$N` + `$ARGUMENTS` 替换；项目覆盖用户、aliases 解析为同一 command；8 个单测覆盖（含 walk-up 发现、冲突优先级、aliases 去重）
-  - 待办：内置 slash 中央 dispatcher（`/help /clear /compact /plan /resume /cost /memory /init /review /worktree /tasks /config /share /doctor`），TUI / CLI 共用
+- [ ] **#2 TUI/CLI slash command dispatch 收口（runtime entry dispatch 已基本成型）**
+  - [x] **markdown command discovery**：由 `agena.skills_fs` 扫描 `.agena/commands/*.md`（向上 walk）+ `~/.agena/commands/*.md`，并把内容注册为 dynamic entries；frontmatter 支持 `description / argument-hint / allowed_tools / model / aliases`
+  - [x] `/review` 等 runtime workflow 命令改走 runtime entry registry，而不是本地 command substrate
+  - 待办：继续收口 TUI / CLI 的本地 UI 命令分发与展示层，把 remaining command UX 与 runtime entry surfaces 对齐
 
 - [x] **#3 Plan Mode 接通会话流（基本完成 ✅）**
-  - [x] `plan::PlanRegistry` 已存在，`tool/mod.rs::enforce_plan_mode_for` 在 session manager 工具调度路径上把关；mutating builtin / unknown 工具一律拒绝
+  - [x] `plan::PlanRegistry` 已存在，plan-mode enforcement 在 session manager 工具调度路径上把关；mutating first-party / write-capable / unknown 工具一律拒绝
   - [x] `EnterPlanMode` / `ExitPlanMode` 工具写计划到 `<workspace>/.agena/plans/<slug>.md`
   - [x] 进入 plan 后 bash 仅放行 `bash::is_read_only_command()` 判定为只读的命令（`git status` / `ls` / `rg` / `cat` …）；mutating 与 unknown 一律拒绝并提示 `exit_plan_mode`；2 个新单测覆盖
   - 进一步：跨 session fork 的 plan-mode 继承策略 / TUI 状态指示

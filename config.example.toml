@@ -31,7 +31,22 @@ api_key_env = "ANTHROPIC_API_KEY"
 # default_model = "gemini-2.5-pro"
 # api_key_env = "GEMINI_API_KEY"
 
-[permissions]
-# `prompt` asks before every tool action; `allow` runs trusted tools
-# without prompting; `deny` is dry-run.
-default_mode = "prompt"
+[permission]
+# Path permissions apply to first-party tools.
+default_read = "allow"
+default_write = "deny"
+default_external_directory = "deny"
+
+# `auto` preserves static allow/deny defaults; `ask` upgrades mutable tool
+# decisions like bash/apply_patch into interactive approval.
+mode = "ask"
+
+# Remembered/static bash rules are matched before the general execution mode.
+# First match wins.
+# [[permission.bash]]
+# pattern = "git status*"
+# mode = "allow"
+
+# Hard deny patterns always win.
+# [[permission.bash_deny]]
+# pattern = "rm -rf /*"

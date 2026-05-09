@@ -11,12 +11,12 @@ use async_trait::async_trait;
 
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
-use crate::plugins::bundled::router;
 use crate::plugin::sdk::{
     EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
     Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
     ToolInvokeOutput,
 };
+use crate::plugins::bundled::router;
 
 pub(crate) const CRON_PLUGIN_ID: &str = "agena.cron";
 

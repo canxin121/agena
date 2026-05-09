@@ -1623,10 +1623,14 @@ impl AgenaCli {
         )
         .with_plugin_manager(plugins);
         let execution = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput { patch }))
+            .execute_first_party_detailed(&FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
+                patch,
+            }))
             .map_err(|err| AppError::Config(err.to_string()))?;
         let patch = execution.apply_patch.ok_or_else(|| {
-            AppError::Internal("apply_patch first-party tool did not return patch metadata".to_owned())
+            AppError::Internal(
+                "apply_patch first-party tool did not return patch metadata".to_owned(),
+            )
         })?;
         if args.json {
             render_serialized(
@@ -2555,7 +2559,9 @@ impl McpServerBackend for AgenaMcpBackend {
                     entry.plugin_name.as_str(),
                     "agena.workflow" | "agena.skills_fs"
                 ) && entry.decl.input_schema
-                    == crate::entry::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>()
+                    == crate::entry::definition::json_schema_for::<
+                        crate::message::WorkflowPromptToolInput,
+                    >()
             })
             .map(|entry| PromptDescriptor {
                 name: entry.exposed_name,
@@ -2572,9 +2578,12 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .lookup_entry(params.name.as_str())
             .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
-        if !matches!(entry.handle.plugin_id.as_str(), "agena.workflow" | "agena.skills_fs")
-            || entry.decl.input_schema
-                != crate::entry::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>()
+        if !matches!(
+            entry.handle.plugin_id.as_str(),
+            "agena.workflow" | "agena.skills_fs"
+        ) || entry.decl.input_schema
+            != crate::entry::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>(
+            )
         {
             return Err(McpServerError::NotFound(params.name));
         }
@@ -3916,11 +3925,22 @@ store_path = "{}"
         init_schema(&db).await.expect("schema should init");
         crate::db::crud::permission_rule::upsert_rule(
             &db,
-            "bash",
-            crate::permission::PermissionMode::Allow,
+            &crate::permission::PersistedPermissionRule {
+                action_key: "bash".to_string(),
+                mode: crate::permission::PermissionMode::Allow,
+                scope: crate::permission::PermissionScope::Workspace,
+                session_id: None,
+                workspace_id: Some(1),
+                source: "test".to_string(),
+                reason: None,
+                operator: None,
+                revoked_at_ms: None,
+                revoked_reason: None,
+                revoked_by: None,
+            },
         )
         .await
-        .expect("rule should upsert");
+        .expect("permission rule should upsert");
 
         let output = cli
             .render_permissions_command(PermissionsArgs {

@@ -35,8 +35,8 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    AskUserToolInput, FirstPartyToolInput, FirstPartyToolOutput, CustomToolOutput, Message, PartContent,
-    PluginInvocation, StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput,
+    AskUserToolInput, CustomToolOutput, FirstPartyToolInput, FirstPartyToolOutput, Message,
+    PartContent, PluginInvocation, StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput,
 };
 use crate::permission::{
     AccessKind, PermissionAction, PermissionDecision, PermissionRuleStore, PermissionRuntime,
@@ -55,9 +55,8 @@ use crate::plugin::{
     },
 };
 use crate::plugins::bundled::{
-    cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, mcp,
-    router as bundled_router, shell as bundled_shell, skills_fs, web as bundled_web,
-    workflow as bundled_workflow,
+    cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, mcp, router as bundled_router,
+    shell as bundled_shell, skills_fs, web as bundled_web, workflow as bundled_workflow,
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
@@ -141,7 +140,10 @@ fn is_first_party_plugin(plugin_id: &str) -> bool {
 }
 
 fn uses_local_first_party_bridge(plugin_id: &str) -> bool {
-    matches!(plugin_id, bundled_fs::FS_PLUGIN_ID | bundled_shell::SHELL_PLUGIN_ID | bundled_web::WEB_PLUGIN_ID)
+    matches!(
+        plugin_id,
+        bundled_fs::FS_PLUGIN_ID | bundled_shell::SHELL_PLUGIN_ID | bundled_web::WEB_PLUGIN_ID
+    )
 }
 
 fn plugin_invocation_uses_local_first_party_bridge(
@@ -153,7 +155,9 @@ fn plugin_invocation_uses_local_first_party_bridge(
         .is_some_and(|resolution| uses_local_first_party_bridge(&resolution.handle.plugin_id))
 }
 
-pub fn first_party_plugin_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
+pub fn first_party_plugin_host(
+    workspace_root: impl Into<PathBuf>,
+) -> Result<Arc<PluginHost>, String> {
     let workspace_root = workspace_root.into();
     let skills_fs_id = skills_fs_plugin_id().to_string();
     let lsp_id = lsp_plugin_id().to_string();
@@ -663,7 +667,10 @@ impl ToolExecutor {
         FirstPartyToolInput::from_invocation(&invocation_view)
             .map(Some)
             .ok_or_else(|| {
-                ToolError::InvalidInput(format!("decode first_party input: {}", invocation.entry_name))
+                ToolError::InvalidInput(format!(
+                    "decode first_party input: {}",
+                    invocation.entry_name
+                ))
             })
     }
 
@@ -709,7 +716,10 @@ impl ToolExecutor {
         if let Some(first_party) = first_party {
             self.ensure_first_party_enabled(first_party)?;
             let tool_name = crate::permission::first_party_tool_name(first_party).to_string();
-            return Ok((tool_name, self.agent.authorize_first_party_tool(first_party)));
+            return Ok((
+                tool_name,
+                self.agent.authorize_first_party_tool(first_party),
+            ));
         }
 
         let tool_name = invocation_name(invocation);
@@ -839,9 +849,10 @@ impl ToolExecutor {
         session_id: Option<i64>,
         call_id: Option<i64>,
     ) -> Result<crate::plugin::ToolInvokeOutput, ToolError> {
-        let first_party = bundled_router::parse_first_party_tool(tool_name, input).map_err(|err| {
-            ToolError::InvalidInput(format!("parse first_party tool {tool_name}: {err}"))
-        })?;
+        let first_party =
+            bundled_router::parse_first_party_tool(tool_name, input).map_err(|err| {
+                ToolError::InvalidInput(format!("parse first_party tool {tool_name}: {err}"))
+            })?;
         let execution = orchestrator::execute_first_party(
             self,
             &first_party,
@@ -973,12 +984,15 @@ impl ToolExecutor {
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         let first_party = self.first_party_from_invocation(invocation)?;
         let (tool_name, decision) = self.authorize_invocation(invocation, first_party.as_ref())?;
-        let mut checks = vec![ToolPermissionCheck {
-            action: PermissionAction::BuiltinTool {
+        let action = if let Some(first_party) = first_party.as_ref() {
+            crate::permission::builtin_tool_action(first_party, Some(&self.agent.tool_policy))
+        } else {
+            PermissionAction::BuiltinTool {
                 tool_name: tool_name.clone(),
-            },
-            decision,
-        }];
+                qualifier: None,
+            }
+        };
+        let mut checks = vec![ToolPermissionCheck { action, decision }];
 
         let input_value = invocation_input_value(invocation);
         if let Some(resolution) =
@@ -1048,7 +1062,9 @@ impl ToolExecutor {
                         metadata: end.metadata.into_iter().collect(),
                         attachments: end.attachments,
                     };
-                    let mut execution = if let Ok(envelope) = bundled_router::payload_to_first_party_envelope(end.payload.as_ref()) {
+                    let mut execution = if let Ok(envelope) =
+                        bundled_router::payload_to_first_party_envelope(end.payload.as_ref())
+                    {
                         ToolInvocationExecution::new(
                             ToolOutput::Custom {
                                 output: envelope.output.into_custom_output(),
@@ -1151,7 +1167,9 @@ impl ToolExecutor {
             metadata: response.metadata.into_iter().collect(),
             attachments: response.attachments,
         };
-        let mut execution = if let Ok(envelope) = bundled_router::payload_to_first_party_envelope(response.payload.as_ref()) {
+        let mut execution = if let Ok(envelope) =
+            bundled_router::payload_to_first_party_envelope(response.payload.as_ref())
+        {
             ToolInvocationExecution::new(
                 ToolOutput::Custom {
                     output: envelope.output.into_custom_output(),
@@ -1239,14 +1257,14 @@ impl ToolExecutor {
         S: PermissionRuleStore,
     {
         let base = self.agent.authorize_first_party_tool(input);
-        let action = PermissionAction::BuiltinTool {
-            tool_name: crate::permission::first_party_tool_name(input).to_string(),
-        };
+        let action = crate::permission::builtin_tool_action(input, Some(&self.agent.tool_policy));
         match runtime.decide_or_request_with_plugins(session_id, action, base, Some(&self.plugins))
         {
-            Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Allow)) => Ok(
-                PermissionedFirstPartyExecution::Executed(self.execute_first_party_detailed(input)?),
-            ),
+            Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Allow)) => {
+                Ok(PermissionedFirstPartyExecution::Executed(
+                    self.execute_first_party_detailed(input)?,
+                ))
+            }
             Ok(PermissionRuntimeDecision::Immediate(PermissionDecision::Deny { reason })) => {
                 Err(ToolError::PermissionDenied(reason))
             }
@@ -1596,7 +1614,9 @@ fn collect_loaded_tool_names(
         .filter_map(|part| match part.content.as_ref() {
             Some(PartContent::ToolExecution(ToolExecutionPart::Completed { details, .. })) => {
                 match details.as_first_party() {
-                    Some(FirstPartyToolOutput::ToolSearch { loaded_tools, .. }) => Some(loaded_tools),
+                    Some(FirstPartyToolOutput::ToolSearch { loaded_tools, .. }) => {
+                        Some(loaded_tools)
+                    }
                     _ => None,
                 }
             }
@@ -1758,11 +1778,11 @@ mod tests {
     use uuid::Uuid;
 
     use crate::message::{
-        ApplyPatchToolInput, BashToolInput, FirstPartyToolInput, FirstPartyToolOutput, FileChangeKind,
-        GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput, StructuredObject,
-        TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority, TodoStatus,
-        TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput, ToolSearchToolInput,
-        ViewFileToolInput,
+        ApplyPatchToolInput, BashToolInput, FileChangeKind, FirstPartyToolInput,
+        FirstPartyToolOutput, GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput,
+        StructuredObject, TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority,
+        TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput,
+        ToolSearchToolInput, ViewFileToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -1871,10 +1891,11 @@ mod tests {
                 crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
             let session_id = context.session_id.unwrap_or(-1);
             let call_id = context.call_id.unwrap_or(-1);
-            let executor = bundled_router::current_executor_for_test(session_id, call_id, "todo_write")
-                .ok_or_else(|| {
-                PluginError::new("test host: no executor available for todo_write")
-            })?;
+            let executor =
+                bundled_router::current_executor_for_test(session_id, call_id, "todo_write")
+                    .ok_or_else(|| {
+                        PluginError::new("test host: no executor available for todo_write")
+                    })?;
             executor
                 .execute_first_party_payload_for_host(
                     "todo_write",
@@ -1884,7 +1905,6 @@ mod tests {
                 )
                 .map_err(|err| PluginError::new(err.to_string()))
         }
-
     }
 
     #[derive(Debug, Default)]
@@ -2482,7 +2502,11 @@ mod tests {
             .expect("task plugin entry should succeed");
 
         assert_eq!(
-            result.view.metadata.get("subagent_type").map(String::as_str),
+            result
+                .view
+                .metadata
+                .get("subagent_type")
+                .map(String::as_str),
             Some("explore")
         );
         assert_eq!(

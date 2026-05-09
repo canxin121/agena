@@ -10,13 +10,13 @@ use std::{
 
 use crate::local_api::{
     AuthApiKeyWriteRequest, AuthCredentialType, AuthProviderResource, HealthResponse,
-    MessageListQuery, PartLoadMode, PermissionRuleListQuery, PermissionRuleWriteRequest,
-    PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
-    RuntimeReloadResponse, SessionContinueRequestBody, SessionCreateRequest,
-    SessionEventStreamQuery, SessionListQuery, SessionPermissionReplyRequestBody,
-    SessionReplaceRequest, SessionRewindRequestBody, SessionRunOptionsRequest, SessionTurnRequest,
-    SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery, WorkspaceListQuery,
-    WorkspaceResolveRequest, WorkspaceWriteRequest,
+    MessageListQuery, PartLoadMode, PermissionRuleListQuery, PermissionRuleRevokeRequest,
+    PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
+    PluginStatusListResponse, RuntimeReloadResponse, SessionContinueRequestBody,
+    SessionCreateRequest, SessionEventStreamQuery, SessionListQuery,
+    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
+    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
+    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::event::{EventStore, StoreRange};
 use agena_api::queries::{ListEventsParams, Query, QueryResult};
@@ -1207,6 +1207,20 @@ pub async fn replace_permission_rule(
         state
             .service()
             .replace_permission_rule(rule_id, request)
+            .await
+            .map_err(server_error_from_http)?,
+    ))
+}
+
+pub async fn revoke_permission_rule(
+    State(state): State<AppState>,
+    Path(rule_id): Path<i64>,
+    Json(request): Json<PermissionRuleRevokeRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .service()
+            .revoke_permission_rule(rule_id, request.reason)
             .await
             .map_err(server_error_from_http)?,
     ))

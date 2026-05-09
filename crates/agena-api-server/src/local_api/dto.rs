@@ -624,7 +624,34 @@ pub struct MessageWriteRequest {
 pub struct PermissionRuleResource {
     pub id: i64,
     pub action_key: String,
+    pub subject_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_access_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_path: Option<String>,
     pub mode: PermissionMode,
+    pub scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<i64>,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -664,8 +691,31 @@ pub struct PermissionRuleListQuery {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PermissionRuleWriteRequest {
-    pub action_key: String,
+    #[serde(default)]
+    pub action_key: Option<String>,
+    #[serde(default)]
+    pub subject_kind: Option<String>,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub qualifier: Option<String>,
+    #[serde(default)]
+    pub path_access_kind: Option<String>,
+    #[serde(default)]
+    pub workspace_root: Option<String>,
+    #[serde(default)]
+    pub target_path: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<i64>,
     pub mode: PermissionMode,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PermissionRuleRevokeRequest {
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

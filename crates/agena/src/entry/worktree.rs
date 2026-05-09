@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{FirstPartyToolOutput, EnterWorktreeToolInput, ExitWorktreeToolInput};
+use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput, FirstPartyToolOutput};
 
 use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
 

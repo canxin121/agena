@@ -207,6 +207,10 @@ pub fn router(state: AppState) -> Router {
                     .put(rest::replace_permission_rule)
                     .delete(rest::delete_permission_rule),
             )
+            .route(
+                "/api/v1/permission-rules/{rule_id}/revoke",
+                post(rest::revoke_permission_rule),
+            )
             .route("/api/v1/events", get(rest::list_events))
             .route("/plugin-rpc/{plugin_id}", post(rest::plugin_rpc))
             .layer(middleware::from_fn(count_request))

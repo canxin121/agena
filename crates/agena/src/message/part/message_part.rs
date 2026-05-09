@@ -410,8 +410,13 @@ mod tests {
                     session_id: Some(2),
                     action: PermissionAction::BuiltinTool {
                         tool_name: "apply_patch".to_string(),
+                        qualifier: None,
                     },
                     reason: "tool 'apply_patch' requires confirmation by policy".to_string(),
+                    explanation: "matched static permission policy".to_string(),
+                    source: Some("static_policy".to_string()),
+                    scope: None,
+                    operator: None,
                     created_at: Utc::now(),
                 },
             )),

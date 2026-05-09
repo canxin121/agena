@@ -1,5 +1,7 @@
 pub mod event_migration;
 mod m20260427_000001_initial;
+mod m20260509_000002_permission_rule_scope;
+mod m20260509_000003_permission_rule_revoke;
 mod migrator;
 
 use sea_orm::{DatabaseConnection, DbErr};

@@ -17,12 +17,13 @@ use agena_skills::skill::Skill;
 use async_trait::async_trait;
 
 use crate::message::WorkflowPromptToolInput;
+use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostEntryRegisterRequest, HostEntryRemoveRequest};
 use crate::plugin::sdk::{
     EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
-    Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
+    ToolInvokeOutput,
 };
-use crate::plugin::PluginError;
 
 pub(crate) const SKILLS_FS_PLUGIN_ID: &str = "agena.skills_fs";
 
@@ -84,7 +85,10 @@ impl SkillsFsPlugin {
             crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
         )
         .description(if entry.skill.frontmatter.description.trim().is_empty() {
-            format!("Generate the '{}' {label} prompt.", entry.skill.frontmatter.name)
+            format!(
+                "Generate the '{}' {label} prompt.",
+                entry.skill.frontmatter.name
+            )
         } else {
             entry.skill.frontmatter.description.clone()
         })

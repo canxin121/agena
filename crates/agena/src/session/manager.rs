@@ -10,10 +10,13 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 use tracing::Instrument;
 
 use crate::AppError;
-use crate::event::{ErrorInfo, EventKind, RunFailedEvent, RunStartedEvent};
+use crate::event::{
+    ErrorInfo, EventKind, PermissionRepliedEvent, PermissionRequestedEvent, RunFailedEvent,
+    RunStartedEvent,
+};
 use crate::message::{
-    AttachmentItem, FirstPartyToolOutput, ExecutionStatus, FileChangePart, Message, MessageMetadata,
-    MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart,
+    AttachmentItem, ExecutionStatus, FileChangePart, FirstPartyToolOutput, Message,
+    MessageMetadata, MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart,
     TaskSubagentType, TimeRange, TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation,
     ToolOutput, ToolResultBlock, UserInputReply, UserInputReplyKind, UserInputRequest,
     UserInputRequestPart,
@@ -21,7 +24,8 @@ use crate::message::{
 use crate::model::ModelRef;
 use crate::permission::{
     PermissionAction, PermissionDecision, PermissionMode, PermissionReply, PermissionReplyKind,
-    PermissionRequest, decide_from_mode,
+    PermissionRequest, PermissionScope, PersistedPermissionRule,
+    resolve_permission_with_persisted_rule,
 };
 use crate::role::Role;
 use crate::tool::{
@@ -1011,10 +1015,27 @@ impl SessionManager {
             permission_part.status = ExecutionStatus::Completed;
         }
 
-        let persisted_mode = persisted_mode_for_reply(request.reply.kind);
-        let persisted_action_key = persisted_mode
-            .map(|_| permission_action_key(&permission_request.action))
-            .transpose()?;
+        let persisted_rule = persisted_rule_for_reply(
+            &self.store,
+            request.session_id,
+            &permission_request.action,
+            &request.reply,
+        )
+        .await?;
+        self.publisher
+            .publish(
+                crate::event::PublishContext::for_session(request.session_id),
+                EventKind::PermissionReplied(PermissionRepliedEvent {
+                    session_id: request.session_id,
+                    request_id: request.reply.request_id.clone(),
+                    kind: request.reply.kind,
+                    reason: request.reply.reason.clone(),
+                    scope: request.reply.scope.map(permission_scope_label),
+                    ts_ms: Utc::now().timestamp_millis(),
+                }),
+            )
+            .await
+            .map_err(|err| AppError::Internal(format!("publish permission reply failed: {err}")))?;
 
         match request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
@@ -1027,8 +1048,7 @@ impl SessionManager {
                         session,
                         &pending.tool,
                         execution,
-                        persisted_action_key,
-                        persisted_mode,
+                        persisted_rule.clone(),
                         state.clone(),
                     )
                     .await?;
@@ -1039,8 +1059,7 @@ impl SessionManager {
                         session,
                         &pending.tool,
                         reply_reason,
-                        persisted_action_key,
-                        persisted_mode,
+                        persisted_rule.clone(),
                         state.clone(),
                     )
                     .await?;
@@ -1134,14 +1153,7 @@ impl SessionManager {
             UserInputReplyKind::Submit => {
                 let execution = user_input_execution(&user_input_request, &request.reply)?;
                 session = self
-                    .apply_tool_success(
-                        session,
-                        &pending.tool,
-                        execution,
-                        None,
-                        None,
-                        state.clone(),
-                    )
+                    .apply_tool_success(session, &pending.tool, execution, None, state.clone())
                     .await?;
             }
             UserInputReplyKind::Cancel => {
@@ -1150,7 +1162,7 @@ impl SessionManager {
                         "user declined to answer requested questions".to_string()
                     });
                 session = self
-                    .apply_tool_failure(session, &pending.tool, reason, None, None, state.clone())
+                    .apply_tool_failure(session, &pending.tool, reason, None, state.clone())
                     .await?;
             }
         }
@@ -1985,7 +1997,6 @@ impl SessionManager {
                             &resolved.pending,
                             execution,
                             None,
-                            None,
                             state.clone(),
                         )
                         .await?;
@@ -2056,7 +2067,9 @@ impl SessionManager {
             .map_err(tool_error_to_app_error)?
         {
             if !matches!(
-                self.resolve_permission_decision(&check).await?,
+                self.resolve_permission_decision(session.id, &check)
+                    .await?
+                    .decision,
                 PermissionDecision::Allow
             ) {
                 *session = before_prepare;
@@ -2162,23 +2175,38 @@ impl SessionManager {
             .collect_permission_checks_for_invocation(&resolved.invocation)
             .map_err(tool_error_to_app_error)?
         {
-            let decision = self.resolve_permission_decision(&check).await?;
-            match decision {
+            let resolution = self.resolve_permission_decision(session.id, &check).await?;
+            match resolution.decision {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Ask { reason } => {
+                    let (source, scope, operator) = match resolution.source {
+                        crate::permission::PermissionResolutionSource::PersistedRule {
+                            scope,
+                            source,
+                            operator,
+                            ..
+                        } => (Some(source), Some(scope), operator),
+                        crate::permission::PermissionResolutionSource::StaticPolicy => {
+                            (Some("static_policy".to_string()), None, None)
+                        }
+                    };
                     return self
                         .apply_permission_request(
                             session,
                             &resolved.pending,
                             check.action,
                             reason,
+                            resolution.explanation,
+                            source,
+                            scope,
+                            operator,
                             state,
                         )
                         .await;
                 }
                 PermissionDecision::Deny { reason } => {
                     return self
-                        .apply_tool_failure(session, &resolved.pending, reason, None, None, state)
+                        .apply_tool_failure(session, &resolved.pending, reason, None, state)
                         .await;
                 }
             }
@@ -2214,7 +2242,7 @@ impl SessionManager {
                     .store
                     .load_session(session.id, state.cache_policy())
                     .await?;
-                self.apply_tool_success(session, &resolved.pending, execution, None, None, state)
+                self.apply_tool_success(session, &resolved.pending, execution, None, state)
                     .await
             }
             Err(ToolError::UserInputRequired(input)) => {
@@ -2231,23 +2259,18 @@ impl SessionManager {
 
     async fn resolve_permission_decision(
         &self,
+        session_id: i64,
         check: &ToolPermissionCheck,
-    ) -> Result<PermissionDecision, AppError> {
-        match &check.decision {
-            PermissionDecision::Allow => Ok(PermissionDecision::Allow),
-            PermissionDecision::Deny { reason } => Ok(PermissionDecision::Deny {
-                reason: reason.clone(),
-            }),
-            PermissionDecision::Ask { reason } => {
-                let key = permission_action_key(&check.action)?;
-                if let Some(mode) = self.store.resolve_permission_mode(key.as_str()).await? {
-                    return Ok(decide_from_mode(mode, reason.clone()));
-                }
-                Ok(PermissionDecision::Ask {
-                    reason: reason.clone(),
-                })
-            }
-        }
+    ) -> Result<crate::permission::PermissionResolution, AppError> {
+        let key = permission_action_key(&check.action)?;
+        let persisted_rule = self
+            .store
+            .resolve_permission_rule(key.as_str(), Some(session_id))
+            .await?;
+        Ok(resolve_permission_with_persisted_rule(
+            check.decision.clone(),
+            persisted_rule.as_ref(),
+        ))
     }
 
     async fn apply_permission_request(
@@ -2256,6 +2279,10 @@ impl SessionManager {
         pending_tool: &SessionPendingTool,
         action: PermissionAction,
         reason: String,
+        explanation: String,
+        source: Option<String>,
+        scope: Option<PermissionScope>,
+        operator: Option<String>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
@@ -2264,6 +2291,10 @@ impl SessionManager {
             session_id: Some(session.id),
             action,
             reason: reason.clone(),
+            explanation: explanation.clone(),
+            source,
+            scope,
+            operator,
             created_at: Utc::now(),
         };
 
@@ -2289,15 +2320,31 @@ impl SessionManager {
             permission_part_id,
             pending_tool.part.message_id,
             resolved.operation_id.as_str(),
-            PermissionRequestPart::pending(request),
+            PermissionRequestPart::pending(request.clone()),
         );
         session.messages[pending_tool.part.message_index]
             .parts
             .push(permission_part.clone());
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
-        let _ = resolved;
-        let _ = reason;
+        self.publisher
+            .publish(
+                crate::event::PublishContext::for_session(session.id),
+                EventKind::PermissionRequested(PermissionRequestedEvent {
+                    session_id: session.id,
+                    request_id: resolved.operation_id.clone(),
+                    reason: reason.clone(),
+                    explanation,
+                    source: request.source.clone(),
+                    scope: request.scope.map(permission_scope_label),
+                    operator: request.operator.clone(),
+                    ts_ms: Utc::now().timestamp_millis(),
+                }),
+            )
+            .await
+            .map_err(|err| {
+                AppError::Internal(format!("publish permission request failed: {err}"))
+            })?;
         self.persist_session_changes(
             session,
             vec![assistant_message],
@@ -2432,7 +2479,7 @@ impl SessionManager {
                     .load_session(session.id, state.cache_policy())
                     .await?;
                 return self
-                    .apply_tool_failure(session, pending_tool, err.to_string(), None, None, state)
+                    .apply_tool_failure(session, pending_tool, err.to_string(), None, state)
                     .await;
             }
             Err(_) => {
@@ -2446,7 +2493,6 @@ impl SessionManager {
                         pending_tool,
                         format!("tool stream ended without terminal result: {stream_id}"),
                         None,
-                        None,
                         state,
                     )
                     .await;
@@ -2457,7 +2503,7 @@ impl SessionManager {
             .store
             .load_session(session.id, state.cache_policy())
             .await?;
-        self.apply_tool_success(session, pending_tool, execution, None, None, state)
+        self.apply_tool_success(session, pending_tool, execution, None, state)
             .await
     }
 
@@ -2466,8 +2512,7 @@ impl SessionManager {
         mut session: Session,
         pending_tool: &SessionPendingTool,
         execution: ToolInvocationExecution,
-        persisted_action_key: Option<String>,
-        persisted_mode: Option<PermissionMode>,
+        persisted_rule: Option<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
@@ -2480,7 +2525,9 @@ impl SessionManager {
             execution.view.attachments.as_slice(),
             blocks.as_slice(),
         );
-        if let Some(FirstPartyToolOutput::ToolSearch { loaded_tools, .. }) = tool_output.as_first_party() {
+        if let Some(FirstPartyToolOutput::ToolSearch { loaded_tools, .. }) =
+            tool_output.as_first_party()
+        {
             session.runtime.record_loaded_deferred_tools(&loaded_tools);
         }
         self.apply_tool_success_execution_context(&mut session, &execution);
@@ -2535,7 +2582,7 @@ impl SessionManager {
                 session,
                 vec![assistant_message, tool_message],
                 Vec::new(),
-                persisted_rule_update(persisted_action_key, persisted_mode),
+                persisted_rule.clone(),
                 state.clone(),
             )
             .await?;
@@ -2559,8 +2606,7 @@ impl SessionManager {
         mut session: Session,
         pending_tool: &SessionPendingTool,
         reason: String,
-        persisted_action_key: Option<String>,
-        persisted_mode: Option<PermissionMode>,
+        persisted_rule: Option<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
@@ -2616,7 +2662,7 @@ impl SessionManager {
                 session,
                 vec![assistant_message, tool_message],
                 Vec::new(),
-                persisted_rule_update(persisted_action_key, persisted_mode),
+                persisted_rule.clone(),
                 state.clone(),
             )
             .await?;
@@ -2640,7 +2686,7 @@ impl SessionManager {
         session: Session,
         touched_messages: Vec<Message>,
         client_events: Vec<EventKind>,
-        persisted_rule: Option<(String, PermissionMode)>,
+        persisted_rule: Option<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         self.store
@@ -3218,11 +3264,45 @@ fn persisted_mode_for_reply(kind: PermissionReplyKind) -> Option<PermissionMode>
     }
 }
 
-fn persisted_rule_update(
-    action_key: Option<String>,
-    mode: Option<PermissionMode>,
-) -> Option<(String, PermissionMode)> {
-    action_key.zip(mode)
+async fn persisted_rule_for_reply(
+    store: &SessionStore,
+    session_id: i64,
+    action: &PermissionAction,
+    reply: &PermissionReply,
+) -> Result<Option<PersistedPermissionRule>, AppError> {
+    let Some(mode) = persisted_mode_for_reply(reply.kind) else {
+        return Ok(None);
+    };
+    let scope = reply.scope.unwrap_or(PermissionScope::Session);
+    let action_key = permission_action_key(action)?;
+    let workspace_id = match scope {
+        PermissionScope::Session => None,
+        PermissionScope::Workspace => Some(store.current_workspace_id().await?),
+    };
+    let session_rule_id = match scope {
+        PermissionScope::Session => Some(session_id),
+        PermissionScope::Workspace => None,
+    };
+    Ok(Some(PersistedPermissionRule {
+        action_key,
+        mode,
+        scope,
+        session_id: session_rule_id,
+        workspace_id,
+        source: "permission_reply".to_string(),
+        reason: reply.reason.clone(),
+        operator: None,
+        revoked_at_ms: None,
+        revoked_reason: None,
+        revoked_by: None,
+    }))
+}
+
+fn permission_scope_label(scope: PermissionScope) -> String {
+    match scope {
+        PermissionScope::Session => "session".to_string(),
+        PermissionScope::Workspace => "workspace".to_string(),
+    }
 }
 
 fn permission_action_key(action: &PermissionAction) -> Result<String, AppError> {
@@ -3415,10 +3495,10 @@ mod tests {
     use crate::entry::FirstPartyExecution;
     use crate::event::EventKind;
     use crate::message::{
-        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, FirstPartyToolOutput, McpToolOutput,
-        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
-        ToolOutput, ToolResultBlock, ToolSearchToolInput, UserInputOption, UserInputQuestion,
-        UserInputReply, UserInputReplyKind,
+        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, FirstPartyToolOutput,
+        McpToolOutput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment,
+        ToolExecutionPart, ToolOutput, ToolResultBlock, ToolSearchToolInput, UserInputOption,
+        UserInputQuestion, UserInputReply, UserInputReplyKind,
     };
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
@@ -4169,9 +4249,18 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::plugin::sdk::host_api::HostClient for SessionTestHostClient {
-        async fn log(&self, _level: crate::plugin::sdk::host_api::LogLevel, _message: String, _fields: serde_json::Value) {}
+        async fn log(
+            &self,
+            _level: crate::plugin::sdk::host_api::LogLevel,
+            _message: String,
+            _fields: serde_json::Value,
+        ) {
+        }
 
-        async fn publish_event(&self, _env: crate::plugin::sdk::EventEnvelope) -> crate::plugin::sdk::Result<()> {
+        async fn publish_event(
+            &self,
+            _env: crate::plugin::sdk::EventEnvelope,
+        ) -> crate::plugin::sdk::Result<()> {
             Ok(())
         }
 
@@ -4189,7 +4278,10 @@ mod tests {
             Ok(crate::plugin::sdk::PermissionDecision::Prompt)
         }
 
-        async fn read_config(&self, _path: Option<String>) -> crate::plugin::sdk::Result<serde_json::Value> {
+        async fn read_config(
+            &self,
+            _path: Option<String>,
+        ) -> crate::plugin::sdk::Result<serde_json::Value> {
             Ok(serde_json::Value::Null)
         }
 
@@ -4198,10 +4290,14 @@ mod tests {
             tool: String,
             _input: serde_json::Value,
         ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-            Err(crate::plugin::PluginError::new(format!("unexpected invoke_tool for {tool}")))
+            Err(crate::plugin::PluginError::new(format!(
+                "unexpected invoke_tool for {tool}"
+            )))
         }
 
-        async fn list_tools(&self) -> crate::plugin::sdk::Result<Vec<crate::plugin::sdk::host_api::ToolDescriptor>> {
+        async fn list_tools(
+            &self,
+        ) -> crate::plugin::sdk::Result<Vec<crate::plugin::sdk::host_api::ToolDescriptor>> {
             Ok(self
                 .executor
                 .searchable_tools()
@@ -4235,11 +4331,13 @@ mod tests {
             &self,
             req: crate::plugin::sdk::host_api::HostTodoWriteRequest,
         ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-            let context = crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
+            let context =
+                crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
             self.executor
                 .execute_first_party_payload_for_host(
                     "todo_write",
-                    serde_json::to_value(req).map_err(|err| crate::plugin::PluginError::new(err.to_string()))?,
+                    serde_json::to_value(req)
+                        .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?,
                     context.session_id.filter(|id| *id >= 0),
                     context.call_id.filter(|id| *id >= 0),
                 )
@@ -5876,8 +5974,8 @@ mod tests {
     async fn blocked_permission_survives_restart_and_reply_continues() {
         let workspace = TempWorkspace::new();
         let db = open_temp_database(&workspace.root, "permission-resume.db").await;
-        let tool_policy =
-            ToolPermissionPolicy::allow_all().with_first_party_mode("todo_write", PermissionMode::Ask);
+        let tool_policy = ToolPermissionPolicy::allow_all()
+            .with_first_party_mode("todo_write", PermissionMode::Ask);
         let first = build_manager_with_provider_on_db(
             &workspace.root,
             db.clone(),

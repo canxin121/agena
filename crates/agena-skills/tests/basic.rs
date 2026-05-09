@@ -1,8 +1,8 @@
 use std::fs;
 
+use agena_skills::Skill;
 use agena_skills::bundled;
 use agena_skills::discovery::{default_command_roots, default_roots, scan, scan_commands};
-use agena_skills::Skill;
 
 #[test]
 fn parse_minimal_skill() {

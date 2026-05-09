@@ -8,9 +8,9 @@ use async_trait::async_trait;
 
 use crate::entry::{FirstPartyExecution, ToolExecutionView, ask_user, tool_search};
 use crate::message::{
-    AskUserToolInput, FirstPartyToolOutput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-    ExitPlanModeToolInput, ExitWorktreeToolInput, TaskToolInput, TodoItem, TodoPriority,
-    TodoStatus, TodoWriteToolInput, ToolSearchToolInput, WorkflowPromptToolInput,
+    AskUserToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
+    ExitWorktreeToolInput, FirstPartyToolOutput, TaskToolInput, TodoItem, TodoPriority, TodoStatus,
+    TodoWriteToolInput, ToolSearchToolInput, WorkflowPromptToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
@@ -168,9 +168,7 @@ impl WorkflowPlugin {
         }
 
         let execution = ask_user::execution_from_answers(input, answers);
-        Ok(crate::plugins::bundled::router::first_party_to_invoke_output(
-            execution,
-        ))
+        Ok(crate::plugins::bundled::router::first_party_to_invoke_output(execution))
     }
 
     async fn invoke_task(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -234,9 +232,11 @@ impl WorkflowPlugin {
             model_provider_id,
             model_id,
         };
-        Ok(crate::plugins::bundled::router::first_party_to_invoke_output(
-            FirstPartyExecution::new(output, view),
-        ))
+        Ok(
+            crate::plugins::bundled::router::first_party_to_invoke_output(
+                FirstPartyExecution::new(output, view),
+            ),
+        )
     }
 
     async fn invoke_tool_search(&self, input: &ToolSearchToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -249,9 +249,7 @@ impl WorkflowPlugin {
             .collect::<Vec<_>>();
         let execution = tool_search::execute_with_tools(&catalog, input)
             .map_err(|err| PluginError::invalid_params(err.to_string()))?;
-        Ok(crate::plugins::bundled::router::first_party_to_invoke_output(
-            execution,
-        ))
+        Ok(crate::plugins::bundled::router::first_party_to_invoke_output(execution))
     }
 }
 
@@ -564,48 +562,57 @@ mod tests {
         async fn todo_write(&self, req: HostTodoWriteRequest) -> SdkResult<ToolInvokeOutput> {
             assert_eq!(req.items.len(), 1);
             assert_eq!(req.items[0].content, "ship it");
-            Ok(crate::plugins::bundled::router::first_party_to_invoke_output(
-                FirstPartyExecution::new(
-                    FirstPartyToolOutput::TodoWrite {
-                        items: vec![TodoItem {
-                            content: "ship it".to_string(),
-                            status: TodoStatus::InProgress,
-                            priority: TodoPriority::High,
-                        }],
-                    },
-                    ToolExecutionView::simple("Todo write", "Updated todo list with 1 item(s):"),
+            Ok(
+                crate::plugins::bundled::router::first_party_to_invoke_output(
+                    FirstPartyExecution::new(
+                        FirstPartyToolOutput::TodoWrite {
+                            items: vec![TodoItem {
+                                content: "ship it".to_string(),
+                                status: TodoStatus::InProgress,
+                                priority: TodoPriority::High,
+                            }],
+                        },
+                        ToolExecutionView::simple(
+                            "Todo write",
+                            "Updated todo list with 1 item(s):",
+                        ),
+                    ),
                 ),
-            ))
+            )
         }
 
         async fn enter_plan_mode(
             &self,
             _req: HostEnterPlanModeRequest,
         ) -> SdkResult<ToolInvokeOutput> {
-            Ok(crate::plugins::bundled::router::first_party_to_invoke_output(
-                FirstPartyExecution::new(
-                    FirstPartyToolOutput::EnterPlanMode {
-                        plan_path: "/tmp/plan.md".to_string(),
-                        slug: "demo".to_string(),
-                    },
-                    ToolExecutionView::simple("Plan mode entered", "plan on"),
+            Ok(
+                crate::plugins::bundled::router::first_party_to_invoke_output(
+                    FirstPartyExecution::new(
+                        FirstPartyToolOutput::EnterPlanMode {
+                            plan_path: "/tmp/plan.md".to_string(),
+                            slug: "demo".to_string(),
+                        },
+                        ToolExecutionView::simple("Plan mode entered", "plan on"),
+                    ),
                 ),
-            ))
+            )
         }
 
         async fn exit_plan_mode(
             &self,
             _req: HostExitPlanModeRequest,
         ) -> SdkResult<ToolInvokeOutput> {
-            Ok(crate::plugins::bundled::router::first_party_to_invoke_output(
-                FirstPartyExecution::new(
-                    FirstPartyToolOutput::ExitPlanMode {
-                        approved: true,
-                        plan_path: "/tmp/plan.md".to_string(),
-                    },
-                    ToolExecutionView::simple("Plan mode exited", "plan off"),
+            Ok(
+                crate::plugins::bundled::router::first_party_to_invoke_output(
+                    FirstPartyExecution::new(
+                        FirstPartyToolOutput::ExitPlanMode {
+                            approved: true,
+                            plan_path: "/tmp/plan.md".to_string(),
+                        },
+                        ToolExecutionView::simple("Plan mode exited", "plan off"),
+                    ),
                 ),
-            ))
+            )
         }
 
         async fn enter_worktree(
@@ -614,29 +621,33 @@ mod tests {
         ) -> SdkResult<ToolInvokeOutput> {
             assert_eq!(req.name.as_deref(), Some("demo"));
             assert_eq!(req.path, None);
-            Ok(crate::plugins::bundled::router::first_party_to_invoke_output(
-                FirstPartyExecution::new(
-                    FirstPartyToolOutput::EnterWorktree {
-                        path: "/tmp/wt".to_string(),
-                        branch: "agena/demo".to_string(),
-                    },
-                    ToolExecutionView::simple("Worktree", "entered worktree"),
+            Ok(
+                crate::plugins::bundled::router::first_party_to_invoke_output(
+                    FirstPartyExecution::new(
+                        FirstPartyToolOutput::EnterWorktree {
+                            path: "/tmp/wt".to_string(),
+                            branch: "agena/demo".to_string(),
+                        },
+                        ToolExecutionView::simple("Worktree", "entered worktree"),
+                    ),
                 ),
-            ))
+            )
         }
 
         async fn exit_worktree(&self, req: HostExitWorktreeRequest) -> SdkResult<ToolInvokeOutput> {
             assert_eq!(req.action, "keep");
             assert!(!req.discard_changes);
-            Ok(crate::plugins::bundled::router::first_party_to_invoke_output(
-                FirstPartyExecution::new(
-                    FirstPartyToolOutput::ExitWorktree {
-                        action: "keep".to_string(),
-                        path: "/tmp/wt".to_string(),
-                    },
-                    ToolExecutionView::simple("Worktree", "exited worktree"),
+            Ok(
+                crate::plugins::bundled::router::first_party_to_invoke_output(
+                    FirstPartyExecution::new(
+                        FirstPartyToolOutput::ExitWorktree {
+                            action: "keep".to_string(),
+                            path: "/tmp/wt".to_string(),
+                        },
+                        ToolExecutionView::simple("Worktree", "exited worktree"),
+                    ),
                 ),
-            ))
+            )
         }
     }
 
@@ -692,9 +703,10 @@ mod tests {
             ))
             .await
             .expect("ask_user host invoke");
-        let envelope =
-            crate::plugins::bundled::router::payload_to_first_party_envelope(output.payload.as_ref())
-                .unwrap();
+        let envelope = crate::plugins::bundled::router::payload_to_first_party_envelope(
+            output.payload.as_ref(),
+        )
+        .unwrap();
         match envelope.output {
             FirstPartyToolOutput::AskUser { answers } => {
                 assert_eq!(answers["color"], vec!["blue".to_string()]);
@@ -719,9 +731,10 @@ mod tests {
             ))
             .await
             .expect("task host invoke");
-        let envelope =
-            crate::plugins::bundled::router::payload_to_first_party_envelope(output.payload.as_ref())
-                .unwrap();
+        let envelope = crate::plugins::bundled::router::payload_to_first_party_envelope(
+            output.payload.as_ref(),
+        )
+        .unwrap();
         match envelope.output {
             FirstPartyToolOutput::Task {
                 session_id,
@@ -752,9 +765,10 @@ mod tests {
             ))
             .await
             .expect("todo_write host invoke");
-        let envelope =
-            crate::plugins::bundled::router::payload_to_first_party_envelope(output.payload.as_ref())
-                .unwrap();
+        let envelope = crate::plugins::bundled::router::payload_to_first_party_envelope(
+            output.payload.as_ref(),
+        )
+        .unwrap();
         match envelope.output {
             FirstPartyToolOutput::TodoWrite { items } => {
                 assert_eq!(items.len(), 1);
@@ -870,9 +884,10 @@ mod tests {
             ))
             .await
             .expect("tool_search host invoke");
-        let envelope =
-            crate::plugins::bundled::router::payload_to_first_party_envelope(output.payload.as_ref())
-                .unwrap();
+        let envelope = crate::plugins::bundled::router::payload_to_first_party_envelope(
+            output.payload.as_ref(),
+        )
+        .unwrap();
         match envelope.output {
             FirstPartyToolOutput::ToolSearch { results, .. } => {
                 assert_eq!(results, vec!["bash".to_string()]);

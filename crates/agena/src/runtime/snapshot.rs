@@ -248,11 +248,7 @@ impl RuntimeSnapshot {
                 .map_err(AppError::from)?
         } else {
             resolution
-                .build_plugin_host_with_previous_and_mcp(
-                    None,
-                    None,
-                    mcp_manager.clone(),
-                )
+                .build_plugin_host_with_previous_and_mcp(None, None, mcp_manager.clone())
                 .await
                 .map_err(AppError::from)?
         };

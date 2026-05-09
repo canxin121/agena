@@ -32,9 +32,36 @@ impl MigrationTrait for Migration {
                 .create_table_from_entity(entities::session::Entity)
                 .if_not_exists()
                 .to_owned(),
-            schema
-                .create_table_from_entity(entities::permission_rule::Entity)
+            Table::create()
+                .table(entities::permission_rule::Entity)
                 .if_not_exists()
+                .col(
+                    ColumnDef::new(entities::permission_rule::Column::Id)
+                        .big_integer()
+                        .not_null()
+                        .auto_increment()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(entities::permission_rule::Column::ActionKey)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(entities::permission_rule::Column::Mode)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(entities::permission_rule::Column::CreatedAtMs)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(entities::permission_rule::Column::UpdatedAtMs)
+                        .big_integer()
+                        .not_null(),
+                )
                 .to_owned(),
             schema
                 .create_table_from_entity(entities::session_snapshot::Entity)

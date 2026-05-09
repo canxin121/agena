@@ -123,6 +123,10 @@ where
                     session_id,
                     action,
                     reason,
+                    explanation: "matched static permission policy".to_string(),
+                    source: Some("static_policy".to_string()),
+                    scope: None,
+                    operator: None,
                     created_at: Utc::now(),
                 };
                 self.pending
@@ -191,7 +195,7 @@ impl From<PermissionMode> for PermissionDecision {
 
 fn permission_subject(action: &PermissionAction) -> serde_json::Value {
     match action {
-        PermissionAction::BuiltinTool { tool_name } => {
+        PermissionAction::BuiltinTool { tool_name, .. } => {
             serde_json::json!({
                 "kind": "tool",
                 "tool_name": tool_name,
@@ -254,6 +258,7 @@ mod tests {
     fn permission_subject_includes_tool_context() {
         let subject = super::permission_subject(&PermissionAction::BuiltinTool {
             tool_name: "bash".to_string(),
+            qualifier: None,
         });
         assert_eq!(subject["kind"], "tool");
         assert_eq!(subject["tool_name"], "bash");
@@ -277,6 +282,7 @@ mod tests {
         let mut runtime = PermissionRuntime::new(TestPermissionStore::default());
         let action = PermissionAction::BuiltinTool {
             tool_name: "bash".to_string(),
+            qualifier: None,
         };
 
         let pending = runtime

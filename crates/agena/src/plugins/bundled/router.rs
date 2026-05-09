@@ -151,7 +151,12 @@ impl Plugin for FirstPartyRouterPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        invoke_first_party_tool(&input.tool_name, input.input, input.session_id, input.call_id)
+        invoke_first_party_tool(
+            &input.tool_name,
+            input.input,
+            input.session_id,
+            input.call_id,
+        )
     }
 
     async fn permission_paths(
@@ -300,4 +305,3 @@ pub(crate) fn payload_to_first_party_envelope(
         )),
     }
 }
-

@@ -13,9 +13,12 @@ use crate::{
         crud::{permission_rule, session, workspace},
         tx::with_transaction_and_effects,
     },
-    event::{DomainEvent, EventKind, EventPublisher, MessagePartUpdatedEvent, PublishContext},
+    event::{
+        DomainEvent, EventKind, EventPublisher, MessagePartUpdatedEvent, PermissionRuleEvent,
+        PublishContext,
+    },
     message::Message,
-    permission::PermissionMode,
+    permission::{PermissionMode, PermissionScope, PersistedPermissionRule},
 };
 
 use super::{
@@ -29,7 +32,14 @@ pub(crate) struct SessionCommit {
     pub(crate) session: Session,
     pub(crate) touched_messages: Vec<Message>,
     pub(crate) client_events: Vec<EventKind>,
-    pub(crate) persisted_rule: Option<(String, PermissionMode)>,
+    pub(crate) persisted_rule: Option<PersistedPermissionRule>,
+}
+
+#[derive(Debug, Clone)]
+struct PersistedRuleEventMeta {
+    rule: PersistedPermissionRule,
+    rule_id: i64,
+    created: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -937,37 +947,69 @@ impl SessionStore {
         let cache = Arc::clone(&self.cache);
         let session_for_cache = session.clone();
         let session_runtime = session.runtime.clone();
-        let updated_session = with_transaction_and_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
-            Box::pin(async move {
-                if let Some((action_key, mode)) = persisted_rule {
-                    permission_rule::upsert_rule(txn, action_key.as_str(), mode).await?;
-                }
+        let (updated_session, persisted_rule_for_event) =
+            with_transaction_and_effects(&self.db, move |txn, effects| {
+                let cache = Arc::clone(&cache);
+                Box::pin(async move {
+                    let persisted_rule_for_event = if let Some(rule) = persisted_rule.as_ref() {
+                        let (model, created) = permission_rule::upsert_rule(txn, rule).await?;
+                        Some(PersistedRuleEventMeta {
+                            rule: rule.clone(),
+                            rule_id: model.id,
+                            created,
+                        })
+                    } else {
+                        None
+                    };
 
-                let updated_session =
-                    session::touch_session_updated_at(txn, session_id, session_runtime)
-                        .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
-                let updated_session = session_from_model_db(updated_session)?;
+                    let updated_session =
+                        session::touch_session_updated_at(txn, session_id, session_runtime)
+                            .await?
+                            .ok_or_else(|| {
+                                DbErr::Custom(format!("session not found: {session_id}"))
+                            })?;
+                    let updated_session = session_from_model_db(updated_session)?;
 
-                let updated_session_for_cache = updated_session.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        let mut cached_session = session_for_cache;
-                        cached_session.apply_persisted_metadata(&updated_session_for_cache);
-                        cached_session.refresh_derived();
-                        guard.insert(cached_session, cache_policy);
+                    let updated_session_for_cache = updated_session.clone();
+                    effects.push(async move {
+                        with_cache(cache.as_ref(), |guard| {
+                            let mut cached_session = session_for_cache;
+                            cached_session.apply_persisted_metadata(&updated_session_for_cache);
+                            cached_session.refresh_derived();
+                            guard.insert(cached_session, cache_policy);
+                        });
                     });
-                });
 
-                Ok(updated_session)
+                    Ok((updated_session, persisted_rule_for_event))
+                })
             })
-        })
-        .await?;
+            .await?;
 
         // Publish every queued event after the row update commits.
         for kind in client_events {
             self.publish_event(session_id, kind).await?;
+        }
+        if let Some(meta) = persisted_rule_for_event {
+            let event_kind = if meta.rule.revoked_at_ms.is_some() {
+                EventKind::PermissionRuleRevoked(permission_rule_event_from_rule(
+                    meta.rule_id,
+                    &meta.rule,
+                    session_id,
+                ))
+            } else if meta.created {
+                EventKind::PermissionRuleCreated(permission_rule_event_from_rule(
+                    meta.rule_id,
+                    &meta.rule,
+                    session_id,
+                ))
+            } else {
+                EventKind::PermissionRuleUpdated(permission_rule_event_from_rule(
+                    meta.rule_id,
+                    &meta.rule,
+                    session_id,
+                ))
+            };
+            self.publish_event(session_id, event_kind).await?;
         }
 
         session.apply_persisted_metadata(&updated_session);
@@ -986,11 +1028,15 @@ impl SessionStore {
         Ok(())
     }
 
-    pub(crate) async fn resolve_permission_mode(
+    pub(crate) async fn resolve_permission_rule(
         &self,
         action_key: &str,
-    ) -> Result<Option<PermissionMode>, AppError> {
-        Ok(permission_rule::resolve_rule(&self.db, action_key).await?)
+        session_id: Option<i64>,
+    ) -> Result<Option<PersistedPermissionRule>, AppError> {
+        let workspace_id = self.lookup_workspace_id().await?;
+        let rule: Option<crate::db::entities::permission_rule::Model> =
+            permission_rule::resolve_rule(&self.db, action_key, session_id, workspace_id).await?;
+        Ok(rule.and_then(|item| persisted_permission_rule_from_model(&item).ok()))
     }
 
     pub(crate) fn prune_cache(&self, cache_policy: SessionCachePolicy) {
@@ -1044,6 +1090,10 @@ impl SessionStore {
         };
         allocator.next_message_id += 1;
         Ok(ids)
+    }
+
+    pub(crate) async fn current_workspace_id(&self) -> Result<i64, AppError> {
+        self.workspace_id().await
     }
 
     async fn workspace_id(&self) -> Result<i64, AppError> {
@@ -1185,6 +1235,71 @@ fn with_cache<T>(
     }
 }
 
+fn persisted_permission_rule_from_model(
+    model: &crate::db::entities::permission_rule::Model,
+) -> Result<PersistedPermissionRule, AppError> {
+    let mode = permission_rule::mode_from_string(model.mode.as_str()).map_err(|_| {
+        AppError::Internal(format!(
+            "invalid permission mode in persisted rule {}",
+            model.id
+        ))
+    })?;
+    let scope = permission_rule::scope_from_string(model.scope.as_str()).map_err(|_| {
+        AppError::Internal(format!(
+            "invalid permission scope in persisted rule {}",
+            model.id
+        ))
+    })?;
+    Ok(PersistedPermissionRule {
+        action_key: model.action_key.clone(),
+        mode,
+        scope,
+        session_id: model.session_id,
+        workspace_id: model.workspace_id,
+        source: model.source.clone(),
+        reason: model.reason.clone(),
+        operator: model.operator.clone(),
+        revoked_at_ms: model.revoked_at_ms,
+        revoked_reason: model.revoked_reason.clone(),
+        revoked_by: model.revoked_by.clone(),
+    })
+}
+
+fn permission_mode_label(mode: PermissionMode) -> String {
+    match mode {
+        PermissionMode::Allow => "allow".to_string(),
+        PermissionMode::Ask => "ask".to_string(),
+        PermissionMode::Deny => "deny".to_string(),
+    }
+}
+
+fn permission_scope_label(scope: PermissionScope) -> String {
+    match scope {
+        PermissionScope::Session => "session".to_string(),
+        PermissionScope::Workspace => "workspace".to_string(),
+    }
+}
+
+fn permission_rule_event_from_rule(
+    rule_id: i64,
+    rule: &PersistedPermissionRule,
+    fallback_session_id: i64,
+) -> PermissionRuleEvent {
+    PermissionRuleEvent {
+        session_id: rule.session_id.or(Some(fallback_session_id)),
+        rule_id,
+        action_key: rule.action_key.clone(),
+        mode: permission_mode_label(rule.mode),
+        scope: permission_scope_label(rule.scope),
+        source: rule.source.clone(),
+        reason: rule.reason.clone(),
+        operator: rule.operator.clone(),
+        revoked_reason: rule.revoked_reason.clone(),
+        revoked_by: rule.revoked_by.clone(),
+        ts_ms: Utc::now().timestamp_millis(),
+    }
+}
+
 fn session_from_model(model: crate::db::entities::session::Model) -> Result<Session, AppError> {
     let created_at = timestamp_millis_to_utc(model.created_at_ms)?;
     let updated_at = timestamp_millis_to_utc(model.updated_at_ms)?;
@@ -1272,6 +1387,11 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
+        | EventKind::PermissionRequested(_)
+        | EventKind::PermissionReplied(_)
+        | EventKind::PermissionRuleCreated(_)
+        | EventKind::PermissionRuleUpdated(_)
+        | EventKind::PermissionRuleRevoked(_)
         | EventKind::TurnStarted(_)
         | EventKind::TurnCompleted(_)
         | EventKind::TurnAborted(_)
@@ -1319,6 +1439,11 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
+        | EventKind::PermissionRequested(_)
+        | EventKind::PermissionReplied(_)
+        | EventKind::PermissionRuleCreated(_)
+        | EventKind::PermissionRuleUpdated(_)
+        | EventKind::PermissionRuleRevoked(_)
         | EventKind::TurnStarted(_)
         | EventKind::TurnCompleted(_)
         | EventKind::TurnAborted(_)

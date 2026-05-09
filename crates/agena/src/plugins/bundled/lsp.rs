@@ -14,13 +14,13 @@ use crate::message::{
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
-use crate::plugins::bundled::router;
 use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
 use crate::plugin::sdk::{
     EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
     PlanModePolicy, Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
     ToolInvokeOutput,
 };
+use crate::plugins::bundled::router;
 
 pub(crate) const LSP_PLUGIN_ID: &str = "agena.lsp";
 

@@ -7,9 +7,9 @@ use agena_api::{
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
         ListRewindCheckpointsParams, ListSessionTreeParams, ReplyPermissionParams,
-        ReplyUserInputParams, ResolveWorkspaceParams, RewindSessionParams, SubmitTurnParams,
-        UnrewindSessionParams, UpdateSessionParams, UpdateWorkspaceParams,
-        UpsertPermissionRuleParams,
+        ReplyUserInputParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
+        RewindSessionParams, SubmitTurnParams, UnrewindSessionParams, UpdateSessionParams,
+        UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     queries::{
         GetMessageParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
@@ -395,14 +395,63 @@ impl AgenaClient {
             Command::ReplyUserInput(params) => Ok(CommandResult::Execution(
                 self.reply_user_input(params).await?,
             )),
-            Command::UpsertPermissionRule(UpsertPermissionRuleParams { action_key, mode }) => {
+            Command::UpsertPermissionRule(UpsertPermissionRuleParams {
+                action_key,
+                subject_kind,
+                tool_name,
+                qualifier,
+                path_access_kind,
+                workspace_root,
+                target_path,
+                scope,
+                session_id,
+                mode,
+            }) => {
+                let mut body = serde_json::Map::new();
+                if let Some(action_key) = action_key {
+                    body.insert("action_key".to_string(), serde_json::json!(action_key));
+                }
+                if let Some(subject_kind) = subject_kind {
+                    body.insert("subject_kind".to_string(), serde_json::json!(subject_kind));
+                }
+                if let Some(tool_name) = tool_name {
+                    body.insert("tool_name".to_string(), serde_json::json!(tool_name));
+                }
+                if let Some(qualifier) = qualifier {
+                    body.insert("qualifier".to_string(), serde_json::json!(qualifier));
+                }
+                if let Some(path_access_kind) = path_access_kind {
+                    body.insert(
+                        "path_access_kind".to_string(),
+                        serde_json::json!(path_access_kind),
+                    );
+                }
+                if let Some(workspace_root) = workspace_root {
+                    body.insert(
+                        "workspace_root".to_string(),
+                        serde_json::json!(workspace_root),
+                    );
+                }
+                if let Some(target_path) = target_path {
+                    body.insert("target_path".to_string(), serde_json::json!(target_path));
+                }
+                if let Some(scope) = scope {
+                    body.insert("scope".to_string(), serde_json::json!(scope));
+                }
+                if let Some(session_id) = session_id {
+                    body.insert("session_id".to_string(), serde_json::json!(session_id));
+                }
+                body.insert("mode".to_string(), serde_json::json!(mode));
+                Ok(CommandResult::PermissionRule(
+                    self.post_json("/api/v1/permission-rules", serde_json::Value::Object(body))
+                        .await?,
+                ))
+            }
+            Command::RevokePermissionRule(RevokePermissionRuleParams { rule_id, reason }) => {
                 Ok(CommandResult::PermissionRule(
                     self.post_json(
-                        "/api/v1/permission-rules",
-                        serde_json::json!({
-                            "action_key": action_key,
-                            "mode": mode,
-                        }),
+                        &format!("/api/v1/permission-rules/{rule_id}/revoke"),
+                        serde_json::json!({ "reason": reason }),
                     )
                     .await?,
                 ))

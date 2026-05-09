@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     message::{ExecutionStatus, MessagePart, MessageStatus},
+    permission::PermissionReplyKind,
     role::Role,
 };
 
@@ -133,6 +134,53 @@ pub struct MessagePartDeltaEvent {
     pub field: PartDeltaField,
     pub delta: String,
     pub seq: u64,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionRequestedEvent {
+    pub session_id: i64,
+    pub request_id: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub explanation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionRepliedEvent {
+    pub session_id: i64,
+    pub request_id: String,
+    pub kind: PermissionReplyKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionRuleEvent {
+    pub session_id: Option<i64>,
+    pub rule_id: i64,
+    pub action_key: String,
+    pub mode: String,
+    pub scope: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_by: Option<String>,
     pub ts_ms: i64,
 }
 

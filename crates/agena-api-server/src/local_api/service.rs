@@ -17,15 +17,19 @@ use serde::{Deserialize, Serialize};
 use agena::{
     AppError,
     db::{
-        crud::{permission_rule as permission_rule_crud, session as session_crud},
+        crud::{
+            permission_rule as permission_rule_crud, session as session_crud,
+            workspace as workspace_crud,
+        },
         entities,
     },
+    event::{EventKind, EventPublisher, PermissionRuleEvent, PublishContext},
     message::{
         ExecutionStatus, Message, MessagePart, PartContent, PermissionRequestPart,
         UserInputRequest, UserInputRequestPart,
     },
     model::ModelRef,
-    permission::PermissionMode,
+    permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
     provider::ProviderRegistry,
     session::{Session, SessionManager},
 };
@@ -49,9 +53,11 @@ use super::{
 
 type ApiResult<T> = Result<T, ApiError>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ApiService {
     db: Arc<DatabaseConnection>,
+    workspace_root: String,
+    publisher: Option<Arc<EventPublisher>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -91,8 +97,16 @@ struct WorkspaceSessionCountRow {
 }
 
 impl ApiService {
-    pub fn new(db: Arc<DatabaseConnection>) -> Self {
-        Self { db }
+    pub fn new(
+        db: Arc<DatabaseConnection>,
+        workspace_root: impl Into<String>,
+        publisher: Option<Arc<EventPublisher>>,
+    ) -> Self {
+        Self {
+            db,
+            workspace_root: workspace_root.into(),
+            publisher,
+        }
     }
 
     pub async fn list_workspaces(
@@ -701,25 +715,46 @@ impl ApiService {
         &self,
         request: PermissionRuleWriteRequest,
     ) -> ApiResult<PermissionRuleResource> {
-        if self
-            .permission_rule_id_by_action_key(request.action_key.as_str())
-            .await?
-            .is_some()
-        {
-            return Err(ApiError::conflict(format!(
-                "permission rule already exists for action_key '{}'",
-                request.action_key
-            )));
-        }
+        let workspace_id =
+            workspace_crud::ensure_workspace_id(self.db.as_ref(), self.workspace_root.as_str())
+                .await
+                .map_err(db_error)?;
+        let scope = permission_scope_from_request(request.scope.as_deref())?;
+        let action = permission_action_from_write_request(&request, self.workspace_root.as_str())?;
+        let action_key = serde_json::to_string(&action)
+            .map_err(AppError::from)
+            .map_err(api_error_from_app)?;
+        let rule = PersistedPermissionRule {
+            action_key,
+            mode: request.mode,
+            scope,
+            session_id: match scope {
+                PermissionScope::Session => request.session_id,
+                PermissionScope::Workspace => None,
+            },
+            workspace_id: match scope {
+                PermissionScope::Session => None,
+                PermissionScope::Workspace => Some(workspace_id),
+            },
+            source: "api".to_string(),
+            reason: None,
+            operator: None,
+            revoked_at_ms: None,
+            revoked_reason: None,
+            revoked_by: None,
+        };
 
-        let created = permission_rule_crud::upsert_rule(
-            self.db.as_ref(),
-            request.action_key.as_str(),
-            request.mode,
-        )
-        .await
-        .map_err(db_error)?;
-        permission_rule_resource(&created)
+        let (created, is_new) = permission_rule_crud::upsert_rule(self.db.as_ref(), &rule)
+            .await
+            .map_err(db_error)?;
+        let resource = permission_rule_resource(&created)?;
+        self.publish_permission_rule_event(if is_new {
+            EventKind::PermissionRuleCreated(permission_rule_event(&created))
+        } else {
+            EventKind::PermissionRuleUpdated(permission_rule_event(&created))
+        })
+        .await?;
+        Ok(resource)
     }
 
     pub async fn replace_permission_rule(
@@ -737,25 +772,57 @@ impl ApiService {
             )));
         };
 
-        if existing.action_key != request.action_key
-            && let Some(existing_id) = self
-                .permission_rule_id_by_action_key(request.action_key.as_str())
-                .await?
-            && existing_id != rule_id
-        {
-            return Err(ApiError::conflict(format!(
-                "permission rule already exists for action_key '{}'",
-                request.action_key
-            )));
-        }
-
+        let workspace_id =
+            workspace_crud::ensure_workspace_id(self.db.as_ref(), self.workspace_root.as_str())
+                .await
+                .map_err(db_error)?;
+        let scope = permission_scope_from_request(request.scope.as_deref())?;
+        let action = permission_action_from_write_request(&request, self.workspace_root.as_str())?;
+        let action_key = serde_json::to_string(&action)
+            .map_err(AppError::from)
+            .map_err(api_error_from_app)?;
         let now_ms = Utc::now().timestamp_millis();
         let mut active: entities::permission_rule::ActiveModel = existing.into();
-        active.action_key = Set(request.action_key);
+        active.action_key = Set(action_key);
         active.mode = Set(permission_mode_to_string(request.mode));
+        active.scope = Set(permission_scope_to_string(scope));
+        active.session_id = Set(match scope {
+            PermissionScope::Session => request.session_id,
+            PermissionScope::Workspace => None,
+        });
+        active.workspace_id = Set(match scope {
+            PermissionScope::Session => None,
+            PermissionScope::Workspace => Some(workspace_id),
+        });
         active.updated_at_ms = Set(now_ms);
         let updated = active.update(self.db.as_ref()).await.map_err(db_error)?;
         permission_rule_resource(&updated)
+    }
+
+    pub async fn revoke_permission_rule(
+        &self,
+        rule_id: i64,
+        reason: Option<String>,
+    ) -> ApiResult<PermissionRuleResource> {
+        let Some(updated) = permission_rule_crud::revoke_rule(
+            self.db.as_ref(),
+            rule_id,
+            reason,
+            Some("api".to_string()),
+        )
+        .await
+        .map_err(db_error)?
+        else {
+            return Err(ApiError::not_found(format!(
+                "permission rule not found: {rule_id}"
+            )));
+        };
+        let resource = permission_rule_resource(&updated)?;
+        self.publish_permission_rule_event(EventKind::PermissionRuleRevoked(
+            permission_rule_event(&updated),
+        ))
+        .await?;
+        Ok(resource)
     }
 
     pub async fn delete_permission_rule(&self, rule_id: i64) -> ApiResult<PermissionRuleResource> {
@@ -1089,17 +1156,6 @@ impl ApiService {
             .map_err(db_error)
     }
 
-    async fn permission_rule_id_by_action_key(&self, action_key: &str) -> ApiResult<Option<i64>> {
-        entities::permission_rule::Entity::find()
-            .select_only()
-            .column(entities::permission_rule::Column::Id)
-            .filter(entities::permission_rule::Column::ActionKey.eq(action_key))
-            .into_tuple::<i64>()
-            .one(self.db.as_ref())
-            .await
-            .map_err(db_error)
-    }
-
     async fn workspace_session_counts(
         &self,
         workspace_ids: &[i64],
@@ -1350,13 +1406,179 @@ fn session_resource(
 fn permission_rule_resource(
     row: &entities::permission_rule::Model,
 ) -> ApiResult<PermissionRuleResource> {
+    let action: PermissionAction = serde_json::from_str(row.action_key.as_str())
+        .map_err(AppError::from)
+        .map_err(api_error_from_app)?;
+    let (subject_kind, tool_name, qualifier, path_access_kind, workspace_root, target_path) =
+        match action {
+            PermissionAction::BuiltinTool {
+                tool_name,
+                qualifier,
+            } => (
+                "builtin_tool".to_string(),
+                Some(tool_name),
+                qualifier,
+                None,
+                None,
+                None,
+            ),
+            PermissionAction::PathAccess {
+                access_kind,
+                workspace_root,
+                target_path,
+            } => (
+                "path_access".to_string(),
+                None,
+                None,
+                Some(access_kind),
+                Some(workspace_root),
+                Some(target_path),
+            ),
+        };
     Ok(PermissionRuleResource {
         id: row.id,
         action_key: row.action_key.clone(),
+        subject_kind,
+        tool_name,
+        qualifier,
+        path_access_kind,
+        workspace_root,
+        target_path,
         mode: permission_mode_from_string(row.mode.as_str())?,
+        scope: row.scope.clone(),
+        session_id: row.session_id,
+        workspace_id: row.workspace_id,
+        source: row.source.clone(),
+        reason: row.reason.clone(),
+        operator: row.operator.clone(),
+        revoked_at: row.revoked_at_ms.map(timestamp_millis_to_utc).transpose()?,
+        revoked_reason: row.revoked_reason.clone(),
+        revoked_by: row.revoked_by.clone(),
         created_at: timestamp_millis_to_utc(row.created_at_ms)?,
         updated_at: timestamp_millis_to_utc(row.updated_at_ms)?,
     })
+}
+
+impl ApiService {
+    async fn publish_permission_rule_event(&self, kind: EventKind) -> ApiResult<()> {
+        let Some(publisher) = self.publisher.as_ref() else {
+            return Ok(());
+        };
+        publisher
+            .publish(PublishContext::default(), kind)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!("publish permission rule event failed: {err}"))
+            })?;
+        Ok(())
+    }
+}
+
+fn permission_rule_event(row: &entities::permission_rule::Model) -> PermissionRuleEvent {
+    PermissionRuleEvent {
+        session_id: row.session_id,
+        rule_id: row.id,
+        action_key: row.action_key.clone(),
+        mode: row.mode.clone(),
+        scope: row.scope.clone(),
+        source: row.source.clone(),
+        reason: row.reason.clone(),
+        operator: row.operator.clone(),
+        revoked_reason: row.revoked_reason.clone(),
+        revoked_by: row.revoked_by.clone(),
+        ts_ms: Utc::now().timestamp_millis(),
+    }
+}
+
+fn permission_scope_from_request(value: Option<&str>) -> ApiResult<PermissionScope> {
+    match value.unwrap_or("workspace") {
+        "session" => Ok(PermissionScope::Session),
+        "workspace" => Ok(PermissionScope::Workspace),
+        other => Err(ApiError::bad_request(format!(
+            "unsupported permission scope: {other}"
+        ))),
+    }
+}
+
+fn permission_scope_to_string(scope: PermissionScope) -> String {
+    match scope {
+        PermissionScope::Session => "session".to_string(),
+        PermissionScope::Workspace => "workspace".to_string(),
+    }
+}
+
+fn permission_action_from_write_request(
+    request: &PermissionRuleWriteRequest,
+    workspace_root: &str,
+) -> ApiResult<PermissionAction> {
+    if let Some(action_key) = request.action_key.as_deref()
+        && !action_key.trim().is_empty()
+    {
+        return serde_json::from_str(action_key)
+            .map_err(AppError::from)
+            .map_err(api_error_from_app);
+    }
+
+    match request.subject_kind.as_deref() {
+        Some("builtin_tool") => {
+            let tool_name = request
+                .tool_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    ApiError::bad_request("tool_name is required for builtin_tool rule")
+                })?
+                .to_string();
+            Ok(PermissionAction::BuiltinTool {
+                tool_name,
+                qualifier: request
+                    .qualifier
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string),
+            })
+        }
+        Some("path_access") => {
+            let access_kind = request
+                .path_access_kind
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    ApiError::bad_request("path_access_kind is required for path_access rule")
+                })?
+                .to_string();
+            let target_path = request
+                .target_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    ApiError::bad_request("target_path is required for path_access rule")
+                })?
+                .to_string();
+            let workspace_root = request
+                .workspace_root
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(workspace_root)
+                .to_string();
+            Ok(PermissionAction::PathAccess {
+                access_kind,
+                workspace_root,
+                target_path,
+            })
+        }
+        Some(other) => Err(ApiError::bad_request(format!(
+            "unsupported permission subject_kind: {other}"
+        ))),
+        None => Err(ApiError::bad_request(
+            "permission rule requires either action_key or structured subject fields",
+        )),
+    }
 }
 
 /// Project a `Message` (from the in-memory `Session.messages`) into the

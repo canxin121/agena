@@ -23,13 +23,14 @@ use crate::message::{
 };
 use crate::model::ModelRef;
 use crate::permission::{
-    PermissionAction, PermissionDecision, PermissionMode, PermissionReply, PermissionReplyKind,
-    PermissionRequest, PermissionScope, PersistedPermissionRule,
-    resolve_permission_with_persisted_rule,
+    DecisionTraceStep, PermissionAction, PermissionDecision, PermissionMode, PermissionReply,
+    PermissionReplyKind, PermissionRequest, PermissionRiskLevel, PermissionScope,
+    PersistedPermissionRule, PolicySourceKind, resolve_permission_with_persisted_rule,
 };
 use crate::role::Role;
 use crate::tool::{
-    StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution, ToolPermissionCheck,
+    PreparedShellCommand, StreamingToolExecution, ToolError, ToolExecutor,
+    ToolInvocationExecution, ToolPermissionCheck,
 };
 use std::path::PathBuf;
 
@@ -216,6 +217,7 @@ struct ResolvedPendingTool {
     operation_id: String,
     call_id: i64,
     invocation: ToolInvocation,
+    prepared_shell_command: Option<PreparedShellCommand>,
     lifecycle: TimeRange,
     session_runtime: crate::session::SessionRuntimeState,
 }
@@ -2029,6 +2031,11 @@ impl SessionManager {
         let prepared = scoped_executor
             .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
             .map_err(tool_error_to_app_error)?;
+        let (prepared_invocation, prepared_shell_command) = scoped_executor
+            .prepare_bash_invocation(&prepared.invocation, session.id, resolved.call_id)
+            .map_err(tool_error_to_app_error)?;
+        resolved.prepared_shell_command = prepared_shell_command;
+        resolved.invocation = prepared_invocation;
         if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
             let current_title = match session
                 .part(&resolved.pending.part)
@@ -2139,6 +2146,11 @@ impl SessionManager {
         let prepared = scoped_executor
             .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
             .map_err(tool_error_to_app_error)?;
+        let (prepared_invocation, prepared_shell_command) = scoped_executor
+            .prepare_bash_invocation(&prepared.invocation, session.id, resolved.call_id)
+            .map_err(tool_error_to_app_error)?;
+        resolved.prepared_shell_command = prepared_shell_command;
+        resolved.invocation = prepared_invocation;
         let mut session_changed = false;
         if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
             let current_title = match session
@@ -2202,6 +2214,8 @@ impl SessionManager {
                             source,
                             scope,
                             operator,
+                            resolution.risk,
+                            resolution.trace,
                             state,
                         )
                         .await;
@@ -2269,10 +2283,162 @@ impl SessionManager {
             .store
             .resolve_permission_rule(key.as_str(), Some(session_id))
             .await?;
-        Ok(resolve_permission_with_persisted_rule(
-            check.decision.clone(),
-            persisted_rule.as_ref(),
-        ))
+        let mut resolution =
+            resolve_permission_with_persisted_rule(check.decision.clone(), persisted_rule.as_ref());
+
+        if persisted_rule.is_none() {
+            let plugins = self.execution_state().tool_executor.plugin_manager().clone();
+            if !plugins.is_empty() {
+                let default_decision = match resolution.decision {
+                    PermissionDecision::Allow => crate::plugin::PermissionDecision::Allow,
+                    PermissionDecision::Deny { .. } => crate::plugin::PermissionDecision::Deny,
+                    PermissionDecision::Ask { .. } => crate::plugin::PermissionDecision::Prompt,
+                };
+                let req = crate::plugin::PermissionAskInput {
+                    session_id,
+                    action: format!("{:?}", check.action),
+                    subject: permission_subject(&check.action),
+                    default_decision,
+                };
+                match plugins.dispatch_permission_ask_blocking(req) {
+                    Ok(Some(crate::plugin::host::PermissionAskOutcome::Decision {
+                        plugin_id,
+                        decision: crate::plugin::PermissionDecision::Allow,
+                        authority,
+                    })) => {
+                        resolution.decision = PermissionDecision::Allow;
+                        resolution.risk = PermissionRiskLevel::Low;
+                        resolution.explanation = format!(
+                            "allowed by plugin decision from {plugin_id} ({})",
+                            authority.trust_level
+                        );
+                        resolution.trace.push(DecisionTraceStep {
+                            source_kind: PolicySourceKind::PluginAdvice,
+                            summary: format!(
+                                "allowed by plugin decision from {plugin_id} (trust={}, capabilities={})",
+                                authority.trust_level,
+                                authority.plugin_capabilities.join(", ")
+                            ),
+                            source: Some(plugin_id),
+                            scope: None,
+                            operator: None,
+                        });
+                    }
+                    Ok(Some(crate::plugin::host::PermissionAskOutcome::Decision {
+                        plugin_id,
+                        decision: crate::plugin::PermissionDecision::Deny,
+                        authority,
+                    })) => {
+                        resolution.decision = PermissionDecision::Deny {
+                            reason: format!("denied by plugin {plugin_id}"),
+                        };
+                        resolution.risk = PermissionRiskLevel::High;
+                        resolution.explanation = format!(
+                            "denied by plugin decision from {plugin_id} ({})",
+                            authority.trust_level
+                        );
+                        resolution.trace.push(DecisionTraceStep {
+                            source_kind: PolicySourceKind::PluginAdvice,
+                            summary: format!(
+                                "denied by plugin decision from {plugin_id} (trust={}, capabilities={})",
+                                authority.trust_level,
+                                authority.plugin_capabilities.join(", ")
+                            ),
+                            source: Some(plugin_id),
+                            scope: None,
+                            operator: None,
+                        });
+                    }
+                    Ok(Some(crate::plugin::host::PermissionAskOutcome::Decision {
+                        plugin_id,
+                        decision: crate::plugin::PermissionDecision::Prompt,
+                        authority,
+                    })) => {
+                        resolution.decision = PermissionDecision::Ask {
+                            reason: resolution.explanation.clone(),
+                        };
+                        resolution.risk = PermissionRiskLevel::Medium;
+                        resolution.trace.push(DecisionTraceStep {
+                            source_kind: PolicySourceKind::PluginAdvice,
+                            summary: format!(
+                                "plugin {plugin_id} requested confirmation (trust={}, capabilities={})",
+                                authority.trust_level,
+                                authority.plugin_capabilities.join(", ")
+                            ),
+                            source: Some(plugin_id),
+                            scope: None,
+                            operator: None,
+                        });
+                    }
+                    Ok(Some(crate::plugin::host::PermissionAskOutcome::Advice {
+                        plugin_id,
+                        advice,
+                        authority,
+                    })) => {
+                        let explanation = if advice.reason.trim().is_empty() {
+                            format!("permission advised by plugin {plugin_id}")
+                        } else {
+                            format!("{} (plugin: {plugin_id})", advice.reason)
+                        };
+                        resolution.explanation = explanation.clone();
+                        resolution.risk = match advice.risk {
+                            crate::plugin::sdk::PermissionRiskLevel::Low => {
+                                PermissionRiskLevel::Low
+                            }
+                            crate::plugin::sdk::PermissionRiskLevel::Medium => {
+                                PermissionRiskLevel::Medium
+                            }
+                            crate::plugin::sdk::PermissionRiskLevel::High => {
+                                PermissionRiskLevel::High
+                            }
+                            crate::plugin::sdk::PermissionRiskLevel::Critical => {
+                                PermissionRiskLevel::Critical
+                            }
+                        };
+                        resolution.decision = match advice.decision {
+                            crate::plugin::PermissionDecision::Allow => PermissionDecision::Allow,
+                            crate::plugin::PermissionDecision::Deny => PermissionDecision::Deny {
+                                reason: if advice.reason.trim().is_empty() {
+                                    "denied by plugin advice".to_string()
+                                } else {
+                                    advice.reason.clone()
+                                },
+                            },
+                            crate::plugin::PermissionDecision::Prompt => PermissionDecision::Ask {
+                                reason: match resolution.decision.clone() {
+                                    PermissionDecision::Ask { reason }
+                                    | PermissionDecision::Deny { reason } => reason,
+                                    PermissionDecision::Allow => {
+                                        "permission requires confirmation".to_string()
+                                    }
+                                },
+                            },
+                        };
+                        resolution.trace.push(DecisionTraceStep {
+                            source_kind: PolicySourceKind::PluginAdvice,
+                            summary: format!(
+                                "{} (trust={}, capabilities={})",
+                                explanation,
+                                authority.trust_level,
+                                authority.plugin_capabilities.join(", ")
+                            ),
+                            source: Some(plugin_id),
+                            scope: None,
+                            operator: None,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "agena_plugin_host::permission",
+                            "permission plugin failed: {err}"
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(resolution)
     }
 
     async fn apply_permission_request(
@@ -2285,6 +2451,8 @@ impl SessionManager {
         source: Option<String>,
         scope: Option<PermissionScope>,
         operator: Option<String>,
+        risk: crate::permission::PermissionRiskLevel,
+        trace: Vec<crate::permission::DecisionTraceStep>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
@@ -2297,6 +2465,8 @@ impl SessionManager {
             source,
             scope,
             operator,
+            risk,
+            trace: trace.clone(),
             created_at: Utc::now(),
         };
 
@@ -2340,6 +2510,8 @@ impl SessionManager {
                     source: request.source.clone(),
                     scope: request.scope.map(permission_scope_label),
                     operator: request.operator.clone(),
+                    risk: request.risk,
+                    trace,
                     ts_ms: Utc::now().timestamp_millis(),
                 }),
             )
@@ -2886,10 +3058,11 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution);
-        scoped_executor.execute_invocation_detailed(
+        scoped_executor.execute_invocation_detailed_with_prepared_shell(
             &pending_tool.invocation,
             session_id,
             pending_tool.call_id,
+            pending_tool.prepared_shell_command.clone(),
         )
     }
 
@@ -2902,15 +3075,37 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution);
-        scoped_executor.execute_invocation_detailed_bypassing_permissions(
+        scoped_executor.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
             &pending_tool.invocation,
             session_id,
             pending_tool.call_id,
+            pending_tool.prepared_shell_command.clone(),
         )
     }
 
     fn execution_state(&self) -> Arc<SessionManagerState> {
         self.execution.load_full()
+    }
+}
+
+fn permission_subject(action: &PermissionAction) -> serde_json::Value {
+    match action {
+        PermissionAction::BuiltinTool { tool_name, .. } => {
+            serde_json::json!({
+                "kind": "tool",
+                "tool_name": tool_name,
+            })
+        }
+        PermissionAction::PathAccess {
+            access_kind,
+            workspace_root,
+            target_path,
+        } => serde_json::json!({
+            "kind": "path_access",
+            "access_kind": access_kind,
+            "workspace_root": workspace_root,
+            "target_path": target_path,
+        }),
     }
 }
 
@@ -3016,6 +3211,7 @@ fn resolve_pending_tool(
         operation_id,
         call_id,
         invocation: invocation.clone(),
+        prepared_shell_command: None,
         lifecycle: lifecycle.clone(),
         session_runtime: session.runtime.clone(),
     })

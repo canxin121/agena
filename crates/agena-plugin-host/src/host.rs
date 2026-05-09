@@ -51,13 +51,14 @@ use crate::sdk::{
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EntryDefinitionInput, EntryDefinitionPatch,
     EventEnvelope, EventFilter, HookSubscription, HostCapability, NotificationInput,
-    PermissionAskDecision, PermissionAskInput, PermissionDecision, PluginEntryDecl, PluginError,
-    PluginErrorCode, PluginManifest, PostTurnInput, PreTurnInput, ProviderListInput,
-    ProviderListPatch, SessionCompactedInput, SessionCompactingInput, SessionCompactingPatch,
-    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolFailureInput,
-    ToolInvokeInput, ToolInvokeOutput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
-    UserPromptSubmitInput, UserPromptSubmitPatch,
+    PermissionAdvice, PermissionAskDecision, PermissionAskInput, PermissionDecision,
+    PluginEntryDecl, PluginError, PluginErrorCode, PluginManifest, PostTurnInput, PreTurnInput,
+    ProviderListInput, ProviderListPatch, SessionCompactedInput, SessionCompactingInput,
+    SessionCompactingPatch, SessionEndInput, SessionStartInput, SessionStartPatch,
+    ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput,
+    ToolBeforePatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput,
+    UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
@@ -67,11 +68,45 @@ pub struct LoadedPlugin {
     pub kind: &'static str,
     pub manifest: PluginManifest,
     pub transport: Arc<dyn PluginTransport>,
+    pub trust_level: String,
+    pub provenance: Vec<String>,
 }
 
 impl LoadedPlugin {
     pub fn transport(&self) -> Arc<dyn PluginTransport> {
         Arc::clone(&self.transport)
+    }
+
+    pub fn authority_summary(&self) -> PluginAuthoritySummary {
+        let plugin_capabilities = effective_host_capabilities_for_manifest(
+            &self.manifest.entries,
+            &self.manifest.plugin_capabilities,
+        )
+        .into_iter()
+        .map(|capability| format!("{capability:?}"))
+        .collect::<Vec<_>>();
+        let entry_capabilities = self
+            .manifest
+            .entries
+            .iter()
+            .filter(|entry| !entry.host_capabilities.is_empty())
+            .map(|entry| {
+                (
+                    entry.name.clone(),
+                    entry
+                        .host_capabilities
+                        .iter()
+                        .map(|capability| format!("{capability:?}"))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        PluginAuthoritySummary {
+            trust_level: self.trust_level.clone(),
+            provenance: self.provenance.clone(),
+            plugin_capabilities,
+            entry_capabilities,
+        }
     }
 }
 
@@ -91,12 +126,16 @@ impl LoadedPlugin {
         kind: &'static str,
         transport: Arc<dyn PluginTransport>,
         manifest: PluginManifest,
+        trust_level: String,
+        provenance: Vec<String>,
     ) -> Self {
         Self {
             id,
             kind,
             manifest,
             transport,
+            trust_level,
+            provenance,
         }
     }
 
@@ -177,10 +216,20 @@ pub struct PluginEntryResolution {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PluginAuthoritySummary {
+    pub trust_level: String,
+    pub provenance: Vec<String>,
+    pub plugin_capabilities: Vec<String>,
+    pub entry_capabilities: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PluginInspect {
     pub status: crate::status::PluginStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<PluginManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<PluginAuthoritySummary>,
 }
 
 /// Live handle to an in-flight tool stream. Consume `chunks` for incremental
@@ -201,6 +250,20 @@ pub struct ToolInvokeStream {
 pub struct SessionCompactingOutcome {
     pub messages: Vec<crate::sdk::ChatMessage>,
     pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum PermissionAskOutcome {
+    Decision {
+        plugin_id: String,
+        decision: PermissionDecision,
+        authority: PluginAuthoritySummary,
+    },
+    Advice {
+        plugin_id: String,
+        advice: PermissionAdvice,
+        authority: PluginAuthoritySummary,
+    },
 }
 
 /// Result-bearing facade for a tool call. Wraps async dispatch in a runtime
@@ -341,11 +404,14 @@ impl PluginHost {
 
     pub fn plugin_inspect(&self, plugin_id: &str) -> Option<PluginInspect> {
         let status = self.plugin_status(plugin_id)?;
-        let manifest = self
-            .plugins_by_id
-            .get(plugin_id)
-            .map(|plugin| plugin.manifest.clone());
-        Some(PluginInspect { status, manifest })
+        let plugin = self.plugins_by_id.get(plugin_id);
+        let manifest = plugin.as_ref().map(|plugin| plugin.manifest.clone());
+        let authority = plugin.map(|plugin| plugin.authority_summary());
+        Some(PluginInspect {
+            status,
+            manifest,
+            authority,
+        })
     }
 
     fn block_on<F>(&self, fut: F) -> F::Output
@@ -782,7 +848,7 @@ impl PluginHost {
     pub async fn dispatch_permission_ask(
         &self,
         input: PermissionAskInput,
-    ) -> Result<Option<PermissionDecision>, PluginError> {
+    ) -> Result<Option<PermissionAskOutcome>, PluginError> {
         let timeout = self.timeouts.permission_ask_or(Duration::from_secs(60));
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::PERMISSION_ASK) {
@@ -798,8 +864,22 @@ impl PluginHost {
             }
             let decision: Option<PermissionAskDecision> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            if let Some(PermissionAskDecision::Decide(d)) = decision {
-                return Ok(Some(d));
+            match decision {
+                Some(PermissionAskDecision::Decide(d)) => {
+                    return Ok(Some(PermissionAskOutcome::Decision {
+                        plugin_id: plugin.id.clone(),
+                        decision: d,
+                        authority: plugin.authority_summary(),
+                    }));
+                }
+                Some(PermissionAskDecision::Advise(advice)) => {
+                    return Ok(Some(PermissionAskOutcome::Advice {
+                        plugin_id: plugin.id.clone(),
+                        advice,
+                        authority: plugin.authority_summary(),
+                    }));
+                }
+                _ => {}
             }
         }
         Ok(None)
@@ -810,7 +890,7 @@ impl PluginHost {
     pub fn dispatch_permission_ask_blocking(
         &self,
         input: PermissionAskInput,
-    ) -> Result<Option<PermissionDecision>, PluginError> {
+    ) -> Result<Option<PermissionAskOutcome>, PluginError> {
         self.block_on(self.dispatch_permission_ask(input))
     }
 
@@ -2131,12 +2211,14 @@ impl HostHandle {
                                     )]
                                     enum AskKind {
                                         Decide(PermissionDecision),
+                                        Advise(crate::sdk::PermissionAdvice),
                                         Defer,
                                     }
                                     let parsed: Option<AskKind> = serde_json::from_value(value)
                                         .map_err(|e| PluginError::invalid_params(e.to_string()))?;
                                     match parsed {
                                         Some(AskKind::Decide(decision)) => decision,
+                                        Some(AskKind::Advise(advice)) => advice.decision,
                                         _ => {
                                             host_api::with_host_callback_context(
                                                 scoped_context(plugin_id, None),

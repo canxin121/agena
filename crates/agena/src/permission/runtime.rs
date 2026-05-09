@@ -11,8 +11,10 @@ use super::request::{
 use super::store::{PermissionRuleStore, PermissionStoreError};
 use super::{PermissionDecision, PermissionMode};
 use crate::plugin::{
-    PermissionAskInput as PluginPermissionAskInput, PermissionDecision as PluginPermissionDecision,
-    PluginHost,
+    PermissionAdvice as PluginPermissionAdvice,
+    PermissionAskInput as PluginPermissionAskInput,
+    PermissionAskOutcome as PluginPermissionAskOutcome,
+    PermissionDecision as PluginPermissionDecision, PluginHost,
 };
 
 #[derive(Debug, Error)]
@@ -91,19 +93,33 @@ where
                 default_decision,
             };
             match host.dispatch_permission_ask_blocking(req) {
-                Ok(Some(PluginPermissionDecision::Allow)) => {
+                Ok(Some(PluginPermissionAskOutcome::Decision {
+                    decision: PluginPermissionDecision::Allow,
+                    ..
+                })) => {
                     return Ok(PermissionRuntimeDecision::Immediate(
                         PermissionDecision::Allow,
                     ));
                 }
-                Ok(Some(PluginPermissionDecision::Deny)) => {
+                Ok(Some(PluginPermissionAskOutcome::Decision {
+                    plugin_id,
+                    decision: PluginPermissionDecision::Deny,
+                    ..
+                })) => {
                     return Ok(PermissionRuntimeDecision::Immediate(
                         PermissionDecision::Deny {
-                            reason: "denied by plugin".to_string(),
+                            reason: format!("denied by plugin {plugin_id}"),
                         },
                     ));
                 }
-                Ok(Some(PluginPermissionDecision::Prompt)) | Ok(None) => {}
+                Ok(Some(PluginPermissionAskOutcome::Decision {
+                    decision: PluginPermissionDecision::Prompt,
+                    ..
+                }))
+                | Ok(None) => {}
+                Ok(Some(PluginPermissionAskOutcome::Advice { advice, .. })) => {
+                    return Ok(apply_plugin_advice(session_id, action, base, advice));
+                }
                 Err(err) => {
                     tracing::warn!(
                         target: "agena_plugin_host::permission",
@@ -127,6 +143,14 @@ where
                     source: Some("static_policy".to_string()),
                     scope: None,
                     operator: None,
+                    risk: super::PermissionRiskLevel::Medium,
+                    trace: vec![super::DecisionTraceStep {
+                        source_kind: super::PolicySourceKind::StaticPolicy,
+                        summary: "matched static permission policy".to_string(),
+                        source: Some("static_policy".to_string()),
+                        scope: None,
+                        operator: None,
+                    }],
                     created_at: Utc::now(),
                 };
                 self.pending
@@ -190,6 +214,60 @@ impl From<PermissionMode> for PermissionDecision {
                 reason: "permission denied by persisted rule".to_string(),
             },
         }
+    }
+}
+
+fn apply_plugin_advice<S>(
+    session_id: Option<i64>,
+    action: PermissionAction,
+    base: PermissionDecision,
+    advice: PluginPermissionAdvice,
+) -> PermissionRuntimeDecision {
+    let explanation = if advice.reason.trim().is_empty() {
+        "permission advised by plugin".to_string()
+    } else {
+        advice.reason.clone()
+    };
+    let trace_step = super::DecisionTraceStep {
+        source_kind: super::PolicySourceKind::PluginAdvice,
+        summary: explanation.clone(),
+        source: Some("plugin_permission_advice".to_string()),
+        scope: None,
+        operator: None,
+    };
+    match advice.decision {
+        PluginPermissionDecision::Allow => PermissionRuntimeDecision::Immediate(PermissionDecision::Allow),
+        PluginPermissionDecision::Deny => PermissionRuntimeDecision::Immediate(PermissionDecision::Deny {
+            reason: if advice.reason.trim().is_empty() {
+                "denied by plugin advice".to_string()
+            } else {
+                advice.reason
+            },
+        }),
+        PluginPermissionDecision::Prompt => PermissionRuntimeDecision::Pending(PendingPermission {
+            request: PermissionRequest {
+                request_id: Uuid::new_v4().to_string(),
+                session_id,
+                action,
+                reason: match base {
+                    PermissionDecision::Ask { reason } => reason,
+                    PermissionDecision::Deny { reason } => reason,
+                    PermissionDecision::Allow => "permission requires confirmation".to_string(),
+                },
+                explanation,
+                source: Some("plugin_permission_advice".to_string()),
+                scope: None,
+                operator: None,
+                risk: match advice.risk {
+                    crate::plugin::sdk::PermissionRiskLevel::Low => super::PermissionRiskLevel::Low,
+                    crate::plugin::sdk::PermissionRiskLevel::Medium => super::PermissionRiskLevel::Medium,
+                    crate::plugin::sdk::PermissionRiskLevel::High => super::PermissionRiskLevel::High,
+                    crate::plugin::sdk::PermissionRiskLevel::Critical => super::PermissionRiskLevel::Critical,
+                },
+                trace: vec![trace_step],
+                created_at: Utc::now(),
+            },
+        }),
     }
 }
 

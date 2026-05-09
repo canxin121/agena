@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::config::PluginEntry;
+use crate::config::{PluginEntry, PluginSignature};
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
 use crate::registry::{effective_host_capabilities_for_manifest, per_entry_host_capabilities};
@@ -253,12 +253,118 @@ pub async fn load_entry(
 
     validate_manifest_options(plugin_id, &outcome.manifest, entry.options())?;
 
+    let trust_level = plugin_trust_level(entry, trusted_keys);
+    let provenance = plugin_provenance(entry, trusted_keys);
+
     Ok(LoadedPlugin::new(
         plugin_id.to_string(),
         entry.kind_str(),
         transport,
         outcome.manifest,
+        trust_level,
+        provenance,
     ))
+}
+
+fn plugin_trust_level(
+    entry: &PluginEntry,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> String {
+    match entry {
+        PluginEntry::Static { .. } => "builtin".to_string(),
+        PluginEntry::Cdylib { signature, sha256, .. } => {
+            if has_trusted_signature(signature.as_ref(), trusted_keys) {
+                "verified".to_string()
+            } else if sha256.is_some() {
+                "checksummed".to_string()
+            } else {
+                "unverified".to_string()
+            }
+        }
+        PluginEntry::Stdio { sha256, .. } => {
+            if sha256.is_some() {
+                "checksummed".to_string()
+            } else {
+                "unverified".to_string()
+            }
+        }
+        PluginEntry::Http { .. } => "remote".to_string(),
+        PluginEntry::Wasm { sha256, sandbox, .. } => {
+            if sha256.is_some() {
+                "sandboxed".to_string()
+            } else if !sandbox.is_default() {
+                "sandboxed".to_string()
+            } else {
+                "unverified".to_string()
+            }
+        }
+    }
+}
+
+fn plugin_provenance(
+    entry: &PluginEntry,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut provenance = vec![format!("transport:{}", entry.kind_str())];
+    match entry {
+        PluginEntry::Static { .. } => provenance.push("builtin registration".to_string()),
+        PluginEntry::Cdylib {
+            path,
+            sha256,
+            signature,
+            ..
+        } => {
+            provenance.push(format!("path:{}", path.display()));
+            if sha256.is_some() {
+                provenance.push("sha256 configured".to_string());
+            }
+            if let Some(signature) = signature {
+                provenance.push(format!("signature key:{}", signature.key_id));
+                if trusted_keys.contains_key(&signature.key_id) {
+                    provenance.push("signature key trusted".to_string());
+                }
+            }
+        }
+        PluginEntry::Stdio {
+            command,
+            sha256,
+            cwd,
+            ..
+        } => {
+            provenance.push(format!("command:{}", command));
+            if let Some(cwd) = cwd {
+                provenance.push(format!("cwd:{}", cwd.display()));
+            }
+            if sha256.is_some() {
+                provenance.push("sha256 configured".to_string());
+            }
+        }
+        PluginEntry::Http { url, .. } => {
+            provenance.push(format!("url:{}", url));
+        }
+        PluginEntry::Wasm {
+            path,
+            sha256,
+            sandbox,
+            ..
+        } => {
+            provenance.push(format!("path:{}", path.display()));
+            if sha256.is_some() {
+                provenance.push("sha256 configured".to_string());
+            }
+            if !sandbox.is_default() {
+                provenance.push("sandbox policy configured".to_string());
+            }
+        }
+    }
+    provenance
+}
+
+fn has_trusted_signature(
+    signature: Option<&PluginSignature>,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    signature.is_some_and(|signature| trusted_keys.contains_key(&signature.key_id))
 }
 
 #[allow(clippy::result_large_err)]

@@ -45,9 +45,31 @@ pub struct PermissionAskInput {
     pub default_decision: PermissionDecision,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionRiskLevel {
+    Low,
+    #[default]
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionAdvice {
+    pub decision: PermissionDecision,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    #[serde(default)]
+    pub risk: PermissionRiskLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_scope: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "value")]
 pub enum PermissionAskDecision {
     Decide(PermissionDecision),
+    Advise(PermissionAdvice),
     Defer,
 }

@@ -7,12 +7,70 @@ use crate::message::{BashToolInput, FirstPartyToolOutput};
 use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 
 use super::{
-    FirstPartyExecution, FirstPartyExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
+    FirstPartyExecution, FirstPartyExecutionContext, PreparedShellCommand, ToolError,
+    ToolExecutionView, ToolExecutor,
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_OUTPUT_LINES: usize = 2_000;
+
+pub(super) fn prepare_command(
+    executor: &ToolExecutor,
+    input: &BashToolInput,
+    session_id: i64,
+    call_id: i64,
+) -> Result<Option<PreparedShellCommand>, ToolError> {
+    let cwd = input
+        .workdir
+        .as_deref()
+        .map(|workdir| executor.resolve_target_path(workdir))
+        .unwrap_or_else(|| executor.workspace_root().to_path_buf());
+    executor.ensure_read_permission(&cwd)?;
+
+    let mut env = inherited_environment();
+    env.extend(executor.shell_env_overrides(&cwd, Some(session_id), Some(call_id))?);
+
+    let env_btree = env
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect::<std::collections::BTreeMap<String, String>>();
+    let hook_input = CommandBeforeInput {
+        command: "sh".to_string(),
+        args: vec!["-c".to_string(), input.command.clone()],
+        cwd: cwd.clone(),
+        env: env_btree,
+    };
+    match executor
+        .plugin_manager()
+        .dispatch_command_before_blocking(hook_input)
+    {
+        Ok(CommandBeforeOutcome::Continue(updated)) => {
+            let command = if updated.args.len() >= 2
+                && updated.args[0] == "-c"
+                && updated.command == "sh"
+            {
+                updated.args[1].clone()
+            } else {
+                input.command.clone()
+            };
+            Ok(Some(PreparedShellCommand {
+                command,
+                cwd: updated.cwd,
+            }))
+        }
+        Ok(CommandBeforeOutcome::Abort(reason)) => Err(ToolError::PermissionDenied(format!(
+            "command aborted by plugin: {reason}"
+        ))),
+        Err(err) => {
+            tracing::warn!(
+                target: "agena_plugin_host::command_before",
+                "command.execute.before hook failed (continuing): {err}"
+            );
+            Ok(None)
+        }
+    }
+}
 
 pub(super) fn execute(
     executor: &ToolExecutor,
@@ -44,47 +102,20 @@ pub(super) fn execute(
     let mut env = inherited_environment();
     env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
 
-    // Plugin chain: command.execute.before. Plugins can transform the
-    // command line, override env, or abort the call entirely.
-    let command_after_hook = {
-        let env_btree = env
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<std::collections::BTreeMap<String, String>>();
-        let hook_input = CommandBeforeInput {
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), input.command.clone()],
-            cwd: cwd.clone(),
-            env: env_btree,
-        };
-        match executor
-            .plugin_manager()
-            .dispatch_command_before_blocking(hook_input)
-        {
-            Ok(CommandBeforeOutcome::Continue(updated)) => {
-                env = updated.env.into_iter().collect();
-                if updated.args.len() >= 2 && updated.args[0] == "-c" && updated.command == "sh" {
-                    Some((updated.args[1].clone(), updated.cwd))
-                } else {
-                    Some((input.command.clone(), updated.cwd))
-                }
+    let prepared = match context.prepared_shell_command {
+        Some(prepared) => Some(prepared),
+        None => match (context.session_id, context.call_id) {
+            (Some(session_id), Some(call_id)) => {
+                executor.prepare_shell_command(input, session_id, call_id)?
             }
-            Ok(CommandBeforeOutcome::Abort(reason)) => {
-                return Err(ToolError::PermissionDenied(format!(
-                    "command aborted by plugin: {reason}"
-                )));
-            }
-            Err(err) => {
-                tracing::warn!(
-                    target: "agena_plugin_host::command_before",
-                    "command.execute.before hook failed (continuing): {err}"
-                );
-                None
-            }
-        }
+            _ => None,
+        },
     };
-    let (final_command, final_cwd) =
-        command_after_hook.unwrap_or_else(|| (input.command.clone(), cwd));
+    let (final_command, final_cwd) = prepared
+        .map(|prepared| (prepared.command, prepared.cwd))
+        .unwrap_or_else(|| (input.command.clone(), cwd));
+    let final_analysis = analyze_command(final_command.as_str());
+    let command_rewritten = final_command != input.command;
 
     let request = ShellRequest {
         command: shell_command_for_platform(&final_command),
@@ -195,12 +226,30 @@ pub(super) fn execute(
         analysis.classification.label().to_string(),
     );
     view.metadata.insert(
+        "final_command_classification".to_string(),
+        final_analysis.classification.label().to_string(),
+    );
+    view.metadata.insert(
+        "command_rewritten".to_string(),
+        command_rewritten.to_string(),
+    );
+    view.metadata.insert(
         "exit_interpretation".to_string(),
         exit_interpretation.label().to_string(),
     );
     if let Some(primary_command) = analysis.primary_command.as_deref() {
         view.metadata
             .insert("primary_command".to_string(), primary_command.to_string());
+    }
+    if let Some(primary_command) = final_analysis.primary_command.as_deref() {
+        view.metadata.insert(
+            "final_primary_command".to_string(),
+            primary_command.to_string(),
+        );
+    }
+    if command_rewritten {
+        view.metadata
+            .insert("final_command".to_string(), final_command.clone());
     }
     view.metadata.insert(
         "sandbox_mode".to_string(),

@@ -229,6 +229,12 @@ pub struct PreparedToolInvocation {
     pub metadata: std::collections::BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedShellCommand {
+    pub command: String,
+    pub cwd: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionExecutionMode {
     Enforced,
@@ -240,6 +246,7 @@ pub(super) struct FirstPartyExecutionContext {
     pub session_id: Option<i64>,
     pub call_id: Option<i64>,
     pub session_context: Option<crate::session::SessionExecutionContext>,
+    pub prepared_shell_command: Option<PreparedShellCommand>,
 }
 
 static SYNTHETIC_BUILTIN_CALL_ID: AtomicI64 = AtomicI64::new(-1);
@@ -827,6 +834,7 @@ impl ToolExecutor {
                 session_id: Some(session_id),
                 call_id: None,
                 session_context: None,
+                prepared_shell_command: None,
             },
         )
         .map(|execution| execution.output)
@@ -851,6 +859,7 @@ impl ToolExecutor {
                 session_id,
                 call_id,
                 session_context: None,
+                prepared_shell_command: None,
             },
         )?;
         Ok(bundled_router::first_party_to_invoke_output(
@@ -927,6 +936,41 @@ impl ToolExecutor {
         input: &FirstPartyToolInput,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         self.collect_permission_checks_for_invocation(&input.clone().into_invocation())
+    }
+
+    pub fn prepare_shell_command(
+        &self,
+        input: &crate::message::BashToolInput,
+        session_id: i64,
+        call_id: i64,
+    ) -> Result<Option<PreparedShellCommand>, ToolError> {
+        bash::prepare_command(self, input, session_id, call_id)
+    }
+
+    pub fn prepare_bash_invocation(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+    ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
+        let Some(crate::message::FirstPartyToolInput::Bash(bash_input)) =
+            self.first_party_from_invocation(invocation)?
+        else {
+            return Ok((invocation.clone(), None));
+        };
+        let prepared_shell = self.prepare_shell_command(&bash_input, session_id, call_id)?;
+        let Some(prepared_shell) = prepared_shell.clone() else {
+            return Ok((invocation.clone(), None));
+        };
+        if prepared_shell.command == bash_input.command {
+            return Ok((invocation.clone(), Some(prepared_shell)));
+        }
+        let mut rewritten = bash_input;
+        rewritten.command = prepared_shell.command.clone();
+        Ok((
+            crate::message::FirstPartyToolInput::Bash(rewritten).into_invocation(),
+            Some(prepared_shell),
+        ))
     }
 
     pub fn prepare_invocation(
@@ -1103,7 +1147,22 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<ToolInvocationExecution, ToolError> {
-        let result = self.execute_invocation_detailed_inner(invocation, session_id, call_id);
+        self.execute_invocation_detailed_with_prepared_shell(invocation, session_id, call_id, None)
+    }
+
+    pub fn execute_invocation_detailed_with_prepared_shell(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+        prepared_shell_command: Option<PreparedShellCommand>,
+    ) -> Result<ToolInvocationExecution, ToolError> {
+        let result = self.execute_invocation_detailed_inner(
+            invocation,
+            session_id,
+            call_id,
+            prepared_shell_command,
+        );
         crate::metrics::record_tool_execution(result.is_ok());
         result
     }
@@ -1113,6 +1172,7 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
+        prepared_shell_command: Option<PreparedShellCommand>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
         let tool_name = plugin_invocation_name(&plugin_invocation);
@@ -1127,6 +1187,7 @@ impl ToolExecutor {
                         session_id: Some(session_id),
                         call_id: Some(call_id),
                         session_context: None,
+                        prepared_shell_command,
                     },
                 )?
                 .into();
@@ -1195,9 +1256,29 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        self.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
+            invocation,
+            session_id,
+            call_id,
+            None,
+        )
+    }
+
+    pub fn execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+        prepared_shell_command: Option<PreparedShellCommand>,
+    ) -> Result<ToolInvocationExecution, ToolError> {
         let mut trusted = self.clone();
         trusted.permission_mode = PermissionExecutionMode::Bypassed;
-        trusted.execute_invocation_detailed(invocation, session_id, call_id)
+        trusted.execute_invocation_detailed_with_prepared_shell(
+            invocation,
+            session_id,
+            call_id,
+            prepared_shell_command,
+        )
     }
 
     pub fn shell_env_overrides(

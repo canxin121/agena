@@ -12,8 +12,9 @@ use thiserror::Error;
 use crate::message::FirstPartyToolInput;
 
 pub use request::{
-    PendingPermission, PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
-    PermissionScope,
+    DecisionTrace, DecisionTraceStep, PendingPermission, PermissionAction, PermissionReply,
+    PermissionReplyKind, PermissionRequest, PermissionRiskLevel, PermissionScope,
+    PolicySourceKind,
 };
 pub use resolver::{
     PermissionResolution, PermissionResolutionSource, resolve_permission_with_persisted_rule,

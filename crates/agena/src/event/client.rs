@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     message::{ExecutionStatus, MessagePart, MessageStatus},
-    permission::PermissionReplyKind,
+    permission::{DecisionTraceStep, PermissionReplyKind, PermissionRiskLevel},
     role::Role,
 };
 
@@ -150,6 +150,10 @@ pub struct PermissionRequestedEvent {
     pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator: Option<String>,
+    #[serde(default)]
+    pub risk: PermissionRiskLevel,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trace: Vec<DecisionTraceStep>,
     pub ts_ms: i64,
 }
 

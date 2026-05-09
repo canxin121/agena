@@ -1,5 +1,6 @@
 use super::{
-    PermissionDecision, PermissionMode, PermissionScope, PersistedPermissionRule, decide_from_mode,
+    DecisionTraceStep, PermissionDecision, PermissionMode, PermissionRiskLevel, PermissionScope,
+    PersistedPermissionRule, PolicySourceKind, decide_from_mode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub struct PermissionResolution {
     pub decision: PermissionDecision,
     pub source: PermissionResolutionSource,
     pub explanation: String,
+    pub risk: PermissionRiskLevel,
+    pub trace: Vec<DecisionTraceStep>,
 }
 
 pub fn resolve_permission_with_persisted_rule(
@@ -26,8 +29,10 @@ pub fn resolve_permission_with_persisted_rule(
 ) -> PermissionResolution {
     if let Some(rule) = persisted_rule {
         let decision = decide_from_mode(rule.mode, persisted_rule_reason(rule, &base));
+        let risk = risk_for_decision(&decision);
+        let explanation = persisted_rule_explanation(rule);
         return PermissionResolution {
-            explanation: persisted_rule_explanation(rule),
+            explanation: explanation.clone(),
             source: PermissionResolutionSource::PersistedRule {
                 scope: rule.scope,
                 source: rule.source.clone(),
@@ -35,13 +40,38 @@ pub fn resolve_permission_with_persisted_rule(
                 operator: rule.operator.clone(),
             },
             decision,
+            risk,
+            trace: vec![DecisionTraceStep {
+                source_kind: PolicySourceKind::PersistedRule,
+                summary: explanation,
+                source: Some(rule.source.clone()),
+                scope: Some(rule.scope),
+                operator: rule.operator.clone(),
+            }],
         };
     }
 
+    let explanation = static_policy_explanation(&base);
     PermissionResolution {
-        explanation: static_policy_explanation(&base),
+        explanation: explanation.clone(),
         source: PermissionResolutionSource::StaticPolicy,
+        risk: risk_for_decision(&base),
         decision: base,
+        trace: vec![DecisionTraceStep {
+            source_kind: PolicySourceKind::StaticPolicy,
+            summary: explanation,
+            source: Some("static_policy".to_string()),
+            scope: None,
+            operator: None,
+        }],
+    }
+}
+
+fn risk_for_decision(decision: &PermissionDecision) -> PermissionRiskLevel {
+    match decision {
+        PermissionDecision::Allow => PermissionRiskLevel::Low,
+        PermissionDecision::Ask { .. } => PermissionRiskLevel::Medium,
+        PermissionDecision::Deny { .. } => PermissionRiskLevel::High,
     }
 }
 
@@ -113,6 +143,7 @@ mod tests {
             Some(&rule),
         );
         assert_eq!(resolution.decision, PermissionDecision::Allow);
+        assert_eq!(resolution.risk, PermissionRiskLevel::Low);
         assert!(resolution.explanation.contains("workspace-scoped rule"));
     }
 
@@ -139,6 +170,7 @@ mod tests {
                 reason: "blocked by reviewer".to_string(),
             }
         );
+        assert_eq!(resolution.risk, PermissionRiskLevel::High);
         assert!(resolution.explanation.contains("session-scoped rule"));
     }
 
@@ -164,6 +196,7 @@ mod tests {
             Some(&rule),
         );
         assert_eq!(resolution.decision, PermissionDecision::Allow);
+        assert_eq!(resolution.risk, PermissionRiskLevel::Low);
         assert!(resolution.explanation.contains("global rule"));
     }
 
@@ -181,6 +214,7 @@ mod tests {
                 reason: "static ask".to_string(),
             }
         );
+        assert_eq!(resolution.risk, PermissionRiskLevel::Medium);
         assert_eq!(resolution.source, PermissionResolutionSource::StaticPolicy);
     }
 }

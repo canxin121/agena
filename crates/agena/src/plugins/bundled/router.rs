@@ -181,6 +181,7 @@ pub(crate) fn invoke_first_party_tool(
         session_id: (session_id >= 0).then_some(session_id),
         call_id: (call_id >= 0).then_some(call_id),
         session_context: None,
+        prepared_shell_command: None,
     };
     let execution = orchestrator::execute_first_party(&executor, &first_party, context)
         .map_err(|err| PluginError::new(format!("{tool_name}: {err}")))?;

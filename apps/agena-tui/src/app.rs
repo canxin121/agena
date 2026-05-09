@@ -17,7 +17,8 @@ use agena::{
     },
     model::ModelRef,
     permission::{
-        PermissionAction, PermissionMode, PermissionReplyKind, PermissionRequest, PermissionScope,
+        DecisionTraceStep, PermissionAction, PermissionMode, PermissionReplyKind,
+        PermissionRequest, PermissionRiskLevel, PermissionScope, PolicySourceKind,
     },
     provider::ProviderModel,
     role::Role,
@@ -6683,6 +6684,7 @@ impl App {
             )));
         }
         let mut facts = Vec::new();
+        facts.push(format!("risk={}", permission_risk_label(dialog.request.risk)));
         if let Some(source) = dialog.request.source.as_deref() {
             facts.push(format!("source={source}"));
         }
@@ -6701,6 +6703,7 @@ impl App {
                 &crate::fl_args!("session" => session_id),
             )));
         }
+        append_permission_trace_lines(&mut lines, &dialog.request.trace);
 
         frame.render_widget(
             Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
@@ -9411,7 +9414,8 @@ fn build_plugin_inspector_item(
             )
         },
     );
-    let detail = format_plugin_inspector_detail(&status, manifest);
+    let authority = inspect.as_ref().and_then(|item| item.authority.as_ref());
+    let detail = format_plugin_inspector_detail(&status, manifest, authority);
     let logs_text = format_plugin_inspector_logs(logs.as_slice());
     let copy_text = format!("{summary}\n\n{detail}\n\nRecent logs\n-----------\n{logs_text}");
     let search_text = format!(
@@ -9435,6 +9439,7 @@ fn build_plugin_inspector_item(
 fn format_plugin_inspector_detail(
     status: &agena::plugin::status::PluginStatus,
     manifest: Option<&agena::plugin::PluginManifest>,
+    authority: Option<&agena::plugin::host::PluginAuthoritySummary>,
 ) -> String {
     let mut lines = vec![
         format!("plugin_id: {}", status.plugin_id),
@@ -9510,6 +9515,26 @@ fn format_plugin_inspector_detail(
             }
         }
         None => lines.push("manifest: unavailable".to_string()),
+    }
+
+    if let Some(authority) = authority {
+        lines.push(String::new());
+        lines.push(format!("trust_level: {}", authority.trust_level));
+        if !authority.provenance.is_empty() {
+            lines.push(format!("provenance: {}", authority.provenance.join(" | ")));
+        }
+        if !authority.plugin_capabilities.is_empty() {
+            lines.push(format!(
+                "effective_capabilities: {}",
+                authority.plugin_capabilities.join(", ")
+            ));
+        }
+        if !authority.entry_capabilities.is_empty() {
+            lines.push("entry_capabilities:".to_string());
+            for (entry, capabilities) in &authority.entry_capabilities {
+                lines.push(format!("  - {}: {}", entry, capabilities.join(", ")));
+            }
+        }
     }
 
     lines.join("\n")
@@ -9774,7 +9799,8 @@ fn timeline_event_summary(record: &DomainEvent) -> String {
         }
         AgenaSessionEvent::PermissionRequested(event) => {
             format!(
-                "permission requested: {}",
+                "permission requested [{}]: {}",
+                permission_risk_label(event.risk),
                 detail_excerpt(event.reason.as_str(), 72)
             )
         }
@@ -9877,15 +9903,29 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
             format!("error_code: {}", event.error.code),
             format!("error_message: {}", event.error.message),
         ],
-        AgenaSessionEvent::PermissionRequested(event) => vec![
-            format!("session_id: {}", event.session_id),
-            format!("request_id: {}", event.request_id),
-            format!("reason: {}", event.reason),
-            format!(
-                "explanation: {}",
-                detail_excerpt(event.explanation.as_str(), 200)
-            ),
-        ],
+        AgenaSessionEvent::PermissionRequested(event) => {
+            let mut lines = vec![
+                format!("session_id: {}", event.session_id),
+                format!("request_id: {}", event.request_id),
+                format!("reason: {}", event.reason),
+                format!("risk: {}", permission_risk_label(event.risk)),
+                format!(
+                    "explanation: {}",
+                    detail_excerpt(event.explanation.as_str(), 200)
+                ),
+            ];
+            if let Some(source) = event.source.as_deref() {
+                lines.push(format!("source: {source}"));
+            }
+            if let Some(scope) = event.scope.as_deref() {
+                lines.push(format!("scope: {scope}"));
+            }
+            if let Some(operator) = event.operator.as_deref() {
+                lines.push(format!("operator: {operator}"));
+            }
+            append_permission_trace_strings(&mut lines, &event.trace);
+            lines
+        },
         AgenaSessionEvent::PermissionReplied(event) => vec![
             format!("session_id: {}", event.session_id),
             format!("request_id: {}", event.request_id),
@@ -9953,6 +9993,51 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
             format!("payload: {}", detail_excerpt(&p.payload.to_string(), 200)),
         ],
     }
+}
+
+fn permission_risk_label(risk: PermissionRiskLevel) -> &'static str {
+    match risk {
+        PermissionRiskLevel::Low => "low",
+        PermissionRiskLevel::Medium => "medium",
+        PermissionRiskLevel::High => "high",
+        PermissionRiskLevel::Critical => "critical",
+    }
+}
+
+fn permission_trace_step_label(step: &DecisionTraceStep) -> String {
+    let source_kind = match step.source_kind {
+        PolicySourceKind::StaticPolicy => "static_policy",
+        PolicySourceKind::PersistedRule => "persisted_rule",
+        PolicySourceKind::PluginAdvice => "plugin_advice",
+        PolicySourceKind::ManagedPolicy => "managed_policy",
+    };
+    let mut facts = vec![source_kind.to_string()];
+    if let Some(source) = step.source.as_deref() {
+        facts.push(format!("source={source}"));
+    }
+    if let Some(scope) = step.scope {
+        facts.push(format!("scope={scope}"));
+    }
+    if let Some(operator) = step.operator.as_deref() {
+        facts.push(format!("operator={operator}"));
+    }
+    format!("- {} — {}", facts.join(" · "), step.summary)
+}
+
+fn append_permission_trace_lines(lines: &mut Vec<Line<'static>>, trace: &[DecisionTraceStep]) {
+    if trace.is_empty() {
+        return;
+    }
+    lines.push(Line::from("Trace:"));
+    lines.extend(trace.iter().map(|step| Line::from(permission_trace_step_label(step))));
+}
+
+fn append_permission_trace_strings(lines: &mut Vec<String>, trace: &[DecisionTraceStep]) {
+    if trace.is_empty() {
+        return;
+    }
+    lines.push("trace:".to_string());
+    lines.extend(trace.iter().map(permission_trace_step_label));
 }
 
 fn detail_excerpt(text: &str, max_chars: usize) -> String {
@@ -11590,6 +11675,7 @@ mod tests {
             Some(agena::plugin::PluginInspect {
                 status,
                 manifest: Some(manifest),
+                authority: None,
             }),
             logs,
         );

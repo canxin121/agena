@@ -344,6 +344,7 @@ fn workflow_first_party_output(
             session_id,
             call_id,
             session_context: None,
+            prepared_shell_command: None,
         },
     )
     .map_err(|err| PluginError::new(err.to_string()))?;

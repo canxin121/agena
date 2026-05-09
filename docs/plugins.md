@@ -116,7 +116,7 @@ can skip dispatch.
 | `auth(input)` | Provider credential lookup miss | `Option<AuthOutput>` |
 | `provider_list(input)` | Provider registry enumeration | `Option<ProviderListPatch>` |
 | `permission_ask(input)` | Permission check before fallback to user | `Option<PermissionAskDecision>` |
-| `command_execute_before(input)` | Before bash subprocess spawn | `Option<CommandBeforePatch>` (incl. `abort`) |
+| `command_execute_before(input)` | Before bash subprocess spawn and before final shell permission evaluation | `Option<CommandBeforePatch>` (incl. `abort`) |
 | `shell_env(input)` | Bash env var injection | `Option<ShellEnvPatch>` |
 | `config_resolved(input)` | Config loaded / reloaded | `Option<ConfigPatch>` |
 | `session_compacting(input)` | Session compaction strategy | `Option<SessionCompactingPatch>` |
@@ -125,12 +125,69 @@ Hooks are dispatched **sequentially** across plugins in deterministic order
 (by config key). Patches chain: each plugin sees the previous plugin's
 output as its input.
 
+## Permission advice and explainability
+
+`permission_ask` lets plugins advise or decide whether a permission request
+should be allowed, denied, or escalated to the user. Agena folds that advice
+into the same resolution path as static policy and persisted rules, and records
+it in the permission trace.
+
+The trace now includes:
+
+- the policy source kind (`static_policy`, `persisted_rule`, `plugin_advice`,
+  `managed_policy`)
+- the plugin id when a plugin participated
+- the human summary / reason
+- the plugin's derived trust level and effective capability set in the summary
+  text shown to operators
+
+That means operator surfaces can answer:
+
+- which plugin influenced this permission decision
+- whether it merely advised or effectively forced an allow / deny / prompt
+- what trust tier the plugin belonged to
+- what host capabilities it had declared
+
+## Shell command rewrite and final-command audit
+
+`command_execute_before` can rewrite shell commands before spawn. Agena now
+runs that hook during the preflight preparation stage, then performs plan-mode
+checks and permission checks against the rewritten command rather than the raw
+user/model command.
+
+In practice this means:
+
+- the command that is approved is the command that is executed
+- if a plugin rewrites a command into something riskier, the rewritten command
+  is what the policy engine evaluates
+- the tool metadata still records both the original and final command analysis
+  so operator surfaces can explain the rewrite
+
+This closes the "approved A, executed B" gap that exists if command rewrites
+happen only after permission evaluation.
+
 ## Calling back into the host
 
 Plugins receive an `Arc<dyn HostClient>` in `init`. Sensitive callbacks are
 capability-gated: at least one entry in the plugin manifest must declare the
 matching `PluginEntryDecl::host_capability(...)`, otherwise the host rejects
 the callback before dispatching it.
+
+At runtime the host also derives an operator-facing authority summary for each
+plugin:
+
+- `trust_level` — `builtin`, `verified`, `checksummed`, `sandboxed`, `remote`,
+  or `unverified`
+- `provenance` — transport, path / command / URL, signature key, sha256, sandbox
+  markers
+- `plugin_capabilities` — the effective union of host capabilities available to
+  the plugin
+- `entry_capabilities` — per-entry capability declarations from the manifest
+
+This summary does not grant authority by itself; `require_capability(...)`
+remains the enforcement gate. The summary exists so permission decisions and
+operator surfaces can explain *which* plugin influenced a decision and *why the
+host considered that influence authoritative enough to evaluate*.
 
 Example:
 

@@ -1135,6 +1135,14 @@ mod tests {
                 source: Some("static_policy".to_string()),
                 scope: None,
                 operator: None,
+                risk: crate::permission::PermissionRiskLevel::Medium,
+                trace: vec![crate::permission::DecisionTraceStep {
+                    source_kind: crate::permission::PolicySourceKind::StaticPolicy,
+                    summary: "matched static permission policy".to_string(),
+                    source: Some("static_policy".to_string()),
+                    scope: None,
+                    operator: None,
+                }],
                 created_at: Utc::now(),
             })),
         );

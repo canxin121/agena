@@ -175,6 +175,7 @@ pub struct SessionPermissionReplyRequest {
     pub session_id: i64,
     pub options: SessionRunOptions,
     pub reply: PermissionReply,
+    pub operator: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1020,6 +1021,7 @@ impl SessionManager {
             request.session_id,
             &permission_request.action,
             &request.reply,
+            request.operator.as_deref(),
         )
         .await?;
         self.publisher
@@ -3269,6 +3271,7 @@ async fn persisted_rule_for_reply(
     session_id: i64,
     action: &PermissionAction,
     reply: &PermissionReply,
+    operator: Option<&str>,
 ) -> Result<Option<PersistedPermissionRule>, AppError> {
     let Some(mode) = persisted_mode_for_reply(reply.kind) else {
         return Ok(None);
@@ -3291,7 +3294,7 @@ async fn persisted_rule_for_reply(
         workspace_id,
         source: "permission_reply".to_string(),
         reason: reply.reason.clone(),
-        operator: None,
+        operator: operator.map(str::to_string),
         revoked_at_ms: None,
         revoked_reason: None,
         revoked_by: None,
@@ -6034,6 +6037,7 @@ mod tests {
                     reason: None,
                     scope: None,
                 },
+                operator: Some("test".to_string()),
             })
             .await
             .expect("permission reply should continue session");

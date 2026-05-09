@@ -176,6 +176,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
                     reason: params.reason,
                     scope: params.remember.map(app_permission_scope),
                 },
+                operator: Some("app_server".to_string()),
             })
             .await
             .map_err(app_backend_error)?;

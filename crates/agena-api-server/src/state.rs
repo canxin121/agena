@@ -32,6 +32,11 @@ impl AppState {
     }
 
     pub fn with_manager_override(mut self, manager: Arc<SessionManager>) -> Self {
+        self.service = ApiService::new(
+            self.service().clone_db(),
+            self.runtime.workspace_root().display().to_string(),
+            Some(manager.event_publisher()),
+        );
         self.manager_override = Some(manager);
         self
     }

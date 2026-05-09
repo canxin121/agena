@@ -109,6 +109,10 @@ impl ApiService {
         }
     }
 
+    pub fn clone_db(&self) -> Arc<DatabaseConnection> {
+        Arc::clone(&self.db)
+    }
+
     pub async fn list_workspaces(
         &self,
         query: WorkspaceListQuery,
@@ -738,7 +742,7 @@ impl ApiService {
             },
             source: "api".to_string(),
             reason: None,
-            operator: None,
+            operator: Some("http_api".to_string()),
             revoked_at_ms: None,
             revoked_reason: None,
             revoked_by: None,
@@ -794,9 +798,16 @@ impl ApiService {
             PermissionScope::Session | PermissionScope::Global => None,
             PermissionScope::Workspace => Some(workspace_id),
         });
+        active.source = Set("api".to_string());
+        active.operator = Set(Some("http_api".to_string()));
         active.updated_at_ms = Set(now_ms);
         let updated = active.update(self.db.as_ref()).await.map_err(db_error)?;
-        permission_rule_resource(&updated)
+        let resource = permission_rule_resource(&updated)?;
+        self.publish_permission_rule_event(EventKind::PermissionRuleUpdated(
+            permission_rule_event(&updated),
+        ))
+        .await?;
+        Ok(resource)
     }
 
     pub async fn revoke_permission_rule(
@@ -808,7 +819,7 @@ impl ApiService {
             self.db.as_ref(),
             rule_id,
             reason,
-            Some("api".to_string()),
+            Some("http_api".to_string()),
         )
         .await
         .map_err(db_error)?

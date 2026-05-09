@@ -25,8 +25,8 @@ use agena::{
 use agena_api::{
     commands::{
         Command as ApiCommand, CommandResult, ContinueRunParams, CreateSessionParams,
-        ReplyPermissionParams, ReplyUserInputParams, RewindSessionParams, SubmitTurnParams,
-        UpdateSessionParams, UpsertPermissionRuleParams,
+        ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
+        RewindSessionParams, SubmitTurnParams, UpdateSessionParams, UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,
     queries::{
@@ -994,10 +994,15 @@ impl Backend {
         rule_id: i64,
         params: UpsertPermissionRuleParams,
     ) -> Result<PermissionRuleResource> {
-        let _ = rule_id;
-        match dispatch::dispatch_command(&self.app_state, ApiCommand::UpsertPermissionRule(params))
-            .await
-            .map_err(api_error)?
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ReplacePermissionRule(ReplacePermissionRuleParams {
+                rule_id,
+                rule: params,
+            }),
+        )
+        .await
+        .map_err(api_error)?
         {
             CommandResult::PermissionRule(rule) => Ok(rule),
             other => Err(anyhow!("unexpected command result: {:?}", other)),

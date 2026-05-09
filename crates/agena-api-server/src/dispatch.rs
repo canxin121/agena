@@ -27,10 +27,10 @@ use agena_api::{
         CancelTurnParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
-        ListRewindCheckpointsParams, ListSessionTreeParams, ReplyPermissionParams,
-        ReplyUserInputParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
-        RewindSessionParams, SubmitTurnParams, UnrewindSessionParams, UpdateSessionParams,
-        UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
+        ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
+        RevokePermissionRuleParams, RewindSessionParams, SubmitTurnParams, UnrewindSessionParams,
+        UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
@@ -611,6 +611,7 @@ pub async fn dispatch_command(
                 session_id,
                 options: run_options_to_core(&options),
                 reply,
+                operator: Some("jsonrpc".to_string()),
             };
             let session = manager.reply_permission(request).await?;
             let resource = state
@@ -706,6 +707,30 @@ pub async fn dispatch_command(
                     session_id,
                     mode,
                 })
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::PermissionRule(permission_rule_from_http(
+                rule,
+            )))
+        }
+        Command::ReplacePermissionRule(ReplacePermissionRuleParams { rule_id, rule }) => {
+            let rule = state
+                .service()
+                .replace_permission_rule(
+                    rule_id,
+                    PermissionRuleWriteRequest {
+                        action_key: rule.action_key,
+                        subject_kind: rule.subject_kind,
+                        tool_name: rule.tool_name,
+                        qualifier: rule.qualifier,
+                        path_access_kind: rule.path_access_kind,
+                        workspace_root: rule.workspace_root,
+                        target_path: rule.target_path,
+                        scope: rule.scope,
+                        session_id: rule.session_id,
+                        mode: rule.mode,
+                    },
+                )
                 .await
                 .map_err(server_error_from_http)?;
             Ok(CommandResult::PermissionRule(permission_rule_from_http(

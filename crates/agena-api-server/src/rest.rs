@@ -944,6 +944,7 @@ pub async fn reply_permission(
             session_id,
             options,
             reply: request.reply,
+            operator: Some("http_api".to_string()),
         })
         .await
         .map_err(ServerError::Core)?;

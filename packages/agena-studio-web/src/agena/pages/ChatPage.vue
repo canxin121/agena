@@ -34,6 +34,13 @@ import {
   type TimelineEventRecord,
   type WorkspaceResource,
 } from '@/agena/lib/agenaApi'
+import {
+  permissionActionView,
+  permissionExplainability,
+  permissionReplyPreview,
+  permissionRiskLabel,
+  type PermissionActionView,
+} from '@/agena/lib/permissionFormatting'
 import { applySessionEvent, sortMessages, type ChatEventState } from './chatPageModel'
 
 const route = useRoute()
@@ -65,11 +72,6 @@ type RenderBlock = {
   body: string
   kind: 'text' | 'diff'
   summary?: string
-}
-
-type PermissionActionView = {
-  title: string
-  details: string[]
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -286,21 +288,6 @@ function messageTags(message: MessageResource): string[] {
   return tags.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
 }
 
-function permissionRiskLabel(action: Record<string, unknown>): string {
-  const kind = readString(action.kind)
-  if (kind === 'builtin_tool') {
-    const toolName = readString(action.tool_name) || ''
-    return toolName === 'bash' ? 'mutable tool execution' : 'tool access'
-  }
-  if (kind === 'path_access') {
-    const accessKind = readString(action.access_kind) || ''
-    if (accessKind === 'write') return 'workspace write'
-    if (accessKind === 'external_directory') return 'external directory access'
-    return 'workspace read'
-  }
-  return 'permission request'
-}
-
 function messageUsageFacts(message: MessageResource): string[] {
   const usage = message.usage as Record<string, unknown> | null | undefined
   if (!usage) return []
@@ -336,46 +323,6 @@ function readFiniteNumber(value: unknown): number | null {
 
 function readPayloadMessageId(payload: Record<string, unknown>): number | null {
   return readFiniteNumber(payload.message_id)
-}
-
-function permissionActionView(action: Record<string, unknown>): PermissionActionView {
-  const kind = readString(action.kind)
-  if (kind === 'builtin_tool') {
-    const toolName = readString(action.tool_name) || 'tool'
-    const qualifier = readString(action.qualifier)
-    return {
-      title: qualifier ? `${toolName} · ${qualifier}` : toolName,
-      details: [
-        `kind=builtin_tool`,
-        `tool=${toolName}`,
-        ...(qualifier ? [`qualifier=${qualifier}`] : []),
-      ],
-    }
-  }
-  if (kind === 'path_access') {
-    const accessKind = readString(action.access_kind) || 'path_access'
-    const workspaceRoot = readString(action.workspace_root)
-    const targetPath = readString(action.target_path)
-    return {
-      title: `${accessKind} · ${targetPath || 'path'}`,
-      details: [
-        `kind=path_access`,
-        `access=${accessKind}`,
-        ...(workspaceRoot ? [`workspace=${workspaceRoot}`] : []),
-        ...(targetPath ? [`target=${targetPath}`] : []),
-      ],
-    }
-  }
-  return {
-    title: kind || 'permission_request',
-    details: Object.entries(action).map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`),
-  }
-}
-
-function permissionReplyPreview(scope?: 'session' | 'workspace'): string {
-  if (scope === 'session') return 'This remembers the decision only for the current session.'
-  if (scope === 'workspace') return 'This remembers the decision for new sessions in the same workspace.'
-  return 'This applies only to the current request.'
 }
 
 function scrollToMessage(messageId: number) {
@@ -669,7 +616,7 @@ async function continueCurrentSession() {
 async function approvePermission(
   requestId: string,
   kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always',
-  scope?: 'session' | 'workspace',
+  scope?: 'session' | 'workspace' | 'global',
 ) {
   const sessionId = selectedSessionId.value
   if (!sessionId) return
@@ -1166,10 +1113,17 @@ onBeforeUnmount(() => {
               <div class="muted">{{ request.reason }}</div>
               <div class="muted">risk={{ permissionRiskLabel(request.action) }}</div>
               <div v-if="request.explanation" class="muted">{{ request.explanation }}</div>
-              <div v-if="request.source || request.scope || request.operator" class="muted">
-                <span v-if="request.source">source={{ request.source }}</span>
-                <span v-if="request.scope"> · scope={{ request.scope }}</span>
-                <span v-if="request.operator"> · operator={{ request.operator }}</span>
+              <div
+                v-if="permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).summary"
+                class="muted"
+              >
+                {{ permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).summary }}
+              </div>
+              <div
+                v-if="permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).details.length"
+                class="muted mono"
+              >
+                {{ permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).details.join(' · ') }}
               </div>
               <div class="muted mono">{{ permissionActionView(request.action).details.join(' · ') }}</div>
               <div class="button-row">
@@ -1182,6 +1136,9 @@ onBeforeUnmount(() => {
                 <button class="button" @click="approvePermission(request.request_id, 'allow_always', 'workspace')">
                   Allow Always (Workspace)
                 </button>
+                <button class="button" @click="approvePermission(request.request_id, 'allow_always', 'global')">
+                  Allow Always (Global)
+                </button>
                 <button class="button danger" @click="approvePermission(request.request_id, 'deny_once')">
                   Deny Once
                 </button>
@@ -1191,9 +1148,12 @@ onBeforeUnmount(() => {
                 <button class="button danger" @click="approvePermission(request.request_id, 'deny_always', 'workspace')">
                   Deny Always (Workspace)
                 </button>
+                <button class="button danger" @click="approvePermission(request.request_id, 'deny_always', 'global')">
+                  Deny Always (Global)
+                </button>
               </div>
               <div class="muted">
-                once={{ permissionReplyPreview() }} · session={{ permissionReplyPreview('session') }} · workspace={{ permissionReplyPreview('workspace') }}
+                once={{ permissionReplyPreview() }} · session={{ permissionReplyPreview('session') }} · workspace={{ permissionReplyPreview('workspace') }} · global={{ permissionReplyPreview('global') }}
               </div>
             </div>
           </div>

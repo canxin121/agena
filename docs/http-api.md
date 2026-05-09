@@ -291,8 +291,12 @@ If-Match: "7"
 - `scope`
   - `session`
   - `workspace`
+  - `global`
 - `session_id` / `workspace_id`
 - `source` / `reason` / `operator`
+  - `source=permission_reply` 表示规则来自一次 remembered permission reply
+  - `source=api` 表示规则由权限规则 API 显式创建或替换
+  - `operator` 表示触发该变更的入口，例如 `http_api`
 - `revoked_at` / `revoked_reason` / `revoked_by`
 
 创建 / 更新请求示例：
@@ -335,7 +339,7 @@ If-Match: "7"
 - `message part` 详情被拆成单独资源，避免列表接口把大块 JSON 全部捞出来
 - 执行类接口返回的是轻量的 `session execution resource`，不会把整段 message history 再次塞回来
 - `pending_permission_requests` / `pending_user_input_requests` 直接给出待回复对象，前端可按 `request_id` 回调后续接口
-- `pending_permission_requests[].scope` 会暴露当前请求允许记忆的作用域（`session` / `workspace`）；`AllowAlways` / `DenyAlways` 会按 reply 的 scope 落成持久化规则
+- `pending_permission_requests[].scope` 会暴露当前请求允许记忆的作用域（`session` / `workspace` / `global`）；`AllowAlways` / `DenyAlways` 会按 reply 的 scope 落成持久化规则
 - `permission-rules/{id}/revoke` 会保留规则审计字段，而不是物理删除；前端应优先使用 revoke 关闭 remembered rule
 - `events/stream` 默认从“当前最新事件之后”开始推送；如需补历史增量，请显式传 `after_seq`
 - public HTTP API 不暴露 message 写接口；消息写入统一通过 `turns` 和后续 runtime reply 接口完成

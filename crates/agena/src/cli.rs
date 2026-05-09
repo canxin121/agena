@@ -20,7 +20,9 @@ use agena_mcp_server::{McpServerBackend, McpServerError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+};
 use serde::Serialize;
 
 use crate::{
@@ -29,14 +31,20 @@ use crate::{
         ConfigEnvironment, ConfigLoader, ConfigModeName, ConfigOutputFormat, ConfigOverride,
         LoadConfigRequest, ProcessEnvironment,
     },
-    db::{entities, init_schema},
+    db::{
+        crud::{permission_rule as permission_rule_crud, workspace as workspace_crud},
+        entities, init_schema,
+    },
     error::AppError,
     memory::{MemoryStore, MemoryType},
     message::{
         ApplyPatchToolInput, FirstPartyToolInput, PartContent, StructuredObject, ToolInvocation,
     },
     model::ModelRef,
-    permission::{PermissionPolicy, ToolPermissionPolicy},
+    permission::{
+        PermissionAction, PermissionMode, PermissionPolicy, PermissionReply, PermissionReplyKind,
+        PermissionScope, PersistedPermissionRule, ToolPermissionPolicy,
+    },
     provider::{
         ModelCapabilities, ModelMetadata, ProviderModel,
         auth::{
@@ -179,8 +187,102 @@ pub struct PrArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct PermissionsArgs {
+    #[command(subcommand)]
+    pub command: Option<PermissionsSubcommand>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PermissionsSubcommand {
+    List(PermissionsListArgs),
+    Create(PermissionsWriteArgs),
+    Replace(PermissionsReplaceArgs),
+    Revoke(PermissionsRevokeArgs),
+    Reply(PermissionsReplyArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PermissionScopeArg {
+    Session,
+    Workspace,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PermissionModeArg {
+    Allow,
+    Ask,
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PermissionReplyKindArg {
+    AllowOnce,
+    AllowAlways,
+    DenyOnce,
+    DenyAlways,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PermissionsListArgs {
     #[arg(long)]
     pub search: Option<String>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PermissionsWriteArgs {
+    #[arg(long)]
+    pub action_key: Option<String>,
+    #[arg(long)]
+    pub tool_name: Option<String>,
+    #[arg(long)]
+    pub qualifier: Option<String>,
+    #[arg(long)]
+    pub path_access_kind: Option<String>,
+    #[arg(long)]
+    pub workspace_root: Option<String>,
+    #[arg(long)]
+    pub target_path: Option<String>,
+    #[arg(long, value_enum)]
+    pub scope: PermissionScopeArg,
+    #[arg(long)]
+    pub session_id: Option<i64>,
+    #[arg(long = "rule-mode", value_enum)]
+    pub rule_mode: PermissionModeArg,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PermissionsReplaceArgs {
+    pub rule_id: i64,
+    #[command(flatten)]
+    pub rule: PermissionsWriteArgs,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PermissionsRevokeArgs {
+    pub rule_id: i64,
+    #[arg(long)]
+    pub reason: Option<String>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PermissionsReplyArgs {
+    pub request_id: String,
+    #[arg(long)]
+    pub session_id: Option<i64>,
+    #[arg(long)]
+    pub last: bool,
+    #[arg(long, value_enum)]
+    pub kind: PermissionReplyKindArg,
+    #[arg(long)]
+    pub reason: Option<String>,
+    #[arg(long, value_enum)]
+    pub scope: Option<PermissionScopeArg>,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
     pub format: ConfigOutputFormat,
 }
@@ -767,6 +869,15 @@ struct PermissionRuleOutput {
     id: i64,
     action_key: String,
     mode: String,
+    scope: String,
+    session_id: Option<i64>,
+    workspace_id: Option<i64>,
+    source: String,
+    reason: Option<String>,
+    operator: Option<String>,
+    revoked_at: Option<DateTime<Utc>>,
+    revoked_reason: Option<String>,
+    revoked_by: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -1845,6 +1956,30 @@ impl AgenaCli {
     }
 
     async fn render_permissions_command(&self, args: PermissionsArgs) -> Result<String, AppError> {
+        match args
+            .command
+            .unwrap_or(PermissionsSubcommand::List(PermissionsListArgs {
+                search: None,
+                format: ConfigOutputFormat::Toml,
+            })) {
+            PermissionsSubcommand::List(args) => self.render_permissions_list_command(args).await,
+            PermissionsSubcommand::Create(args) => {
+                self.render_permissions_create_command(args).await
+            }
+            PermissionsSubcommand::Replace(args) => {
+                self.render_permissions_replace_command(args).await
+            }
+            PermissionsSubcommand::Revoke(args) => {
+                self.render_permissions_revoke_command(args).await
+            }
+            PermissionsSubcommand::Reply(args) => self.render_permissions_reply_command(args).await,
+        }
+    }
+
+    async fn render_permissions_list_command(
+        &self,
+        args: PermissionsListArgs,
+    ) -> Result<String, AppError> {
         let storage = StorageConfig {
             database_url: self.database_url.clone(),
             database_path: self.database_path.clone(),
@@ -1869,33 +2004,113 @@ impl AgenaCli {
         let rows = query.all(&db).await?;
         let rules = rows
             .into_iter()
-            .map(|row| {
-                Ok(PermissionRuleOutput {
-                    id: row.id,
-                    action_key: row.action_key,
-                    mode: row.mode,
-                    created_at: DateTime::<Utc>::from_timestamp_millis(row.created_at_ms)
-                        .ok_or_else(|| {
-                            AppError::Internal(format!(
-                                "invalid permission rule created_at_ms: {}",
-                                row.created_at_ms
-                            ))
-                        })?,
-                    updated_at: DateTime::<Utc>::from_timestamp_millis(row.updated_at_ms)
-                        .ok_or_else(|| {
-                            AppError::Internal(format!(
-                                "invalid permission rule updated_at_ms: {}",
-                                row.updated_at_ms
-                            ))
-                        })?,
-                })
-            })
+            .map(permission_rule_output)
             .collect::<Result<Vec<_>, AppError>>()?;
         render_serialized(
             args.format,
             &PermissionsOutput {
                 count: rules.len(),
                 rules,
+            },
+        )
+    }
+
+    async fn render_permissions_create_command(
+        &self,
+        args: PermissionsWriteArgs,
+    ) -> Result<String, AppError> {
+        let storage = StorageConfig {
+            database_url: self.database_url.clone(),
+            database_path: self.database_path.clone(),
+        };
+        let database_url = storage.resolve_url()?;
+        StorageConfig::ensure_parent(database_url.as_str())?;
+        let db = sea_orm::Database::connect(database_url.as_str()).await?;
+        init_schema(&db).await?;
+        let workspace_root = self.resolve_workspace_root(None)?;
+        let created =
+            upsert_permission_rule_from_args(&db, workspace_root.as_path(), &args).await?;
+        render_serialized(args.format, &created)
+    }
+
+    async fn render_permissions_replace_command(
+        &self,
+        args: PermissionsReplaceArgs,
+    ) -> Result<String, AppError> {
+        let storage = StorageConfig {
+            database_url: self.database_url.clone(),
+            database_path: self.database_path.clone(),
+        };
+        let database_url = storage.resolve_url()?;
+        StorageConfig::ensure_parent(database_url.as_str())?;
+        let db = sea_orm::Database::connect(database_url.as_str()).await?;
+        init_schema(&db).await?;
+        let workspace_root = self.resolve_workspace_root(None)?;
+        let updated = replace_permission_rule_from_args(
+            &db,
+            workspace_root.as_path(),
+            args.rule_id,
+            &args.rule,
+        )
+        .await?;
+        render_serialized(args.rule.format, &updated)
+    }
+
+    async fn render_permissions_revoke_command(
+        &self,
+        args: PermissionsRevokeArgs,
+    ) -> Result<String, AppError> {
+        let storage = StorageConfig {
+            database_url: self.database_url.clone(),
+            database_path: self.database_path.clone(),
+        };
+        let database_url = storage.resolve_url()?;
+        StorageConfig::ensure_parent(database_url.as_str())?;
+        let db = sea_orm::Database::connect(database_url.as_str()).await?;
+        init_schema(&db).await?;
+        let updated = permission_rule_crud::revoke_rule(
+            &db,
+            args.rule_id,
+            args.reason,
+            Some("cli".to_string()),
+        )
+        .await?;
+        let Some(updated) = updated else {
+            return Err(AppError::Config(format!(
+                "permission rule not found: {}",
+                args.rule_id
+            )));
+        };
+        render_serialized(args.format, &permission_rule_output(updated)?)
+    }
+
+    async fn render_permissions_reply_command(
+        &self,
+        args: PermissionsReplyArgs,
+    ) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
+        let session = manager
+            .reply_permission(crate::session::SessionPermissionReplyRequest {
+                session_id,
+                options: resolve_run_options(&runtime, None, None, None)?,
+                reply: PermissionReply {
+                    request_id: args.request_id,
+                    kind: permission_reply_kind_from_arg(args.kind),
+                    reason: args.reason,
+                    scope: args.scope.map(permission_scope_from_arg),
+                },
+                operator: Some("cli".to_string()),
+            })
+            .await?;
+        let latest_event_seq = latest_event_seq(&manager, session.id).await?;
+        render_serialized(
+            args.format,
+            &SessionOutput {
+                session: session_detail(&session, latest_event_seq),
             },
         )
     }
@@ -2690,6 +2905,216 @@ fn memory_entry_name(entry: &crate::memory::MemoryEntry) -> String {
 
 fn memory_type_label(memory_type: Option<MemoryType>) -> Option<String> {
     memory_type.map(|value| value.label().to_string())
+}
+
+fn permission_mode_from_arg(mode: PermissionModeArg) -> PermissionMode {
+    match mode {
+        PermissionModeArg::Allow => PermissionMode::Allow,
+        PermissionModeArg::Ask => PermissionMode::Ask,
+        PermissionModeArg::Deny => PermissionMode::Deny,
+    }
+}
+
+fn permission_scope_from_arg(scope: PermissionScopeArg) -> PermissionScope {
+    match scope {
+        PermissionScopeArg::Session => PermissionScope::Session,
+        PermissionScopeArg::Workspace => PermissionScope::Workspace,
+        PermissionScopeArg::Global => PermissionScope::Global,
+    }
+}
+
+fn permission_reply_kind_from_arg(kind: PermissionReplyKindArg) -> PermissionReplyKind {
+    match kind {
+        PermissionReplyKindArg::AllowOnce => PermissionReplyKind::AllowOnce,
+        PermissionReplyKindArg::AllowAlways => PermissionReplyKind::AllowAlways,
+        PermissionReplyKindArg::DenyOnce => PermissionReplyKind::DenyOnce,
+        PermissionReplyKindArg::DenyAlways => PermissionReplyKind::DenyAlways,
+    }
+}
+
+fn permission_rule_output(
+    row: entities::permission_rule::Model,
+) -> Result<PermissionRuleOutput, AppError> {
+    Ok(PermissionRuleOutput {
+        id: row.id,
+        action_key: row.action_key,
+        mode: row.mode,
+        scope: row.scope,
+        session_id: row.session_id,
+        workspace_id: row.workspace_id,
+        source: row.source,
+        reason: row.reason,
+        operator: row.operator,
+        revoked_at: timestamp_ms_to_datetime(row.revoked_at_ms)?,
+        revoked_reason: row.revoked_reason,
+        revoked_by: row.revoked_by,
+        created_at: required_timestamp_ms_to_datetime(
+            "permission rule created_at_ms",
+            row.created_at_ms,
+        )?,
+        updated_at: required_timestamp_ms_to_datetime(
+            "permission rule updated_at_ms",
+            row.updated_at_ms,
+        )?,
+    })
+}
+
+fn required_timestamp_ms_to_datetime(label: &str, value: i64) -> Result<DateTime<Utc>, AppError> {
+    DateTime::<Utc>::from_timestamp_millis(value)
+        .ok_or_else(|| AppError::Internal(format!("invalid {label}: {value}")))
+}
+
+fn timestamp_ms_to_datetime(value: Option<i64>) -> Result<Option<DateTime<Utc>>, AppError> {
+    value
+        .map(|value| required_timestamp_ms_to_datetime("timestamp_ms", value))
+        .transpose()
+}
+
+fn permission_action_from_args(
+    workspace_root: &Path,
+    args: &PermissionsWriteArgs,
+) -> Result<PermissionAction, AppError> {
+    if let Some(action_key) = args
+        .action_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return serde_json::from_str(action_key)
+            .map_err(|err| AppError::Config(format!("invalid action_key json: {err}")));
+    }
+    if let Some(tool_name) = args
+        .tool_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(PermissionAction::BuiltinTool {
+            tool_name: tool_name.to_string(),
+            qualifier: args
+                .qualifier
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+        });
+    }
+    let path_access_kind = args
+        .path_access_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::Config(
+                "permission rule requires either --action-key, or tool/path fields".to_string(),
+            )
+        })?;
+    let target_path = args
+        .target_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Config("path_access rules require --target-path".to_string()))?;
+    let workspace_root_value = args
+        .workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| workspace_root.to_string_lossy().to_string());
+    Ok(PermissionAction::PathAccess {
+        access_kind: path_access_kind.to_string(),
+        workspace_root: workspace_root_value,
+        target_path: target_path.to_string(),
+    })
+}
+
+async fn upsert_permission_rule_from_args(
+    db: &sea_orm::DatabaseConnection,
+    workspace_root: &Path,
+    args: &PermissionsWriteArgs,
+) -> Result<PermissionRuleOutput, AppError> {
+    let scope = permission_scope_from_arg(args.scope);
+    let action = permission_action_from_args(workspace_root, args)?;
+    let action_key = serde_json::to_string(&action).map_err(AppError::from)?;
+    let workspace_id = match scope {
+        PermissionScope::Workspace => Some(
+            workspace_crud::ensure_workspace_id(db, workspace_root.to_string_lossy().as_ref())
+                .await?,
+        ),
+        PermissionScope::Session | PermissionScope::Global => None,
+    };
+    let session_id = match scope {
+        PermissionScope::Session => args.session_id,
+        PermissionScope::Workspace | PermissionScope::Global => None,
+    };
+    if matches!(scope, PermissionScope::Session) && session_id.is_none() {
+        return Err(AppError::Config(
+            "session scope requires --session-id".to_string(),
+        ));
+    }
+    let (row, _) = permission_rule_crud::upsert_rule(
+        db,
+        &PersistedPermissionRule {
+            action_key,
+            mode: permission_mode_from_arg(args.rule_mode),
+            scope,
+            session_id,
+            workspace_id,
+            source: "cli".to_string(),
+            reason: None,
+            operator: Some("cli".to_string()),
+            revoked_at_ms: None,
+            revoked_reason: None,
+            revoked_by: None,
+        },
+    )
+    .await?;
+    permission_rule_output(row)
+}
+
+async fn replace_permission_rule_from_args(
+    db: &sea_orm::DatabaseConnection,
+    workspace_root: &Path,
+    rule_id: i64,
+    args: &PermissionsWriteArgs,
+) -> Result<PermissionRuleOutput, AppError> {
+    let existing = entities::permission_rule::Entity::find_by_id(rule_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::Config(format!("permission rule not found: {rule_id}")))?;
+    let scope = permission_scope_from_arg(args.scope);
+    let action = permission_action_from_args(workspace_root, args)?;
+    let action_key = serde_json::to_string(&action).map_err(AppError::from)?;
+    let workspace_id = match scope {
+        PermissionScope::Workspace => Some(
+            workspace_crud::ensure_workspace_id(db, workspace_root.to_string_lossy().as_ref())
+                .await?,
+        ),
+        PermissionScope::Session | PermissionScope::Global => None,
+    };
+    let session_id = match scope {
+        PermissionScope::Session => args.session_id,
+        PermissionScope::Workspace | PermissionScope::Global => None,
+    };
+    if matches!(scope, PermissionScope::Session) && session_id.is_none() {
+        return Err(AppError::Config(
+            "session scope requires --session-id".to_string(),
+        ));
+    }
+    let mut active: entities::permission_rule::ActiveModel = existing.into();
+    active.action_key = Set(action_key);
+    active.mode = Set(permission_rule_crud::mode_to_string(
+        permission_mode_from_arg(args.rule_mode),
+    ));
+    active.scope = Set(permission_rule_crud::scope_to_string(scope));
+    active.session_id = Set(session_id);
+    active.workspace_id = Set(workspace_id);
+    active.source = Set("cli".to_string());
+    active.operator = Set(Some("cli".to_string()));
+    active.updated_at_ms = Set(Utc::now().timestamp_millis());
+    let row = active.update(db).await?;
+    permission_rule_output(row)
 }
 
 fn render_completion_command(args: CompletionArgs) -> Result<String, AppError> {
@@ -3803,15 +4228,43 @@ store_path = "{}"
         let permissions = AgenaCli::parse_from([
             "agena",
             "permissions",
+            "list",
             "--search",
             "bash",
             "--format",
             "json",
         ]);
-        let Some(AgenaCommand::Permissions(args)) = permissions.command else {
-            unreachable!("expected permissions command after successful parse");
+        let Some(AgenaCommand::Permissions(PermissionsArgs {
+            command: Some(PermissionsSubcommand::List(args)),
+        })) = permissions.command
+        else {
+            unreachable!("expected permissions list command after successful parse");
         };
         assert_eq!(args.search.as_deref(), Some("bash"));
+        assert_eq!(args.format, ConfigOutputFormat::Json);
+
+        let permissions_create = AgenaCli::parse_from([
+            "agena",
+            "permissions",
+            "create",
+            "--tool-name",
+            "bash",
+            "--scope",
+            "workspace",
+            "--rule-mode",
+            "allow",
+            "--format",
+            "json",
+        ]);
+        let Some(AgenaCommand::Permissions(PermissionsArgs {
+            command: Some(PermissionsSubcommand::Create(args)),
+        })) = permissions_create.command
+        else {
+            unreachable!("expected permissions create command after successful parse");
+        };
+        assert_eq!(args.tool_name.as_deref(), Some("bash"));
+        assert_eq!(args.scope, PermissionScopeArg::Workspace);
+        assert_eq!(args.rule_mode, PermissionModeArg::Allow);
         assert_eq!(args.format, ConfigOutputFormat::Json);
 
         let worktree = AgenaCli::parse_from(["agena", "worktree", "--format", "json"]);
@@ -3944,8 +4397,10 @@ store_path = "{}"
 
         let output = cli
             .render_permissions_command(PermissionsArgs {
-                search: Some("bash".to_owned()),
-                format: ConfigOutputFormat::Json,
+                command: Some(PermissionsSubcommand::List(PermissionsListArgs {
+                    search: Some("bash".to_owned()),
+                    format: ConfigOutputFormat::Json,
+                })),
             })
             .await
             .expect("permissions command should render");
@@ -3953,6 +4408,62 @@ store_path = "{}"
         assert_eq!(value["count"], 1);
         assert_eq!(value["rules"][0]["action_key"], "bash");
         assert_eq!(value["rules"][0]["mode"], "allow");
+    }
+
+    #[tokio::test]
+    async fn permissions_create_and_revoke_commands_round_trip() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("agena-cli-perm-mutate-{suffix}.db"));
+        let cli = AgenaCli {
+            config: None,
+            mode: None,
+            overrides: Vec::new(),
+            database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
+            database_path: None,
+            command: None,
+        };
+
+        let created = cli
+            .render_permissions_command(PermissionsArgs {
+                command: Some(PermissionsSubcommand::Create(PermissionsWriteArgs {
+                    action_key: None,
+                    tool_name: Some("bash".to_string()),
+                    qualifier: Some("git status".to_string()),
+                    path_access_kind: None,
+                    workspace_root: None,
+                    target_path: None,
+                    scope: PermissionScopeArg::Workspace,
+                    session_id: None,
+                    rule_mode: PermissionModeArg::Allow,
+                    format: ConfigOutputFormat::Json,
+                })),
+            })
+            .await
+            .expect("permissions create should render");
+        let created: Value =
+            serde_json::from_str(created.as_str()).expect("create output should be json");
+        let rule_id = created["id"].as_i64().expect("created rule should have id");
+        assert_eq!(created["scope"], "workspace");
+        assert_eq!(created["mode"], "allow");
+
+        let revoked = cli
+            .render_permissions_command(PermissionsArgs {
+                command: Some(PermissionsSubcommand::Revoke(PermissionsRevokeArgs {
+                    rule_id,
+                    reason: Some("test revoke".to_string()),
+                    format: ConfigOutputFormat::Json,
+                })),
+            })
+            .await
+            .expect("permissions revoke should render");
+        let revoked: Value =
+            serde_json::from_str(revoked.as_str()).expect("revoke output should be json");
+        assert_eq!(revoked["id"], rule_id);
+        assert_eq!(revoked["revoked_reason"], "test revoke");
+        assert!(revoked["revoked_at"].is_string());
     }
 
     #[test]

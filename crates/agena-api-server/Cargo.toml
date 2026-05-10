@@ -15,6 +15,7 @@ jsonrpc = []
 [dependencies]
 agena = { workspace = true }
 agena-api = { workspace = true }
+agena-plugin-marketplace = { workspace = true }
 agena-scheduler = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
@@ -26,6 +27,7 @@ path-clean = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sea-orm = { workspace = true }
+semver = { workspace = true }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util"] }

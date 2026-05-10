@@ -1,6 +1,6 @@
-import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from '@/lib/authEvents'
-import { apiJson, apiUrl } from '@/lib/api'
-import { buildActiveUiAuthHeaders } from '@/lib/uiAuthToken'
+import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from '../../lib/authEvents'
+import { apiJson, apiUrl } from '../../lib/api'
+import { buildActiveUiAuthHeaders } from '../../lib/uiAuthToken'
 import { normalizeSseBuffer, parseSseEventBlock } from './sse'
 
 export type StudioHealth = {
@@ -140,6 +140,60 @@ export type PluginLogEntry = {
   timestamp_ms: number
 }
 
+export type MarketplacePluginResource = {
+  plugin_id: string
+  name: string
+  description: string
+  homepage?: string | null
+  version_count: number
+  latest_version?: string | null
+  latest_kind?: string | null
+  latest_platform?: string | null
+}
+
+export type MarketplaceInstalledPluginResource = {
+  plugin_id: string
+  version: string
+  kind: string
+  platform: string
+  binary_path: string
+  config_path: string
+  sha256?: string | null
+  installed_at: string
+  registry_id: string
+  registry_url: string
+  archive_extracted: boolean
+}
+
+export type MarketplaceOutdatedPluginResource = {
+  plugin_id: string
+  installed_version: string
+  latest_version: string
+}
+
+export type MarketplaceInstallOutcomeResource = {
+  plugin_id: string
+  version: string
+  kind: string
+  artifact_path: string
+  config_path: string
+  dry_run: boolean
+}
+
+export type MarketplaceUninstallOutcomeResource = {
+  plugin_id: string
+  version: string
+  config_path: string
+}
+
+export type MarketplaceUpgradeOutcomeResource = {
+  plugin_id: string
+  previous_version: string
+  installed_version: string
+  upgraded: boolean
+  outcome?: MarketplaceInstallOutcomeResource | null
+}
+
 export type RuntimeReloadResponse = {
   cause: string
   previous_generation: number
@@ -223,6 +277,24 @@ export type WorkspaceFileTreeResource = {
   entries: WorkspaceFileNode[]
 }
 
+export type GitStatusResource = {
+  workspace_root: string
+  git_available: boolean
+  repo: boolean
+  gh_available: boolean
+  branch?: string | null
+  upstream?: string | null
+  ahead?: number | null
+  behind?: number | null
+  staged_files: number
+  unstaged_files: number
+  untracked_files: number
+  changed_files: number
+  clean: boolean
+  worktree_active_sessions: number
+  worktree_managed_dirs: number
+}
+
 export type SessionResource = {
   id: number
   parent_id?: number | null
@@ -234,6 +306,21 @@ export type SessionResource = {
   message_count: number
   child_session_count: number
   last_message_at?: string | null
+}
+
+export type SessionTreeResource = SessionResource
+
+export type RewindCheckpointEntryResource = {
+  message_id: number
+  role: string
+  preview: string
+}
+
+export type RewindCheckpointResource = {
+  schema: number
+  at_ms: number
+  target_message_id: number
+  dropped: RewindCheckpointEntryResource[]
 }
 
 export type MessagePart = {
@@ -456,6 +543,111 @@ export async function listPluginLogs(
   return response.entries ?? []
 }
 
+export async function searchMarketplacePlugins(input: {
+  registryId?: string
+  registryUrl: string
+  query?: string
+  refresh?: boolean
+}): Promise<MarketplacePluginResource[]> {
+  const response = await apiJson<{ entries: MarketplacePluginResource[] }>('/api/v1/plugins/marketplace/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...(input.registryId?.trim() ? { registry_id: input.registryId.trim() } : {}),
+      registry_url: input.registryUrl.trim(),
+      ...(input.query?.trim() ? { query: input.query.trim() } : {}),
+      ...(input.refresh ? { refresh: true } : {}),
+    }),
+  })
+  return response.entries ?? []
+}
+
+export async function syncMarketplaceRegistry(input: {
+  registryId?: string
+  registryUrl: string
+}): Promise<{ registry_id: string; registry_url: string; plugin_count: number }> {
+  return await apiJson('/api/v1/plugins/marketplace/sync', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...(input.registryId?.trim() ? { registry_id: input.registryId.trim() } : {}),
+      registry_url: input.registryUrl.trim(),
+    }),
+  })
+}
+
+export async function listMarketplaceInstalledPlugins(): Promise<MarketplaceInstalledPluginResource[]> {
+  const response = await apiJson<{ entries: MarketplaceInstalledPluginResource[] }>('/api/v1/plugins/marketplace/installed')
+  return response.entries ?? []
+}
+
+export async function listMarketplaceOutdatedPlugins(): Promise<MarketplaceOutdatedPluginResource[]> {
+  const response = await apiJson<{ entries: MarketplaceOutdatedPluginResource[] }>('/api/v1/plugins/marketplace/outdated')
+  return response.entries ?? []
+}
+
+export async function installMarketplacePlugin(input: {
+  spec: string
+  registryId?: string
+  registryUrl: string
+  configPath?: string
+  force?: boolean
+  dryRun?: boolean
+  allowUnverified?: boolean
+  refresh?: boolean
+  requireSignature?: boolean
+}): Promise<MarketplaceInstallOutcomeResource> {
+  return await apiJson<MarketplaceInstallOutcomeResource>('/api/v1/plugins/marketplace/install', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      spec: input.spec.trim(),
+      ...(input.registryId?.trim() ? { registry_id: input.registryId.trim() } : {}),
+      registry_url: input.registryUrl.trim(),
+      ...(input.configPath?.trim() ? { config_path: input.configPath.trim() } : {}),
+      ...(input.force ? { force: true } : {}),
+      ...(input.dryRun ? { dry_run: true } : {}),
+      ...(input.allowUnverified ? { allow_unverified: true } : {}),
+      ...(input.refresh ? { refresh: true } : {}),
+      ...(input.requireSignature ? { require_signature: true } : {}),
+    }),
+  })
+}
+
+export async function uninstallMarketplacePlugin(input: {
+  pluginId: string
+  cascade?: boolean
+}): Promise<MarketplaceUninstallOutcomeResource[]> {
+  const response = await apiJson<{ entries: MarketplaceUninstallOutcomeResource[] }>('/api/v1/plugins/marketplace/uninstall', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      plugin_id: input.pluginId.trim(),
+      ...(input.cascade ? { cascade: true } : {}),
+    }),
+  })
+  return response.entries ?? []
+}
+
+export async function upgradeMarketplacePlugins(input: {
+  pluginId?: string
+  all?: boolean
+  registryId?: string
+  registryUrl?: string
+}): Promise<MarketplaceUpgradeOutcomeResource[]> {
+  const response = await apiJson<{ entries: MarketplaceUpgradeOutcomeResource[] }>('/api/v1/plugins/marketplace/upgrade', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...(input.pluginId?.trim() ? { plugin_id: input.pluginId.trim() } : {}),
+      ...(input.all ? { all: true } : {}),
+      ...(input.registryId?.trim() ? { registry_id: input.registryId.trim() } : {}),
+      ...(input.registryUrl?.trim() ? { registry_url: input.registryUrl.trim() } : {}),
+    }),
+  })
+  return response.entries ?? []
+}
+
 export async function listProviders(): Promise<ProviderSummary[]> {
   return await apiJson<ProviderSummary[]>('/api/v1/providers')
 }
@@ -604,6 +796,10 @@ export async function deletePermissionRule(id: number): Promise<PermissionRuleRe
   })
 }
 
+export async function getGitStatus(): Promise<GitStatusResource> {
+  return await apiJson<GitStatusResource>('/api/v1/git/status')
+}
+
 export async function listWorkspaceFileTree(input: {
   workspaceId: number
   path?: string
@@ -668,6 +864,24 @@ export async function createSession(input: {
 
 export async function getSessionState(sessionId: number): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${sessionId}/state`)
+}
+
+export async function exportSessionJsonl(sessionId: number): Promise<string> {
+  const response = await fetch(apiUrl(`/api/v1/sessions/${sessionId}/export`), {
+    headers: buildActiveUiAuthHeaders(),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to export session ${sessionId}`)
+  }
+  return await response.text()
+}
+
+export async function importSessionJsonl(jsonl: string): Promise<SessionExecutionResource> {
+  return await apiJson<SessionExecutionResource>('/api/v1/sessions/import', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonl }),
+  })
 }
 
 export async function listMessages(sessionId: number): Promise<MessageResource[]> {
@@ -879,6 +1093,14 @@ export async function continueSession(input: {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
+}
+
+export async function getSessionTree(rootId: number): Promise<SessionTreeResource[]> {
+  return await apiJson<SessionTreeResource[]>(`/api/v1/sessions/tree/${rootId}`)
+}
+
+export async function listRewindCheckpoints(sessionId: number): Promise<RewindCheckpointResource[]> {
+  return await apiJson<RewindCheckpointResource[]>(`/api/v1/sessions/${sessionId}/rewind-checkpoints`)
 }
 
 export async function submitTurn(input: {

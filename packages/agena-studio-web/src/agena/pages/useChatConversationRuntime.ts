@@ -1,0 +1,219 @@
+import type { Ref } from 'vue'
+
+import {
+  getSessionState,
+  listMessages,
+  listSessionTimeline,
+  streamSessionEvents,
+  type MessageResource,
+  type SessionEventRecord,
+  type SessionEventStreamHandle,
+  type SessionExecutionResource,
+  type TimelineEventRecord,
+} from '../lib/agenaApi'
+import { applySessionEvent, type ChatEventState } from './chatPageModel'
+
+export type ChatConversationRuntimeInput = {
+  errorMessage: Ref<string>
+  loading: Ref<boolean>
+  messages: Ref<MessageResource[]>
+  selectedSessionId: Ref<number | null>
+  sessionState: Ref<SessionExecutionResource | null>
+  timelineEvents: Ref<TimelineEventRecord[]>
+}
+
+export type ChatConversationRuntimeDeps = {
+  applySessionEvent: typeof applySessionEvent
+  getSessionState: typeof getSessionState
+  listMessages: typeof listMessages
+  listSessionTimeline: typeof listSessionTimeline
+  streamSessionEvents: typeof streamSessionEvents
+}
+
+export type ChatConversationRuntimeOptions = {
+  loadRewindCheckpoints: (sessionId: number) => Promise<void>
+  loadSessionTree: (rootId: number) => Promise<void>
+}
+
+export function useChatConversationRuntime(
+  input: ChatConversationRuntimeInput,
+  deps: ChatConversationRuntimeDeps,
+  options: ChatConversationRuntimeOptions,
+) {
+  let pollTimer: ReturnType<typeof setInterval> | null = null
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null
+  let refreshInFlight = false
+  let refreshQueued = false
+  let eventStream: SessionEventStreamHandle | null = null
+
+  function stopEventStream() {
+    eventStream?.close()
+    eventStream = null
+  }
+
+  function clearScheduledConversationRefresh() {
+    refreshQueued = false
+    if (!refreshTimer) return
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+
+  function stopPolling() {
+    if (!pollTimer) return
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+
+  function ensurePolling() {
+    if (pollTimer || !input.selectedSessionId.value) return
+    pollTimer = setInterval(() => {
+      void refreshConversation(false)
+    }, 1800)
+  }
+
+  function syncPolling() {
+    if (eventStream) {
+      stopPolling()
+      return
+    }
+
+    if (!input.sessionState.value) {
+      stopPolling()
+      return
+    }
+
+    if (input.sessionState.value.blocked || input.sessionState.value.run_state !== 'idle') {
+      ensurePolling()
+      return
+    }
+
+    stopPolling()
+  }
+
+  function scheduleConversationRefresh(delayMs = 120) {
+    if (!input.selectedSessionId.value || refreshTimer) return
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null
+      void refreshConversation(false)
+    }, delayMs)
+  }
+
+  function applyChatSessionEvent(event: SessionEventRecord): boolean {
+    const result = deps.applySessionEvent(
+      {
+        messages: input.messages.value,
+        timelineEvents: input.timelineEvents.value,
+        sessionState: input.sessionState.value,
+        selectedSessionId: input.selectedSessionId.value,
+      } satisfies ChatEventState,
+      event,
+    )
+    input.messages.value = result.state.messages
+    input.timelineEvents.value = result.state.timelineEvents
+    input.sessionState.value = result.state.sessionState
+    return result.shouldRefresh
+  }
+
+  function syncEventStream() {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) {
+      stopEventStream()
+      stopPolling()
+      return
+    }
+
+    if (typeof ReadableStream === 'undefined' || typeof TextDecoder === 'undefined') {
+      stopEventStream()
+      syncPolling()
+      return
+    }
+
+    if (eventStream) {
+      return
+    }
+
+    eventStream = deps.streamSessionEvents(sessionId, {
+      afterSeq: input.sessionState.value?.latest_event_seq ?? 0,
+      pollIntervalMs: 250,
+      onOpen: () => {
+        stopPolling()
+      },
+      onEvent: (event) => {
+        if (input.selectedSessionId.value !== sessionId) return
+        if (input.sessionState.value) {
+          input.sessionState.value = {
+            ...input.sessionState.value,
+            latest_event_seq: Math.max(input.sessionState.value.latest_event_seq ?? 0, event.seq),
+          }
+        }
+        if (applyChatSessionEvent(event)) {
+          scheduleConversationRefresh()
+        }
+      },
+      onError: (error) => {
+        if (input.selectedSessionId.value !== sessionId) return
+        console.warn('session event stream failed', error)
+      },
+    })
+  }
+
+  async function refreshConversation(foreground: boolean) {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return
+
+    if (refreshInFlight) {
+      refreshQueued = true
+      return
+    }
+
+    if (foreground) {
+      input.loading.value = true
+    }
+    refreshInFlight = true
+
+    try {
+      const [state, messageItems, eventItems] = await Promise.all([
+        deps.getSessionState(sessionId),
+        deps.listMessages(sessionId),
+        deps.listSessionTimeline(sessionId, { limit: 100 }),
+      ])
+      if (input.selectedSessionId.value !== sessionId) return
+      input.sessionState.value = state
+      input.messages.value = messageItems
+      input.timelineEvents.value = eventItems
+      const rootId = state.session.parent_id ? state.session.parent_id : state.session.id
+      await Promise.all([options.loadSessionTree(rootId), options.loadRewindCheckpoints(sessionId)])
+      syncEventStream()
+      syncPolling()
+    } catch (err) {
+      if (input.selectedSessionId.value !== sessionId) return
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      stopPolling()
+    } finally {
+      refreshInFlight = false
+      if (refreshQueued && input.selectedSessionId.value === sessionId) {
+        refreshQueued = false
+        scheduleConversationRefresh(0)
+      }
+      if (foreground) {
+        input.loading.value = false
+      }
+    }
+  }
+
+  function dispose() {
+    stopEventStream()
+    stopPolling()
+    clearScheduledConversationRefresh()
+  }
+
+  return {
+    clearScheduledConversationRefresh,
+    dispose,
+    refreshConversation,
+    stopEventStream,
+    stopPolling,
+    syncEventStream,
+    syncPolling,
+  }
+}

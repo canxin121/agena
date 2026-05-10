@@ -40,6 +40,7 @@ export function useRuntimeSectionPageState(input: {
     selectedWorkspaceId: state.selectedWorkspaceId,
     sessionExecution: state.sessionExecution,
     sessions: state.sessions,
+    globalEventSummaries: state.globalEventSummaries,
     timelineSummaries: state.timelineSummaries,
     workflowLoading: state.workflowLoading,
     workspaces: state.workspaces,

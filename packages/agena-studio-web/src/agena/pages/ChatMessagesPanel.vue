@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MessageResource } from '@/agena/lib/agenaApi'
+import type { MessagePart, MessageResource } from '@/agena/lib/agenaApi'
 
 type ChatMessageRenderBlock = {
   body: string
@@ -11,7 +11,11 @@ const props = defineProps<{
   selectedSessionId: number | null
   loading: boolean
   messages: MessageResource[]
+  inspectedMessage: MessageResource | null
+  inspectedMessageParts: MessagePart[]
+  inspectedPart: MessagePart | null
   refreshConversation: (foreground: boolean) => void | Promise<void>
+  inspectMessage: (messageId: number, partId?: number) => void | Promise<void>
   rewindToMessage: (messageId: number) => void | Promise<void>
   formatMessageTime: (value: string) => string
   messageTags: (message: MessageResource) => string[]
@@ -42,6 +46,7 @@ const props = defineProps<{
         <div class="message-head">
           <div class="message-role">{{ message.role }}</div>
           <div class="button-row">
+            <button class="button ghost" :disabled="props.loading" @click="props.inspectMessage(message.id)">Inspect</button>
             <button class="button ghost" :disabled="props.loading" @click="props.rewindToMessage(message.id)">Rewind Here</button>
             <div>{{ props.formatMessageTime(message.created_at) }}</div>
           </div>
@@ -73,5 +78,36 @@ const props = defineProps<{
       </article>
     </div>
     <p v-else class="muted">No messages yet.</p>
+
+    <section v-if="props.inspectedMessage" class="card" style="margin-top: 16px">
+      <div class="page-header" style="margin-bottom: 12px">
+        <h3 style="margin: 0">Message Inspector</h3>
+        <div class="muted mono">message={{ props.inspectedMessage.id }} · parts={{ props.inspectedMessageParts.length }}</div>
+      </div>
+      <div class="stack">
+        <div><strong>Role:</strong> {{ props.inspectedMessage.role }}</div>
+        <div><strong>State:</strong> {{ props.inspectedMessage.state }}</div>
+        <div class="muted mono">metadata={{ JSON.stringify(props.inspectedMessage.metadata, null, 2) }}</div>
+        <div v-if="props.inspectedMessageParts.length" class="list">
+          <div v-for="part in props.inspectedMessageParts" :key="part.id" class="list-item">
+            <div class="page-header" style="align-items: flex-start">
+              <div>
+                <div><strong>#{{ part.part_index }}</strong> · {{ part.kind }}</div>
+                <div class="muted">{{ part.summary || 'No summary' }}</div>
+                <div class="muted mono">part={{ part.id }} · status={{ part.status }} · detail={{ part.has_detail ? 'yes' : 'no' }}</div>
+              </div>
+              <button class="button ghost" :disabled="props.loading" @click="props.inspectMessage(props.inspectedMessage!.id, part.id)">
+                Load Part
+              </button>
+            </div>
+          </div>
+        </div>
+        <div v-if="props.inspectedPart" class="stack">
+          <strong>Selected Part</strong>
+          <div class="muted mono">part={{ props.inspectedPart.id }} · operation={{ props.inspectedPart.operation_id || 'n/a' }}</div>
+          <pre class="message-block mono">{{ JSON.stringify(props.inspectedPart.content, null, 2) }}</pre>
+        </div>
+      </div>
+    </section>
   </section>
 </template>

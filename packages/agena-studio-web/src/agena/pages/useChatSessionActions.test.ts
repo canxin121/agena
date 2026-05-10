@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { ref } from 'vue'
 
-import type { MessageResource, SessionExecutionResource } from '@/agena/lib/agenaApi'
+import type { MessagePart, MessageResource, SessionExecutionResource } from '@/agena/lib/agenaApi'
 
 import { useChatSessionActions, type ChatSessionActionsDeps, type ChatSessionActionsInput } from './useChatSessionActions'
 
@@ -47,6 +47,10 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
   const calls: string[] = []
   return {
     calls,
+    cancelSessionTurn: async (sessionId) => {
+      calls.push(`cancelSessionTurn:${sessionId}`)
+      return { ok: true }
+    },
     cancelUserInput: async ({ sessionId, requestId }) => {
       calls.push(`cancelUserInput:${sessionId}:${requestId}`)
       return sessionState()
@@ -73,6 +77,19 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`createWorkspace:${path}`)
       return { id: 7, path, created_at: '2026-05-10T00:00:00Z', updated_at: '2026-05-10T00:00:00Z' }
     },
+    deleteSession: async ({ sessionId, version }) => {
+      calls.push(`deleteSession:${sessionId}:${version || ''}`)
+      return {
+        id: sessionId,
+        workspace_id: 1,
+        title: 'session',
+        version: version ?? 1,
+        created_at: '2026-05-10T00:00:00Z',
+        updated_at: '2026-05-10T00:00:00Z',
+        message_count: 0,
+        child_session_count: 0,
+      }
+    },
     exportSessionJsonl: async (sessionId) => {
       calls.push(`exportSessionJsonl:${sessionId}`)
       return '{"session":3}'
@@ -81,9 +98,21 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`forkSession:${sessionId}:${atMessageId || ''}:${title}`)
       return sessionState({ session: { ...sessionState().session, id: 13, title: title || 'forked' } })
     },
+    getMessage: async (messageId) => {
+      calls.push(`getMessage:${messageId}`)
+      return { ...message(messageId), part_count: 1, parts: [{ id: 200 + messageId, message_id: messageId, part_index: 0, status: 'complete', kind: 'text', created_at: '2026-05-10T00:00:00Z', content: { type: 'text', text: 'hello' } }] }
+    },
+    getMessagePart: async (partId) => {
+      calls.push(`getMessagePart:${partId}`)
+      return { id: partId, message_id: 21, part_index: 0, status: 'complete', kind: 'text', created_at: '2026-05-10T00:00:00Z', content: { type: 'text', text: 'hello' } }
+    },
     importSessionJsonl: async (jsonl) => {
       calls.push(`importSessionJsonl:${jsonl}`)
       return sessionState({ session: { ...sessionState().session, id: 15, workspace_id: 4 } })
+    },
+    listMessageParts: async (messageId) => {
+      calls.push(`listMessageParts:${messageId}`)
+      return [{ id: 200 + messageId, message_id: messageId, part_index: 0, status: 'complete', kind: 'text', created_at: '2026-05-10T00:00:00Z', content: { type: 'text', text: 'hello' } }]
     },
     replyPermission: async ({ sessionId, requestId, kind, scope }) => {
       calls.push(`replyPermission:${sessionId}:${requestId}:${kind}:${scope || ''}`)
@@ -105,6 +134,24 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`submitTurn:${sessionId}:${text}:${providerId || ''}:${modelId || ''}`)
       return sessionState({ run_state: 'awaiting_model' })
     },
+    unrewindSession: async ({ sessionId, messageId }) => {
+      calls.push(`unrewindSession:${sessionId}:${messageId}`)
+      return sessionState()
+    },
+    updateSession: async ({ sessionId, title, parentId, version }) => {
+      calls.push(`updateSession:${sessionId}:${title}:${parentId || ''}:${version || ''}`)
+      return {
+        id: sessionId,
+        workspace_id: 1,
+        title,
+        version: (version ?? 1) + 1,
+        created_at: '2026-05-10T00:00:00Z',
+        updated_at: '2026-05-10T00:00:00Z',
+        message_count: 0,
+        child_session_count: 0,
+        parent_id: parentId ?? null,
+      }
+    },
   }
 }
 
@@ -117,9 +164,13 @@ function createInput() {
   const selectWorkspaceCalls: number[] = []
 
   const input: ChatSessionActionsInput = {
+    confirm: () => true,
     composer: ref(''),
     continuing: ref(false),
     errorMessage: ref(''),
+    inspectedMessage: ref<MessageResource | null>(null),
+    inspectedMessageParts: ref<MessagePart[]>([]),
+    inspectedPart: ref<MessagePart | null>(null),
     loading: ref(false),
     localCommandNotice: ref(''),
     messages: ref<MessageResource[]>([message(21)]),
@@ -138,6 +189,7 @@ function createInput() {
     syncEventStream: () => {
       syncCalls.push('sync')
     },
+    prompt: () => null,
     userInputDrafts: { req1: { q1: 'alpha', q2: 'one, two' } },
     workspacePath: ref('/repo'),
     loadSidebar: async () => {
@@ -275,5 +327,60 @@ describe('useChatSessionActions', () => {
     expect(deps.calls.includes('replyUserInput:3:req1:{"q1":["alpha"],"q2":["one","two"]}')).toBe(true)
     expect(syncCalls).toEqual(['sync'])
     expect(refreshCalls).toEqual([false])
+  })
+
+  test('renameCurrentSession updates session title and reloads workspace sessions', async () => {
+    const deps = createDeps()
+    const { input, loadSessionsCalls, selectSessionCalls } = createInput()
+    input.sessionState.value = sessionState()
+    const promptCalls: string[] = []
+    input.prompt = (message, value) => {
+      promptCalls.push(`${message}:${value || ''}`)
+      return 'Renamed Session'
+    }
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.renameCurrentSession()
+
+    expect(promptCalls).toEqual(['Rename session:session'])
+    expect(deps.calls.includes('updateSession:3:Renamed Session::1')).toBe(true)
+    expect(loadSessionsCalls).toEqual([[1, false]])
+    expect(selectSessionCalls).toEqual([3])
+    expect(input.localCommandNotice.value).toBe('Renamed session #3.')
+  })
+
+  test('deleteCurrentSession deletes the current session after confirmation', async () => {
+    const deps = createDeps()
+    const { input, loadSessionsCalls } = createInput()
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.deleteCurrentSession()
+
+    expect(deps.calls.includes('deleteSession:3:1')).toBe(true)
+    expect(loadSessionsCalls).toEqual([[1, false]])
+    expect(input.localCommandNotice.value).toBe('Deleted session #3.')
+  })
+
+  test('cancelCurrentSessionTurn requests cancellation and refreshes conversation', async () => {
+    const deps = createDeps()
+    const { input, refreshCalls } = createInput()
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.cancelCurrentSessionTurn()
+
+    expect(deps.calls.includes('cancelSessionTurn:3')).toBe(true)
+    expect(refreshCalls).toEqual([false])
+    expect(input.localCommandNotice.value).toBe('Cancellation requested for session #3.')
+  })
+
+  test('unrewindToMessage undoes a rewind and refreshes conversation', async () => {
+    const deps = createDeps()
+    const { input, refreshCalls } = createInput()
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.unrewindToMessage(21)
+
+    expect(deps.calls.includes('unrewindSession:3:21')).toBe(true)
+    expect(refreshCalls).toEqual([true])
   })
 })

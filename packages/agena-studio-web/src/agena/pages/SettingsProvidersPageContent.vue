@@ -11,9 +11,18 @@ const props = defineProps<{
 <template>
   <ProvidersSettingsPanel
     :auth-providers="props.providers.authProviders"
+    :browser-auth-code-drafts="props.providers.browserAuthCodeDrafts"
+    :browser-auth-instance-drafts="props.providers.browserAuthInstanceDrafts"
+    :browser-auth-start-state="props.providers.browserAuthStartState"
+    :device-auth-enterprise-drafts="props.providers.deviceAuthEnterpriseDrafts"
+    :device-auth-start-state="props.providers.deviceAuthStartState"
     :drafts="props.providers.drafts"
+    :finish-browser-auth="props.providers.finishBrowserAuth"
+    :poll-device-auth="props.providers.pollDeviceAuth"
     :save-api-key="props.providers.saveApiKey"
     :refresh-credential="props.providers.refreshCredential"
     :clear-credential="props.providers.clearCredential"
+    :start-browser-auth="props.providers.startBrowserAuth"
+    :start-device-auth="props.providers.startDeviceAuth"
   />
 </template>

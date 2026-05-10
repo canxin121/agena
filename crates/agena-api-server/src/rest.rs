@@ -9,7 +9,11 @@ use std::{
 };
 
 use crate::local_api::{
-    AuthApiKeyWriteRequest, AuthCredentialType, AuthProviderResource, HealthResponse,
+    AuthApiKeyWriteRequest, AuthBrowserStartRequest, AuthBrowserStartResource,
+    AuthCopilotDevicePollRequest, AuthCopilotDeviceStartRequest, AuthCredentialType,
+    AuthDeviceStartResource, AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest,
+    AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
+    AuthProviderResource, HealthResponse,
     MarketplaceInstallOutcomeResource, MarketplaceInstallRequestBody,
     MarketplaceInstalledListResponse, MarketplaceInstalledPluginResource,
     MarketplaceOutdatedListResponse, MarketplaceOutdatedPluginResource,
@@ -746,6 +750,199 @@ pub async fn set_auth_provider_api_key(
         provider_id,
         auth.as_ref(),
     )?))
+}
+
+pub async fn start_openai_browser_auth(
+    State(state): State<AppState>,
+    Json(request): Json<AuthBrowserStartRequest>,
+) -> Result<Json<AuthBrowserStartResource>, ServerError> {
+    let start = state
+        .runtime()
+        .auth_manager()
+        .start_openai_browser_login(request.redirect_uri)
+        .map_err(ServerError::Core)?;
+    Ok(Json(AuthBrowserStartResource {
+        provider_id: "openai".to_string(),
+        instance_url: None,
+        authorize_url: start.authorize_url,
+        state: start.state,
+        pkce_verifier: start.pkce_verifier,
+    }))
+}
+
+pub async fn finish_openai_browser_auth(
+    State(state): State<AppState>,
+    Json(request): Json<AuthOpenAiBrowserFinishRequest>,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    let auth = state
+        .runtime()
+        .auth_manager()
+        .finish_openai_browser_login(request.code, request.pkce_verifier, request.redirect_uri)
+        .await
+        .map_err(ServerError::Core)?;
+    let configured = configured_provider_ids(&state);
+    Ok(Json(AuthLoginResultResource {
+        completed: true,
+        provider: Some(auth_provider_resource(
+            configured.contains("openai"),
+            "openai".to_string(),
+            Some(&auth),
+        )?),
+    }))
+}
+
+pub async fn start_openai_device_auth(
+    State(state): State<AppState>,
+) -> Result<Json<AuthDeviceStartResource>, ServerError> {
+    let start = state
+        .runtime()
+        .auth_manager()
+        .start_openai_headless_login()
+        .await
+        .map_err(ServerError::Core)?;
+    Ok(Json(AuthDeviceStartResource {
+        provider_id: "openai".to_string(),
+        enterprise_domain: None,
+        verification_url: start.verification_url,
+        user_code: start.user_code,
+        device_code: start.device_code,
+        interval_seconds: start.interval_seconds,
+    }))
+}
+
+pub async fn poll_openai_device_auth(
+    State(state): State<AppState>,
+    Json(request): Json<AuthOpenAiDevicePollRequest>,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    let auth = state
+        .runtime()
+        .auth_manager()
+        .poll_openai_headless_login(request.device_code, request.user_code)
+        .await
+        .map_err(ServerError::Core)?;
+    let configured = configured_provider_ids(&state);
+    let provider = if let Some(value) = auth.as_ref() {
+        Some(auth_provider_resource(
+            configured.contains("openai"),
+            "openai".to_string(),
+            Some(value),
+        )?)
+    } else {
+        None
+    };
+    Ok(Json(AuthLoginResultResource {
+        completed: auth.is_some(),
+        provider,
+    }))
+}
+
+pub async fn start_gitlab_browser_auth(
+    State(state): State<AppState>,
+    Json(request): Json<AuthGitLabBrowserStartRequest>,
+) -> Result<Json<AuthBrowserStartResource>, ServerError> {
+    let start = state
+        .runtime()
+        .auth_manager()
+        .start_gitlab_login(request.instance_url.clone(), request.redirect_uri)
+        .map_err(ServerError::Core)?;
+    Ok(Json(AuthBrowserStartResource {
+        provider_id: "gitlab".to_string(),
+        instance_url: Some(request.instance_url),
+        authorize_url: start.authorize_url,
+        state: start.state,
+        pkce_verifier: start.pkce_verifier,
+    }))
+}
+
+pub async fn finish_gitlab_browser_auth(
+    State(state): State<AppState>,
+    Json(request): Json<AuthGitLabBrowserFinishRequest>,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    let auth = state
+        .runtime()
+        .auth_manager()
+        .finish_gitlab_login(
+            request.instance_url,
+            request.code,
+            request.pkce_verifier,
+            request.redirect_uri,
+        )
+        .await
+        .map_err(ServerError::Core)?;
+    let configured = configured_provider_ids(&state);
+    Ok(Json(AuthLoginResultResource {
+        completed: true,
+        provider: Some(auth_provider_resource(
+            configured.contains("gitlab"),
+            "gitlab".to_string(),
+            Some(&auth),
+        )?),
+    }))
+}
+
+pub async fn start_copilot_device_auth(
+    State(state): State<AppState>,
+    Json(request): Json<AuthCopilotDeviceStartRequest>,
+) -> Result<Json<AuthDeviceStartResource>, ServerError> {
+    let deployment = if let Some(domain) = request.enterprise_domain.as_deref() {
+        agena::provider::auth::CopilotDeployment::Enterprise {
+            domain: domain.trim().to_string(),
+        }
+    } else {
+        agena::provider::auth::CopilotDeployment::GitHubCom
+    };
+    let start = state
+        .runtime()
+        .auth_manager()
+        .start_copilot_login(deployment)
+        .await
+        .map_err(ServerError::Core)?;
+    Ok(Json(AuthDeviceStartResource {
+        provider_id: "github-copilot".to_string(),
+        enterprise_domain: request.enterprise_domain,
+        verification_url: start.verification_url,
+        user_code: start.user_code,
+        device_code: start.device_code,
+        interval_seconds: start.interval_seconds,
+    }))
+}
+
+pub async fn poll_copilot_device_auth(
+    State(state): State<AppState>,
+    Json(request): Json<AuthCopilotDevicePollRequest>,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    let deployment = if let Some(domain) = request.enterprise_domain.as_deref() {
+        agena::provider::auth::CopilotDeployment::Enterprise {
+            domain: domain.trim().to_string(),
+        }
+    } else {
+        agena::provider::auth::CopilotDeployment::GitHubCom
+    };
+    let provider_id = if request.enterprise_domain.is_some() {
+        "github-copilot-enterprise"
+    } else {
+        "github-copilot"
+    };
+    let auth = state
+        .runtime()
+        .auth_manager()
+        .poll_copilot_login(request.device_code, deployment)
+        .await
+        .map_err(ServerError::Core)?;
+    let configured = configured_provider_ids(&state);
+    let provider = if let Some(value) = auth.as_ref() {
+        Some(auth_provider_resource(
+            configured.contains(provider_id),
+            provider_id.to_string(),
+            Some(value),
+        )?)
+    } else {
+        None
+    };
+    Ok(Json(AuthLoginResultResource {
+        completed: auth.is_some(),
+        provider,
+    }))
 }
 
 pub async fn delete_auth_provider(

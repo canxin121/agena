@@ -1,28 +1,40 @@
 import type { Ref } from 'vue'
 
 import {
+  cancelSessionTurn,
   cancelUserInput,
   continueSession,
   createSession,
+  deleteSession,
   createWorkspace,
   exportSessionJsonl,
   forkSession,
+  getMessage,
+  getMessagePart,
   importSessionJsonl,
+  listMessageParts,
   replyPermission,
   replyUserInput,
   resolveWorkspace,
   rewindSession,
   submitTurn,
+  updateSession,
+  unrewindSession,
+  type MessagePart,
   type MessageResource,
   type SessionExecutionResource,
 } from '../lib/agenaApi'
 
 export type ChatSessionActionsInput = {
+  confirm: (message: string) => boolean
   composer: Ref<string>
   continuing: Ref<boolean>
   errorMessage: Ref<string>
   loading: Ref<boolean>
   localCommandNotice: Ref<string>
+  inspectedMessage: Ref<MessageResource | null>
+  inspectedMessageParts: Ref<MessagePart[]>
+  inspectedPart: Ref<MessagePart | null>
   messages: Ref<MessageResource[]>
   newSessionTitle: Ref<string>
   refreshConversation: (foreground: boolean) => Promise<void>
@@ -38,6 +50,7 @@ export type ChatSessionActionsInput = {
   sessionImportJsonl: Ref<string>
   sessionState: Ref<SessionExecutionResource | null>
   syncEventStream: () => void
+  prompt: (message: string, defaultValue?: string) => string | null
   userInputDrafts: Record<string, Record<string, string>>
   workspacePath: Ref<string>
   loadSidebar: () => Promise<void>
@@ -47,36 +60,70 @@ export type ChatSessionActionsInput = {
 }
 
 export type ChatSessionActionsDeps = {
+  cancelSessionTurn: typeof cancelSessionTurn
   cancelUserInput: typeof cancelUserInput
   continueSession: typeof continueSession
   createSession: typeof createSession
   createWorkspace: typeof createWorkspace
+  deleteSession: typeof deleteSession
   exportSessionJsonl: typeof exportSessionJsonl
   forkSession: typeof forkSession
+  getMessage: typeof getMessage
+  getMessagePart: typeof getMessagePart
   importSessionJsonl: typeof importSessionJsonl
+  listMessageParts: typeof listMessageParts
   replyPermission: typeof replyPermission
   replyUserInput: typeof replyUserInput
   resolveWorkspace: typeof resolveWorkspace
   rewindSession: typeof rewindSession
   submitTurn: typeof submitTurn
+  unrewindSession: typeof unrewindSession
+  updateSession: typeof updateSession
 }
 
 const defaultDeps: ChatSessionActionsDeps = {
+  cancelSessionTurn,
   cancelUserInput,
   continueSession,
   createSession,
   createWorkspace,
+  deleteSession,
   exportSessionJsonl,
   forkSession,
+  getMessage,
+  getMessagePart,
   importSessionJsonl,
+  listMessageParts,
   replyPermission,
   replyUserInput,
   resolveWorkspace,
   rewindSession,
   submitTurn,
+  unrewindSession,
+  updateSession,
 }
 
 export function useChatSessionActions(input: ChatSessionActionsInput, deps: ChatSessionActionsDeps = defaultDeps) {
+  async function inspectMessage(messageId: number, partId?: number) {
+    input.loading.value = true
+    input.errorMessage.value = ''
+    try {
+      const [message, parts] = await Promise.all([
+        deps.getMessage(messageId),
+        deps.listMessageParts(messageId),
+      ])
+      input.inspectedMessage.value = message
+      input.inspectedMessageParts.value = parts
+      input.inspectedPart.value =
+        partId != null ? await deps.getMessagePart(partId) : parts.find((part) => part.id === message.parts?.[0]?.id) || parts[0] || null
+      input.localCommandNotice.value = `Loaded message #${messageId} inspector.`
+    } catch (err) {
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      input.loading.value = false
+    }
+  }
+
   async function resolveWorkspaceAction(createIfMissing: boolean) {
     const path = input.workspacePath.value.trim()
     if (!path) return
@@ -119,6 +166,41 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
   }
 
+  async function renameCurrentSession() {
+    const session = input.sessionState.value?.session
+    if (!session) return
+
+    const nextTitle = input.prompt('Rename session', session.title)?.trim() ?? ''
+    if (!nextTitle || nextTitle === session.title) return
+
+    input.loading.value = true
+    input.errorMessage.value = ''
+    try {
+      const updated = await deps.updateSession({
+        sessionId: session.id,
+        title: nextTitle,
+        parentId: session.parent_id ?? null,
+        version: session.version,
+      })
+      if (input.sessionState.value) {
+        input.sessionState.value = {
+          ...input.sessionState.value,
+          session: {
+            ...input.sessionState.value.session,
+            ...updated,
+          },
+        }
+      }
+      await input.loadSessionsForWorkspace(updated.workspace_id, false)
+      await input.selectSession(updated.id)
+      input.localCommandNotice.value = `Renamed session #${updated.id}.`
+    } catch (err) {
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      input.loading.value = false
+    }
+  }
+
   async function forkCurrentSession() {
     const sessionId = input.selectedSessionId.value
     const workspaceId = input.selectedWorkspaceId.value
@@ -137,6 +219,30 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.newSessionTitle.value = ''
       await input.loadSessionsForWorkspace(workspaceId, false)
       await input.selectSession(execution.session.id)
+    } catch (err) {
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      input.loading.value = false
+    }
+  }
+
+  async function deleteCurrentSession() {
+    const session = input.sessionState.value?.session
+    const workspaceId = input.selectedWorkspaceId.value
+    if (!session || !workspaceId) return
+    if (!input.confirm(`Delete session #${session.id} (${session.title})?`)) {
+      return
+    }
+
+    input.loading.value = true
+    input.errorMessage.value = ''
+    try {
+      await deps.deleteSession({
+        sessionId: session.id,
+        version: session.version,
+      })
+      input.localCommandNotice.value = `Deleted session #${session.id}.`
+      await input.loadSessionsForWorkspace(workspaceId, false)
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)
     } finally {
@@ -195,6 +301,23 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         modelId: input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
       })
       input.syncEventStream()
+      await input.refreshConversation(false)
+    } catch (err) {
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      input.continuing.value = false
+    }
+  }
+
+  async function cancelCurrentSessionTurn() {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return
+
+    input.continuing.value = true
+    input.errorMessage.value = ''
+    try {
+      await deps.cancelSessionTurn(sessionId)
+      input.localCommandNotice.value = `Cancellation requested for session #${sessionId}.`
       await input.refreshConversation(false)
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)
@@ -278,7 +401,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   async function rewindToMessage(messageId: number) {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
-    if (typeof window !== 'undefined' && !window.confirm(`Rewind session #${sessionId} to message #${messageId}?`)) {
+    if (!input.confirm(`Rewind session #${sessionId} to message #${messageId}?`)) {
       return
     }
 
@@ -286,6 +409,28 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     input.errorMessage.value = ''
     try {
       input.sessionState.value = await deps.rewindSession({
+        sessionId,
+        messageId,
+      })
+      await input.refreshConversation(true)
+    } catch (err) {
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      input.loading.value = false
+    }
+  }
+
+  async function unrewindToMessage(messageId: number) {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return
+    if (!input.confirm(`Undo rewind for session #${sessionId} at message #${messageId}?`)) {
+      return
+    }
+
+    input.loading.value = true
+    input.errorMessage.value = ''
+    try {
+      input.sessionState.value = await deps.unrewindSession({
         sessionId,
         messageId,
       })
@@ -332,16 +477,21 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   }
 
   return {
+    cancelCurrentSessionTurn,
     approvePermission,
     cancelUserAnswers,
     continueCurrentSession,
     createSessionAction,
+    deleteCurrentSession,
     exportCurrentSession,
     forkCurrentSession,
     importSessionFromJsonl: importSessionFromJsonlAction,
+    inspectMessage,
+    renameCurrentSession,
     resolveWorkspaceAction,
     rewindToMessage,
     sendPrompt,
     submitUserAnswers,
+    unrewindToMessage,
   }
 }

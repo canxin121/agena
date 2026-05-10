@@ -3,10 +3,12 @@ import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
 import {
   createWorkspace,
+  deleteWorkspace,
   getGitStatus,
   listWorkspaceFileTree,
   listWorkspaces,
   resolveWorkspace,
+  updateWorkspace,
   type GitStatusResource,
   type WorkspaceFileNode,
   type WorkspaceFileTreeResource,
@@ -31,18 +33,22 @@ export type WorkspaceConfigCard = {
 
 export type WorkspacePageStateDeps = {
   createWorkspace: typeof createWorkspace
+  deleteWorkspace: typeof deleteWorkspace
   getGitStatus: typeof getGitStatus
   listWorkspaceFileTree: typeof listWorkspaceFileTree
   listWorkspaces: typeof listWorkspaces
   resolveWorkspace: typeof resolveWorkspace
+  updateWorkspace: typeof updateWorkspace
 }
 
 const defaultDeps: WorkspacePageStateDeps = {
   createWorkspace,
+  deleteWorkspace,
   getGitStatus,
   listWorkspaceFileTree,
   listWorkspaces,
   resolveWorkspace,
+  updateWorkspace,
 }
 
 function flattenTree(nodes: WorkspaceFileNode[], depth = 0): WorkspaceTreeRow[] {
@@ -255,6 +261,52 @@ export function useWorkspacePageState(
     }
   }
 
+  async function renameSelectedWorkspace() {
+    const workspace = selectedWorkspace.value
+    if (!workspace) return
+
+    const nextPath = typeof window !== 'undefined' ? window.prompt('Rename workspace path', workspace.path)?.trim() ?? '' : ''
+    if (!nextPath || nextPath === workspace.path) return
+
+    loading.value = true
+    actionError.value = ''
+    actionMessage.value = ''
+    try {
+      const updated = await deps.updateWorkspace({
+        workspaceId: workspace.id,
+        path: nextPath,
+      })
+      await load()
+      selectedWorkspaceId.value = updated.id
+      actionMessage.value = `Renamed workspace to ${updated.path}.`
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function deleteSelectedWorkspace() {
+    const workspace = selectedWorkspace.value
+    if (!workspace) return
+    if (typeof window !== 'undefined' && !window.confirm(`Delete workspace #${workspace.id} (${workspace.path})?`)) {
+      return
+    }
+
+    loading.value = true
+    actionError.value = ''
+    actionMessage.value = ''
+    try {
+      const removed = await deps.deleteWorkspace(workspace.id)
+      await load()
+      actionMessage.value = `Deleted workspace ${removed.path}.`
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      loading.value = false
+    }
+  }
+
   watch(
     () => [input.route.query.workspace, input.route.query.path],
     () => {
@@ -286,11 +338,13 @@ export function useWorkspacePageState(
     pageDescription,
     pageTitle,
     pathInput,
+    renameSelectedWorkspace,
     resolveWorkspaceAction,
     rows,
     selectedShortcutId,
     selectedWorkspace,
     selectedWorkspaceId,
+    deleteSelectedWorkspace,
     tree,
     workspaceConfigCards,
     workspacePath,

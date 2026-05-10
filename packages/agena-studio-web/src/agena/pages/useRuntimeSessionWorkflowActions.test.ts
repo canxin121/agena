@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { ref } from 'vue'
 
-import type { SessionExecutionResource, SessionResource, TimelineEventRecord } from '../lib/agenaApi'
+import type { GlobalEventRecord, SessionExecutionResource, SessionResource, TimelineEventRecord } from '../lib/agenaApi'
 import { useRuntimeSessionWorkflowActions } from './useRuntimeSessionWorkflowActions'
 
 function createExecution(sessionId: number): SessionExecutionResource {
@@ -36,6 +36,18 @@ function createTimeline(sessionId: number): TimelineEventRecord[] {
   }]
 }
 
+function createGlobalEvents(): GlobalEventRecord[] {
+  return [{
+    id: 'event-1',
+    seq_global: 100,
+    session_id: 10,
+    workspace_id: 1,
+    created_at: '2026-05-10T00:00:00Z',
+    kind: 'turn_started',
+    payload: {},
+  }]
+}
+
 function createState() {
   const calls: string[] = []
   const state = {
@@ -47,6 +59,7 @@ function createState() {
     selectedSessionId: ref<number | null>(10),
     selectedWorkspaceId: ref<number | null>(1),
     sessionExecution: ref<SessionExecutionResource | null>(null),
+    globalEvents: ref<GlobalEventRecord[]>([]),
     sessionTimeline: ref<TimelineEventRecord[]>([]),
     sessions: ref<SessionResource[]>([]),
     workflowLoading: ref(false),
@@ -62,6 +75,10 @@ describe('useRuntimeSessionWorkflowActions', () => {
       getSessionState: async (sessionId) => {
         calls.push(`getSessionState:${sessionId}`)
         return createExecution(sessionId)
+      },
+      listGlobalEvents: async () => {
+        calls.push('listGlobalEvents')
+        return createGlobalEvents()
       },
       listSessions: async () => [],
       listSessionTimeline: async (sessionId) => {
@@ -82,9 +99,11 @@ describe('useRuntimeSessionWorkflowActions', () => {
     expect(calls).toEqual([
       'getSessionState:10',
       'listSessionTimeline:10',
+      'listGlobalEvents',
     ])
     expect(state.sessionExecution.value?.session.id).toBe(10)
     expect(state.sessionTimeline.value.map((entry) => entry.kind)).toEqual(['run.started'])
+    expect(state.globalEvents.value.map((entry) => entry.kind)).toEqual(['turn_started'])
     expect(state.workflowLoading.value).toBe(false)
   })
 
@@ -104,6 +123,10 @@ describe('useRuntimeSessionWorkflowActions', () => {
       getSessionState: async (sessionId) => {
         calls.push(`getSessionState:${sessionId}`)
         return createExecution(sessionId)
+      },
+      listGlobalEvents: async () => {
+        calls.push('listGlobalEvents')
+        return createGlobalEvents()
       },
       listSessions: async (workspaceId) => {
         calls.push(`listSessions:${workspaceId}`)
@@ -132,6 +155,7 @@ describe('useRuntimeSessionWorkflowActions', () => {
       'pickSessionId:10:1',
       'getSessionState:22',
       'listSessionTimeline:22',
+      'listGlobalEvents',
     ])
     expect(state.selectedWorkspaceId.value).toBe(7)
     expect(state.selectedSessionId.value).toBe(22)
@@ -145,6 +169,7 @@ describe('useRuntimeSessionWorkflowActions', () => {
     state.sessionTimeline.value = createTimeline(10)
     const actions = useRuntimeSessionWorkflowActions(state, {
       getSessionState: async () => createExecution(0),
+      listGlobalEvents: async () => createGlobalEvents(),
       listSessions: async (workspaceId) => {
         calls.push(`listSessions:${workspaceId}`)
         return []
@@ -164,6 +189,7 @@ describe('useRuntimeSessionWorkflowActions', () => {
     expect(calls).toEqual(['listSessions:8'])
     expect(state.selectedSessionId.value).toBe(null)
     expect(state.sessionExecution.value === null).toBe(true)
+    expect(state.globalEvents.value).toEqual([])
     expect(state.sessionTimeline.value).toEqual([])
   })
 
@@ -173,6 +199,10 @@ describe('useRuntimeSessionWorkflowActions', () => {
       getSessionState: async (sessionId) => {
         calls.push(`getSessionState:${sessionId}`)
         return createExecution(sessionId)
+      },
+      listGlobalEvents: async () => {
+        calls.push('listGlobalEvents')
+        return createGlobalEvents()
       },
       listSessions: async () => [],
       listSessionTimeline: async (sessionId) => {
@@ -197,6 +227,7 @@ describe('useRuntimeSessionWorkflowActions', () => {
     expect(calls).toEqual([
       'getSessionState:33',
       'listSessionTimeline:33',
+      'listGlobalEvents',
       'reloadRuntime',
       'load',
     ])

@@ -17,6 +17,7 @@ export type RuntimeWorkflowStateInput = {
   selectedWorkspaceId: Ref<number | null>
   sessionExecution: Ref<SessionExecutionResource | null>
   sessions: Ref<SessionResource[]>
+  globalEventSummaries: ComputedRef<TimelineSummaryItem[]>
   timelineSummaries: ComputedRef<TimelineSummaryItem[]>
   workflowLoading: Ref<boolean>
   workspaces: Ref<WorkspaceResource[]>
@@ -34,6 +35,7 @@ export function useRuntimeWorkflowState(input: RuntimeWorkflowStateInput) {
     selectedWorkspaceId: input.selectedWorkspaceId,
     sessionExecution: input.sessionExecution,
     sessions: input.sessions,
+    globalEventSummaries: input.globalEventSummaries,
     timelineSummaries: input.timelineSummaries,
     workflowLoading: input.workflowLoading,
     workspaces: input.workspaces,

@@ -2,9 +2,11 @@ import type { Ref } from 'vue'
 
 import {
   getSessionState,
+  listGlobalEvents,
   listSessions,
   listSessionTimeline,
   reloadRuntime,
+  type GlobalEventRecord,
   type SessionExecutionResource,
   type SessionResource,
   type TimelineEventRecord,
@@ -18,6 +20,7 @@ export type RuntimeSessionWorkflowActionsInput = {
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sessionExecution: Ref<SessionExecutionResource | null>
+  globalEvents: Ref<GlobalEventRecord[]>
   sessionTimeline: Ref<TimelineEventRecord[]>
   sessions: Ref<SessionResource[]>
   workflowLoading: Ref<boolean>
@@ -25,6 +28,7 @@ export type RuntimeSessionWorkflowActionsInput = {
 
 export type RuntimeSessionWorkflowActionsDeps = {
   getSessionState: typeof getSessionState
+  listGlobalEvents: typeof listGlobalEvents
   listSessions: typeof listSessions
   listSessionTimeline: typeof listSessionTimeline
   pickSessionId: typeof pickSessionId
@@ -33,6 +37,7 @@ export type RuntimeSessionWorkflowActionsDeps = {
 
 const defaultDeps: RuntimeSessionWorkflowActionsDeps = {
   getSessionState,
+  listGlobalEvents,
   listSessions,
   listSessionTimeline,
   pickSessionId,
@@ -54,6 +59,7 @@ export function useRuntimeSessionWorkflowActions(
       if (input.selectedSessionId.value !== sessionId) return
       input.sessionExecution.value = execution
       input.sessionTimeline.value = timeline
+      input.globalEvents.value = await deps.listGlobalEvents({ limit: 25 })
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
     } finally {
@@ -84,6 +90,7 @@ export function useRuntimeSessionWorkflowActions(
     }
     input.sessionExecution.value = null
     input.sessionTimeline.value = []
+    input.globalEvents.value = []
   }
 
   async function selectSession(sessionId: number) {

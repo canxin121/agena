@@ -2,6 +2,9 @@ import { reactive, ref } from 'vue'
 
 import type {
   AuthProvider,
+  AuthBrowserStartResponse,
+  AuthDeviceStartResponse,
+  GlobalEventRecord,
   MarketplaceInstalledPluginResource,
   MarketplaceOutdatedPluginResource,
   MarketplacePluginResource,
@@ -42,6 +45,7 @@ export function useRuntimePageStore() {
   const selectedSessionId = ref<number | null>(null)
   const sessionExecution = ref<SessionExecutionResource | null>(null)
   const sessionTimeline = ref<TimelineEventRecord[]>([])
+  const globalEvents = ref<GlobalEventRecord[]>([])
   const selectedPluginId = ref('')
   const selectedPlugin = ref<PluginInspect | null>(null)
   const pluginLogs = ref<PluginLogEntry[]>([])
@@ -54,6 +58,11 @@ export function useRuntimePageStore() {
   const actionMessage = ref('')
   const desktopNotice = ref('')
   const drafts = reactive<Record<string, string>>({})
+  const browserAuthCodeDrafts = reactive<Record<string, string>>({})
+  const browserAuthInstanceDrafts = reactive<Record<string, string>>({})
+  const browserAuthStartState = reactive<Record<string, AuthBrowserStartResponse | null>>({})
+  const deviceAuthEnterpriseDrafts = reactive<Record<string, string>>({})
+  const deviceAuthStartState = reactive<Record<string, AuthDeviceStartResponse | null>>({})
   const permissionSearch = ref('')
   const permissionModeFilter = ref<'all' | PermissionMode>('all')
   const permissionScopeFilter = ref<'all' | 'session' | 'workspace' | 'global'>('all')
@@ -124,6 +133,9 @@ export function useRuntimePageStore() {
     actionError,
     actionMessage,
     authProviders,
+    browserAuthCodeDrafts,
+    browserAuthInstanceDrafts,
+    browserAuthStartState,
     desktopConfig,
     desktopForm,
     desktopInstallerAssetName,
@@ -135,8 +147,11 @@ export function useRuntimePageStore() {
     desktopStatus,
     desktopUpdate,
     desktopUpdateRunning,
+    deviceAuthEnterpriseDrafts,
+    deviceAuthStartState,
     drafts,
     editingPermissionRuleId,
+    globalEvents,
     loading,
     lspQuery,
     marketplaceAllowUnverified,

@@ -15,10 +15,19 @@ export function useSettingsPageState(input: {
 
   const providers = createSettingsProvidersPanelState({
     authProviders: state.authProviders,
+    browserAuthCodeDrafts: state.browserAuthCodeDrafts,
+    browserAuthInstanceDrafts: state.browserAuthInstanceDrafts,
+    browserAuthStartState: state.browserAuthStartState,
+    deviceAuthEnterpriseDrafts: state.deviceAuthEnterpriseDrafts,
+    deviceAuthStartState: state.deviceAuthStartState,
     drafts: state.drafts,
+    finishBrowserAuth: state.finishBrowserAuth,
+    pollDeviceAuth: state.pollDeviceAuth,
     saveApiKey: state.saveApiKey,
     refreshCredential: state.refreshCredential,
     clearCredential: state.clearCredential,
+    startBrowserAuth: state.startBrowserAuth,
+    startDeviceAuth: state.startDeviceAuth,
   })
 
   const permissions = createSettingsPermissionsPanelState({
@@ -37,6 +46,7 @@ export function useSettingsPageState(input: {
     savePermissionRule: state.savePermissionRule,
     resetPermissionDraft: state.resetPermissionDraft,
     revokePermissionRuleAction: state.revokePermissionRuleAction,
+    deletePermissionRuleAction: state.deletePermissionRuleAction,
   })
 
   const desktop = createSettingsDesktopPanelState({

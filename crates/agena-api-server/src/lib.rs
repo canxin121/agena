@@ -115,6 +115,38 @@ pub fn router(state: AppState) -> Router {
             )
             .route("/api/v1/auth/providers", get(rest::list_auth_providers))
             .route(
+                "/api/v1/auth/providers/openai/browser/start",
+                post(rest::start_openai_browser_auth),
+            )
+            .route(
+                "/api/v1/auth/providers/openai/browser/finish",
+                post(rest::finish_openai_browser_auth),
+            )
+            .route(
+                "/api/v1/auth/providers/openai/device/start",
+                post(rest::start_openai_device_auth),
+            )
+            .route(
+                "/api/v1/auth/providers/openai/device/poll",
+                post(rest::poll_openai_device_auth),
+            )
+            .route(
+                "/api/v1/auth/providers/gitlab/browser/start",
+                post(rest::start_gitlab_browser_auth),
+            )
+            .route(
+                "/api/v1/auth/providers/gitlab/browser/finish",
+                post(rest::finish_gitlab_browser_auth),
+            )
+            .route(
+                "/api/v1/auth/providers/github-copilot/device/start",
+                post(rest::start_copilot_device_auth),
+            )
+            .route(
+                "/api/v1/auth/providers/github-copilot/device/poll",
+                post(rest::poll_copilot_device_auth),
+            )
+            .route(
                 "/api/v1/auth/providers/{provider_id}",
                 get(rest::get_auth_provider).delete(rest::delete_auth_provider),
             )

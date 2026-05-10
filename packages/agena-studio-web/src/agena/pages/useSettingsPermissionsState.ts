@@ -28,10 +28,12 @@ export type SettingsPermissionsStateInput = {
   savePermissionRule: () => void | Promise<void>
   resetPermissionDraft: () => void
   revokePermissionRuleAction: (rule: PermissionRuleResource) => void | Promise<void>
+  deletePermissionRuleAction: (rule: PermissionRuleResource) => void | Promise<void>
 }
 
 export function useSettingsPermissionsState(input: SettingsPermissionsStateInput) {
   return {
+    deleteRuleAction: input.deletePermissionRuleAction,
     draft: input.permissionDraft,
     editRule: input.editPermissionRule,
     editingRuleId: input.editingPermissionRuleId,

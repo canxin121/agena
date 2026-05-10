@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 
 import {
   createPermissionRule,
+  deletePermissionRule,
   replyPermission,
   revokePermissionRule,
   updatePermissionRule,
@@ -36,6 +37,7 @@ export type RuntimePermissionActionsInput = {
 
 export type RuntimePermissionActionsDeps = {
   createPermissionRule: typeof createPermissionRule
+  deletePermissionRule: typeof deletePermissionRule
   replyPermission: typeof replyPermission
   revokePermissionRule: typeof revokePermissionRule
   updatePermissionRule: typeof updatePermissionRule
@@ -43,6 +45,7 @@ export type RuntimePermissionActionsDeps = {
 
 const defaultDeps: RuntimePermissionActionsDeps = {
   createPermissionRule,
+  deletePermissionRule,
   replyPermission,
   revokePermissionRule,
   updatePermissionRule,
@@ -209,6 +212,19 @@ export function useRuntimePermissionActions(
     }
   }
 
+  async function deletePermissionRuleAction(rule: PermissionRuleResource) {
+    input.actionMessage.value = ''
+    input.actionError.value = ''
+    try {
+      await deps.deletePermissionRule(rule.id)
+      input.actionMessage.value = `Deleted permission rule for ${permissionRuleLabel(rule)}.`
+      if (input.editingPermissionRuleId.value === rule.id) resetPermissionDraft()
+      await input.load()
+    } catch (err) {
+      input.actionError.value = err instanceof Error ? err.message : String(err)
+    }
+  }
+
   async function approvePermission(
     requestId: string,
     kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always',
@@ -235,6 +251,7 @@ export function useRuntimePermissionActions(
   return {
     approvePermission,
     editPermissionRule,
+    deletePermissionRuleAction,
     permissionRuleFacts,
     permissionRuleLabel,
     permissionRulePreview,

@@ -7,10 +7,19 @@ describe('useSettingsProvidersPageState', () => {
   test('assembles providers panel state from provided settings source', () => {
     const providers = createSettingsProvidersPanelState({
       authProviders: ref([]),
+      browserAuthCodeDrafts: {},
+      browserAuthInstanceDrafts: {},
+      browserAuthStartState: {},
+      deviceAuthEnterpriseDrafts: {},
+      deviceAuthStartState: {},
       drafts: { anthropic: 'sk-test' },
+      finishBrowserAuth: async () => {},
+      pollDeviceAuth: async () => {},
       saveApiKey: async () => {},
       refreshCredential: async () => {},
       clearCredential: async () => {},
+      startBrowserAuth: async () => {},
+      startDeviceAuth: async () => {},
     })
 
     expect(providers.authProviders.value).toEqual([])
@@ -38,10 +47,19 @@ describe('useSettingsProvidersPageState', () => {
             shared,
             state: {
               authProviders: ref([]),
+              browserAuthCodeDrafts: {},
+              browserAuthInstanceDrafts: {},
+              browserAuthStartState: {},
+              deviceAuthEnterpriseDrafts: {},
+              deviceAuthStartState: {},
               drafts: {},
+              finishBrowserAuth: async () => {},
+              pollDeviceAuth: async () => {},
               saveApiKey: async () => {},
               refreshCredential: async () => {},
               clearCredential: async () => {},
+              startBrowserAuth: async () => {},
+              startDeviceAuth: async () => {},
             },
           }
         },

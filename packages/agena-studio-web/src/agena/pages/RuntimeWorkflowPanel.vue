@@ -16,6 +16,7 @@ const props = defineProps<{
   workflowLoading: boolean
   sessionExecution: SessionExecutionResource | null
   timelineSummaries: Array<{ key: string; kind: string; summary: string; sessionId: string; timestamp: string }>
+  globalEventSummaries: Array<{ key: string; kind: string; summary: string; sessionId: string; timestamp: string }>
   openSelectedSessionInChat: () => void
   selectWorkspace: (workspaceId: number) => void | Promise<void>
   selectSession: (sessionId: number) => void | Promise<void>
@@ -138,6 +139,24 @@ const props = defineProps<{
       </div>
       <p v-else-if="props.workflowLoading" class="muted">Loading session timeline…</p>
       <p v-else class="muted">No timeline events loaded yet.</p>
+    </section>
+
+    <section class="card">
+      <h3>Global Event History</h3>
+      <div v-if="props.globalEventSummaries.length" class="list">
+        <div v-for="event in props.globalEventSummaries" :key="`global-${event.key}`" class="list-item">
+          <div class="page-header" style="align-items: flex-start">
+            <div>
+              <div><strong>{{ event.kind }}</strong></div>
+              <div class="muted">{{ event.summary }}</div>
+              <div class="muted">{{ event.sessionId }}</div>
+            </div>
+            <span class="badge">{{ event.timestamp }}</span>
+          </div>
+        </div>
+      </div>
+      <p v-else-if="props.workflowLoading" class="muted">Loading global events…</p>
+      <p v-else class="muted">No global events loaded yet.</p>
     </section>
   </div>
 </template>

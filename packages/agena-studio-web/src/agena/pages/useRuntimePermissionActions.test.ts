@@ -82,6 +82,7 @@ describe('useRuntimePermissionActions', () => {
     const { state } = createState()
     const actions = useRuntimePermissionActions(state, {
       createPermissionRule: async () => createRule(),
+      deletePermissionRule: async () => createRule(),
       replyPermission: async () => createExecution(),
       revokePermissionRule: async () => createRule(),
       updatePermissionRule: async () => createRule(),
@@ -136,6 +137,7 @@ describe('useRuntimePermissionActions', () => {
         apiCalls.push(`create:${input.subjectKind}:${input.toolName}:${input.mode}`)
         return createRule()
       },
+      deletePermissionRule: async () => createRule(),
       replyPermission: async () => createExecution(),
       revokePermissionRule: async () => createRule(),
       updatePermissionRule: async (input) => {
@@ -177,6 +179,10 @@ describe('useRuntimePermissionActions', () => {
     const { calls, state } = createState()
     const actions = useRuntimePermissionActions(state, {
       createPermissionRule: async () => createRule(),
+      deletePermissionRule: async (id) => {
+        calls.push(`deletePermissionRule:${id}`)
+        return createRule({ id })
+      },
       replyPermission: async ({ kind }) => {
         calls.push(`replyPermission:${kind}`)
         return createExecution()
@@ -194,6 +200,14 @@ describe('useRuntimePermissionActions', () => {
 
     expect(calls).toEqual(['revokePermissionRule:7', 'load'])
     expect(state.actionMessage.value).toBe('Revoked permission rule for bash · ls *.')
+    expect(state.editingPermissionRuleId.value === null).toBe(true)
+
+    calls.length = 0
+    state.editingPermissionRuleId.value = 7
+    await actions.deletePermissionRuleAction(rule)
+
+    expect(calls).toEqual(['deletePermissionRule:7', 'load'])
+    expect(state.actionMessage.value).toBe('Deleted permission rule for bash · ls *.')
     expect(state.editingPermissionRuleId.value === null).toBe(true)
 
     calls.length = 0

@@ -1,6 +1,7 @@
 import { reactive, ref } from 'vue'
 
 import type {
+  MessagePart,
   MessageResource,
   ProviderModel,
   ProviderSummary,
@@ -21,6 +22,9 @@ export function useChatPageState() {
   const sessions = ref<SessionResource[]>([])
   const messages = ref<MessageResource[]>([])
   const timelineEvents = ref<TimelineEventRecord[]>([])
+  const inspectedMessage = ref<MessageResource | null>(null)
+  const inspectedMessageParts = ref<MessagePart[]>([])
+  const inspectedPart = ref<MessagePart | null>(null)
   const sessionState = ref<SessionExecutionResource | null>(null)
   const sessionTree = ref<SessionTreeResource[]>([])
   const rewindCheckpoints = ref<RewindCheckpointResource[]>([])
@@ -50,6 +54,9 @@ export function useChatPageState() {
     localCommandNotice,
     messages,
     newSessionTitle,
+    inspectedMessage,
+    inspectedMessageParts,
+    inspectedPart,
     providerModels,
     providers,
     rewindCheckpoints,

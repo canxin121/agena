@@ -19,6 +19,7 @@ export type SettingsPermissionsPageStateSource = {
   savePermissionRule: Parameters<typeof useSettingsPermissionsState>[0]['savePermissionRule']
   resetPermissionDraft: Parameters<typeof useSettingsPermissionsState>[0]['resetPermissionDraft']
   revokePermissionRuleAction: Parameters<typeof useSettingsPermissionsState>[0]['revokePermissionRuleAction']
+  deletePermissionRuleAction: Parameters<typeof useSettingsPermissionsState>[0]['deletePermissionRuleAction']
 }
 
 export type SettingsPermissionsPageStateDeps = {
@@ -57,6 +58,7 @@ export function createSettingsPermissionsPanelState(state: SettingsPermissionsPa
     savePermissionRule: state.savePermissionRule,
     resetPermissionDraft: state.resetPermissionDraft,
     revokePermissionRuleAction: state.revokePermissionRuleAction,
+    deletePermissionRuleAction: state.deletePermissionRuleAction,
   })
 }
 

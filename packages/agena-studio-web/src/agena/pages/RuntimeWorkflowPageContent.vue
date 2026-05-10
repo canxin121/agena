@@ -18,6 +18,7 @@ const props = defineProps<{
     :workflow-loading="props.workflow.workflowLoading"
     :session-execution="props.workflow.sessionExecution"
     :timeline-summaries="props.workflow.timelineSummaries"
+    :global-event-summaries="props.workflow.globalEventSummaries"
     :open-selected-session-in-chat="props.workflow.openSelectedSessionInChat"
     :select-workspace="props.workflow.selectWorkspace"
     :select-session="props.workflow.selectSession"

@@ -26,6 +26,7 @@ const props = defineProps<{
   resetPermissionDraft: () => void
   editPermissionRule: (rule: PermissionRuleResource) => void
   revokePermissionRuleAction: (rule: PermissionRuleResource) => void | Promise<void>
+  deletePermissionRuleAction: (rule: PermissionRuleResource) => void | Promise<void>
   permissionRuleLabel: (rule: PermissionRuleResource) => string
   permissionRulePreview: (rule: PermissionRuleResource) => string
   permissionRuleFacts: (rule: PermissionRuleResource) => string[]
@@ -234,6 +235,7 @@ const emit = defineEmits<{
           <button class="button danger" :disabled="Boolean(rule.revoked_at)" @click="props.revokePermissionRuleAction(rule)">
             Revoke
           </button>
+          <button class="button danger" @click="props.deletePermissionRuleAction(rule)">Delete</button>
         </div>
       </div>
     </div>

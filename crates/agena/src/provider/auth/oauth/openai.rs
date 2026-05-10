@@ -200,16 +200,18 @@ pub async fn poll_openai_headless_device_code(
 
     let poll_data: DevicePollResponse = poll_response.json().await?;
 
-    let mut form = url::form_urlencoded::Serializer::new(String::new());
-    form.append_pair("grant_type", "authorization_code");
-    form.append_pair("code", poll_data.authorization_code.as_str());
-    form.append_pair(
-        "redirect_uri",
-        "https://auth.openai.com/deviceauth/callback",
-    );
-    form.append_pair("client_id", OPENAI_CLIENT_ID);
-    form.append_pair("code_verifier", poll_data.code_verifier.as_str());
-    let encoded_form = form.finish();
+    let encoded_form = {
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.append_pair("grant_type", "authorization_code");
+        form.append_pair("code", poll_data.authorization_code.as_str());
+        form.append_pair(
+            "redirect_uri",
+            "https://auth.openai.com/deviceauth/callback",
+        );
+        form.append_pair("client_id", OPENAI_CLIENT_ID);
+        form.append_pair("code_verifier", poll_data.code_verifier.as_str());
+        form.finish()
+    };
 
     let token_response = reqwest::Client::new()
         .post(format!("{OPENAI_ISSUER}/oauth/token"))

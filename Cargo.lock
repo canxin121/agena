@@ -198,6 +198,7 @@ version = "0.1.0"
 dependencies = [
  "agena",
  "agena-api",
+ "agena-plugin-marketplace",
  "agena-scheduler",
  "async-stream",
  "async-trait",
@@ -209,6 +210,7 @@ dependencies = [
  "hyper",
  "path-clean",
  "sea-orm",
+ "semver",
  "serde",
  "serde_json",
  "smol_str",

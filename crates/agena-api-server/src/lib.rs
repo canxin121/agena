@@ -78,11 +78,40 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/health", get(rest::health))
             .route("/api/v1/runtime", get(rest::get_runtime_status))
             .route("/api/v1/runtime/reload", post(rest::reload_runtime))
+            .route("/api/v1/git/status", get(rest::get_git_status))
             .route("/api/v1/plugins", get(rest::list_plugins))
             .route("/api/v1/plugins/{plugin_id}", get(rest::get_plugin))
             .route(
                 "/api/v1/plugins/{plugin_id}/logs",
                 get(rest::list_plugin_logs),
+            )
+            .route(
+                "/api/v1/plugins/marketplace/search",
+                post(rest::search_marketplace_plugins),
+            )
+            .route(
+                "/api/v1/plugins/marketplace/sync",
+                post(rest::sync_marketplace_registry),
+            )
+            .route(
+                "/api/v1/plugins/marketplace/installed",
+                get(rest::list_marketplace_installed_plugins),
+            )
+            .route(
+                "/api/v1/plugins/marketplace/outdated",
+                get(rest::list_marketplace_outdated_plugins),
+            )
+            .route(
+                "/api/v1/plugins/marketplace/install",
+                post(rest::install_marketplace_plugin),
+            )
+            .route(
+                "/api/v1/plugins/marketplace/uninstall",
+                post(rest::uninstall_marketplace_plugin),
+            )
+            .route(
+                "/api/v1/plugins/marketplace/upgrade",
+                post(rest::upgrade_marketplace_plugins),
             )
             .route("/api/v1/auth/providers", get(rest::list_auth_providers))
             .route(

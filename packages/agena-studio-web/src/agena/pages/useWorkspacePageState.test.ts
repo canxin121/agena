@@ -33,6 +33,7 @@ describe('useWorkspacePageState', () => {
       },
       {
         createWorkspace: async (path) => ({ id: 3, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+        deleteWorkspace: async (workspaceId) => ({ id: workspaceId, path: '/repo-b', created_at: 'x', updated_at: 'x', session_count: 4 }),
         getGitStatus: async () => null as never,
         listWorkspaceFileTree: async ({ workspaceId, path }): Promise<WorkspaceFileTreeResource> => ({
           workspace_id: workspaceId,
@@ -47,6 +48,7 @@ describe('useWorkspacePageState', () => {
           { id: 2, path: '/repo-b', created_at: 'x', updated_at: 'x', session_count: 4 },
         ],
         resolveWorkspace: async (path) => ({ id: 4, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+        updateWorkspace: async ({ workspaceId, path }) => ({ id: workspaceId, path, created_at: 'x', updated_at: 'x', session_count: 4 }),
       },
     )
 
@@ -83,10 +85,12 @@ describe('useWorkspacePageState', () => {
       },
       {
         createWorkspace: async (path) => ({ id: 5, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+        deleteWorkspace: async (workspaceId) => ({ id: workspaceId, path: '/repo-c', created_at: 'x', updated_at: 'x', session_count: 0 }),
         getGitStatus: async () => null as never,
         listWorkspaceFileTree: async ({ workspaceId, path }): Promise<WorkspaceFileTreeResource> => ({ workspace_id: workspaceId, root: '/repo-c', path: path || '', entries: [] }),
         listWorkspaces: async () => [{ id: 5, path: '/repo-c', created_at: 'x', updated_at: 'x', session_count: 0 }],
         resolveWorkspace: async (path) => ({ id: 5, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+        updateWorkspace: async ({ workspaceId, path }) => ({ id: workspaceId, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
       },
     )
 
@@ -95,5 +99,45 @@ describe('useWorkspacePageState', () => {
 
     expect(state.selectedWorkspaceId.value).toBe(5)
     expect(state.actionMessage.value).toBe('Opened workspace /repo-c.')
+  })
+
+  test('renames and deletes the selected workspace', async () => {
+    const originalPrompt = globalThis.window?.prompt
+    const originalConfirm = globalThis.window?.confirm
+    ;(globalThis as unknown as { window: { prompt: (message: string, value?: string) => string | null; confirm: (message: string) => boolean } }).window = {
+      ...(globalThis.window || {}),
+      prompt: () => '/repo-renamed',
+      confirm: () => true,
+    }
+
+    try {
+      const state = useWorkspacePageState(
+        {
+          route: createRoute({ workspace: '2' }),
+          router: { replace: async () => {}, push: async () => {} } as never,
+        },
+        {
+          createWorkspace: async (path) => ({ id: 2, path, created_at: 'x', updated_at: 'x', session_count: 4 }),
+          deleteWorkspace: async (workspaceId) => ({ id: workspaceId, path: '/repo-renamed', created_at: 'x', updated_at: 'x', session_count: 4 }),
+          getGitStatus: async () => null as never,
+          listWorkspaceFileTree: async ({ workspaceId, path }): Promise<WorkspaceFileTreeResource> => ({ workspace_id: workspaceId, root: '/repo', path: path || '', entries: [] }),
+          listWorkspaces: async () => [{ id: 2, path: '/repo', created_at: 'x', updated_at: 'x', session_count: 4 }],
+          resolveWorkspace: async (path) => ({ id: 2, path, created_at: 'x', updated_at: 'x', session_count: 4 }),
+          updateWorkspace: async ({ workspaceId, path }) => ({ id: workspaceId, path, created_at: 'x', updated_at: 'x', session_count: 4 }),
+        },
+      )
+
+      await state.load()
+      await state.renameSelectedWorkspace()
+      expect(state.actionMessage.value).toBe('Renamed workspace to /repo-renamed.')
+
+      await state.deleteSelectedWorkspace()
+      expect(state.actionMessage.value).toBe('Deleted workspace /repo-renamed.')
+    } finally {
+      if (globalThis.window) {
+        globalThis.window.prompt = originalPrompt || (() => null)
+        globalThis.window.confirm = originalConfirm || (() => false)
+      }
+    }
   })
 })

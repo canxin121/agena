@@ -41,6 +41,7 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
     input.rewindCheckpoints.value.map((checkpoint) => ({
       key: `${checkpoint.target_message_id}-${checkpoint.at_ms}`,
       label: `message #${checkpoint.target_message_id}`,
+      messageId: checkpoint.target_message_id,
       summary: `${input.formatEventTime(checkpoint.at_ms)} · dropped ${formatUsageCount(checkpoint.dropped.length)} message(s)`,
     })),
   )

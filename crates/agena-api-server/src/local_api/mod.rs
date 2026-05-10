@@ -4,7 +4,11 @@ pub mod pagination;
 pub mod service;
 
 pub use dto::{
-    AuthApiKeyWriteRequest, AuthCredentialType, AuthProviderResource, HealthResponse,
+    AuthApiKeyWriteRequest, AuthBrowserStartRequest, AuthBrowserStartResource,
+    AuthCopilotDevicePollRequest, AuthCopilotDeviceStartRequest, AuthCredentialType,
+    AuthDeviceStartResource, AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest,
+    AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
+    AuthProviderResource, HealthResponse,
     MessageListQuery, PartLoadMode, PermissionRuleListQuery, PermissionRuleResource,
     PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
     PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,

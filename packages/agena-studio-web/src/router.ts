@@ -18,6 +18,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('./agena/pages/ChatPage.vue'),
   },
   {
+    path: '/auth/callback',
+    component: () => import('./agena/pages/AuthCallbackPage.vue'),
+  },
+  {
     path: '/workspace',
     component: () => import('./agena/pages/WorkspacePage.vue'),
   },

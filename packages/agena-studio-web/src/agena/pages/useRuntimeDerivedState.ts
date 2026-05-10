@@ -1,6 +1,7 @@
 import { computed, type Ref } from 'vue'
 
 import type {
+  GlobalEventRecord,
   MarketplaceInstalledPluginResource,
   MarketplacePluginResource,
   PermissionMode,
@@ -45,6 +46,7 @@ export type RuntimeDerivedStateInput = {
   runtimeSkillQuery: Ref<string>
   section?: RuntimeRouteSection
   selectedPlugin: Ref<PluginInspect | null>
+  globalEvents: Ref<GlobalEventRecord[]>
   sessionExecution: Ref<SessionExecutionResource | null>
   sessionTimeline: Ref<TimelineEventRecord[]>
   tabs: SectionTabOption[]
@@ -56,6 +58,7 @@ export function useRuntimeDerivedState(input: RuntimeDerivedStateInput) {
   const sessionCacheFacts = computed<SessionExecutionFact[]>(() => buildSessionCacheFacts(input.runtime.value))
   const executionFacts = computed<SessionExecutionFact[]>(() => buildExecutionFacts(input.sessionExecution.value))
   const timelineSummaries = computed(() => buildTimelineSummary(input.sessionTimeline.value))
+  const globalEventSummaries = computed(() => buildTimelineSummary(input.globalEvents.value))
   const desktopEnabled = computed(() => isDesktopRuntime())
   const desktopConfigFacts = computed(() => buildDesktopConfigFacts(input.desktopConfig.value))
   const desktopStatusFacts = computed(() => buildDesktopStatusFacts(input.desktopStatus.value))
@@ -138,6 +141,7 @@ export function useRuntimeDerivedState(input: RuntimeDerivedStateInput) {
     filteredMcpServers,
     filteredPermissionRules,
     filteredSkillCommands,
+    globalEventSummaries,
     installedMarketplacePluginIds,
     operatorCards,
     pageDescription,

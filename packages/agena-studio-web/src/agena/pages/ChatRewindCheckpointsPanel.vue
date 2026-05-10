@@ -5,8 +5,10 @@ const props = defineProps<{
     key: string
     label: string
     summary: string
+    messageId: number
   }>
   loadRewindCheckpoints: (sessionId: number) => void | Promise<void>
+  unrewindToMessage: (messageId: number) => void | Promise<void>
 }>()
 </script>
 
@@ -33,6 +35,9 @@ const props = defineProps<{
           <strong>{{ item.label }}</strong>
         </div>
         <div class="muted mono">{{ item.summary }}</div>
+        <div class="button-row" style="margin-top: 8px">
+          <button class="button ghost" @click="props.unrewindToMessage(item.messageId)">Undo Rewind</button>
+        </div>
       </div>
     </div>
     <p v-else class="muted">No rewind checkpoints are available for the active session.</p>

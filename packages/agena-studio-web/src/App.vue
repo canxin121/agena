@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import LoginPage from './agena/pages/LoginPage.vue'
+import { dispatchAuthCallback } from './agena/lib/authCallbackRegistry'
 import { createCommandPalette } from './agena/lib/commandPalette'
 import { registeredLocalCommands, setGlobalCommandPaletteOpenHandler } from './agena/lib/commandPaletteRegistry'
 import { fetchRuntimeStatus } from './agena/lib/agenaApi'
@@ -71,6 +72,18 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   }
 }
 
+function handleWindowMessage(event: MessageEvent) {
+  const data = event.data
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return
+  const payload = data as Record<string, unknown>
+  if (payload.type !== 'agena-auth-callback') return
+  void dispatchAuthCallback({
+    code: typeof payload.code === 'string' ? payload.code : '',
+    state: typeof payload.state === 'string' ? payload.state : '',
+    error: typeof payload.error === 'string' ? payload.error : '',
+  })
+}
+
 async function bootstrap() {
   booting.value = true
   try {
@@ -100,6 +113,7 @@ onMounted(() => {
   void bootstrap()
   if (typeof window !== 'undefined') {
     window.addEventListener('keydown', handleGlobalKeydown)
+    window.addEventListener('message', handleWindowMessage)
   }
 })
 
@@ -107,6 +121,7 @@ onBeforeUnmount(() => {
   setGlobalCommandPaletteOpenHandler(null)
   if (typeof window !== 'undefined') {
     window.removeEventListener('keydown', handleGlobalKeydown)
+    window.removeEventListener('message', handleWindowMessage)
   }
 })
 

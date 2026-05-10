@@ -98,16 +98,31 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
   })
 
   const providerActions = useRuntimeProviderActions({
-    actionError: input.actionError,
-    actionMessage: input.actionMessage,
-    drafts: input.drafts,
-    load: loadPageState,
-  })
+      actionError: input.actionError,
+      actionMessage: input.actionMessage,
+      browserAuthCodeDrafts: input.browserAuthCodeDrafts,
+      browserAuthInstanceDrafts: input.browserAuthInstanceDrafts,
+      browserAuthStartState: input.browserAuthStartState,
+      deviceAuthEnterpriseDrafts: input.deviceAuthEnterpriseDrafts,
+      deviceAuthStartState: input.deviceAuthStartState,
+      drafts: input.drafts,
+      load: loadPageState,
+      openUrl: (url) => {
+        if (typeof window !== 'undefined') {
+          window.open(url, '_blank', 'noopener,noreferrer')
+        }
+      },
+      readRedirectUri: () => {
+        if (typeof window === 'undefined') return ''
+        return `${window.location.origin}/auth/callback`
+      },
+    })
 
   const sessionWorkflowActions = useRuntimeSessionWorkflowActions({
     actionError: input.actionError,
     actionMessage: input.actionMessage,
     load: loadPageState,
+    globalEvents: input.globalEvents,
     selectedSessionId: input.selectedSessionId,
     selectedWorkspaceId: input.selectedWorkspaceId,
     sessionExecution: input.sessionExecution,

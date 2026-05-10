@@ -128,6 +128,7 @@ describe('useChatDerivedState', () => {
       {
         key: '17-1715299200000',
         label: 'message #17',
+        messageId: 17,
         summary: 't=1715299200000 · dropped 1 message(s)',
       },
     ])

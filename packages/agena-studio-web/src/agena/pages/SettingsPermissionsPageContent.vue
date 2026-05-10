@@ -26,6 +26,7 @@ const props = defineProps<{
     :reset-permission-draft="props.permissions.resetDraft"
     :edit-permission-rule="props.permissions.editRule"
     :revoke-permission-rule-action="props.permissions.revokeRuleAction"
+    :delete-permission-rule-action="props.permissions.deleteRuleAction"
     :permission-rule-label="props.permissions.ruleLabel"
     :permission-rule-preview="props.permissions.rulePreview"
     :permission-rule-facts="props.permissions.ruleFacts"

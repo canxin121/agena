@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { ref } from 'vue'
 
 import type {
+  GlobalEventRecord,
   MarketplaceInstalledPluginResource,
   MarketplacePluginResource,
   PermissionRuleResource,
@@ -185,6 +186,17 @@ describe('useRuntimeDerivedState', () => {
       routePath: ref('/settings/desktop'),
       runtime: ref<RuntimeStatus | null>(runtime()),
       runtimeSkillQuery: ref(''),
+      globalEvents: ref<GlobalEventRecord[]>([
+        {
+          id: 'event-1',
+          seq_global: 101,
+          session_id: 9,
+          workspace_id: 1,
+          created_at: '2026-05-10T00:00:01Z',
+          kind: 'turn_started',
+          payload: { summary: 'Turn started' },
+        },
+      ]),
       selectedPlugin: ref<PluginInspect | null>({
         status: {
           plugin_id: 'demo/plugin',
@@ -228,6 +240,7 @@ describe('useRuntimeDerivedState', () => {
     expect(derived.runtimeSnapshotFacts.value.length > 0).toBe(true)
     expect(derived.sessionCacheFacts.value.length > 0).toBe(true)
     expect(derived.executionFacts.value.length > 0).toBe(true)
+    expect(derived.globalEventSummaries.value.length).toBe(1)
     expect(derived.timelineSummaries.value.length).toBe(1)
     expect(derived.selectedPluginManifest.value).toEqual({ name: 'demo-plugin' })
   })
@@ -333,6 +346,7 @@ describe('useRuntimeDerivedState', () => {
       routePath: ref('/runtime/workflow'),
       runtime: ref<RuntimeStatus | null>(runtime()),
       runtimeSkillQuery: ref('review'),
+      globalEvents: ref<GlobalEventRecord[]>([]),
       selectedPlugin: ref<PluginInspect | null>(null),
       sessionExecution: ref<SessionExecutionResource | null>(null),
       sessionTimeline: ref<TimelineEventRecord[]>([]),

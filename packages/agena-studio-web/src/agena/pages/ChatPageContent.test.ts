@@ -14,6 +14,8 @@ describe('ChatPageContent', () => {
     expect(source.includes('ChatPendingPermissionsPanel')).toBe(true)
     expect(source.includes('ChatPendingUserInputPanel')).toBe(true)
     expect(source.includes('ChatComposerPanel')).toBe(true)
+    expect(source.includes('inspect-message')).toBe(true)
+    expect(source.includes('inspected-message')).toBe(true)
     expect(source.includes('props.state.sidebar.selectedSessionId.value')).toBe(true)
     expect(source.includes('props.state.composer.value')).toBe(true)
   })

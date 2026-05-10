@@ -31,6 +31,7 @@ describe('useSettingsPermissionsPageState', () => {
       savePermissionRule: async () => {},
       resetPermissionDraft: () => {},
       revokePermissionRuleAction: async () => {},
+      deletePermissionRuleAction: async () => {},
     })
 
     expect(permissions.draft.toolName).toBe('bash')
@@ -83,6 +84,7 @@ describe('useSettingsPermissionsPageState', () => {
               savePermissionRule: async () => {},
               resetPermissionDraft: () => {},
               revokePermissionRuleAction: async () => {},
+              deletePermissionRuleAction: async () => {},
             },
           }
         },

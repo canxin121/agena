@@ -13,6 +13,7 @@ export type RuntimeWorkflowPageStateSource = {
   selectedWorkspaceId: Parameters<typeof useRuntimeWorkflowState>[0]['selectedWorkspaceId']
   sessionExecution: Parameters<typeof useRuntimeWorkflowState>[0]['sessionExecution']
   sessions: Parameters<typeof useRuntimeWorkflowState>[0]['sessions']
+  globalEventSummaries: Parameters<typeof useRuntimeWorkflowState>[0]['globalEventSummaries']
   timelineSummaries: Parameters<typeof useRuntimeWorkflowState>[0]['timelineSummaries']
   workflowLoading: Parameters<typeof useRuntimeWorkflowState>[0]['workflowLoading']
   workspaces: Parameters<typeof useRuntimeWorkflowState>[0]['workspaces']
@@ -48,6 +49,7 @@ export function createRuntimeWorkflowPanelState(state: RuntimeWorkflowPageStateS
     selectedWorkspaceId: state.selectedWorkspaceId,
     sessionExecution: state.sessionExecution,
     sessions: state.sessions,
+    globalEventSummaries: state.globalEventSummaries,
     timelineSummaries: state.timelineSummaries,
     workflowLoading: state.workflowLoading,
     workspaces: state.workspaces,

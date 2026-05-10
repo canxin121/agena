@@ -1,5 +1,6 @@
 import type {
   AuthProvider,
+  GlobalEventRecord,
   PluginLogEntry,
   PluginStatus,
   ProviderModel,
@@ -25,6 +26,12 @@ export type TimelineSummaryItem = {
   summary: string
   timestamp: string
   sessionId: string
+}
+
+function readEventTimestamp(event: TimelineEventRecord | GlobalEventRecord): string {
+  if (event.created_at) return event.created_at
+  const maybeTsMs = 'ts_ms' in event ? event.ts_ms : null
+  return maybeTsMs ? new Date(maybeTsMs).toLocaleString() : 'n/a'
 }
 
 export function buildOperatorCards(runtime: RuntimeStatus | null): OperatorCard[] {
@@ -126,17 +133,17 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
   ]
 }
 
-export function buildTimelineSummary(events: TimelineEventRecord[]): TimelineSummaryItem[] {
+export function buildTimelineSummary(events: Array<TimelineEventRecord | GlobalEventRecord>): TimelineSummaryItem[] {
   return events.map((event) => ({
     key: `${event.seq_global}`,
     kind: event.kind,
     summary: summarizeTimelineEvent(event),
-    timestamp: event.created_at || (event.ts_ms ? new Date(event.ts_ms).toLocaleString() : 'n/a'),
+    timestamp: readEventTimestamp(event),
     sessionId: event.session_id == null ? 'global' : `session ${event.session_id}`,
   }))
 }
 
-function summarizeTimelineEvent(event: TimelineEventRecord): string {
+function summarizeTimelineEvent(event: TimelineEventRecord | GlobalEventRecord): string {
   const payload = event.payload || {}
   const candidate = [
     readString(payload.summary),

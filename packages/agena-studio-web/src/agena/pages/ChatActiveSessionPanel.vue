@@ -16,9 +16,12 @@ const props = defineProps<{
   childSessions: SessionResource[]
   parentSession: SessionResource | null
   selectSession: (sessionId: number) => void | Promise<void>
+  renameCurrentSession: () => void | Promise<void>
   forkCurrentSession: () => void | Promise<void>
+  deleteCurrentSession: () => void | Promise<void>
   exportCurrentSession: () => void | Promise<void>
   continueCurrentSession: () => void | Promise<void>
+  cancelCurrentSessionTurn: () => void | Promise<void>
   formatMessageTime: (value: string) => string
 }>()
 </script>
@@ -41,6 +44,9 @@ const props = defineProps<{
         <button v-if="props.parentSession" class="button ghost" @click="props.selectSession(props.parentSession.id)">
           Open Parent #{{ props.parentSession.id }}
         </button>
+        <button class="button ghost" :disabled="!props.selectedSessionId || props.loading" @click="props.renameCurrentSession">
+          Rename Session
+        </button>
         <button class="button ghost" :disabled="!props.selectedSessionId || props.loading" @click="props.forkCurrentSession">
           Fork Current Session
         </button>
@@ -53,6 +59,16 @@ const props = defineProps<{
           @click="props.continueCurrentSession"
         >
           {{ props.continuing ? 'Continuing…' : 'Continue Run' }}
+        </button>
+        <button
+          class="button danger"
+          :disabled="!props.selectedSessionId || props.continuing || props.sessionState?.run_state === 'idle'"
+          @click="props.cancelCurrentSessionTurn"
+        >
+          {{ props.continuing ? 'Cancelling…' : 'Cancel Run' }}
+        </button>
+        <button class="button danger" :disabled="!props.selectedSessionId || props.loading" @click="props.deleteCurrentSession">
+          Delete Session
         </button>
       </div>
       <template v-if="props.ancestorSessions.length">

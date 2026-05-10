@@ -56,9 +56,12 @@ const props = defineProps<{
         :child-sessions="props.state.childSessions.value"
         :parent-session="props.state.parentSession.value"
         :select-session="props.state.sidebar.selectSession"
+        :rename-current-session="props.state.renameCurrentSession"
         :fork-current-session="props.state.forkCurrentSession"
+        :delete-current-session="props.state.deleteCurrentSession"
         :export-current-session="props.state.exportCurrentSession"
         :continue-current-session="props.state.continueCurrentSession"
+        :cancel-current-session-turn="props.state.cancelCurrentSessionTurn"
         :format-message-time="props.state.formatMessageTime"
       />
 
@@ -74,6 +77,7 @@ const props = defineProps<{
         :selected-session-id="props.state.sidebar.selectedSessionId.value"
         :rewind-checkpoint-facts="props.state.rewindCheckpointFacts.value"
         :load-rewind-checkpoints="props.state.loadRewindCheckpoints"
+        :unrewind-to-message="props.state.unrewindToMessage"
       />
 
       <ChatUsagePanel
@@ -109,7 +113,11 @@ const props = defineProps<{
         :selected-session-id="props.state.sidebar.selectedSessionId.value"
         :loading="props.state.loading.value"
         :messages="props.state.messages.value"
+        :inspected-message="props.state.inspectedMessage.value"
+        :inspected-message-parts="props.state.inspectedMessageParts.value"
+        :inspected-part="props.state.inspectedPart.value"
         :refresh-conversation="props.state.refreshConversation"
+        :inspect-message="props.state.inspectMessage"
         :rewind-to-message="props.state.rewindToMessage"
         :format-message-time="props.state.formatMessageTime"
         :message-tags="props.state.messageTags"

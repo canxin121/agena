@@ -227,6 +227,28 @@ export type AuthProvider = {
   enterprise_url?: string | null
 }
 
+export type AuthBrowserStartResponse = {
+  provider_id: string
+  instance_url?: string | null
+  authorize_url: string
+  state: string
+  pkce_verifier: string
+}
+
+export type AuthDeviceStartResponse = {
+  provider_id: string
+  enterprise_domain?: string | null
+  verification_url: string
+  user_code: string
+  device_code: string
+  interval_seconds: number
+}
+
+export type AuthLoginResultResponse = {
+  completed: boolean
+  provider?: AuthProvider | null
+}
+
 export type WorkspaceResource = {
   id: number
   path: string
@@ -298,9 +320,12 @@ export type GitStatusResource = {
 export type SessionResource = {
   id: number
   parent_id?: number | null
+  depth?: number
+  root_id?: number
   workspace_id: number
   title: string
   version: number
+  is_subagent?: boolean
   created_at: string
   updated_at: string
   message_count: number
@@ -424,6 +449,20 @@ export type TimelineEventRecord = {
   correlation_id?: number | null
   created_at?: string | null
   ts_ms?: number | null
+  kind: string
+  payload: Record<string, unknown>
+}
+
+export type GlobalEventRecord = {
+  id?: string | null
+  seq_global: number
+  seq_session?: number | null
+  session_id?: number | null
+  workspace_id?: number | null
+  created_at: string
+  causation_id?: string | null
+  correlation_id?: string | null
+  envelope_schema?: number
   kind: string
   payload: Record<string, unknown>
 }
@@ -680,11 +719,109 @@ export async function refreshProviderCredential(providerId: string): Promise<voi
   })
 }
 
+export async function startOpenAiBrowserAuth(redirectUri: string): Promise<AuthBrowserStartResponse> {
+  return await apiJson<AuthBrowserStartResponse>('/api/v1/auth/providers/openai/browser/start', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ redirect_uri: redirectUri }),
+  })
+}
+
+export async function finishOpenAiBrowserAuth(input: {
+  code: string
+  pkceVerifier: string
+  redirectUri: string
+}): Promise<AuthLoginResultResponse> {
+  return await apiJson<AuthLoginResultResponse>('/api/v1/auth/providers/openai/browser/finish', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      code: input.code,
+      pkce_verifier: input.pkceVerifier,
+      redirect_uri: input.redirectUri,
+    }),
+  })
+}
+
+export async function startOpenAiDeviceAuth(): Promise<AuthDeviceStartResponse> {
+  return await apiJson<AuthDeviceStartResponse>('/api/v1/auth/providers/openai/device/start', {
+    method: 'POST',
+  })
+}
+
+export async function pollOpenAiDeviceAuth(input: {
+  deviceCode: string
+  userCode: string
+}): Promise<AuthLoginResultResponse> {
+  return await apiJson<AuthLoginResultResponse>('/api/v1/auth/providers/openai/device/poll', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      device_code: input.deviceCode,
+      user_code: input.userCode,
+    }),
+  })
+}
+
+export async function startGitLabBrowserAuth(input: {
+  instanceUrl: string
+  redirectUri: string
+}): Promise<AuthBrowserStartResponse> {
+  return await apiJson<AuthBrowserStartResponse>('/api/v1/auth/providers/gitlab/browser/start', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      instance_url: input.instanceUrl,
+      redirect_uri: input.redirectUri,
+    }),
+  })
+}
+
+export async function finishGitLabBrowserAuth(input: {
+  instanceUrl: string
+  code: string
+  pkceVerifier: string
+  redirectUri: string
+}): Promise<AuthLoginResultResponse> {
+  return await apiJson<AuthLoginResultResponse>('/api/v1/auth/providers/gitlab/browser/finish', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      instance_url: input.instanceUrl,
+      code: input.code,
+      pkce_verifier: input.pkceVerifier,
+      redirect_uri: input.redirectUri,
+    }),
+  })
+}
+
+export async function startCopilotDeviceAuth(enterpriseDomain?: string): Promise<AuthDeviceStartResponse> {
+  return await apiJson<AuthDeviceStartResponse>('/api/v1/auth/providers/github-copilot/device/start', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(enterpriseDomain?.trim() ? { enterprise_domain: enterpriseDomain.trim() } : {}),
+  })
+}
+
+export async function pollCopilotDeviceAuth(input: {
+  deviceCode: string
+  enterpriseDomain?: string
+}): Promise<AuthLoginResultResponse> {
+  return await apiJson<AuthLoginResultResponse>('/api/v1/auth/providers/github-copilot/device/poll', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      device_code: input.deviceCode,
+      ...(input.enterpriseDomain?.trim() ? { enterprise_domain: input.enterpriseDomain.trim() } : {}),
+    }),
+  })
+}
+
 export async function listWorkspaces(): Promise<WorkspaceResource[]> {
   return await collectPagedItems(
     (cursor) =>
       apiJson<PaginatedResponse<WorkspaceResource>>(
-        `/api/v1/workspaces?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        `/api/v1/workspaces?limit=100&include_session_count=true${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
       ),
     { resourceName: 'workspaces' },
   )
@@ -706,6 +843,23 @@ export async function createWorkspace(path: string): Promise<WorkspaceResource> 
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path }),
+  })
+}
+
+export async function updateWorkspace(input: {
+  workspaceId: number
+  path: string
+}): Promise<WorkspaceResource> {
+  return await apiJson<WorkspaceResource>(`/api/v1/workspaces/${input.workspaceId}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: input.path }),
+  })
+}
+
+export async function deleteWorkspace(workspaceId: number): Promise<WorkspaceResource> {
+  return await apiJson<WorkspaceResource>(`/api/v1/workspaces/${workspaceId}`, {
+    method: 'DELETE',
   })
 }
 
@@ -862,6 +1016,46 @@ export async function createSession(input: {
   })
 }
 
+export async function getSession(sessionId: number): Promise<SessionResource> {
+  return await apiJson<SessionResource>(`/api/v1/sessions/${sessionId}`)
+}
+
+export async function updateSession(input: {
+  sessionId: number
+  title: string
+  parentId?: number | null
+  version?: number | null
+}): Promise<SessionResource> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+  }
+  if (input.version !== undefined && input.version !== null) {
+    headers['if-match'] = String(input.version)
+  }
+  return await apiJson<SessionResource>(`/api/v1/sessions/${input.sessionId}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      title: input.title,
+      parent_id: input.parentId ?? null,
+    }),
+  })
+}
+
+export async function deleteSession(input: {
+  sessionId: number
+  version?: number | null
+}): Promise<SessionResource> {
+  const headers: Record<string, string> = {}
+  if (input.version !== undefined && input.version !== null) {
+    headers['if-match'] = String(input.version)
+  }
+  return await apiJson<SessionResource>(`/api/v1/sessions/${input.sessionId}`, {
+    method: 'DELETE',
+    headers,
+  })
+}
+
 export async function getSessionState(sessionId: number): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${sessionId}/state`)
 }
@@ -910,6 +1104,42 @@ export async function listSessionTimeline(
   const response = await apiJson<PaginatedResponse<TimelineEventRecord>>(
     `/api/v1/sessions/${sessionId}/events${query ? `?${query}` : ''}`,
   )
+  return response.items ?? []
+}
+
+export async function getMessage(messageId: number): Promise<MessageResource> {
+  return await apiJson<MessageResource>(`/api/v1/messages/${messageId}?parts=full`)
+}
+
+export async function listMessageParts(messageId: number): Promise<MessagePart[]> {
+  return await apiJson<MessagePart[]>(`/api/v1/messages/${messageId}/parts?mode=full`)
+}
+
+export async function getMessagePart(partId: number): Promise<MessagePart> {
+  return await apiJson<MessagePart>(`/api/v1/message-parts/${partId}`)
+}
+
+export async function listGlobalEvents(options?: {
+  sinceSeqGlobal?: number
+  limit?: number
+  scopeKind?: 'global' | 'workspace' | 'session'
+  workspaceId?: number
+  sessionId?: number
+  kinds?: string[]
+}): Promise<GlobalEventRecord[]> {
+  const params = new URLSearchParams()
+  if (options?.sinceSeqGlobal !== undefined) params.set('since_seq_global', String(options.sinceSeqGlobal))
+  if (options?.limit !== undefined) params.set('limit', String(options.limit))
+  if (options?.scopeKind && options.scopeKind !== 'global') {
+    params.set('scope_kind', options.scopeKind)
+  }
+  if (options?.workspaceId !== undefined) params.set('workspace_id', String(options.workspaceId))
+  if (options?.sessionId !== undefined) params.set('session_id', String(options.sessionId))
+  if (options?.kinds?.length) {
+    params.set('kinds', options.kinds.map((item) => item.trim()).filter(Boolean).join(','))
+  }
+  const query = params.toString()
+  const response = await apiJson<PaginatedResponse<GlobalEventRecord>>(`/api/v1/events${query ? `?${query}` : ''}`)
   return response.items ?? []
 }
 
@@ -1095,6 +1325,12 @@ export async function continueSession(input: {
   })
 }
 
+export async function cancelSessionTurn(sessionId: number): Promise<{ ok: boolean }> {
+  return await apiJson<{ ok: boolean }>(`/api/v1/sessions/${sessionId}/cancel`, {
+    method: 'POST',
+  })
+}
+
 export async function getSessionTree(rootId: number): Promise<SessionTreeResource[]> {
   return await apiJson<SessionTreeResource[]>(`/api/v1/sessions/tree/${rootId}`)
 }
@@ -1194,6 +1430,19 @@ export async function rewindSession(input: {
   messageId: number
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/rewind`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      message_id: input.messageId,
+    }),
+  })
+}
+
+export async function unrewindSession(input: {
+  sessionId: number
+  messageId: number
+}): Promise<SessionExecutionResource> {
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/unrewind`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

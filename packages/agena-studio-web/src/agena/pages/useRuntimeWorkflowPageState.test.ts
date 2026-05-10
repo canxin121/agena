@@ -15,6 +15,9 @@ describe('useRuntimeWorkflowPageState', () => {
       selectedWorkspaceId: ref(3),
       sessionExecution: ref(null),
       sessions: ref([]),
+      globalEventSummaries: computed(() => [
+        { key: 'global-1', kind: 'turn_started', summary: 'turn', timestamp: '2026-05-11T00:00:00Z', sessionId: 'session 7' },
+      ]),
       timelineSummaries: computed(() => [
         { key: 'timeline-1', kind: 'step', summary: 'step', timestamp: '2026-05-11T00:00:00Z', sessionId: '7' },
       ]),
@@ -25,6 +28,7 @@ describe('useRuntimeWorkflowPageState', () => {
     expect(workflow.selectedSessionId.value).toBe(7)
     expect(workflow.selectedWorkspaceId.value).toBe(3)
     expect(workflow.executionFacts.value[0]?.label).toBe('state')
+    expect(workflow.globalEventSummaries.value[0]?.kind).toBe('turn_started')
     expect(workflow.timelineSummaries.value[0]?.summary).toBe('step')
   })
 
@@ -57,6 +61,7 @@ describe('useRuntimeWorkflowPageState', () => {
               selectedWorkspaceId: ref(null),
               sessionExecution: ref(null),
               sessions: ref([]),
+              globalEventSummaries: computed(() => []),
               timelineSummaries: computed(() => []),
               workflowLoading: ref(false),
               workspaces: ref([]),
@@ -70,6 +75,7 @@ describe('useRuntimeWorkflowPageState', () => {
     expect(result.pageTitle).toBe(shared.pageTitle)
     expect(result.pageDescription).toBe(shared.pageDescription)
     expect(result.load).toBe(shared.load)
+    expect(result.workflow.globalEventSummaries.value).toEqual([])
     expect(result.workflow.timelineSummaries.value).toEqual([])
   })
 })

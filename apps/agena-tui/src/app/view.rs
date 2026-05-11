@@ -1208,10 +1208,12 @@ impl App {
                 .collect::<Vec<_>>()
         };
         let list = List::new(result_items)
-            .block(Block::default().borders(Borders::ALL).title(format!(
-                " {} ",
-                ui_text::t(&self.i18n, "overlay-attach-matches")
-            )))
+            .block(
+                Block::default().borders(Borders::ALL).title(sanitize_display_text(format!(
+                    " {} ",
+                    ui_text::t(&self.i18n, "overlay-attach-matches")
+                ))),
+            )
             .highlight_style(selection_highlight_style())
             .highlight_symbol(">> ");
         let mut state = ListState::default();
@@ -1258,20 +1260,20 @@ impl App {
 
         let mut lines = Vec::new();
         lines.push(Line::from(Span::styled(
-            self.i18n.text_args(
+            sanitize_display_text(self.i18n.text_args(
                 "overlay-permission-request-id",
                 &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
-            ),
+            )),
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(permission_action_label(
             &self.i18n,
             &dialog.request.action,
         )));
-        lines.push(Line::from(self.i18n.text_args(
+        lines.push(Line::from(sanitize_display_text(self.i18n.text_args(
             "overlay-permission-reason",
             &crate::fl_args!("reason" => sanitize_display_text(dialog.request.reason.as_str())),
-        )));
+        ))));
         if !dialog.request.explanation.trim().is_empty() {
             lines.push(Line::from(format!(
                 "Explanation: {}",
@@ -1296,10 +1298,10 @@ impl App {
             lines.push(Line::from(facts.join(" · ")));
         }
         if let Some(session_id) = dialog.request.session_id {
-            lines.push(Line::from(self.i18n.text_args(
+            lines.push(Line::from(sanitize_display_text(self.i18n.text_args(
                 "overlay-permission-session",
                 &crate::fl_args!("session" => session_id),
-            )));
+            ))));
         }
         append_permission_trace_lines(&mut lines, &dialog.request.trace);
 
@@ -1351,10 +1353,10 @@ impl App {
 
         let mut lines = Vec::new();
         lines.push(Line::from(Span::styled(
-            self.i18n.text_args(
+            sanitize_display_text(self.i18n.text_args(
                 "overlay-user-input-request-id",
                 &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
-            ),
+            )),
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(""));
@@ -1599,10 +1601,10 @@ impl App {
         let list = List::new(list_items)
             .block(
                 Block::default()
-                    .title(format!(
+                    .title(sanitize_display_text(format!(
                         " {} ",
                         ui_text::t(&self.i18n, "overlay-timeline-events")
-                    ))
+                    )))
                     .borders(Borders::ALL),
             )
             .highlight_style(selection_highlight_style())
@@ -1624,10 +1626,10 @@ impl App {
             Paragraph::new(detail)
                 .block(
                     Block::default()
-                        .title(format!(
+                        .title(sanitize_display_text(format!(
                             " {} ",
                             ui_text::t(&self.i18n, "overlay-timeline-detail")
-                        ))
+                        )))
                         .borders(Borders::ALL),
                 )
                 .wrap(Wrap { trim: false }),
@@ -1739,10 +1741,10 @@ impl App {
         let list = List::new(list_items)
             .block(
                 Block::default()
-                    .title(format!(
+                    .title(sanitize_display_text(format!(
                         " {} ",
                         ui_text::t(&self.i18n, "overlay-plugins-list")
-                    ))
+                    )))
                     .borders(Borders::ALL),
             )
             .highlight_style(selection_highlight_style())
@@ -1760,10 +1762,10 @@ impl App {
             Paragraph::new(detail)
                 .block(
                     Block::default()
-                        .title(format!(
+                        .title(sanitize_display_text(format!(
                             " {} ",
                             ui_text::t(&self.i18n, "overlay-plugins-detail")
-                        ))
+                        )))
                         .borders(Borders::ALL),
                 )
                 .wrap(Wrap { trim: false }),
@@ -1779,10 +1781,10 @@ impl App {
             Paragraph::new(logs)
                 .block(
                     Block::default()
-                        .title(format!(
+                        .title(sanitize_display_text(format!(
                             " {} ",
                             ui_text::t(&self.i18n, "overlay-plugins-logs")
-                        ))
+                        )))
                         .borders(Borders::ALL),
                 )
                 .wrap(Wrap { trim: false }),

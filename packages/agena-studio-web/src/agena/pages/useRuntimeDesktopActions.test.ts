@@ -21,7 +21,6 @@ function sampleConfig(): DesktopConfig {
       backend_log_level: 'info',
       ui_cookie_samesite: 'lax',
       agena_config_path: '/repo/.agena/config.json',
-      agena_mode: 'default',
       workspace_root: '/repo',
       database_path: '/repo/.agena/agena.db',
       database_url: null,
@@ -75,7 +74,6 @@ function createState(enabled = true) {
       port: '',
       workspace_root: '',
       agena_config_path: '',
-      agena_mode: '',
       database_path: '',
       database_url: '',
       backend_log_level: '',
@@ -174,7 +172,6 @@ describe('useRuntimeDesktopActions', () => {
     state.desktopForm.port = '9999'
     state.desktopForm.workspace_root = ' '
     state.desktopForm.agena_config_path = '/tmp/config.json '
-    state.desktopForm.agena_mode = ' fast '
     state.desktopForm.database_path = ''
     state.desktopForm.database_url = ' sqlite:///tmp/db '
     state.desktopForm.backend_log_level = ' debug '
@@ -196,7 +193,6 @@ describe('useRuntimeDesktopActions', () => {
     expect(savedConfig.backend.port).toBe(9999)
     expect(savedConfig.backend.workspace_root).toBe(null)
     expect(savedConfig.backend.agena_config_path).toBe('/tmp/config.json')
-    expect(savedConfig.backend.agena_mode).toBe('fast')
     expect(savedConfig.backend.database_url).toBe('sqlite:///tmp/db')
     expect(savedConfig.backend.backend_log_level).toBe('debug')
     expect(savedConfig.backend.ui_cookie_samesite).toBe('strict')

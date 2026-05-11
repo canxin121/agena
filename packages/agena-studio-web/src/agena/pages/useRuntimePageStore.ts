@@ -119,7 +119,6 @@ export function useRuntimePageStore() {
     port: '',
     workspace_root: '',
     agena_config_path: '',
-    agena_mode: '',
     database_path: '',
     database_url: '',
     backend_log_level: '',

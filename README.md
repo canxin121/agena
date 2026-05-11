@@ -141,7 +141,7 @@ cargo run -p agena-studio-server -- --help
 
 运行时与鉴权管理：
 
-- `GET /api/v1/runtime` 提供当前 generation、config path、active mode、watch paths、provider/plugin/runtime 状态
+- `GET /api/v1/runtime` 提供当前 generation、config path、watch paths、provider/plugin/runtime 状态
 - `POST /api/v1/runtime/reload` 提供手动 reload 入口
 - `GET /api/v1/auth/providers*` 提供 provider credential 状态读取
 - `PUT /api/v1/auth/providers/{provider_id}/api-key` / `DELETE ...` 提供 API key 管理
@@ -159,23 +159,22 @@ Workspace 管理补充：
 
 - [docs/http-api.md](docs/http-api.md)
 
-## Config / Mode（新增）
+## Config（新增）
 
 现在提供完整的强类型配置体系：
 
 - 默认配置路径：`~/.agena/config.toml`
 - 可用 `AGENA_CONFIG` 指定配置文件
-- 可用 `mode` / `AGENA_MODE` / `--mode` 切换配置 mode
-- 配置优先级：**默认值 < 配置文件 < mode 叠加 < 环境变量 < CLI 覆盖**
+- 配置优先级：**默认值 < 配置文件 < 环境变量 < CLI 覆盖**
 - `ResolvedConfig::build_provider_registry()` 可直接把配置转成 provider registry
+- 完整字段参考见：[docs/config.zh-CN.md](docs/config.zh-CN.md)
 
 ### CLI
 
 ```bash
 agena config resolve --format toml
 agena config validate
-agena config mode --list
-agena --mode prod -c providers.openai.default_model=gpt-5 config resolve --format json
+agena -c providers.openai.default_model=gpt-5 config resolve --format json
 ```
 
 ### 支持的 provider config kind
@@ -183,15 +182,16 @@ agena --mode prod -c providers.openai.default_model=gpt-5 config resolve --forma
 - `preset`（基于 `models.dev` 的 provider 预设）
 - `openai`
 - `openai_compatible`
+- `sap_ai_core`
 - `anthropic`
 - `gemini`
+- `ollama`
 - `codex`
 - `gitlab`
 - `copilot`
 - `amazon_bedrock`
 - `google_vertex`
 - `cloudflare_ai_gateway`
-- `alias`
 
 示例见仓库根目录 `config.example.toml`。
 
@@ -236,17 +236,14 @@ kind = "preset"
 
 ### 配置
 
-```toml
-[plugins]
-enabled = true
-paths = ["plugins"]
-```
+plugin 配置已经改为显式 entry 形式，不再使用旧的 `[plugins].paths = [...]`。
 
-说明：
+当前应使用：
 
-- `paths` 可填目录，也可直接填某个动态库文件。
-- 相对路径相对配置文件目录解析。
-- 如果省略 `paths`，默认会扫描配置文件同目录下的 `plugins/`。
+- `[plugins]`
+- `[plugins.list.<id>]`
+
+完整 schema 见：[docs/config.zh-CN.md](docs/config.zh-CN.md)
 
 ### Sample Plugin
 
@@ -263,7 +260,7 @@ cd examples/echo_plugin
 cargo build --release
 ```
 
-然后把 `target/release/` 或生成出的动态库路径加入 `[plugins].paths` 即可。
+然后把生成出的动态库通过 `[plugins.list.<id>]` 方式加入配置即可，字段参考见 [docs/config.zh-CN.md](docs/config.zh-CN.md)。
 
 ## Provider / Model（显式注册）
 
@@ -271,7 +268,6 @@ cargo build --release
 
 - 不再从环境变量自动发现/自动注册 provider。
 - provider 参数通过构造函数显式传入。
-- 自定义 provider 通过“内部 provider 别名”机制实现（不是新写协议栈）。
 
 ### 全局运行时参数（显式）
 
@@ -312,24 +308,6 @@ registry.register(OpenAiProvider::new(
     "gpt-4.1-mini",
 ));
 ```
-
-### 自定义 provider（内部别名）
-
-你可以把新 provider id 映射到内部 provider，实现“同一实现、多入口名”：
-
-```rust
-use agena::provider::ProviderAliasRegistration;
-
-registry.register_alias(
-    ProviderAliasRegistration::new("my-openai", "openai")
-        .with_default_model("gpt-4.1-mini"),
-)?;
-```
-
-行为说明：
-
-- 调用 `my-openai` 实际执行的是内部 `openai` provider 代码。
-- 返回结果和流式事件的 `provider_id` 会重写为别名 id（`my-openai`）。
 
 ### OpenAI-compatible 可显式自定义的项
 

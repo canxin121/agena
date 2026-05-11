@@ -6,8 +6,6 @@ use crate::{error::AppError, permission::PermissionMode};
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("invalid config mode name")]
-    InvalidModeName,
     #[error("failed to read config file {path}: {source}")]
     ReadFile {
         path: PathBuf,
@@ -18,10 +16,10 @@ pub enum ConfigError {
         path: PathBuf,
         source: toml::de::Error,
     },
-    #[error("config mode `{mode}` not found")]
-    UnknownMode { mode: String },
-    #[error("config mode cycle detected: {cycle}")]
-    ModeCycle { cycle: String },
+    #[error("config modes are no longer supported; remove `{field}` and use a single config file")]
+    UnsupportedModeConfig { field: &'static str },
+    #[error("AGENA_MODE is no longer supported; use a single config file or explicit --set overrides")]
+    UnsupportedModeEnvironment,
     #[error("invalid override `{0}`")]
     InvalidOverride(String),
     #[error("invalid permission mode `{0}`")]
@@ -30,8 +28,6 @@ pub enum ConfigError {
     InvalidNumber { key: String, value: String },
     #[error("provider `{provider_id}` is missing kind")]
     MissingProviderKind { provider_id: String },
-    #[error("provider alias `{provider_id}` is missing target_provider_id")]
-    MissingAliasTarget { provider_id: String },
     #[error("provider `{provider_id}` field `{field}` is required")]
     MissingProviderField {
         provider_id: String,

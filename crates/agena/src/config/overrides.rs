@@ -1,14 +1,13 @@
 use std::{path::PathBuf, str::FromStr};
 
 use super::{
-    AuthStoreBackend, ConfigError, ConfigModeName, RawAuthConfig, RawConfig, RawPermissionConfig,
+    AuthStoreBackend, ConfigError, RawAuthConfig, RawConfig, RawPermissionConfig,
     RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig, RawStreamReplayConfig,
     RawTracingConfig, RawUiConfig, parse_numeric, parse_permission_mode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigOverride {
-    Mode(ConfigModeName),
     AuthStorePath(PathBuf),
     AuthStoreBackend(AuthStoreBackend),
     TracingFilter(String),
@@ -41,7 +40,7 @@ impl FromStr for ConfigOverride {
         let raw_value = raw_value.trim();
 
         match key {
-            "mode" => Ok(Self::Mode(ConfigModeName::new(raw_value)?)),
+            "mode" => Err(ConfigError::UnsupportedModeConfig { field: "mode" }),
             "auth.store_path" => Ok(Self::AuthStorePath(PathBuf::from(raw_value))),
             "auth.store_backend" => {
                 Ok(Self::AuthStoreBackend(parse_auth_store_backend(raw_value)?))
@@ -86,7 +85,6 @@ impl FromStr for ConfigOverride {
 impl ConfigOverride {
     pub(crate) fn apply_to(&self, config: &mut RawConfig) {
         match self {
-            Self::Mode(mode) => config.mode = Some(mode.to_string()),
             Self::AuthStorePath(path) => {
                 config
                     .auth

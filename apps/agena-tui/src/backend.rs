@@ -1040,15 +1040,6 @@ impl Backend {
                 detail: resolution.meta.config_found.to_string(),
             },
             InspectorRow {
-                label: "active_mode".to_string(),
-                detail: resolution
-                    .meta
-                    .active_mode
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "default".to_string()),
-            },
-            InspectorRow {
                 label: "provider_count".to_string(),
                 detail: resolution.config.providers.len().to_string(),
             },

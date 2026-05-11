@@ -10,7 +10,6 @@ Param(
   [string]$DatabasePath = "",
   [string]$DatabaseUrl = "",
   [string]$ConfigPath = "",
-  [string]$RuntimeMode = "",
   [string[]]$Set = @()
 )
 
@@ -80,7 +79,6 @@ try {
   if ($DatabasePath) { $ArgList += @("--database-path", $DatabasePath) }
   if ($DatabaseUrl) { $ArgList += @("--database-url", $DatabaseUrl) }
   if ($ConfigPath) { $ArgList += @("--config", $ConfigPath) }
-  if ($RuntimeMode) { $ArgList += @("--mode", $RuntimeMode) }
   foreach ($item in $Set) {
     $ArgList += @("--set", $item)
   }

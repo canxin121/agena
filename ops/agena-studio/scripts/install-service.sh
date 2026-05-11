@@ -17,7 +17,6 @@ Options:
   --database-path PATH     Optional SQLite database path
   --database-url URL       Optional database URL
   --config PATH            Optional Agena config path
-  --runtime-mode MODE      Optional Agena runtime mode
   --set KEY=VALUE          Additional Agena overrides (repeatable)
   -h, --help               Show help
 EOF
@@ -35,7 +34,6 @@ WORKSPACE_ROOT=""
 DATABASE_PATH=""
 DATABASE_URL=""
 CONFIG_PATH=""
-RUNTIME_MODE=""
 SETS=()
 
 while [[ $# -gt 0 ]]; do
@@ -51,7 +49,6 @@ while [[ $# -gt 0 ]]; do
     --database-path) DATABASE_PATH="${2:-}"; shift 2 ;;
     --database-url) DATABASE_URL="${2:-}"; shift 2 ;;
     --config) CONFIG_PATH="${2:-}"; shift 2 ;;
-    --runtime-mode) RUNTIME_MODE="${2:-}"; shift 2 ;;
     --set) SETS+=("${2:-}"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -133,9 +130,6 @@ LAUNCHER="$INSTALL_DIR/bin/run-agena-studio.sh"
   fi
   if [[ -n "$CONFIG_PATH" ]]; then
     printf ' --config %q' "$CONFIG_PATH"
-  fi
-  if [[ -n "$RUNTIME_MODE" ]]; then
-    printf ' --mode %q' "$RUNTIME_MODE"
   fi
   for item in "${SETS[@]}"; do
     printf ' --set %q' "$item"

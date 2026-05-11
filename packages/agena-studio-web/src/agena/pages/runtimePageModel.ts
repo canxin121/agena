@@ -54,8 +54,6 @@ export function buildRuntimeSnapshotFacts(runtime: RuntimeStatus | null): Sessio
     { label: 'Workspace Root', value: runtime.workspace_root, mono: true },
     { label: 'Config Path', value: runtime.config_path, mono: true },
     { label: 'Config Found', value: runtime.config_found ? 'yes' : 'no' },
-    { label: 'Active Mode', value: runtime.active_mode || 'default' },
-    { label: 'Mode Source', value: runtime.active_mode_source || 'runtime default' },
     { label: 'Auth Store', value: runtime.auth_store_path, mono: true },
     { label: 'Providers', value: runtime.provider_ids.join(', ') || 'none' },
     { label: 'Session Runtime', value: runtime.session_runtime_available ? 'enabled' : 'disabled' },

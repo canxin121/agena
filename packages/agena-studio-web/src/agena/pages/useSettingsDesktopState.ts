@@ -21,7 +21,6 @@ export type SettingsDesktopStateInput = {
     port: string
     workspace_root: string
     agena_config_path: string
-    agena_mode: string
     database_path: string
     database_url: string
     backend_log_level: string

@@ -86,7 +86,7 @@ $\rightarrow$
 
   \node[runtime, right=26mm of studio, text width=60mm, minimum height=16mm] (runtime) {\textbf{AgenaRuntime}\\运行时入口对象\\持有当前 \pathinline{RuntimeSnapshot}、后台任务控制、重载能力};
 
-  \node[runtime, above right=14mm and 18mm of runtime] (config) {\textbf{Config 子系统}\\\pathinline{config/}\\默认值 + 文件 + mode + 环境变量 + CLI 覆盖};
+  \node[runtime, above right=14mm and 18mm of runtime] (config) {\textbf{Config 子系统}\\\pathinline{config/}\\默认值 + 文件 + 环境变量 + CLI 覆盖};
   \node[runtime, right=22mm of runtime] (providers) {\textbf{ProviderRegistry}\\\pathinline{provider/}\\统一抽象 OpenAI / Anthropic / Gemini / Copilot / GitLab / Vertex 等};
   \node[runtime, below right=14mm and 18mm of runtime] (sessions) {\textbf{SessionManager}\\\pathinline{session/}\\会话状态、消息流、工具执行、阻塞恢复};
   \node[runtime, below left=14mm and 18mm of runtime] (plugins) {\textbf{PluginManager}\\\pathinline{plugin/}\\动态插件、hook、自定义 tool};
@@ -154,7 +154,7 @@ $\rightarrow$
 \resizebox{0.94\linewidth}{!}{%
 \begin{tikzpicture}[diagram, node distance=11mm and 14mm, scale=0.86, every node/.style={transform shape}]
   \node[runtime, text width=42mm] (loader) {\textbf{ConfigLoader}\\负责读取、合并、验证配置\\输出 \pathinline{ConfigResolution}};
-  \node[runtime, right=of loader, text width=44mm] (resolution) {\textbf{ConfigResolution}\\最终配置 + 元信息\\active mode、config path、applied layers};
+  \node[runtime, right=of loader, text width=44mm] (resolution) {\textbf{ConfigResolution}\\最终配置 + 元信息\\config path、applied layers};
   \node[runtime, right=of resolution, text width=48mm] (snapshotbuild) {\textbf{RuntimeSnapshot::build}\\生成 ProviderRegistry、PluginManager、AuthStore、SessionManager};
 
   \node[runtime, below=18mm of snapshotbuild, text width=38mm] (store) {\textbf{RuntimeSnapshotStore}\\保存 current snapshot\\reload 时整体 swap};
@@ -162,8 +162,7 @@ $\rightarrow$
 
   \node[storage, above left=13mm and 14mm of loader, text width=28mm] (defaults) {\textbf{内建默认值}\\代码里的默认配置};
   \node[storage, above=13mm of loader, text width=34mm] (file) {\textbf{config.toml}\\默认路径：\pathinline{~/.agena/config.toml}};
-  \node[storage, above right=13mm and 14mm of loader, text width=28mm] (mode) {\textbf{mode 叠加}\\例如 \pathinline{dev} / \pathinline{prod}};
-  \node[storage, below left=13mm and 14mm of loader, text width=30mm] (env) {\textbf{环境变量}\\例如 \pathinline{AGENA_MODE}};
+  \node[storage, below left=13mm and 14mm of loader, text width=30mm] (env) {\textbf{环境变量}\\例如 \pathinline{AGENA_LOG}};
   \node[storage, below right=13mm and 14mm of loader, text width=36mm] (cliovr) {\textbf{CLI 覆盖}\\例如 \pathinline{-c providers.openai.default_model=gpt-5}};
 
   \node[storage, above=13mm of snapshotbuild, text width=34mm] (workspace) {\textbf{workspace root}\\默认是当前工作目录};
@@ -173,13 +172,12 @@ $\rightarrow$
   \node[runtime, below=13mm of runtimebox, text width=34mm] (janitor) {\textbf{janitor::run}\\定期修剪 session cache};
 
   \begin{scope}[on background layer]
-    \node[group, fit=(defaults)(file)(mode)(env)(cliovr), label={[text=agenaInk]north:配置来源}] {};
+    \node[group, fit=(defaults)(file)(env)(cliovr), label={[text=agenaInk]north:配置来源}] {};
     \node[group, fit=(loader)(resolution)(snapshotbuild)(store)(runtimebox)(reloadtask)(janitor), label={[text=agenaInk]north:运行时装配链}] {};
   \end{scope}
 
   \draw[flow] (defaults) -- (loader);
   \draw[flow] (file) -- (loader);
-  \draw[flow] (mode) -- (loader);
   \draw[flow] (env) -- (loader);
   \draw[flow] (cliovr) -- (loader);
   \draw[flow] (loader) -- (resolution);

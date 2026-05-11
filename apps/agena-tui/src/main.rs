@@ -21,7 +21,7 @@ use std::{
 
 use agena::{
     AppError,
-    config::{ConfigLoader, ConfigModeName, ConfigOverride, LoadConfigRequest},
+    config::{ConfigLoader, ConfigOverride, LoadConfigRequest},
     runtime::AgenaRuntime,
     storage::StorageConfig,
 };
@@ -40,8 +40,6 @@ use tracing_subscriber::{
 struct AgenaTuiCli {
     #[arg(long, env = "AGENA_CONFIG", global = true)]
     config: Option<PathBuf>,
-    #[arg(long, env = "AGENA_MODE", global = true)]
-    mode: Option<ConfigModeName>,
     #[arg(short = 'c', long = "set", global = true)]
     overrides: Vec<ConfigOverride>,
     #[command(subcommand)]
@@ -93,7 +91,6 @@ impl AgenaTuiCli {
     fn load_request(&self) -> LoadConfigRequest {
         LoadConfigRequest {
             config_path: self.config.clone(),
-            mode: self.mode.clone(),
             overrides: self.overrides.clone(),
         }
     }

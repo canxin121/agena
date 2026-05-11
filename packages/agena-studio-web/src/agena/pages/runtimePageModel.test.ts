@@ -29,7 +29,6 @@ function sampleRuntime(): RuntimeStatus {
     workspace_root: '/workspace',
     config_path: '/workspace/.agena/config.toml',
     config_found: true,
-    active_mode: 'default',
     auth_store_path: '/workspace/.agena/auth.json',
     provider_ids: ['anthropic', 'openai'],
     plugin_count: 3,
@@ -238,9 +237,10 @@ describe('runtimePageModel', () => {
     expect(buildOperatorCards(null)).toEqual([])
   })
 
-  test('buildRuntimeSnapshotFacts includes mode source', () => {
+  test('buildRuntimeSnapshotFacts omits removed mode facts', () => {
     const facts = buildRuntimeSnapshotFacts(sampleRuntime())
-    expect(facts.find((fact) => fact.label === 'Mode Source')?.value).toBe('runtime default')
+    expect(facts.find((fact) => fact.label === 'Mode Source')).toBeUndefined()
+    expect(facts.find((fact) => fact.label === 'Active Mode')).toBeUndefined()
   })
 
   test('buildSessionCacheFacts includes max bytes', () => {

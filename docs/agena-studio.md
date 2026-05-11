@@ -35,7 +35,6 @@ cargo run --manifest-path apps/agena-studio-server/Cargo.toml --bin agena-studio
 Useful runtime flags:
 
 - `--config <path>`
-- `--mode <mode>`
 - `--set <key=value>`
 - `--workspace-root <path>`
 - `--database-path <path>`

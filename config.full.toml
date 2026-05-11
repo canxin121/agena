@@ -1,5 +1,3 @@
-mode = "dev"
-
 [tracing]
 filter = "info"
 
@@ -118,12 +116,12 @@ enabled = true
 # Plugin storage and secrets live under ~/.agena/plugin-storage by default
 # (override with the AGENA_PLUGIN_STORAGE_DIR environment variable). Storage is
 # plain JSON keyed by (plugin_id, namespace, key); secrets go to the OS keyring
-# under the agena.plugin service. Set [plugins.storage] to override:
+# under the agena.plugin service.
 #
-# [plugins.storage]
-# # root_path = "/var/lib/agena/plugin-storage"
-# # secrets_backend = "auto"   # auto | keyring | file
-# # fallback_to_file = true
+# Note: the runtime config schema does not currently expose a `[plugins.storage]`
+# TOML section. Today the only supported override is:
+#
+#   AGENA_PLUGIN_STORAGE_DIR=/var/lib/agena/plugin-storage
 #
 # Stdio plugins respect [plugins.list.<id>.restart] for backoff/retry and the
 # host tracks their pid + restart history. Plugins that declare
@@ -158,6 +156,18 @@ default_model = "gpt-4.1-mini"
 api_key_env = "OPENAI_API_KEY"
 api_mode = "auto"
 stream_mode = "sse"
+
+# Optional explicit per-model metadata / capability configuration.
+# Keys are exact model ids under the provider; no matcher syntax is supported.
+#
+# [providers.openai.models."gpt-4.1-mini"]
+# input = { unsupported = ["image"] }
+# features = ["tool_calling"]
+# display_name = "GPT-4.1 Mini Internal"
+# family = "gpt"
+# lifecycle = "active"
+# context_window_tokens = 200000
+# max_output_tokens = 16384
 
 # Per-provider thinking-depth presets (name → budget_tokens).
 # Set default_thinking to one of the preset names to apply it to every request
@@ -237,15 +247,6 @@ kind = "ollama"
 base_url = "http://localhost:11434"
 default_model = "qwen3:14b"
 
-[providers."prod-openai"]
-kind = "alias"
-target_provider_id = "openai"
-default_model = "gpt-5"
-
-[[providers."prod-openai".capability_overrides]]
-model = "gpt-5"
-image_input = "unsupported"
-
 [providers.gitlab]
 kind = "gitlab"
 instance_url = "https://gitlab.com"
@@ -258,19 +259,3 @@ kind = "google_vertex"
 base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
 default_model = "google/gemini-2.5-flash"
 access_token_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
-
-[modes.dev.tracing]
-filter = "debug"
-
-[modes.dev.providers.openai]
-default_model = "gpt-4.1-mini"
-
-[modes.prod.permission]
-default_write = "ask"
-
-[modes.prod.providers.openai]
-default_model = "gpt-5"
-api_mode = "responses"
-
-[modes.prod.providers.ollama]
-enabled = false

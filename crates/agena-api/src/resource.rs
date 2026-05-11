@@ -5,7 +5,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use agena::{
-    config::ConfigSource,
     message::{MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
     session::{SessionStatus, SessionSummary},
@@ -144,10 +143,6 @@ pub struct RuntimeStatusResponse {
     pub workspace_root: String,
     pub config_path: String,
     pub config_found: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_mode_source: Option<ConfigSource>,
     pub auth_store_path: String,
     pub provider_ids: Vec<String>,
     pub plugin_count: usize,

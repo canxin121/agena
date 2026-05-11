@@ -28,8 +28,8 @@ use serde::Serialize;
 use crate::{
     agent::Agent,
     config::{
-        ConfigEnvironment, ConfigLoader, ConfigModeName, ConfigOutputFormat, ConfigOverride,
-        LoadConfigRequest, ProcessEnvironment,
+        ConfigEnvironment, ConfigLoader, ConfigOutputFormat, ConfigOverride, LoadConfigRequest,
+        ProcessEnvironment,
     },
     db::{
         crud::{permission_rule as permission_rule_crud, workspace as workspace_crud},
@@ -91,8 +91,6 @@ use crate::{
 pub struct AgenaCli {
     #[arg(long, env = "AGENA_CONFIG", global = true)]
     pub config: Option<PathBuf>,
-    #[arg(long, env = "AGENA_MODE", global = true)]
-    pub mode: Option<ConfigModeName>,
     #[arg(short = 'c', long = "set", global = true)]
     pub overrides: Vec<ConfigOverride>,
     #[arg(long, env = "AGENA_DATABASE_URL", global = true)]
@@ -474,7 +472,6 @@ pub enum AuthSubcommand {
 pub enum ConfigSubcommand {
     Resolve(ConfigResolveArgs),
     Validate,
-    Mode(ConfigModeArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -726,13 +723,6 @@ pub struct ConfigResolveArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct ConfigModeArgs {
-    #[arg(long)]
-    pub list: bool,
-    pub name: Option<ConfigModeName>,
-}
-
-#[derive(Debug, Clone, Args)]
 pub struct ProviderListArgs {
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
     pub format: ConfigOutputFormat,
@@ -965,7 +955,6 @@ struct PrOutput {
 struct DiagnosticsConfigOutput {
     path: String,
     found: bool,
-    active_mode: Option<String>,
     applied_layers: Vec<String>,
     provider_count: usize,
     plugin_count: usize,
@@ -982,7 +971,6 @@ struct DiagnosticsTelemetryOutput {
 #[derive(Debug, Serialize)]
 struct DiagnosticsEnvironmentOutput {
     agena_config_set: bool,
-    agena_mode_set: bool,
     agena_database_url_set: bool,
     agena_database_path_set: bool,
     agena_telemetry_enabled_set: bool,
@@ -1093,21 +1081,14 @@ impl AgenaCli {
         loader: ConfigLoader<ProcessEnvironment>,
         tracing_reload_handle: Option<TracingFilterReloadHandle>,
     ) -> Result<(), AppError> {
-        let resolution = loader.load(&self.load_request())?;
+        let _resolution = loader.load(&self.load_request())?;
         let mut builder = AgenaRuntime::builder().with_load_request(self.load_request());
         if let Some(handle) = tracing_reload_handle {
             builder = builder.with_tracing_reload_handle(handle);
         }
         let runtime = builder.build().await?;
         let snapshot = runtime.current_snapshot();
-        let mode = resolution
-            .meta
-            .active_mode
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "default".to_owned());
         tracing::info!(
-            mode,
             generation = snapshot.generation(),
             providers = snapshot.provider_registry().provider_ids().len(),
             plugins = snapshot.plugin_manager().plugins().len(),
@@ -1678,40 +1659,7 @@ impl AgenaCli {
             }
             ConfigSubcommand::Validate => {
                 let resolution = loader.load(&self.load_request())?;
-                println!(
-                    "config valid: path={}, mode={}",
-                    resolution.meta.config_path.display(),
-                    resolution
-                        .meta
-                        .active_mode
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| "<none>".to_owned())
-                );
-            }
-            ConfigSubcommand::Mode(args) => {
-                if args.list {
-                    let modes = loader.list_modes(self.config.clone())?;
-                    if modes.is_empty() {
-                        println!("<no modes>");
-                    } else {
-                        for mode in modes {
-                            println!("{mode}");
-                        }
-                    }
-                } else {
-                    let mut request = self.load_request();
-                    request.mode = args.name.or(request.mode);
-                    let resolution = loader.load(&request)?;
-                    println!(
-                        "{}",
-                        resolution
-                            .meta
-                            .active_mode
-                            .map(|mode| mode.to_string())
-                            .unwrap_or_else(|| "<none>".to_owned())
-                    );
-                }
+                println!("config valid: path={}", resolution.meta.config_path.display());
             }
         }
 
@@ -2371,11 +2319,6 @@ impl AgenaCli {
                 config: DiagnosticsConfigOutput {
                     path: resolution.meta.config_path.display().to_string(),
                     found: resolution.meta.config_found,
-                    active_mode: resolution
-                        .meta
-                        .active_mode
-                        .as_ref()
-                        .map(ToString::to_string),
                     applied_layers: resolution
                         .meta
                         .applied_layers
@@ -2393,7 +2336,6 @@ impl AgenaCli {
                 },
                 environment: DiagnosticsEnvironmentOutput {
                     agena_config_set: std::env::var_os("AGENA_CONFIG").is_some(),
-                    agena_mode_set: std::env::var_os("AGENA_MODE").is_some(),
                     agena_database_url_set: std::env::var_os("AGENA_DATABASE_URL").is_some(),
                     agena_database_path_set: std::env::var_os("AGENA_DATABASE_PATH").is_some(),
                     agena_telemetry_enabled_set: std::env::var_os("AGENA_TELEMETRY_ENABLED")
@@ -2647,7 +2589,6 @@ impl AgenaCli {
     pub fn load_request(&self) -> LoadConfigRequest {
         LoadConfigRequest {
             config_path: self.config.clone(),
-            mode: self.mode.clone(),
             overrides: self.overrides.clone(),
         }
     }
@@ -3769,7 +3710,6 @@ store_path = "{}"
         );
         let cli = AgenaCli {
             config: Some(path.clone()),
-            mode: None,
             overrides: Vec::new(),
             database_url: None,
             database_path: None,
@@ -3833,7 +3773,6 @@ store_path = "{}"
         );
         let cli = AgenaCli {
             config: Some(path),
-            mode: None,
             overrides: Vec::new(),
             database_url: None,
             database_path: None,
@@ -3889,7 +3828,6 @@ store_path = "{}"
         let db_path = std::env::temp_dir().join(format!("agena-cli-session-{suffix}.db"));
         let cli = AgenaCli {
             config: None,
-            mode: None,
             overrides: Vec::new(),
             database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
             database_path: None,
@@ -3945,7 +3883,6 @@ store_path = "{}"
         let db_path = std::env::temp_dir().join(format!("agena-cli-session-view-{suffix}.db"));
         let cli = AgenaCli {
             config: None,
-            mode: None,
             overrides: Vec::new(),
             database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
             database_path: None,
@@ -4062,7 +3999,6 @@ store_path = "{}"
 
         let cli = AgenaCli {
             config: None,
-            mode: None,
             overrides: Vec::new(),
             database_url: None,
             database_path: None,
@@ -4318,7 +4254,6 @@ store_path = "{}"
         let db_path = std::env::temp_dir().join(format!("agena-cli-cost-{suffix}.db"));
         let cli = AgenaCli {
             config: None,
-            mode: None,
             overrides: Vec::new(),
             database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
             database_path: None,
@@ -4360,7 +4295,6 @@ store_path = "{}"
         let db_path = std::env::temp_dir().join(format!("agena-cli-perm-{suffix}.db"));
         let cli = AgenaCli {
             config: None,
-            mode: None,
             overrides: Vec::new(),
             database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
             database_path: None,
@@ -4419,7 +4353,6 @@ store_path = "{}"
         let db_path = std::env::temp_dir().join(format!("agena-cli-perm-mutate-{suffix}.db"));
         let cli = AgenaCli {
             config: None,
-            mode: None,
             overrides: Vec::new(),
             database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
             database_path: None,
@@ -4509,7 +4442,6 @@ store_path = "{}"
         .expect("patch file should be written");
         let cli = AgenaCli {
             config: None,
-            mode: None,
             overrides: Vec::new(),
             database_url: None,
             database_path: None,
@@ -4621,23 +4553,17 @@ store_path = "{}"
     }
 
     #[tokio::test]
-    async fn provider_capabilities_command_renders_resolved_alias_capabilities() {
+    async fn provider_capabilities_command_renders_resolved_provider_capabilities() {
         let path = write_temp_config(
             r#"
 [providers.openai]
 kind = "openai"
 base_url = "https://api.openai.com/v1"
-default_model = "gpt-4.1-mini"
+default_model = "gpt-5"
 api_key_env = "OPENAI_API_KEY"
 
-[providers.prod]
-kind = "alias"
-target_provider_id = "openai"
-default_model = "gpt-5"
-
-[[providers.prod.capability_overrides]]
-model = "gpt-5"
-image_input = "unsupported"
+[providers.openai.models."gpt-5"]
+input = { unsupported = ["image"] }
 "#,
         );
         let env = TestEnvironment {
@@ -4646,13 +4572,12 @@ image_input = "unsupported"
         let loader = ConfigLoader::new(env);
         let cli = AgenaCli {
             config: Some(path),
-            mode: None,
             overrides: Vec::new(),
             database_url: None,
             database_path: None,
             command: Some(AgenaCommand::Provider(ProviderCommand {
                 command: Some(ProviderSubcommand::Capabilities(ProviderCapabilitiesArgs {
-                    target: "prod".to_owned(),
+                    target: "openai".to_owned(),
                     model: None,
                     format: ConfigOutputFormat::Json,
                 })),
@@ -4664,7 +4589,7 @@ image_input = "unsupported"
                 &loader,
                 ProviderCommand {
                     command: Some(ProviderSubcommand::Capabilities(ProviderCapabilitiesArgs {
-                        target: "prod/gpt-5".to_owned(),
+                        target: "openai/gpt-5".to_owned(),
                         model: None,
                         format: ConfigOutputFormat::Json,
                     })),
@@ -4674,9 +4599,9 @@ image_input = "unsupported"
             .expect("provider capabilities command should succeed");
         let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
 
-        assert_eq!(value["provider_id"], "prod");
+        assert_eq!(value["provider_id"], "openai");
         assert_eq!(value["model"], "gpt-5");
-        assert_eq!(value["model_ref"], "prod/gpt-5");
+        assert_eq!(value["model_ref"], "openai/gpt-5");
         assert_eq!(value["capabilities"]["image_input"], "unsupported");
         assert_eq!(value["capabilities"]["document_input"], "supported");
         assert_eq!(value["metadata"]["family"], "gpt");
@@ -4697,7 +4622,6 @@ default_model = "claude-sonnet-4-5"
         });
         let cli = AgenaCli {
             config: Some(path),
-            mode: None,
             overrides: Vec::new(),
             database_url: None,
             database_path: None,
@@ -4728,19 +4652,14 @@ default_model = "claude-sonnet-4-5"
     }
 
     #[tokio::test]
-    async fn provider_list_command_includes_alias_default_models() {
+    async fn provider_list_command_includes_provider_default_models() {
         let path = write_temp_config(
             r#"
 [providers.openai]
 kind = "openai"
 base_url = "https://api.openai.com/v1"
-default_model = "gpt-4.1-mini"
-api_key_env = "OPENAI_API_KEY"
-
-[providers.prod]
-kind = "alias"
-target_provider_id = "openai"
 default_model = "gpt-5"
+api_key_env = "OPENAI_API_KEY"
 "#,
         );
         let env = TestEnvironment {
@@ -4749,7 +4668,6 @@ default_model = "gpt-5"
         let loader = ConfigLoader::new(env);
         let cli = AgenaCli {
             config: Some(path),
-            mode: None,
             overrides: Vec::new(),
             database_url: None,
             database_path: None,
@@ -4774,13 +4692,8 @@ default_model = "gpt-5"
 
         assert!(providers.iter().any(|item| {
             item["provider_id"] == "openai"
-                && item["default_model"] == "gpt-4.1-mini"
-                && item["default_model_ref"] == "openai/gpt-4.1-mini"
-        }));
-        assert!(providers.iter().any(|item| {
-            item["provider_id"] == "prod"
                 && item["default_model"] == "gpt-5"
-                && item["default_model_ref"] == "prod/gpt-5"
+                && item["default_model_ref"] == "openai/gpt-5"
         }));
     }
 

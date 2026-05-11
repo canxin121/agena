@@ -1,4 +1,4 @@
-cli-about = Agena terminal chat application
+cli-about = Agena unified terminal workspace
 
 pane-sessions = Sessions
 pane-sessions-search = Sessions [{$query}]

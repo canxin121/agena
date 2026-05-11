@@ -88,7 +88,8 @@ This refactor delivers the unified event substrate end-to-end:
 publisher → store → bus → multi-transport server → SDK + TUI subscription.
 
 **Migrated**:
-- `agena-tui` consumes live events via the unified `EventBus` (push), in
+- the unified terminal UI (`agena`, with `agena-tui` kept as a compatibility
+  wrapper) consumes live events via the unified `EventBus` (push), in
   addition to its existing 250ms safety-net poll. See
   `Backend::subscribe_session_events` and `AppMessage::SessionEventArrived`.
 - `agena-studio-server` mounts both v1 (`/api/v1/*`) and v2 (`/api/v2/*`)

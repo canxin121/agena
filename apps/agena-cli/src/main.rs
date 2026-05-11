@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use agena::{
     AppError,
-    cli::{AgenaCli, AgenaCommand, AppServerArgs, AppServerTransport},
+    cli::{AgenaCli, AgenaCommand, AppServerArgs, AppServerTransport, TuiArgs},
     config::ConfigLoader,
     message::PartContent,
     model::ModelRef,
@@ -30,6 +30,24 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 #[tokio::main]
 async fn main() -> Result<(), agena::AppError> {
     let cli = AgenaCli::parse();
+    if let Some(args) = tui_launch_args(&cli) {
+        return agena_tui::run_with_load_request(
+            cli.load_request(),
+            agena_tui::TuiLaunchArgs {
+                database_url: args.database_url.or_else(|| cli.database_url.clone()),
+                database_path: args.database_path.or_else(|| cli.database_path.clone()),
+                workspace_root: args.workspace,
+                session: args.session,
+                search: args.search,
+                locale: args.locale,
+                log_file: args.log_file,
+                log_stderr: args.log_stderr,
+                tui_config: args.tui_config,
+            },
+        )
+        .await;
+    }
+
     let resolution = ConfigLoader::default().load(&cli.load_request()).ok();
     let filter = resolution
         .as_ref()
@@ -70,6 +88,72 @@ async fn main() -> Result<(), agena::AppError> {
     match cli.command.clone() {
         Some(AgenaCommand::AppServer(args)) => run_app_server(cli, args).await,
         _ => cli.run(Some(filter_handle)).await,
+    }
+}
+
+fn tui_launch_args(cli: &AgenaCli) -> Option<TuiArgs> {
+    match cli.command.clone() {
+        None => Some(TuiArgs::default()),
+        Some(AgenaCommand::Tui(args)) => Some(args),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tui_launch_args_defaults_to_tui_for_plain_agena() {
+        let cli = AgenaCli {
+            config: None,
+            overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
+            command: None,
+        };
+
+        assert_eq!(tui_launch_args(&cli).unwrap().session, None);
+    }
+
+    #[test]
+    fn tui_launch_args_preserves_explicit_tui_options() {
+        let cli = AgenaCli {
+            config: None,
+            overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
+            command: Some(AgenaCommand::Tui(TuiArgs {
+                session: Some(42),
+                search: Some("lineage".to_string()),
+                locale: Some("en-US".to_string()),
+                log_stderr: true,
+                ..TuiArgs::default()
+            })),
+        };
+
+        let args = tui_launch_args(&cli).expect("tui args should be returned");
+        assert_eq!(args.session, Some(42));
+        assert_eq!(args.search.as_deref(), Some("lineage"));
+        assert_eq!(args.locale.as_deref(), Some("en-US"));
+        assert!(args.log_stderr);
+    }
+
+    #[test]
+    fn tui_launch_args_ignores_non_tui_subcommands() {
+        let cli = AgenaCli {
+            config: None,
+            overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
+            command: Some(AgenaCommand::Resume(agena::cli::ResumeArgs {
+                session_id: Some(7),
+                last: false,
+                format: agena::config::ConfigOutputFormat::Toml,
+            })),
+        };
+
+        assert!(tui_launch_args(&cli).is_none());
     }
 }
 

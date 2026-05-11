@@ -16,21 +16,6 @@ pub fn t(i18n: &I18n, key: &str) -> String {
     i18n.text(key)
 }
 
-pub fn sessions_title(i18n: &I18n, mode: &str, query: &str) -> String {
-    let mut label = t(i18n, "pane-sessions");
-    if !mode.trim().is_empty() {
-        label.push_str(format!(" [{mode}]").as_str());
-    }
-    if !query.trim().is_empty() {
-        label.push_str(format!(" [{}]", query.trim()).as_str());
-    }
-    format!(" {label} ")
-}
-
-pub fn transcript_panel_title(i18n: &I18n) -> String {
-    format!(" {} ", t(i18n, "pane-messages"))
-}
-
 pub fn transcript_header_title(
     i18n: &I18n,
     session_id: Option<i64>,

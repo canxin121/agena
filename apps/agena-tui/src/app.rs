@@ -10331,6 +10331,20 @@ mod tests {
     }
 
     #[test]
+    fn transcript_surface_header_height_expands_with_available_height() {
+        assert_eq!(view::transcript_surface_header_height(8), 2);
+        assert_eq!(view::transcript_surface_header_height(14), 3);
+        assert_eq!(view::transcript_surface_header_height(24), 4);
+    }
+
+    #[test]
+    fn session_sidebar_header_height_respects_compact_layouts() {
+        assert_eq!(view::session_sidebar_header_height(4), 2);
+        assert_eq!(view::session_sidebar_header_height(6), 3);
+        assert_eq!(view::session_sidebar_header_height(9), 4);
+    }
+
+    #[test]
     fn composer_height_accounts_for_extra_rows() {
         let logical_lines = 1_u16;
         let no_items_height = min(14, logical_lines + 2);

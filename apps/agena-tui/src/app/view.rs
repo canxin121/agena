@@ -41,13 +41,9 @@ impl App {
             transcript_host_area = horizontal[1];
         }
 
-        let transcript = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(4), Constraint::Min(4)])
-            .split(transcript_host_area);
-
+        let transcript_layout = transcript_surface_layout(transcript_host_area);
         self.layout = LayoutCache {
-            transcript_body: inner_rect(transcript[1]),
+            transcript_body: transcript_layout.body,
         };
 
         self.transcript.clamp_scroll(
@@ -55,31 +51,141 @@ impl App {
             self.layout.transcript_body.height,
         );
 
-        self.render_sessions(frame, sessions_area);
-        self.render_transcript_header(frame, transcript[0]);
-        self.render_transcript(frame, transcript[1]);
+        self.render_sessions(frame, sessions_area, stacked_sessions);
+        self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
         self.render_status(frame, status);
         self.render_overlay(frame, area);
     }
 
-    fn render_sessions(&mut self, frame: &mut Frame, area: Rect) {
-        let title = ui_text::sessions_title(
-            &self.i18n,
-            self.current_session_view_summary().as_str(),
-            self.sessions.search_query.as_str(),
-        );
+    fn render_sessions(&mut self, frame: &mut Frame, area: Rect, stacked: bool) {
+        let frame_block = Block::default().borders(if stacked {
+            Borders::BOTTOM
+        } else {
+            Borders::RIGHT
+        });
+        let inner = inset_rect(frame_block.inner(area), 1, 1);
+        frame.render_widget(frame_block, area);
+
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+
+        let header_height = session_sidebar_header_height(inner.height);
+        let footer_height = u16::from(inner.height > header_height.saturating_add(2));
+        let mut constraints = vec![Constraint::Length(header_height), Constraint::Min(1)];
+        if footer_height > 0 {
+            constraints.push(Constraint::Length(footer_height));
+        }
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(inner);
+        let header_area = sections[0];
+        let list_area = sections[1];
+        let footer_area = (footer_height > 0).then_some(sections[2]);
+
+        let header_frame = Block::default().borders(Borders::BOTTOM);
+        let header_inner = inset_rect(header_frame.inner(header_area), 0, 0);
+        frame.render_widget(header_frame, header_area);
+
+        if header_inner.width > 0 && header_inner.height > 0 {
+            let mut header_constraints = vec![Constraint::Length(1)];
+            if header_inner.height >= 2 {
+                header_constraints.push(Constraint::Length(1));
+            }
+            if header_inner.height >= 3 {
+                header_constraints.push(Constraint::Length(1));
+            }
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(header_constraints)
+                .split(header_inner);
+
+            let selected_title = self
+                .current_or_selected_session_title()
+                .unwrap_or_else(|| "new session".to_string());
+            let selected_id = self
+                .current_or_selected_session_id()
+                .map(|id| format!("#{id}"))
+                .unwrap_or_else(|| "new".to_string());
+            let mut selected_right = vec![selected_id];
+            if let Some(session_id) = self.current_or_selected_session_id()
+                && self.session_is_busy(session_id)
+            {
+                selected_right.push(ui_text::t(&self.i18n, "transcript-header-busy"));
+            }
+
+            let mut summary_right = vec![format!("{} listed", self.sessions.items.len())];
+            if self.sessions.loading {
+                summary_right.push(ui_text::t(&self.i18n, "transcript-header-loading"));
+            } else if self.sessions.loading_more {
+                summary_right.push(ui_text::t(&self.i18n, "sessions-loading-more"));
+            }
+
+            self.render_header_row(
+                frame,
+                rows[0],
+                ui_text::t(&self.i18n, "pane-sessions"),
+                summary_right.join("  ·  "),
+                Style::default().add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::DarkGray),
+            );
+            if rows.len() > 1 {
+                self.render_header_row(
+                    frame,
+                    rows[1],
+                    selected_title,
+                    selected_right.join("  ·  "),
+                    Style::default(),
+                    Style::default().fg(Color::DarkGray),
+                );
+            }
+
+            if rows.len() > 2 {
+                let selected_meta = self
+                    .current_or_selected_session_summary()
+                    .map(|session| {
+                        let mut parts = vec![ui_text::session_meta(
+                            &self.i18n,
+                            session.id,
+                            session.message_count,
+                            session.updated_at,
+                        )];
+                        if let Some(parent_id) = session.parent_id {
+                            parts.push(self.i18n.text_args(
+                                "session-summary-parent",
+                                &crate::fl_args!("id" => parent_id),
+                            ));
+                        }
+                        if session.child_session_count > 0 {
+                            parts.push(self.i18n.text_args(
+                                "session-summary-children",
+                                &crate::fl_args!("count" => session.child_session_count as i64),
+                            ));
+                        }
+                        parts.join("  ·  ")
+                    })
+                    .unwrap_or_else(|| self.current_session_view_summary());
+
+                let mut scope_parts = vec![self.current_session_view_summary()];
+                if !self.sessions.search_query.trim().is_empty() {
+                    scope_parts.push(format!("find={}", self.sessions.search_query.trim()));
+                }
+                self.render_header_row(
+                    frame,
+                    rows[2],
+                    selected_meta,
+                    scope_parts.join("  ·  "),
+                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::DarkGray),
+                );
+            }
+        }
+
         let current_session_id = self.transcript.session_id;
         let current_parent_id = self.current_parent_session_id();
         let session_depths = session_depth_map(self.sessions.items.as_slice());
-
-        if self.sessions.items.is_empty() && self.sessions.initialized {
-            let empty = Paragraph::new(ui_text::t(&self.i18n, "sessions-empty"))
-                .block(Block::default().title(title).borders(Borders::ALL))
-                .alignment(Alignment::Center);
-            frame.render_widget(empty, area);
-            return;
-        }
 
         let mut items = self
             .sessions
@@ -87,6 +193,7 @@ impl App {
             .iter()
             .map(|session| {
                 let is_open = self.transcript.session_id == Some(session.id);
+                let is_busy = self.session_is_busy(session.id);
                 let lineage_relation = self
                     .current_lineage_item(session.id)
                     .map(|item| item.relation);
@@ -94,65 +201,67 @@ impl App {
                     current_session_id.is_some_and(|id| session.parent_id == Some(id));
                 let is_current_parent = current_parent_id == Some(session.id);
                 let depth = session_depths.get(&session.id).copied().unwrap_or_default();
-                let mut title_style = Style::default();
+                let mut title_style = Style::default().add_modifier(Modifier::BOLD);
                 if is_open {
                     title_style = title_style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
+                } else if is_busy {
+                    title_style = title_style.fg(Color::Magenta);
                 }
 
+                let marker_style = if is_open {
+                    Style::default().fg(Color::Cyan)
+                } else if matches!(lineage_relation, Some(LineageRelation::Ancestor)) || is_current_parent {
+                    Style::default().fg(Color::Magenta)
+                } else if matches!(lineage_relation, Some(LineageRelation::Child)) || is_current_child {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
                 let mut title_spans = vec![Span::styled(
                     format!(
                         "{}{}",
                         "  ".repeat(depth),
                         if depth == 0 { "◆ " } else { "↳ " }
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    marker_style,
                 )];
                 title_spans.push(Span::styled(session.title.clone(), title_style));
-                if is_open {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-current")),
+                let badge = if is_open {
+                    Some((
+                        ui_text::t(&self.i18n, "session-tag-current"),
                         Style::default().fg(Color::Cyan),
-                    ));
-                }
-                if is_current_parent {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-parent")),
+                    ))
+                } else if is_busy {
+                    Some((
+                        ui_text::t(&self.i18n, "transcript-header-busy"),
                         Style::default().fg(Color::Magenta),
-                    ));
+                    ))
+                } else if is_current_parent {
+                    Some((
+                        ui_text::t(&self.i18n, "session-tag-parent"),
+                        Style::default().fg(Color::Magenta),
+                    ))
                 } else if matches!(lineage_relation, Some(LineageRelation::Ancestor)) {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-ancestor")),
+                    Some((
+                        ui_text::t(&self.i18n, "session-tag-ancestor"),
                         Style::default().fg(Color::Magenta),
-                    ));
-                }
-                if is_current_child || matches!(lineage_relation, Some(LineageRelation::Child)) {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-child")),
+                    ))
+                } else if is_current_child || matches!(lineage_relation, Some(LineageRelation::Child)) {
+                    Some((
+                        ui_text::t(&self.i18n, "session-tag-child"),
                         Style::default().fg(Color::Green),
-                    ));
+                    ))
                 } else if matches!(lineage_relation, Some(LineageRelation::Sibling)) {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-sibling")),
+                    Some((
+                        ui_text::t(&self.i18n, "session-tag-sibling"),
                         Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                if session.child_session_count > 0 {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!(
-                            "[{}]",
-                            self.i18n.text_args(
-                                "session-summary-children",
-                                &crate::fl_args!("count" => session.child_session_count as i64),
-                            )
-                        ),
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                    ))
+                } else {
+                    None
+                };
+                if let Some((label, style)) = badge {
+                    title_spans.push(Span::styled("  ", Style::default()));
+                    title_spans.push(Span::styled(label, style));
                 }
 
                 let meta = ui_text::session_meta(
@@ -168,10 +277,16 @@ impl App {
                         &crate::fl_args!("id" => parent_id),
                     ));
                 }
+                if session.child_session_count > 0 {
+                    meta_parts.push(self.i18n.text_args(
+                        "session-summary-children",
+                        &crate::fl_args!("count" => session.child_session_count as i64),
+                    ));
+                }
                 ListItem::new(vec![
                     Line::from(title_spans),
                     Line::from(Span::styled(
-                        meta_parts.join(" | "),
+                        meta_parts.join("  ·  "),
                         Style::default().fg(Color::DarkGray),
                     )),
                 ])
@@ -190,136 +305,110 @@ impl App {
             ))));
         }
 
-        let list = List::new(items)
-            .block(Block::default().title(title).borders(Borders::ALL))
-            .highlight_style(selection_highlight_style())
-            .highlight_symbol(">> ");
-
-        let mut state = ListState::default();
-        state.select(self.sessions.selection_for_render());
-        frame.render_stateful_widget(list, area, &mut state);
-    }
-
-    fn render_transcript_header(&mut self, frame: &mut Frame, area: Rect) {
-        let is_running = self.transcript.execution.as_ref().is_some_and(|execution| {
-            execution.run_state != SessionRunState::Idle || execution.blocked
-        });
-        let title = ui_text::transcript_header_title(
-            &self.i18n,
-            self.transcript.session_id,
-            self.transcript.session_title.as_str(),
-            is_running,
-        );
-        let mut top_right = Vec::new();
-        if self.transcript.submitting {
-            top_right.push(ui_text::t(&self.i18n, "transcript-header-busy"));
-        }
-        if self.transcript.loading_initial {
-            top_right.push(ui_text::t(&self.i18n, "transcript-header-loading"));
-        } else if self.transcript.loading_older {
-            top_right.push(ui_text::t(&self.i18n, "transcript-header-loading-older"));
-        }
-
-        let mut bottom_left = Vec::new();
-        if let Some(execution) = self.transcript.execution.as_ref() {
-            bottom_left.push(ui_text::session_meta(
-                &self.i18n,
-                execution.session.id,
-                execution.session.message_count,
-                execution.session.updated_at,
-            ));
-            if let Some(parent_id) = execution.session.parent_id {
-                bottom_left.push(self.i18n.text_args(
-                    "session-summary-parent",
-                    &crate::fl_args!("id" => parent_id),
-                ));
-            }
-            if execution.session.child_session_count > 0 {
-                bottom_left.push(self.i18n.text_args(
-                    "session-summary-children",
-                    &crate::fl_args!("count" => execution.session.child_session_count as i64),
-                ));
-            }
-        }
-        bottom_left.extend(self.current_lineage_context_parts());
-        bottom_left.extend(self.current_execution_context_parts());
-        bottom_left.push(self.current_session_view_summary());
-        if let Some(summary) = self.run_options.summary() {
-            bottom_left.push(summary);
-        }
-
-        let mut bottom_right = Vec::new();
-        let total_lines = self
-            .transcript
-            .rendered(self.layout.transcript_body.width.max(1))
-            .lines
-            .len();
-        if total_lines > 0 {
-            let first_line = min(self.transcript.scroll.saturating_add(1), total_lines);
-            let last_line = min(
-                self.transcript
-                    .scroll
-                    .saturating_add(self.layout.transcript_body.height.max(1) as usize),
-                total_lines,
+        if self.sessions.items.is_empty() && self.sessions.initialized {
+            frame.render_widget(
+                Paragraph::new(ui_text::t(&self.i18n, "sessions-empty")).alignment(Alignment::Center),
+                list_area,
             );
-            let percent = ((last_line as f64 / total_lines as f64) * 100.0).round() as u16;
-            bottom_right.push(ui_text::transcript_lines_summary(
-                &self.i18n,
-                first_line,
-                last_line,
-                total_lines,
-                percent,
-            ));
-        }
-        if self.transcript.follow_tail {
-            bottom_right.push(ui_text::t(&self.i18n, "transcript-header-tail"));
-        }
-        if !self.transcript.search_query.trim().is_empty() {
-            bottom_right.push(ui_text::transcript_search_summary(
-                &self.i18n,
-                self.transcript.search_query.as_str(),
-                self.transcript.current_search_match_number(),
-                self.transcript.current_search_match_count(),
-            ));
+        } else {
+            let list = List::new(items)
+                .highlight_style(selection_highlight_style())
+                .highlight_symbol("> ");
+
+            let mut state = ListState::default();
+            state.select(self.sessions.selection_for_render());
+            frame.render_stateful_widget(list, list_area, &mut state);
         }
 
-        let block = Block::default().borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        if inner.width == 0 || inner.height == 0 {
-            return;
+        if let Some(footer_area) = footer_area {
+            let footer_frame = Block::default().borders(Borders::TOP);
+            let footer_inner = inset_rect(footer_frame.inner(footer_area), 0, 0);
+            frame.render_widget(footer_frame, footer_area);
+            if footer_inner.width > 0 && footer_inner.height > 0 {
+                let left = if self.sessions.items.is_empty() {
+                    self.current_session_view_summary()
+                } else {
+                    format!(
+                        "{}  ·  {}/{}",
+                        self.current_session_view_summary(),
+                        self.sessions.selected.saturating_add(1),
+                        self.sessions.items.len(),
+                    )
+                };
+                let mut right_parts = Vec::new();
+                if !self.sessions.search_query.trim().is_empty() {
+                    right_parts.push(format!("find={}", self.sessions.search_query.trim()));
+                }
+                if self.sessions.has_more {
+                    right_parts.push(ui_text::t(&self.i18n, "sessions-more"));
+                }
+                self.render_header_row(
+                    frame,
+                    footer_inner,
+                    left,
+                    right_parts.join("  ·  "),
+                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::DarkGray),
+                );
+            }
         }
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(inner);
-        self.render_header_row(
-            frame,
-            rows[0],
-            title,
-            top_right.join(" | "),
-            Style::default().add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::DarkGray),
-        );
-        self.render_header_row(
-            frame,
-            rows[1],
-            bottom_left.join(" | "),
-            bottom_right.join(" | "),
-            Style::default().fg(Color::DarkGray),
-            Style::default().fg(Color::DarkGray),
-        );
     }
 
-    fn render_transcript(&mut self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .title(ui_text::transcript_panel_title(&self.i18n))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+    fn render_transcript_surface(&mut self, frame: &mut Frame, area: Rect) {
+        let layout = transcript_surface_layout(area);
+        let header_frame = Block::default().borders(Borders::BOTTOM);
+        let header_inner = inset_rect(header_frame.inner(layout.header), 1, 0);
+        frame.render_widget(header_frame, layout.header);
 
-        if inner.width == 0 || inner.height == 0 {
+        if header_inner.width > 0 && header_inner.height > 0 {
+            let mut constraints = vec![Constraint::Length(1)];
+            if header_inner.height >= 2 {
+                constraints.push(Constraint::Length(1));
+            }
+            if header_inner.height >= 3 {
+                constraints.push(Constraint::Length(1));
+            }
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(constraints)
+                .split(header_inner);
+
+            let top_right = self.transcript_surface_top_right();
+            let title = self.transcript_surface_title();
+            self.render_header_row(
+                frame,
+                rows[0],
+                title,
+                top_right.join("  ·  "),
+                Style::default().add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::DarkGray),
+            );
+
+            if rows.len() > 1 {
+                let primary_left = self.transcript_surface_primary_left();
+                let primary_right = self.transcript_surface_primary_right();
+                self.render_header_row(
+                    frame,
+                    rows[1],
+                    primary_left,
+                    primary_right,
+                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::DarkGray),
+                );
+            }
+            if rows.len() > 2 {
+                let secondary_left = self.transcript_surface_secondary_left();
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        secondary_left,
+                        Style::default().fg(Color::DarkGray),
+                    ))),
+                    rows[2],
+                );
+            }
+        }
+
+        if layout.body.width == 0 || layout.body.height == 0 {
             return;
         }
 
@@ -329,7 +418,7 @@ impl App {
                 Line::from(ui_text::t(&self.i18n, "no-session-selected-hint")),
             ]
         } else {
-            let rendered = self.transcript.rendered(inner.width).clone();
+            let rendered = self.transcript.rendered(layout.body.width).clone();
             let matches = rendered.search_matches.clone();
             let active_match = self
                 .transcript
@@ -356,7 +445,121 @@ impl App {
         let paragraph = Paragraph::new(Text::from(lines))
             .scroll((min(self.transcript.scroll, u16::MAX as usize) as u16, 0))
             .wrap(Wrap { trim: false });
-        frame.render_widget(paragraph, inner);
+        frame.render_widget(paragraph, layout.body);
+    }
+
+    fn transcript_surface_top_right(&self) -> Vec<String> {
+        let is_running = self.transcript.execution.as_ref().is_some_and(|execution| {
+            execution.run_state != SessionRunState::Idle || execution.blocked
+        });
+        let mut top_right = Vec::new();
+        if is_running && !self.transcript.submitting {
+            top_right.push(ui_text::t(&self.i18n, "session-running"));
+        }
+        if self.transcript.submitting {
+            top_right.push(ui_text::t(&self.i18n, "transcript-header-busy"));
+        }
+        if self.transcript.loading_initial {
+            top_right.push(ui_text::t(&self.i18n, "transcript-header-loading"));
+        } else if self.transcript.loading_older {
+            top_right.push(ui_text::t(&self.i18n, "transcript-header-loading-older"));
+        }
+        top_right
+    }
+
+    fn transcript_surface_title(&self) -> String {
+        let is_running = self.transcript.execution.as_ref().is_some_and(|execution| {
+            execution.run_state != SessionRunState::Idle || execution.blocked
+        });
+        ui_text::transcript_header_title(
+            &self.i18n,
+            self.transcript.session_id,
+            self.transcript.session_title.as_str(),
+            is_running,
+        )
+    }
+
+    fn transcript_surface_primary_left(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(execution) = self.transcript.execution.as_ref() {
+            parts.push(ui_text::session_meta(
+                &self.i18n,
+                execution.session.id,
+                execution.session.message_count,
+                execution.session.updated_at,
+            ));
+            if let Some(parent_id) = execution.session.parent_id {
+                parts.push(self.i18n.text_args(
+                    "session-summary-parent",
+                    &crate::fl_args!("id" => parent_id),
+                ));
+            }
+            if execution.session.child_session_count > 0 {
+                parts.push(self.i18n.text_args(
+                    "session-summary-children",
+                    &crate::fl_args!("count" => execution.session.child_session_count as i64),
+                ));
+            }
+        }
+        if parts.is_empty() {
+            if let Some(session_id) = self.current_or_selected_session_id() {
+                parts.push(format!("#{session_id}"));
+            }
+            parts.push(self.current_session_view_summary());
+        }
+        parts.join("  ·  ")
+    }
+
+    fn transcript_surface_primary_right(&mut self) -> String {
+        let mut parts = Vec::new();
+        let total_lines = self
+            .transcript
+            .rendered(self.layout.transcript_body.width.max(1))
+            .lines
+            .len();
+        if total_lines > 0 {
+            let first_line = min(self.transcript.scroll.saturating_add(1), total_lines);
+            let last_line = min(
+                self.transcript
+                    .scroll
+                    .saturating_add(self.layout.transcript_body.height.max(1) as usize),
+                total_lines,
+            );
+            let percent = ((last_line as f64 / total_lines as f64) * 100.0).round() as u16;
+            parts.push(ui_text::transcript_lines_summary(
+                &self.i18n,
+                first_line,
+                last_line,
+                total_lines,
+                percent,
+            ));
+        }
+        if self.transcript.follow_tail {
+            parts.push(ui_text::t(&self.i18n, "transcript-header-tail"));
+        }
+        if !self.transcript.search_query.trim().is_empty() {
+            parts.push(ui_text::transcript_search_summary(
+                &self.i18n,
+                self.transcript.search_query.as_str(),
+                self.transcript.current_search_match_number(),
+                self.transcript.current_search_match_count(),
+            ));
+        }
+        parts.join("  ·  ")
+    }
+
+    fn transcript_surface_secondary_left(&self) -> String {
+        let mut parts = self.current_lineage_context_parts();
+        parts.extend(
+            self.current_execution_context_parts()
+                .into_iter()
+                .filter(|part| !part.starts_with("cwd=")),
+        );
+        parts.push(self.current_session_view_summary());
+        if let Some(summary) = self.run_options.summary() {
+            parts.push(summary);
+        }
+        parts.join("  ·  ")
     }
 
     fn render_composer(&self, frame: &mut Frame, area: Rect) {
@@ -1650,12 +1853,54 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
-fn inner_rect(area: Rect) -> Rect {
+#[derive(Debug, Clone, Copy)]
+struct TranscriptSurfaceLayout {
+    header: Rect,
+    body: Rect,
+}
+
+fn inset_rect(area: Rect, horizontal: u16, vertical: u16) -> Rect {
     Rect {
-        x: area.x.saturating_add(1),
-        y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(2),
+        x: area.x.saturating_add(horizontal),
+        y: area.y.saturating_add(vertical),
+        width: area.width.saturating_sub(horizontal.saturating_mul(2)),
+        height: area.height.saturating_sub(vertical.saturating_mul(2)),
+    }
+}
+
+pub(super) fn transcript_surface_header_height(total_height: u16) -> u16 {
+    if total_height <= 10 {
+        2
+    } else if total_height <= 18 {
+        3
+    } else {
+        4
+    }
+}
+
+fn transcript_surface_layout(area: Rect) -> TranscriptSurfaceLayout {
+    let header_height = min(
+        transcript_surface_header_height(area.height),
+        area.height.saturating_sub(1),
+    );
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(header_height), Constraint::Min(1)])
+        .split(area);
+
+    TranscriptSurfaceLayout {
+        header: split[0],
+        body: inset_rect(split[1], 1, 0),
+    }
+}
+
+pub(super) fn session_sidebar_header_height(total_height: u16) -> u16 {
+    if total_height <= 4 {
+        2
+    } else if total_height <= 8 {
+        3
+    } else {
+        4
     }
 }
 

@@ -66,19 +66,23 @@ use crate::{
 #[command(
     name = "agena",
     version,
-    about = "Agena backend CLI",
-    long_about = "Agena is an LLM-agent runtime. The CLI runs sessions \
-                  interactively (`agena exec`), manages plugins / MCP \
-                  servers / providers, and exposes app-server / mcp-server \
-                  transports for IDE integrations.\n\n\
+    about = "Agena unified CLI and terminal UI",
+    long_about = "Agena is an LLM-agent runtime with a unified CLI/TUI. \
+                  Running `agena` starts the terminal UI directly; use \
+                  subcommands like `exec`, `sessions`, `plugin`, \
+                  `mcp-server`, or `app-server` for non-TUI workflows.\n\n\
                   Quick start:\n  \
+                  agena\n  \
                   agena exec \"summarise the README\"\n  \
-                  agena sessions list\n  \
-                  agena plugin list\n\n\
+                  agena sessions list\n\n\
                   Configuration is loaded from $AGENA_CONFIG, the path passed \
                   with --config, or `agena.toml` in the workspace. \
                   Run `agena config show` to inspect the resolved settings.",
     after_help = "EXAMPLES:\n  \
+                  Start the terminal UI:\n    \
+                  agena\n\n  \
+                  Start the terminal UI at a specific session:\n    \
+                  agena tui --session 42\n\n  \
                   Start a one-shot turn:\n    \
                   agena exec \"explain crates/agena-api-server\"\n\n  \
                   Resume the most recent session:\n    \
@@ -127,6 +131,7 @@ pub enum AgenaCommand {
     Resume(ResumeArgs),
     Review(ReviewArgs),
     Sessions(SessionsCommand),
+    Tui(TuiArgs),
     Worktree(WorktreeArgs),
 }
 
@@ -687,6 +692,28 @@ pub struct ExecArgs {
     pub prompt: String,
 }
 
+#[derive(Debug, Clone, Args, Default)]
+pub struct TuiArgs {
+    #[arg(long, env = "AGENA_DATABASE_URL")]
+    pub database_url: Option<String>,
+    #[arg(long, env = "AGENA_DATABASE_PATH")]
+    pub database_path: Option<PathBuf>,
+    #[arg(long = "workspace", alias = "cwd")]
+    pub workspace: Option<PathBuf>,
+    #[arg(long)]
+    pub session: Option<i64>,
+    #[arg(long)]
+    pub search: Option<String>,
+    #[arg(long)]
+    pub locale: Option<String>,
+    #[arg(long, env = "AGENA_TUI_LOG_FILE", conflicts_with = "log_stderr")]
+    pub log_file: Option<PathBuf>,
+    #[arg(long, env = "AGENA_TUI_LOG_STDERR")]
+    pub log_stderr: bool,
+    #[arg(long, env = "AGENA_TUI_CONFIG")]
+    pub tui_config: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct ReviewArgs {
     #[arg(long = "workspace", alias = "cwd")]
@@ -1071,6 +1098,9 @@ impl AgenaCli {
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
             Some(AgenaCommand::Review(args)) => self.run_review(args).await,
             Some(AgenaCommand::Sessions(command)) => self.run_sessions(command).await,
+            Some(AgenaCommand::Tui(_)) => Err(AppError::Config(
+                "tui command must be handled by the agena-cli binary".to_owned(),
+            )),
             Some(AgenaCommand::Worktree(args)) => self.run_worktree(args).await,
             None => self.run_default(loader, tracing_reload_handle).await,
         }
@@ -1659,7 +1689,10 @@ impl AgenaCli {
             }
             ConfigSubcommand::Validate => {
                 let resolution = loader.load(&self.load_request())?;
-                println!("config valid: path={}", resolution.meta.config_path.display());
+                println!(
+                    "config valid: path={}",
+                    resolution.meta.config_path.display()
+                );
             }
         }
 

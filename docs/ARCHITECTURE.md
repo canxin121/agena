@@ -6,8 +6,8 @@
 ## 顶层布局
 
 - `apps/` — 用户实际启动的可执行体
-  - `agena-cli` — 终端 CLI 入口（`agena` 二进制）
-  - `agena-tui` — 全功能终端 UI
+  - `agena-cli` — 统一终端入口（`agena` 二进制，默认直接启动 TUI，也承载 `exec` / `mcp-server` / `app-server` 等子命令）
+  - `agena-tui` — 兼容性包装器，复用同一套 TUI 启动链
   - `agena-studio-server` — Studio Web 后端，HTTP/WebSocket
 - `crates/` — 库 crate，按职责切分
   - `agena` — 核心运行时（agent / session / runtime / tool / provider /
@@ -36,7 +36,7 @@
 user input
     │
     ▼
-agena-cli / agena-tui ──► agena::session::Manager
+agena / agena-tui(compat) ──► agena::session::Manager
                               │
                               ├─► agena::permission   （工具调用门控）
                               ├─► agena::tool         （工具执行）

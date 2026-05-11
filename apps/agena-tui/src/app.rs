@@ -10938,6 +10938,20 @@ mod tests {
     }
 
     #[test]
+    fn sessions_stack_above_transcript_on_narrow_terminals() {
+        assert!(view::should_stack_sessions_layout(80));
+        assert!(view::should_stack_sessions_layout(91));
+        assert!(!view::should_stack_sessions_layout(92));
+    }
+
+    #[test]
+    fn adaptive_sessions_height_stays_within_compact_bounds() {
+        assert_eq!(view::adaptive_sessions_height(15), 6);
+        assert_eq!(view::adaptive_sessions_height(24), 8);
+        assert_eq!(view::adaptive_sessions_height(40), 10);
+    }
+
+    #[test]
     fn build_lineage_session_items_marks_descendants_of_current_as_children() {
         let now = Utc::now();
         let mut current = test_session(1, None, "Current Root", now);

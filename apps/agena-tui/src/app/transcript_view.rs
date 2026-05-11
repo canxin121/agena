@@ -206,13 +206,13 @@ pub(super) fn sanitize_terminal_text(text: &str) -> String {
     let stripped = strip_terminal_ansi_sequences(text).replace('\r', "");
     stripped
         .chars()
-        .map(|ch| match ch {
-            '\n' | '\t' => ch,
-            '\u{200e}' | '\u{200f}' => ' ',
-            '\u{202a}'..='\u{202e}' => ' ',
-            '\u{2066}'..='\u{2069}' => ' ',
-            ch if ch.is_control() => ' ',
-            _ => ch,
+        .filter_map(|ch| match ch {
+            '\n' | '\t' => Some(ch),
+            '\u{200e}' | '\u{200f}' => None,
+            '\u{202a}'..='\u{202e}' => None,
+            '\u{2066}'..='\u{2069}' => None,
+            ch if ch.is_control() => Some(' '),
+            _ => Some(ch),
         })
         .collect()
 }

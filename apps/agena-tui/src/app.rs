@@ -9857,6 +9857,97 @@ api_key = "test"
         let _ = fs::remove_file(path);
     }
 
+    #[tokio::test]
+    async fn draw_permission_overlay_sanitizes_localized_request_fields() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key = "test"
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root.clone()),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        app.overlay = Some(Overlay::Permission(PermissionOverlay {
+            session_id: 7,
+            request: PermissionRequest {
+                request_id: "req\u{2068}-7\u{2069}\u{7}".to_string(),
+                session_id: Some(7),
+                action: PermissionAction::BuiltinTool {
+                    tool_name: "exec\u{2068}".to_string(),
+                    qualifier: Some("rg\u{2069}".to_string()),
+                },
+                reason: "Need \u{1b}[31mworkspace\u{1b}[0m access\u{2068}".to_string(),
+                explanation: "Check \u{2068}repo\u{2069}\u{7}".to_string(),
+                source: Some("policy\u{2068}".to_string()),
+                scope: Some(PermissionScope::Session),
+                operator: Some("agent\u{2069}".to_string()),
+                risk: PermissionRiskLevel::High,
+                trace: vec![DecisionTraceStep {
+                    source_kind: PolicySourceKind::ManagedPolicy,
+                    summary: "managed\u{2068} summary".to_string(),
+                    source: Some("trace\u{2069}".to_string()),
+                    scope: Some(PermissionScope::Workspace),
+                    operator: Some("reviewer\u{2068}".to_string()),
+                }],
+                created_at: Utc::now(),
+            },
+            selected: 0,
+        }));
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should build");
+        terminal
+            .draw(|frame| app.draw(frame))
+            .expect("draw should succeed");
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Permission Request"));
+        assert!(rendered.contains("req"));
+        assert!(rendered.contains("workspace"));
+        assert!(rendered.contains("repo"));
+        assert!(rendered.contains("policy"));
+        assert!(rendered.contains("agent"));
+        assert!(!rendered.contains("\u{1b}"));
+        assert!(!rendered.contains("\u{7}"));
+        assert!(!rendered.contains("\u{2068}"));
+        assert!(!rendered.contains("\u{2069}"));
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn rewind_message_preview_prefers_first_text_line() {
         let now = Utc::now();

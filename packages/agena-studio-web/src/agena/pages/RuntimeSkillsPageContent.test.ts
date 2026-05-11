@@ -1,16 +1,45 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 
-const filePath = '/home/canxin/Git/ai/agena/packages/agena-studio-web/src/agena/pages/RuntimeSkillsPageContent.vue'
+import { renderVueSsr } from './test/renderVueSsr'
 
 describe('RuntimeSkillsPageContent', () => {
-  test('wires shared runtime catalog actions into the skills shell', () => {
-    const source = readFileSync(filePath, 'utf8')
+  test('renders the runtime skills shell and shared actions', async () => {
+    const html = await renderVueSsr('/src/agena/pages/RuntimeSkillsPageContent.vue', {
+      skills: {
+        runtimeSkillQuery: 'review',
+        catalogSections: [
+          {
+            id: 'skills',
+            title: 'Skills',
+            description: 'Discovered runtime skills',
+            badgeLabel: 'skill',
+            openShortcutId: 'skills',
+            openShortcutLabel: 'Open Skills Dir',
+            totalCount: 1,
+            filteredCount: 1,
+            entries: [
+              {
+                name: 'review',
+                description: 'Review code',
+                aliases: ['rv'],
+                source_path: '.agena/skills/review.md',
+              },
+            ],
+            emptyLabel: 'No skills',
+          },
+        ],
+        openWorkspaceShortcut: () => {},
+        openRuntimeConfigRoot: () => {},
+        openPluginLogsWorkspacePath: () => {},
+        openRuntimeEntryInChat: () => {},
+        openRuntimeEntrySource: () => {},
+      },
+    })
 
-    expect(source.includes('RuntimeSkillsPanel')).toBe(true)
-    expect(source.includes(':open-runtime-config-root="props.skills.openRuntimeConfigRoot"')).toBe(true)
-    expect(source.includes(':open-plugin-logs-workspace-path="props.skills.openPluginLogsWorkspacePath"')).toBe(true)
-    expect(source.includes(':open-runtime-entry-in-chat="props.skills.openRuntimeEntryInChat"')).toBe(true)
-    expect(source.includes(':open-runtime-entry-source="props.skills.openRuntimeEntrySource"')).toBe(true)
+    expect(html.includes('Search Skills &amp; Commands')).toBe(true)
+    expect(html.includes('Open Config Root')).toBe(true)
+    expect(html.includes('Open Logs')).toBe(true)
+    expect(html.includes('Review code')).toBe(true)
+    expect(html.includes('Open Source')).toBe(true)
   })
 })

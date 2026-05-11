@@ -1,16 +1,25 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 
-const filePath = '/home/canxin/Git/ai/agena/packages/agena-studio-web/src/agena/pages/SectionTabbedPageLayout.vue'
+import { renderVueSsr } from './test/renderVueSsr'
 
 describe('SectionTabbedPageLayout', () => {
-  test('contains shared section shell, tab bar, and content slot', () => {
-    const source = readFileSync(filePath, 'utf8')
+  test('renders shared shell and tab buttons', async () => {
+    const html = await renderVueSsr('/src/agena/pages/SectionTabbedPageLayout.vue', {
+      activeTab: 'providers',
+      actionError: '',
+      actionMessage: '',
+      loading: false,
+      pageDescription: 'Settings description',
+      pageTitle: 'Settings title',
+      tabs: [
+        { id: 'providers', label: 'Providers' },
+        { id: 'permissions', label: 'Permissions' },
+      ],
+    })
 
-    expect(source.includes('SectionPageShell')).toBe(true)
-    expect(source.includes('SectionTabBar')).toBe(true)
-    expect(source.includes("emit('refresh')")).toBe(true)
-    expect(source.includes("'update:activeTab'")).toBe(true)
-    expect(source.includes('<slot />')).toBe(true)
+    expect(html.includes('Settings title')).toBe(true)
+    expect(html.includes('Providers')).toBe(true)
+    expect(html.includes('Permissions')).toBe(true)
+    expect(html.includes('Refresh')).toBe(false)
   })
 })

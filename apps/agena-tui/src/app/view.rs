@@ -83,7 +83,7 @@ impl App {
             .split(inner);
         let header_area = sections[0];
         let list_area = sections[1];
-        let footer_area = (footer_height > 0).then_some(sections[2]);
+        let footer_area = sections.get(2).copied();
 
         let header_frame = Block::default().borders(Borders::BOTTOM);
         let header_inner = inset_rect(header_frame.inner(header_area), 0, 0);

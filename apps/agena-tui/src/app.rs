@@ -9506,14 +9506,19 @@ fn split_command_args_once(value: &str) -> Option<(&str, &str)> {
 mod tests {
     use super::*;
     use agena::{
+        config::LoadConfigRequest,
         event::{CommandContext, CommandEndEvent},
         message::{
             ExecutionStatus, MessageMetadata, MessageStatus, PartContent, UserInputOption,
             UserInputQuestion,
         },
+        runtime::AgenaRuntime,
     };
     use chrono::Utc;
+    use ratatui::{Terminal, backend::TestBackend};
+    use sea_orm::Database;
     use serde_json::json;
+    use std::{fs, sync::Arc};
 
     #[test]
     fn derive_title_uses_first_non_empty_line() {
@@ -9708,6 +9713,72 @@ mod tests {
         assert!(lines[0].text.starts_with("[assistant]"));
         assert!(lines.iter().skip(1).all(|line| line.text.starts_with("  ")));
         assert!(lines.iter().any(|line| line.text.contains("alpha beta")));
+    }
+
+    #[tokio::test]
+    async fn draw_sanitizes_shell_chrome_and_renders_workspace_label() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key = "test"
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root.clone()),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        let now = Utc::now();
+        app.sessions.initialized = true;
+        app.sessions.items = vec![test_session(7, None, "bad\u{1b}[31mtitle\u{7}", now)];
+        app.sessions.selected = 0;
+        app.transcript.session_id = Some(7);
+        app.transcript.session_title = "bad\u{1b}[31mtitle\u{7}".to_string();
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("test terminal should build");
+        terminal
+            .draw(|frame| app.draw(frame))
+            .expect("draw should succeed");
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("ws "));
+        assert!(rendered.contains("bad"));
+        assert!(rendered.contains("title"));
+        assert!(!rendered.contains("\u{1b}"));
+        assert!(!rendered.contains("\u{7}"));
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -10459,5 +10530,12 @@ mod tests {
             child_session_count: 0,
             last_message_at: None,
         }
+    }
+
+    fn write_test_runtime_config(content: &str) -> PathBuf {
+        let dir = tempfile::tempdir().expect("tempdir should exist");
+        let path = dir.keep().join("agena-tui-test.toml");
+        fs::write(&path, content).expect("config should be written");
+        path
     }
 }

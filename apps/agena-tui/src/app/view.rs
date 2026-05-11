@@ -1037,9 +1037,20 @@ impl App {
             rows[1],
         );
 
+        let stacked = should_stack_detail_layout(rows[2].width, 40, 46);
+        let stacked_constraints = [Constraint::Percentage(42), Constraint::Percentage(58)];
+        let split_constraints = adaptive_detail_split(rows[2].width, 40, 46);
         let content = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(adaptive_detail_split(rows[2].width, 40, 46))
+            .direction(if stacked {
+                Direction::Vertical
+            } else {
+                Direction::Horizontal
+            })
+            .constraints(if stacked {
+                stacked_constraints.as_ref()
+            } else {
+                split_constraints.as_ref()
+            })
             .split(rows[2]);
 
         let list_items = if dialog.loading {
@@ -1143,14 +1154,24 @@ impl App {
             rows[1],
         );
 
-        let content = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(adaptive_detail_split(rows[2].width, 34, 48))
-            .split(rows[2]);
-        let right = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(adaptive_vertical_split(content[1].height, 7, 9))
-            .split(content[1]);
+        let stacked = should_stack_detail_layout(rows[2].width, 34, 48);
+        let (list_area, detail_area, logs_area) = if stacked {
+            let content = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(6), Constraint::Min(5), Constraint::Min(5)])
+                .split(rows[2]);
+            (content[0], content[1], content[2])
+        } else {
+            let content = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(adaptive_detail_split(rows[2].width, 34, 48))
+                .split(rows[2]);
+            let right = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(adaptive_vertical_split(content[1].height, 7, 9))
+                .split(content[1]);
+            (content[0], right[0], right[1])
+        };
 
         let list_items = if dialog.items.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
@@ -1193,7 +1214,7 @@ impl App {
             .highlight_symbol(">> ");
         let mut state = ListState::default();
         state.select((!dialog.items.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(list, content[0], &mut state);
+        frame.render_stateful_widget(list, list_area, &mut state);
 
         let detail = dialog
             .items
@@ -1211,7 +1232,7 @@ impl App {
                         .borders(Borders::ALL),
                 )
                 .wrap(Wrap { trim: false }),
-            right[0],
+            detail_area,
         );
 
         let logs = dialog
@@ -1230,7 +1251,7 @@ impl App {
                         .borders(Borders::ALL),
                 )
                 .wrap(Wrap { trim: false }),
-            right[1],
+            logs_area,
         );
 
         frame.render_widget(Paragraph::new(dialog.footer.clone()), rows[3]);
@@ -1396,12 +1417,16 @@ pub(super) fn adaptive_detail_split(
     left_min: u16,
     right_min: u16,
 ) -> [Constraint; 2] {
-    let available = total_width.saturating_sub(2);
-    if available < left_min.saturating_add(right_min).saturating_add(8) {
+    if should_stack_detail_layout(total_width, left_min, right_min) {
         [Constraint::Percentage(50), Constraint::Percentage(50)]
     } else {
         [Constraint::Min(left_min), Constraint::Min(right_min)]
     }
+}
+
+pub(super) fn should_stack_detail_layout(total_width: u16, left_min: u16, right_min: u16) -> bool {
+    let available = total_width.saturating_sub(2);
+    available < left_min.saturating_add(right_min).saturating_add(8)
 }
 
 pub(super) fn adaptive_vertical_split(

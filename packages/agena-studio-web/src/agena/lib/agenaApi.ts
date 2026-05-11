@@ -59,8 +59,6 @@ export type RuntimeStatus = {
   workspace_root: string
   config_path: string
   config_found: boolean
-  active_mode?: string | null
-  active_mode_source?: string | null
   auth_store_path: string
   provider_ids: string[]
   plugin_count: number

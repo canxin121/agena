@@ -4,9 +4,9 @@ mod credential;
 mod amazon_bedrock;
 mod anthropic;
 mod capabilities;
-mod capability_overrides;
 mod chat_wire;
 mod cloudflare_ai_gateway;
+mod configured_models;
 mod codex;
 mod copilot;
 mod core;
@@ -34,9 +34,9 @@ pub use crate::model::{
 pub use amazon_bedrock::AmazonBedrockProvider;
 pub use anthropic::AnthropicProvider;
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
-pub use capability_overrides::{
-    CapabilityOverrideMatchMode, CapabilityOverrideProvider, ModelCapabilityPatch,
-    ProviderCapabilityOverrideRule,
+pub use configured_models::{
+    ConfiguredModelDefinition, ConfiguredModelsProvider, ModelCapabilityFeature,
+    ModelCapabilityPatch,
 };
 pub use cloudflare_ai_gateway::CloudflareAiGatewayProvider;
 pub use codex::CodexProvider;
@@ -55,7 +55,7 @@ pub use openai::{OpenAiApiMode, OpenAiProvider, OpenAiStreamMode};
 pub use openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleStreamMode};
 pub use opencode::OpencodeProvider;
 pub use prompt_cache_shape::{PromptCacheShape, PromptCacheShapeChange, PromptCacheShapeDiff};
-pub use registry::{NamedProvider, ProviderAliasRegistration, ProviderRegistry};
+pub use registry::{NamedProvider, ProviderRegistry};
 pub use runtime::{
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
     ProviderStreamReplayConfig,

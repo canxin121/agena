@@ -17,7 +17,6 @@ describe('runtimeDesktopModel', () => {
         cors_origins: [],
         cors_allow_all: false,
         agena_config_path: '/workspace/.agena/config.toml',
-        agena_mode: 'default',
         workspace_root: '/workspace',
         database_path: '/workspace/agena.db',
         database_url: 'sqlite:///workspace/agena.db',

@@ -18,7 +18,6 @@ export function buildDesktopConfigFacts(config: DesktopConfig | null): DesktopFa
     { label: 'Host', value: config.backend.host || '127.0.0.1', mono: true },
     { label: 'Port', value: String(config.backend.port) },
     { label: 'Config Path', value: config.backend.agena_config_path || 'n/a', mono: true },
-    { label: 'Mode', value: config.backend.agena_mode || 'default' },
     { label: 'Workspace Root', value: config.backend.workspace_root || 'n/a', mono: true },
     { label: 'Database Path', value: config.backend.database_path || 'n/a', mono: true },
     { label: 'Database URL', value: config.backend.database_url || 'n/a', mono: true },

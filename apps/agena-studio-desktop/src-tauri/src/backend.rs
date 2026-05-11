@@ -301,10 +301,6 @@ async fn spawn_backend_service(
         cmd = cmd.args(["--config", config_path]);
     }
 
-    if let Some(mode) = cfg.backend.agena_mode.as_deref() {
-        cmd = cmd.args(["--mode", mode]);
-    }
-
     if let Some(workspace_root) = cfg.backend.workspace_root.as_deref() {
         cmd = cmd.args(["--workspace-root", workspace_root]);
     }

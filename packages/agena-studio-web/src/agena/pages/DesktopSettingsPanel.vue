@@ -22,7 +22,6 @@ const props = defineProps<{
     port: string
     workspace_root: string
     agena_config_path: string
-    agena_mode: string
     database_path: string
     database_url: string
     backend_log_level: string
@@ -203,10 +202,6 @@ const emit = defineEmits<{
         <div class="field">
           <label class="label" for="desktop-host">Host</label>
           <input id="desktop-host" v-model="props.desktopForm.host" class="input mono" placeholder="127.0.0.1" />
-        </div>
-        <div class="field">
-          <label class="label" for="desktop-mode">Mode</label>
-          <input id="desktop-mode" v-model="props.desktopForm.agena_mode" class="input mono" placeholder="default" />
         </div>
         <div class="field">
           <label class="label" for="desktop-workspace-root">Workspace Root</label>

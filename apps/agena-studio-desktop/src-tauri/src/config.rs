@@ -28,7 +28,6 @@ pub struct BackendConfig {
     pub ui_password: Option<String>,
     pub ui_cookie_samesite: Option<String>,
     pub agena_config_path: Option<String>,
-    pub agena_mode: Option<String>,
     pub workspace_root: Option<String>,
     pub database_path: Option<String>,
     pub database_url: Option<String>,
@@ -59,7 +58,6 @@ impl Default for BackendConfig {
             ui_password: Some(String::new()),
             ui_cookie_samesite: None,
             agena_config_path: None,
-            agena_mode: None,
             workspace_root: None,
             database_path: None,
             database_url: None,
@@ -138,7 +136,6 @@ fn normalize_config(mut cfg: DesktopConfig) -> DesktopConfig {
     cfg.backend.ui_cookie_samesite =
         normalize_ui_cookie_samesite(cfg.backend.ui_cookie_samesite.take());
     cfg.backend.agena_config_path = normalize_optional_path(cfg.backend.agena_config_path.take());
-    cfg.backend.agena_mode = normalize_optional_path(cfg.backend.agena_mode.take());
     cfg.backend.workspace_root = normalize_optional_path(cfg.backend.workspace_root.take());
     cfg.backend.database_path = normalize_optional_path(cfg.backend.database_path.take());
     cfg.backend.database_url = normalize_optional_path(cfg.backend.database_url.take());

@@ -38,16 +38,11 @@ fn cli_override_parser_supports_provider_fields() {
 }
 
 #[test]
-fn loader_applies_mode_then_env_then_cli() {
+fn loader_applies_file_then_env_then_cli() {
     let path = write_temp_config(
         r#"
-mode = "dev"
-
 [runtime.provider_http]
 timeout_secs = 90
-
-[modes.dev.runtime.provider_http]
-timeout_secs = 45
 
 [providers.openai]
 kind = "openai"
@@ -66,17 +61,26 @@ default_model = "gpt-4.1-mini"
     let resolution = loader
         .load(&LoadConfigRequest {
             config_path: Some(path),
-            mode: None,
             overrides: vec![ConfigOverride::ProviderHttpTimeoutSecs(12)],
         })
         .expect("config should load");
 
     assert_eq!(resolution.config.runtime.provider_http.timeout_secs, 12);
-    assert_eq!(resolution.meta.active_mode.unwrap().to_string(), "dev");
 }
 
 #[test]
-fn loader_resolves_mode_inheritance() {
+fn cli_override_parser_rejects_mode_override() {
+    let err = "mode=prod"
+        .parse::<ConfigOverride>()
+        .expect_err("mode override should be rejected");
+    assert!(matches!(
+        err,
+        ConfigError::UnsupportedModeConfig { field: "mode" }
+    ));
+}
+
+#[test]
+fn loader_rejects_legacy_mode_config() {
     let path = write_temp_config(
         r#"
 mode = "prod"
@@ -85,12 +89,30 @@ mode = "prod"
 kind = "openai"
 base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1-mini"
+"#,
+    );
 
-[modes.shared.runtime.request_retry]
-max_retries = 3
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("legacy mode config should fail");
+    assert!(matches!(
+        err,
+        ConfigError::UnsupportedModeConfig { field: "mode" }
+    ));
+}
 
-[modes.prod]
-extends = "shared"
+#[test]
+fn loader_rejects_legacy_modes_table() {
+    let path = write_temp_config(
+        r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
 
 [modes.prod.permission]
 default_write = "ask"
@@ -98,19 +120,27 @@ default_write = "ask"
     );
 
     let loader = ConfigLoader::new(TestEnvironment::default());
-    let resolution = loader
+    let err = loader
         .load(&LoadConfigRequest {
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect("config should load");
+        .expect_err("legacy modes table should fail");
+    assert!(matches!(
+        err,
+        ConfigError::UnsupportedModeConfig { field: "modes" }
+    ));
+}
 
-    assert_eq!(resolution.config.runtime.request_retry.max_retries, 3);
-    assert_eq!(
-        resolution.config.permission.default_write,
-        crate::permission::PermissionMode::Ask
-    );
-    assert_eq!(resolution.meta.active_mode.unwrap().to_string(), "prod");
+#[test]
+fn loader_rejects_agena_mode_env() {
+    let loader = ConfigLoader::new(TestEnvironment {
+        vars: BTreeMap::from([("AGENA_MODE".to_owned(), "prod".to_owned())]),
+    });
+    let err = loader
+        .load(&LoadConfigRequest::default())
+        .expect_err("AGENA_MODE should be rejected");
+    assert!(matches!(err, ConfigError::UnsupportedModeEnvironment));
 }
 
 #[test]
@@ -198,19 +228,13 @@ fn example_config_parses_successfully() {
         .expect("example config should load");
 
     assert!(resolution.config.providers.contains_key("anthropic"));
-    assert!(resolution.meta.active_mode.is_none());
 }
 
 #[test]
-fn auth_store_backend_config_loads_and_modes_override() {
+fn auth_store_backend_config_loads() {
     let path = write_temp_config(
         r#"
-mode = "file-auth"
-
 [auth]
-store_backend = "auto"
-
-[modes.file-auth.auth]
 store_backend = "file"
 "#,
     );
@@ -227,16 +251,10 @@ store_backend = "file"
 }
 
 #[test]
-fn memory_project_instruction_config_loads_and_modes_override() {
+fn memory_project_instruction_config_loads() {
     let path = write_temp_config(
         r#"
-mode = "quiet"
-
 [memory.project_instructions]
-enabled = true
-include_global = true
-
-[modes.quiet.memory.project_instructions]
 enabled = false
 include_global = false
 "#,
@@ -302,41 +320,6 @@ url = "http://127.0.0.1:8080/agena-hook"
 }
 
 #[test]
-fn mode_hooks_override_root_hooks() {
-    let path = write_temp_config(
-        r#"
-mode = "dev"
-
-[[hooks]]
-event = "user_prompt_submit"
-command = "root-hook"
-
-[[modes.dev.hooks]]
-event = "pre_tool_use"
-command = "dev-hook"
-matcher = { tool = "read" }
-"#,
-    );
-
-    let loader = ConfigLoader::new(TestEnvironment::default());
-    let resolution = loader
-        .load(&LoadConfigRequest {
-            config_path: Some(path),
-            ..LoadConfigRequest::default()
-        })
-        .expect("mode hook config should load");
-
-    let hooks = resolution.config.hooks.entries();
-    assert_eq!(hooks.len(), 1);
-    assert!(matches!(
-        hooks[0].event,
-        crate::hooks::HookEvent::ToolBefore
-    ));
-    assert_eq!(hooks[0].command.as_deref(), Some("dev-hook"));
-    assert_eq!(hooks[0].matcher.tool.as_deref(), Some("read"));
-}
-
-#[test]
 fn legacy_hook_event_names_still_parse() {
     let path = write_temp_config(
         r#"
@@ -363,24 +346,16 @@ command = "legacy-hook"
 }
 
 #[test]
-fn provider_capability_overrides_parse_and_merge_from_mode_layers() {
+fn provider_models_parse() {
     let path = write_temp_config(
         r#"
-mode = "dev"
-
 [providers.openai]
 kind = "openai"
 base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1-mini"
 
-[[providers.openai.capability_overrides]]
-model = "gpt-4.1-mini"
-image_input = "unsupported"
-
-[[modes.dev.providers.openai.capability_overrides]]
-model = "gpt-5"
-match = "prefix"
-file_input = "supported"
+[providers.openai.models."gpt-4.1-mini"]
+input = { unsupported = ["image"] }
 "#,
     );
 
@@ -397,24 +372,19 @@ file_input = "supported"
         .providers
         .get("openai")
         .expect("openai provider should exist");
-    assert_eq!(provider.capability_overrides.len(), 2);
-    assert_eq!(provider.capability_overrides[0].model, "gpt-4.1-mini");
+    assert_eq!(provider.models.len(), 1);
+    let model = provider
+        .models
+        .get("gpt-4.1-mini")
+        .expect("configured model should exist");
     assert_eq!(
-        provider.capability_overrides[0].capabilities.image_input,
+        model.capabilities.image_input,
         Some(crate::provider::CapabilitySupport::Unsupported)
-    );
-    assert_eq!(
-        provider.capability_overrides[1].match_mode,
-        crate::provider::CapabilityOverrideMatchMode::Prefix
-    );
-    assert_eq!(
-        provider.capability_overrides[1].capabilities.file_input,
-        Some(crate::provider::CapabilitySupport::Supported)
     );
 }
 
 #[test]
-fn provider_capability_overrides_require_model_and_capability_fields() {
+fn provider_models_require_non_empty_configuration() {
     let path = write_temp_config(
         r#"
 [providers.openai]
@@ -422,8 +392,7 @@ kind = "openai"
 base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1-mini"
 
-[[providers.openai.capability_overrides]]
-model = "   "
+[providers.openai.models."gpt-4.1-mini"]
 "#,
     );
 
@@ -436,8 +405,67 @@ model = "   "
         .expect_err("invalid override should fail validation");
 
     assert!(
-        matches!(err, ConfigError::Validation(message) if message.contains("capability override model matcher cannot be empty"))
+        matches!(err, ConfigError::Validation(message) if message.contains("model `gpt-4.1-mini` must set at least one field"))
     );
+}
+
+#[test]
+fn provider_models_reject_overlapping_compact_capabilities() {
+    let path = write_temp_config(
+        r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+
+[providers.openai.models."gpt-4.1-mini"]
+input = { supported = ["image"], unsupported = ["image"] }
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("overlapping compact patch should fail validation");
+
+    assert!(matches!(err, ConfigError::Validation(message) if message.contains("input capability `image` cannot be both supported and unsupported")));
+}
+
+#[test]
+fn provider_models_resolved_config_serializes_compact_patch_shape() {
+    let path = write_temp_config(
+        r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+
+[providers.openai.models."gpt-4.1-mini"]
+input = { unsupported = ["image"] }
+features = ["tool_calling"]
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let serialized = resolution
+        .render(ConfigOutputFormat::Toml)
+        .expect("resolved config should serialize");
+
+    assert!(serialized.contains("[config.providers.openai.models.\"gpt-4.1-mini\".input]"));
+    assert!(serialized.contains("unsupported = [\"image\"]"));
+    assert!(serialized.contains("features = [\"tool_calling\"]"));
+    assert!(!serialized.contains("image_input = \"unsupported\""));
+    assert!(!serialized.contains("tool_calling = \"supported\""));
 }
 
 #[test]

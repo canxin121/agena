@@ -9,9 +9,10 @@ use crate::{
         ToolPermissionPolicy,
     },
     provider::{
+        ConfiguredModelDefinition,
         OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
-        ProviderCapabilityOverrideRule, ProviderHttpClientConfig, ProviderRequestRetryConfig,
-        ProviderRuntimeConfig, ProviderStreamReplayConfig, ThinkingRequest,
+        ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+        ProviderStreamReplayConfig, ThinkingRequest,
         auth::{ConfiguredAuthStore, FileAuthStore, KeyringAuthStore},
     },
 };
@@ -23,7 +24,6 @@ use super::ConfigError;
 pub enum ConfigSource {
     Default,
     File,
-    Mode,
     Environment,
     Cli,
 }
@@ -38,8 +38,6 @@ pub struct AppliedLayer {
 pub struct ConfigResolutionMeta {
     pub config_path: PathBuf,
     pub config_found: bool,
-    pub active_mode: Option<ConfigModeName>,
-    pub active_mode_source: Option<ConfigSource>,
     pub applied_layers: Vec<AppliedLayer>,
 }
 
@@ -55,48 +53,6 @@ impl ConfigResolution {
             ConfigOutputFormat::Json => Ok(serde_json::to_string_pretty(self)?),
             ConfigOutputFormat::Toml => Ok(toml::to_string_pretty(self)?),
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-#[serde(transparent)]
-pub struct ConfigModeName(String);
-
-impl ConfigModeName {
-    pub fn new(value: impl Into<String>) -> Result<Self, ConfigError> {
-        value.into().try_into()
-    }
-}
-
-impl TryFrom<String> for ConfigModeName {
-    type Error = ConfigError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Err(ConfigError::InvalidModeName);
-        }
-        Ok(Self(trimmed.to_owned()))
-    }
-}
-
-impl AsRef<str> for ConfigModeName {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl FromStr for ConfigModeName {
-    type Err = ConfigError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::new(value)
-    }
-}
-
-impl fmt::Display for ConfigModeName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
     }
 }
 
@@ -351,8 +307,8 @@ impl Default for ProjectInstructionsConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderConfig {
     pub enabled: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capability_overrides: Vec<ProviderCapabilityOverrideRule>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub models: BTreeMap<String, ConfiguredModelDefinition>,
     #[serde(flatten)]
     pub definition: ProviderDefinition,
 }
@@ -360,7 +316,6 @@ pub struct ResolvedProviderConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProviderDefinition {
-    Alias(ProviderAliasConfig),
     Ollama(OllamaProviderOptions),
     OpenAi(HttpProviderConfig<OpenAiProviderOptions>),
     OpenAiCompatible(HttpProviderConfig<OpenAiCompatibleProviderOptions>),
@@ -373,12 +328,6 @@ pub enum ProviderDefinition {
     AmazonBedrock(AmazonBedrockProviderOptions),
     GoogleVertex(GoogleVertexProviderOptions),
     CloudflareAiGateway(CloudflareAiGatewayProviderOptions),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ProviderAliasConfig {
-    pub target_provider_id: String,
-    pub default_model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

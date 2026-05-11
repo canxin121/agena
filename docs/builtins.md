@@ -384,7 +384,6 @@ This document only covers the in-tree provider implementations above.
 
 It does **not** cover:
 
-- provider aliases declared in config
 - provider removals/additions injected by plugins through `provider_list`
 - remote or custom providers added at runtime
 

@@ -1,22 +1,23 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use serde::{Deserialize, Serialize};
+use toml::Value;
 
 use crate::{
     permission::PermissionMode,
-    provider::{ProviderCapabilityOverrideRule, ThinkingRequest, auth::FileAuthStore},
+    provider::{ConfiguredModelDefinition, ThinkingRequest, auth::FileAuthStore},
 };
 
 use super::{
     AuthConfig, AuthStoreBackend, ConfigEnvironment, ConfigError, McpConfig, MemoryConfig,
     OpenAiApiModeConfig, PermissionConfig, PluginConfig, ProjectInstructionsConfig,
-    ProviderAliasConfig, ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig,
-    StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
+    ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, StreamTransportMode,
+    TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
     provider_presets,
 };
 
@@ -32,6 +33,7 @@ impl RawConfigFile {
     pub(crate) fn read(path: &Path) -> Result<Self, ConfigError> {
         match fs::read_to_string(path) {
             Ok(text) => {
+                reject_legacy_mode_fields(path, &text)?;
                 let config = toml::from_str::<RawConfig>(&text).map_err(|source| {
                     ConfigError::ParseFile {
                         path: path.to_path_buf(),
@@ -53,49 +55,29 @@ impl RawConfigFile {
             }),
         }
     }
+}
 
-    pub(crate) fn resolve_mode(
-        &self,
-        name: &super::ConfigModeName,
-    ) -> Result<RawModeConfig, ConfigError> {
-        let mut visiting = BTreeSet::new();
-        self.resolve_mode_inner(name.as_ref(), &mut visiting)
+fn reject_legacy_mode_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
+    let value = toml::from_str::<Value>(text)
+        .map_err(|source| ConfigError::ParseFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let Some(table) = value.as_table() else {
+        return Ok(());
+    };
+    if table.contains_key("mode") {
+        return Err(ConfigError::UnsupportedModeConfig { field: "mode" });
     }
-
-    fn resolve_mode_inner(
-        &self,
-        name: &str,
-        visiting: &mut BTreeSet<String>,
-    ) -> Result<RawModeConfig, ConfigError> {
-        let mode =
-            self.config
-                .modes
-                .get(name)
-                .cloned()
-                .ok_or_else(|| ConfigError::UnknownMode {
-                    mode: name.to_owned(),
-                })?;
-
-        if !visiting.insert(name.to_owned()) {
-            let cycle = visiting.iter().cloned().collect::<Vec<_>>().join(" -> ");
-            return Err(ConfigError::ModeCycle { cycle });
-        }
-
-        let mut resolved = if let Some(parent) = mode.extends.clone() {
-            self.resolve_mode_inner(parent.as_str(), visiting)?
-        } else {
-            RawModeConfig::default()
-        };
-        resolved.merge_from(mode);
-        visiting.remove(name);
-        Ok(resolved)
+    if table.contains_key("modes") {
+        return Err(ConfigError::UnsupportedModeConfig { field: "modes" });
     }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct RawConfig {
-    pub(crate) mode: Option<String>,
     pub(crate) tracing: Option<RawTracingConfig>,
     pub(crate) telemetry: Option<RawTelemetryConfig>,
     pub(crate) auth: Option<RawAuthConfig>,
@@ -108,14 +90,12 @@ pub(crate) struct RawConfig {
     pub(crate) lsp: Option<crate::config::types::LspConfig>,
     pub(crate) web: Option<WebToolsConfig>,
     pub(crate) providers: BTreeMap<String, RawProviderConfig>,
-    pub(crate) modes: BTreeMap<String, RawModeConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "hooks")]
     pub(crate) hooks: Vec<crate::hooks::HookEntry>,
 }
 
 impl RawConfig {
     pub(crate) fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.mode, overlay.mode);
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.telemetry, overlay.telemetry);
         merge_option_struct(&mut self.auth, overlay.auth);
@@ -128,30 +108,13 @@ impl RawConfig {
         merge_option_struct(&mut self.lsp, overlay.lsp);
         merge_option_struct(&mut self.web, overlay.web);
         merge_map(&mut self.providers, overlay.providers);
-        merge_map(&mut self.modes, overlay.modes);
-        if !overlay.hooks.is_empty() {
-            self.hooks = overlay.hooks;
-        }
-    }
-
-    pub(crate) fn merge_mode(&mut self, overlay: RawModeConfig) {
-        merge_option_struct(&mut self.tracing, overlay.tracing);
-        merge_option_struct(&mut self.telemetry, overlay.telemetry);
-        merge_option_struct(&mut self.auth, overlay.auth);
-        merge_option_struct(&mut self.ui, overlay.ui);
-        merge_option_struct(&mut self.runtime, overlay.runtime);
-        merge_option_struct(&mut self.permission, overlay.permission);
-        merge_option_struct(&mut self.plugins, overlay.plugins);
-        merge_option_struct(&mut self.memory, overlay.memory);
-        merge_map(&mut self.providers, overlay.providers);
         if !overlay.hooks.is_empty() {
             self.hooks = overlay.hooks;
         }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.mode.is_none()
-            && self.tracing.is_none()
+        self.tracing.is_none()
             && self.telemetry.is_none()
             && self.auth.is_none()
             && self.ui.is_none()
@@ -163,7 +126,6 @@ impl RawConfig {
             && self.lsp.is_none()
             && self.web.is_none()
             && self.providers.is_empty()
-            && self.modes.is_empty()
             && self.hooks.is_empty()
     }
 
@@ -306,7 +268,6 @@ impl RawConfig {
                 }
                 "REALTIME_WS_URL" => provider.realtime_ws_url = Some(value),
                 "DEFAULT_THINKING" => provider.default_thinking = Some(value),
-                "TARGET_PROVIDER_ID" => provider.target_provider_id = Some(value),
                 "AUTH_PROVIDER_ID" => provider.auth_provider_id = Some(value),
                 "INSTANCE_URL" => provider.instance_url = Some(value),
                 "AI_GATEWAY_URL" => provider.ai_gateway_url = Some(value),
@@ -404,41 +365,6 @@ impl RawConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub(crate) struct RawModeConfig {
-    pub(crate) extends: Option<String>,
-    pub(crate) tracing: Option<RawTracingConfig>,
-    pub(crate) telemetry: Option<RawTelemetryConfig>,
-    pub(crate) auth: Option<RawAuthConfig>,
-    pub(crate) ui: Option<RawUiConfig>,
-    pub(crate) runtime: Option<RawRuntimeConfig>,
-    pub(crate) permission: Option<RawPermissionConfig>,
-    pub(crate) plugins: Option<PluginConfig>,
-    pub(crate) memory: Option<MemoryConfig>,
-    pub(crate) providers: BTreeMap<String, RawProviderConfig>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "hooks")]
-    pub(crate) hooks: Vec<crate::hooks::HookEntry>,
-}
-
-impl RawModeConfig {
-    pub(crate) fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.extends, overlay.extends);
-        merge_option_struct(&mut self.tracing, overlay.tracing);
-        merge_option_struct(&mut self.telemetry, overlay.telemetry);
-        merge_option_struct(&mut self.auth, overlay.auth);
-        merge_option_struct(&mut self.ui, overlay.ui);
-        merge_option_struct(&mut self.runtime, overlay.runtime);
-        merge_option_struct(&mut self.permission, overlay.permission);
-        merge_option_struct(&mut self.plugins, overlay.plugins);
-        merge_option_struct(&mut self.memory, overlay.memory);
-        merge_map(&mut self.providers, overlay.providers);
-        if !overlay.hooks.is_empty() {
-            self.hooks = overlay.hooks;
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[allow(dead_code)]
 pub(crate) struct RawPluginConfig;
 
@@ -482,12 +408,6 @@ impl Merge for WebToolsConfig {
         // Whole-struct replace.  WebToolsConfig is small and there's no
         // sensible per-field overlay semantics to preserve.
         *self = overlay;
-    }
-}
-
-impl Merge for RawModeConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        Self::merge_from(self, overlay);
     }
 }
 
@@ -831,8 +751,6 @@ impl PermissionConfig {
 pub(crate) enum ProviderKind {
     #[serde(rename = "preset")]
     Preset,
-    #[serde(rename = "alias")]
-    Alias,
     #[serde(rename = "ollama")]
     Ollama,
     #[serde(rename = "openai", alias = "open_ai")]
@@ -865,7 +783,6 @@ impl std::str::FromStr for ProviderKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim() {
             "preset" => Ok(Self::Preset),
-            "alias" => Ok(Self::Alias),
             "ollama" => Ok(Self::Ollama),
             "openai" => Ok(Self::OpenAi),
             "openai_compatible" => Ok(Self::OpenAiCompatible),
@@ -890,7 +807,6 @@ impl std::str::FromStr for ProviderKind {
 pub(crate) struct RawProviderConfig {
     pub(crate) enabled: Option<bool>,
     pub(crate) kind: Option<ProviderKind>,
-    pub(crate) target_provider_id: Option<String>,
     pub(crate) auth_provider_id: Option<String>,
     pub(crate) default_model: Option<String>,
     pub(crate) base_url: Option<String>,
@@ -920,14 +836,13 @@ pub(crate) struct RawProviderConfig {
     pub(crate) access_key_id: Option<String>,
     pub(crate) secret_access_key: Option<String>,
     pub(crate) session_token: Option<String>,
-    pub(crate) capability_overrides: Vec<ProviderCapabilityOverrideRule>,
+    pub(crate) models: BTreeMap<String, ConfiguredModelDefinition>,
 }
 
 impl Merge for RawProviderConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.enabled, overlay.enabled);
         merge_option(&mut self.kind, overlay.kind);
-        merge_option(&mut self.target_provider_id, overlay.target_provider_id);
         merge_option(&mut self.auth_provider_id, overlay.auth_provider_id);
         merge_option(&mut self.default_model, overlay.default_model);
         merge_option(&mut self.base_url, overlay.base_url);
@@ -953,8 +868,7 @@ impl Merge for RawProviderConfig {
         merge_option(&mut self.access_key_id, overlay.access_key_id);
         merge_option(&mut self.secret_access_key, overlay.secret_access_key);
         merge_option(&mut self.session_token, overlay.session_token);
-        self.capability_overrides
-            .extend(overlay.capability_overrides);
+        self.models.extend(overlay.models);
     }
 }
 
@@ -972,8 +886,11 @@ impl RawProviderConfig {
             provider_id: provider_id.clone(),
         })?;
         let enabled = self.enabled.unwrap_or(true);
-        validate_capability_overrides(provider_id.as_str(), &self.capability_overrides)?;
-        let capability_overrides = self.capability_overrides.clone();
+        for configured in self.models.values_mut() {
+            configured.capabilities.normalize_compact_patch();
+        }
+        validate_configured_models(provider_id.as_str(), &self.models)?;
+        let models = self.models.clone();
         let default_thinking = resolve_default_thinking(
             provider_id.as_str(),
             &self.thinking_depths,
@@ -988,14 +905,6 @@ impl RawProviderConfig {
                         .to_owned(),
                 });
             }
-            ProviderKind::Alias => ProviderDefinition::Alias(ProviderAliasConfig {
-                target_provider_id: required_string(
-                    provider_id.as_str(),
-                    "target_provider_id",
-                    self.target_provider_id,
-                )?,
-                default_model: normalize_optional(self.default_model),
-            }),
             ProviderKind::Ollama => ProviderDefinition::Ollama(super::OllamaProviderOptions {
                 base_url: self
                     .base_url
@@ -1206,7 +1115,7 @@ impl RawProviderConfig {
             provider_id,
             ResolvedProviderConfig {
                 enabled,
-                capability_overrides,
+                models,
                 definition,
             },
         ))
@@ -1274,14 +1183,24 @@ fn resolve_default_thinking(
     Ok(Some(ThinkingRequest::Enabled { budget_tokens }))
 }
 
-fn validate_capability_overrides(
+fn validate_configured_models(
     provider_id: &str,
-    rules: &[ProviderCapabilityOverrideRule],
+    models: &BTreeMap<String, ConfiguredModelDefinition>,
 ) -> Result<(), ConfigError> {
-    for rule in rules {
-        if let Err(message) = rule.validate() {
+    for (model_id, configured) in models {
+        if model_id.trim().is_empty() {
             return Err(ConfigError::Validation(format!(
-                "provider `{provider_id}` {message}"
+                "provider `{provider_id}` model id cannot be empty"
+            )));
+        }
+        if configured.is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "provider `{provider_id}` model `{model_id}` must set at least one field"
+            )));
+        }
+        if let Err(message) = configured.capabilities.validate() {
+            return Err(ConfigError::Validation(format!(
+                "provider `{provider_id}` model `{model_id}` has invalid capability patch: {message}"
             )));
         }
     }

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use super::{
-    AppliedLayer, ConfigError, ConfigModeName, ConfigOverride, ConfigResolution,
-    ConfigResolutionMeta, ConfigSource, RawConfig, RawConfigFile,
+    AppliedLayer, ConfigError, ConfigOverride, ConfigResolution, ConfigResolutionMeta,
+    ConfigSource, RawConfig, RawConfigFile,
 };
 
 const DEFAULT_CONFIG_DIR_NAME: &str = ".agena";
@@ -11,7 +11,6 @@ const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
 #[derive(Debug, Clone, Default)]
 pub struct LoadConfigRequest {
     pub config_path: Option<PathBuf>,
-    pub mode: Option<ConfigModeName>,
     pub overrides: Vec<ConfigOverride>,
 }
 
@@ -68,28 +67,12 @@ where
             .clone()
             .unwrap_or_else(|| self.default_config_path());
 
+        if self.env.var("AGENA_MODE").is_some() {
+            return Err(ConfigError::UnsupportedModeEnvironment);
+        }
+
         let file_state = RawConfigFile::read(&config_path)?;
         let env_overlay = RawConfig::from_env(&self.env)?;
-
-        let cli_mode = request
-            .overrides
-            .iter()
-            .find_map(|item| match item {
-                ConfigOverride::Mode(mode) => Some(mode.clone()),
-                _ => None,
-            })
-            .or_else(|| request.mode.clone());
-        let env_mode = self
-            .env
-            .var("AGENA_MODE")
-            .map(ConfigModeName::try_from)
-            .transpose()?;
-        let file_mode = file_state
-            .config
-            .mode
-            .clone()
-            .map(ConfigModeName::try_from)
-            .transpose()?;
 
         let mut merged = RawConfig::default();
         let mut applied_layers = vec![AppliedLayer {
@@ -102,26 +85,6 @@ where
             applied_layers.push(AppliedLayer {
                 source: ConfigSource::File,
                 description: format!("file:{}", config_path.display()),
-            });
-        }
-
-        let active_mode_source = if cli_mode.is_some() {
-            Some(ConfigSource::Cli)
-        } else if self.env.var("AGENA_MODE").is_some() {
-            Some(ConfigSource::Environment)
-        } else if file_state.config.mode.is_some() {
-            Some(ConfigSource::File)
-        } else {
-            None
-        };
-        let active_mode = cli_mode.clone().or(env_mode).or(file_mode);
-
-        if let Some(mode_name) = active_mode.clone() {
-            let mode_overlay = file_state.resolve_mode(&mode_name)?;
-            merged.merge_mode(mode_overlay);
-            applied_layers.push(AppliedLayer {
-                source: ConfigSource::Mode,
-                description: format!("mode:{}", mode_name),
             });
         }
 
@@ -149,25 +112,9 @@ where
             meta: ConfigResolutionMeta {
                 config_path,
                 config_found: file_state.found,
-                active_mode,
-                active_mode_source,
                 applied_layers,
             },
         })
-    }
-
-    pub fn list_modes(
-        &self,
-        config_path: Option<PathBuf>,
-    ) -> Result<Vec<ConfigModeName>, ConfigError> {
-        let path = config_path.unwrap_or_else(|| self.default_config_path());
-        let file = RawConfigFile::read(&path)?;
-        file.config
-            .modes
-            .keys()
-            .cloned()
-            .map(ConfigModeName::try_from)
-            .collect::<Result<Vec<_>, _>>()
     }
 }
 

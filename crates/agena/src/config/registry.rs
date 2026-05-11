@@ -7,11 +7,11 @@ use crate::{
     plugin::{PluginHost, PluginHostBuilder},
     provider::{
         AmazonBedrockProvider, AnthropicProvider, AuthRefreshStrategy, AuthSecretSelector,
-        CapabilityOverrideProvider, CloudflareAiGatewayProvider, CodexProvider, CopilotProvider,
+        CloudflareAiGatewayProvider, CodexProvider, ConfiguredModelsProvider, CopilotProvider,
         CopilotProviderOptions as RuntimeCopilotProviderOptions, GeminiProvider, GitlabProvider,
         GitlabProviderConfig, GoogleVertexProvider, ManagedCredential, ModelProvider,
         NamedProvider, OllamaProvider, OpenAiCompatibleProvider, OpenAiProvider, OpencodeProvider,
-        ProviderAliasRegistration, ProviderRegistry,
+        ProviderRegistry,
         auth::{AuthData, AuthStore},
         parse_sap_ai_core_service_key,
     },
@@ -36,34 +36,23 @@ impl ResolvedConfig {
         let auth_store = Arc::new(self.auth_store());
         let auth_snapshot = auth_store.all()?;
         let mut registry = ProviderRegistry::with_runtime_config(self.provider_runtime_config());
-        let mut aliases = Vec::new();
 
         for (provider_id, resolved) in &self.providers {
             if !resolved.enabled {
                 continue;
             }
 
-            match &resolved.definition {
-                ProviderDefinition::Alias(alias) => aliases.push((
-                    provider_id.clone(),
-                    alias.clone(),
-                    resolved.capability_overrides.clone(),
-                )),
-                _ => {
-                    let provider = build_provider(
-                        provider_id.as_str(),
-                        resolved,
-                        client.clone(),
-                        auth_store.clone(),
-                        &auth_snapshot,
-                        env,
-                    )?;
-                    registry.register_arc(provider);
-                }
-            }
+            let provider = build_provider(
+                provider_id.as_str(),
+                resolved,
+                client.clone(),
+                auth_store.clone(),
+                &auth_snapshot,
+                env,
+            )?;
+            registry.register_arc(provider);
         }
 
-        register_aliases(&mut registry, aliases)?;
         Ok(registry)
     }
 }
@@ -198,10 +187,7 @@ fn build_provider(
     env: &dyn ConfigEnvironment,
 ) -> Result<Arc<dyn ModelProvider>, ConfigError> {
     let provider = match &resolved.definition {
-        ProviderDefinition::Alias(_) => Err(ConfigError::Validation(format!(
-            "provider `{provider_id}` alias should be registered in alias phase"
-        ))),
-        ProviderDefinition::Ollama(config) => Ok(register_provider(
+        ProviderDefinition::Ollama(config) => register_provider(
             provider_id,
             OllamaProvider::new(
                 provider_id,
@@ -209,8 +195,8 @@ fn build_provider(
                 config.base_url.clone(),
                 config.default_model.clone(),
             ),
-        )),
-        ProviderDefinition::OpenAi(config) => Ok(register_provider(
+        ),
+        ProviderDefinition::OpenAi(config) => register_provider(
             provider_id,
             OpenAiProvider::new_managed(
                 client,
@@ -229,7 +215,7 @@ fn build_provider(
             .with_stream_mode(config.options.stream_mode.into())
             .with_realtime_ws_url(config.options.realtime_ws_url.clone())
             .with_default_thinking(config.default_thinking.clone()),
-        )),
+        ),
         ProviderDefinition::OpenAiCompatible(config) => {
             let credential = required_managed_secret(
                 provider_id,
@@ -240,7 +226,7 @@ fn build_provider(
             )?;
             let extra_headers = to_hash_map(&config.extra_headers);
             if matches!(provider_id, "opencode" | "opencode-go") {
-                Ok(register_provider(
+                register_provider(
                     provider_id,
                     OpencodeProvider::new(
                         provider_id,
@@ -254,9 +240,9 @@ fn build_provider(
                         config.options.stream_mode.into(),
                         config.options.realtime_ws_url.clone(),
                     ),
-                ))
+                )
             } else {
-                Ok(register_provider(
+                register_provider(
                     provider_id,
                     OpenAiCompatibleProvider::new_managed(
                         provider_id,
@@ -273,14 +259,14 @@ fn build_provider(
                     .with_stream_mode(config.options.stream_mode.into())
                     .with_realtime_ws_url(config.options.realtime_ws_url.clone())
                     .with_default_thinking(config.default_thinking.clone()),
-                ))
+                )
             }
         }
-        ProviderDefinition::SapAiCore(config) => Ok(register_provider(
+        ProviderDefinition::SapAiCore(config) => register_provider(
             provider_id,
             build_sap_ai_core_provider(provider_id, client, config, env)?,
-        )),
-        ProviderDefinition::Anthropic(config) => Ok(register_provider(
+        ),
+        ProviderDefinition::Anthropic(config) => register_provider(
             provider_id,
             AnthropicProvider::new_managed(
                 client,
@@ -300,8 +286,8 @@ fn build_provider(
             )
             .with_extra_headers(to_hash_map(&config.extra_headers))
             .with_default_thinking(config.default_thinking.clone()),
-        )),
-        ProviderDefinition::Gemini(config) => Ok(register_provider(
+        ),
+        ProviderDefinition::Gemini(config) => register_provider(
             provider_id,
             GeminiProvider::new_managed(
                 client,
@@ -317,10 +303,10 @@ fn build_provider(
             )
             .with_extra_headers(to_hash_map(&config.extra_headers))
             .with_default_thinking(config.default_thinking.clone()),
-        )),
+        ),
         ProviderDefinition::Codex(config) => {
             let auth = required_auth(auth_snapshot, config.auth_provider_id.as_str(), provider_id)?;
-            Ok(register_provider(
+            register_provider(
                 provider_id,
                 CodexProvider::from_auth_with_options(
                     client,
@@ -329,7 +315,7 @@ fn build_provider(
                     config.default_model.clone(),
                     config.auth_provider_id.clone(),
                 )?,
-            ))
+            )
         }
         ProviderDefinition::Gitlab(config) => {
             let runtime_config = GitlabProviderConfig {
@@ -347,7 +333,7 @@ fn build_provider(
                 config.api_key_env.as_ref(),
                 env,
             )? {
-                Ok(register_provider(
+                register_provider(
                     provider_id,
                     GitlabProvider::from_managed_token_with_config(
                         client,
@@ -360,9 +346,9 @@ fn build_provider(
                         )?,
                         runtime_config,
                     )?,
-                ))
+                )
             } else {
-                Ok(register_provider(
+                register_provider(
                     provider_id,
                     build_gitlab_auth_provider(
                         provider_id,
@@ -372,7 +358,7 @@ fn build_provider(
                         config,
                         runtime_config,
                     )?,
-                ))
+                )
             }
         }
         ProviderDefinition::Copilot(config) => {
@@ -382,7 +368,7 @@ fn build_provider(
                 default_model: Some(ModelId::new(config.default_model.clone())),
                 models_url: config.models_url.clone(),
             };
-            Ok(register_provider(
+            register_provider(
                 provider_id,
                 CopilotProvider::with_bearer_credential(
                     provider_id,
@@ -397,7 +383,7 @@ fn build_provider(
                     auth.enterprise_url().map(ToOwned::to_owned),
                     options,
                 )?,
-            ))
+            )
         }
         ProviderDefinition::AmazonBedrock(config) => {
             let provider = match &config.auth {
@@ -436,7 +422,7 @@ fn build_provider(
                     )?,
                 ),
             };
-            Ok(register_provider(provider_id, provider))
+            register_provider(provider_id, provider)
         }
         ProviderDefinition::GoogleVertex(config) => {
             let provider = match &config.auth {
@@ -463,71 +449,18 @@ fn build_provider(
                     config.default_model.clone(),
                 ),
             };
-            Ok(register_provider(provider_id, provider))
+            register_provider(provider_id, provider)
         }
-        ProviderDefinition::CloudflareAiGateway(config) => Ok(register_provider(
+        ProviderDefinition::CloudflareAiGateway(config) => register_provider(
             provider_id,
             build_cloudflare_provider(provider_id, client, config, env)?,
-        )),
-    }?;
+        ),
+    };
 
-    Ok(apply_capability_overrides(
+    Ok(apply_configured_models(
         provider,
-        resolved.capability_overrides.clone(),
+        resolved.models.clone(),
     ))
-}
-
-fn register_aliases(
-    registry: &mut ProviderRegistry,
-    mut aliases: Vec<(
-        String,
-        super::ProviderAliasConfig,
-        Vec<crate::provider::ProviderCapabilityOverrideRule>,
-    )>,
-) -> Result<(), ConfigError> {
-    while !aliases.is_empty() {
-        let mut remaining = Vec::new();
-        let mut progressed = false;
-
-        for (alias_id, alias, capability_overrides) in aliases {
-            let Some(_target) = registry.get(alias.target_provider_id.as_str()) else {
-                remaining.push((alias_id, alias, capability_overrides));
-                continue;
-            };
-
-            let mut registration =
-                ProviderAliasRegistration::new(alias_id.clone(), alias.target_provider_id.clone());
-            if let Some(model) = alias.default_model {
-                registration = registration.with_default_model(model);
-            }
-            if !capability_overrides.is_empty() {
-                registration = registration.with_capability_overrides(capability_overrides);
-            }
-            registry.register_alias(registration).map_err(|err| {
-                ConfigError::Validation(format!(
-                    "failed to register provider alias `{alias_id}`: {err}"
-                ))
-            })?;
-            progressed = true;
-        }
-
-        if !progressed {
-            let unresolved = remaining
-                .into_iter()
-                .map(|(alias_id, alias, _)| {
-                    format!("{alias_id}->{target}", target = alias.target_provider_id)
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(ConfigError::Validation(format!(
-                "unresolved provider aliases: {unresolved}"
-            )));
-        }
-
-        aliases = remaining;
-    }
-
-    Ok(())
 }
 
 fn build_cloudflare_provider(
@@ -770,11 +703,11 @@ where
     }
 }
 
-fn apply_capability_overrides(
+fn apply_configured_models(
     provider: Arc<dyn ModelProvider>,
-    rules: Vec<crate::provider::ProviderCapabilityOverrideRule>,
+    models: std::collections::BTreeMap<String, crate::provider::ConfiguredModelDefinition>,
 ) -> Arc<dyn ModelProvider> {
-    CapabilityOverrideProvider::new(provider, rules)
+    ConfiguredModelsProvider::new(provider, models)
 }
 
 fn normalize_text(value: &str) -> Option<String> {
@@ -823,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_builder_resolves_env_secret_and_alias() {
+    fn registry_builder_resolves_env_secret_for_concrete_provider() {
         let path = write_temp_file(
             r#"
 [providers.openai]
@@ -831,11 +764,6 @@ kind = "openai"
 base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1-mini"
 api_key_env = "OPENAI_API_KEY"
-
-[providers.prod]
-kind = "alias"
-target_provider_id = "openai"
-default_model = "gpt-5"
 "#,
         );
 
@@ -856,11 +784,10 @@ default_model = "gpt-5"
 
         let ids = registry.provider_ids();
         assert!(ids.iter().any(|id| id == "openai"));
-        assert!(ids.iter().any(|id| id == "prod"));
     }
 
     #[test]
-    fn registry_builder_applies_capability_overrides_to_alias_models() {
+    fn registry_builder_applies_configured_models_to_provider_models() {
         let path = write_temp_file(
             r#"
 [providers.openai]
@@ -869,14 +796,8 @@ base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1-mini"
 api_key_env = "OPENAI_API_KEY"
 
-[providers.prod]
-kind = "alias"
-target_provider_id = "openai"
-default_model = "gpt-5"
-
-[[providers.prod.capability_overrides]]
-model = "gpt-5"
-image_input = "unsupported"
+[providers.openai.models."gpt-4.1-mini"]
+input = { unsupported = ["image"] }
 "#,
         );
 
@@ -896,8 +817,8 @@ image_input = "unsupported"
             .expect("registry should build");
 
         let capabilities = registry
-            .model_capabilities(&crate::model::ModelRef::new("prod", "gpt-5"))
-            .expect("aliased provider capabilities should resolve");
+            .model_capabilities(&crate::model::ModelRef::new("openai", "gpt-4.1-mini"))
+            .expect("provider capabilities should resolve");
         assert_eq!(capabilities.image_input, CapabilitySupport::Unsupported);
         assert_eq!(capabilities.document_input, CapabilitySupport::Supported);
     }

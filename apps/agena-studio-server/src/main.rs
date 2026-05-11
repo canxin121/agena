@@ -1,7 +1,7 @@
 use base64::Engine as _;
 use std::path::PathBuf;
 
-use agena::config::{ConfigModeName, ConfigOverride, LoadConfigRequest};
+use agena::config::{ConfigOverride, LoadConfigRequest};
 use clap::{Parser, ValueEnum};
 use tracing::Level;
 
@@ -19,10 +19,6 @@ pub(crate) struct Args {
     /// Agena runtime config file path.
     #[arg(long, env = "AGENA_CONFIG", value_name = "PATH")]
     pub(crate) config: Option<String>,
-
-    /// Agena runtime mode.
-    #[arg(long, env = "AGENA_MODE", value_name = "MODE")]
-    pub(crate) mode: Option<ConfigModeName>,
 
     /// Agena runtime overrides.
     #[arg(short = 'c', long = "set")]
@@ -109,7 +105,6 @@ impl Args {
     pub(crate) fn load_request(&self) -> LoadConfigRequest {
         LoadConfigRequest {
             config_path: self.config.as_ref().map(PathBuf::from),
-            mode: self.mode.clone(),
             overrides: self.overrides.clone(),
         }
     }

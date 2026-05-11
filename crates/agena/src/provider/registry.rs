@@ -15,43 +15,10 @@ use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, P
 use crate::plugin::ProviderDescriptor;
 
 use super::{
-    CapabilityOverrideProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    ModelProvider, ProviderCapabilityOverrideRule, ProviderHttpClientConfig,
-    ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
-    StreamResumePolicy, wire_message,
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider,
+    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+    ProviderStreamReplayConfig, StreamResumePolicy, wire_message,
 };
-
-#[derive(Debug, Clone)]
-pub struct ProviderAliasRegistration {
-    pub alias_id: String,
-    pub target_provider_id: String,
-    pub default_model: Option<ModelId>,
-    pub capability_overrides: Vec<ProviderCapabilityOverrideRule>,
-}
-
-impl ProviderAliasRegistration {
-    pub fn new(alias_id: impl Into<String>, target_provider_id: impl Into<String>) -> Self {
-        Self {
-            alias_id: alias_id.into(),
-            target_provider_id: target_provider_id.into(),
-            default_model: None,
-            capability_overrides: Vec::new(),
-        }
-    }
-
-    pub fn with_default_model(mut self, model: impl Into<String>) -> Self {
-        self.default_model = Some(ModelId::new(model));
-        self
-    }
-
-    pub fn with_capability_overrides(
-        mut self,
-        capability_overrides: Vec<ProviderCapabilityOverrideRule>,
-    ) -> Self {
-        self.capability_overrides = capability_overrides;
-        self
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 struct RequestRetryPolicy {
@@ -137,7 +104,6 @@ struct PluginRegisteredProvider {
 pub struct NamedProvider {
     provider_id: String,
     target: Arc<dyn ModelProvider>,
-    default_model: Option<ModelId>,
 }
 
 impl NamedProvider {
@@ -145,13 +111,7 @@ impl NamedProvider {
         Self {
             provider_id: provider_id.into(),
             target,
-            default_model: None,
         }
-    }
-
-    pub fn with_default_model(mut self, model: impl Into<String>) -> Self {
-        self.default_model = Some(ModelId::new(model));
-        self
     }
 }
 
@@ -162,9 +122,7 @@ impl ModelProvider for NamedProvider {
     }
 
     fn default_model(&self) -> &ModelId {
-        self.default_model
-            .as_ref()
-            .unwrap_or_else(|| self.target.default_model())
+        self.target.default_model()
     }
 
     fn model_capabilities(&self, model: &ModelId) -> super::ModelCapabilities {
@@ -215,11 +173,7 @@ impl ModelProvider for NamedProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let stream = self.target.complete_stream(request).await?;
-        let alias_id = self.provider_id.clone();
-        let mapped = stream
-            .map(move |item| item.map(|event| remap_event_provider_id(event, alias_id.as_str())));
-        Ok(Box::pin(mapped))
+        self.target.complete_stream(request).await
     }
 }
 
@@ -331,37 +285,6 @@ impl ProviderRegistry {
             default_model,
             models,
         });
-        Ok(())
-    }
-
-    pub fn register_alias(&mut self, alias: ProviderAliasRegistration) -> Result<(), AppError> {
-        let alias_id = alias.alias_id.trim();
-        if alias_id.is_empty() {
-            return Err(AppError::Config(
-                "provider alias id cannot be empty".to_owned(),
-            ));
-        }
-
-        let target_provider_id = alias.target_provider_id.trim();
-        let target = self.get(target_provider_id).ok_or_else(|| {
-            AppError::Config(format!(
-                "provider alias target not found: {target_provider_id}"
-            ))
-        })?;
-
-        let default_model = alias.default_model;
-
-        let aliased = match default_model {
-            Some(model) => {
-                NamedProvider::new(alias_id.to_owned(), target).with_default_model(model)
-            }
-            None => NamedProvider::new(alias_id.to_owned(), target),
-        };
-
-        let provider =
-            CapabilityOverrideProvider::new(Arc::new(aliased), alias.capability_overrides);
-
-        self.providers.insert(alias_id.to_owned(), provider);
         Ok(())
     }
 
@@ -906,55 +829,6 @@ impl ProviderRegistry {
     }
 }
 
-fn remap_event_provider_id(
-    event: CompletionStreamEvent,
-    provider_id: &str,
-) -> CompletionStreamEvent {
-    let provider_id = ProviderId::new(provider_id);
-    match event {
-        CompletionStreamEvent::TextDelta { model, delta, .. } => CompletionStreamEvent::TextDelta {
-            provider_id: provider_id.clone(),
-            model,
-            delta,
-        },
-        CompletionStreamEvent::ToolCallDelta {
-            model,
-            stream_key,
-            id,
-            name,
-            arguments_delta,
-            ..
-        } => CompletionStreamEvent::ToolCallDelta {
-            provider_id: provider_id.clone(),
-            model,
-            stream_key,
-            id,
-            name,
-            arguments_delta,
-        },
-        CompletionStreamEvent::Completed {
-            model,
-            finish_reason,
-            usage,
-            provider_metadata,
-            ..
-        } => CompletionStreamEvent::Completed {
-            provider_id,
-            model,
-            finish_reason,
-            usage,
-            provider_metadata,
-        },
-        CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
-            CompletionStreamEvent::ThinkingDelta {
-                provider_id,
-                model,
-                delta,
-            }
-        }
-    }
-}
-
 fn validate_request_capabilities(
     model: &ModelRef,
     provider: &dyn ModelProvider,
@@ -1036,9 +910,8 @@ mod tests {
     use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent};
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::provider::{
-        CapabilityOverrideMatchMode, CapabilitySupport, CompletionFinishReason, CompletionRequest,
-        CompletionResponse, ModelCapabilities, ModelCapabilityPatch,
-        ProviderCapabilityOverrideRule, ProviderModel,
+        CapabilitySupport, CompletionFinishReason, CompletionRequest, CompletionResponse,
+        ModelCapabilities, ProviderModel,
     };
     use futures_util::{StreamExt, stream};
     use std::sync::{
@@ -1491,99 +1364,12 @@ mod tests {
     }
 
     #[test]
-    fn register_alias_requires_existing_target_provider() {
-        let mut registry = ProviderRegistry::new();
-        let err = registry
-            .register_alias(ProviderAliasRegistration::new(
-                "alias-provider",
-                "missing-provider",
-            ))
-            .expect_err("alias registration should fail when target is missing");
-        assert!(matches!(err, AppError::Config(message) if message.contains("target not found")));
-    }
-
-    #[test]
     fn resolve_model_target_parses_explicit_model_reference() {
         let registry = ProviderRegistry::new();
         let resolved = registry
             .resolve_model_target("openai/gpt-5", None)
             .expect("model reference should parse");
         assert_eq!(resolved, model_ref("openai", "gpt-5"));
-    }
-
-    #[test]
-    fn resolve_model_target_uses_provider_default_model() {
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let provider = FlakyProvider {
-            provider_id: "target-default",
-            attempts,
-            fail_attempts: 0,
-            retryable: false,
-        };
-        let mut registry = ProviderRegistry::new();
-        registry.register(provider);
-        registry
-            .register_alias(
-                ProviderAliasRegistration::new("target-alias", "target-default")
-                    .with_default_model("alias-model"),
-            )
-            .expect("alias registration should succeed");
-
-        let resolved = registry
-            .resolve_model_target("target-alias", None)
-            .expect("target should resolve using alias default");
-        assert_eq!(resolved, model_ref("target-alias", "alias-model"));
-    }
-
-    #[tokio::test]
-    async fn alias_provider_remaps_complete_and_stream_ids() {
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let provider = FlakyProvider {
-            provider_id: "internal-provider",
-            attempts,
-            fail_attempts: 0,
-            retryable: false,
-        };
-        let mut registry = ProviderRegistry::new();
-        registry.register(provider);
-        registry
-            .register_alias(
-                ProviderAliasRegistration::new("custom-provider", "internal-provider")
-                    .with_default_model("alias-model"),
-            )
-            .expect("alias registration should succeed");
-        let response = registry
-            .complete(
-                &model_ref("custom-provider", "alias-model"),
-                completion_request("alias-model"),
-            )
-            .await
-            .expect("alias completion should succeed");
-        assert_eq!(response.provider_id, pid("custom-provider"));
-        assert_eq!(response.model, mid("alias-model"));
-        let mut stream = registry
-            .complete_stream(
-                &model_ref("custom-provider", "alias-model"),
-                completion_request("alias-model"),
-            )
-            .await
-            .expect("alias stream should start");
-        let first = stream
-            .next()
-            .await
-            .expect("first stream event should exist")
-            .expect("first stream event should be success");
-        assert!(
-            matches!(first, CompletionStreamEvent::TextDelta { ref provider_id, .. } if provider_id == &pid("custom-provider"))
-        );
-        let second = stream
-            .next()
-            .await
-            .expect("second stream event should exist")
-            .expect("second stream event should be success");
-        assert!(
-            matches!(second, CompletionStreamEvent::Completed { ref provider_id, .. } if provider_id == &pid("custom-provider"))
-        );
     }
 
     #[tokio::test]
@@ -1641,78 +1427,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_model_for_alias_unlisted_model_preserves_alias_identity() {
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let provider = FlakyProvider {
-            provider_id: "internal-model-info",
-            attempts,
-            fail_attempts: 0,
-            retryable: false,
-        };
-        let mut registry = ProviderRegistry::new();
-        registry.register(provider);
-        registry
-            .register_alias(
-                ProviderAliasRegistration::new("alias-model-info", "internal-model-info")
-                    .with_default_model("alias-model"),
-            )
-            .expect("alias registration should succeed");
-
-        let model = registry
-            .resolve_model(&model_ref("alias-model-info", "alias-model"))
-            .await
-            .expect("alias provider model should resolve");
-
-        assert_eq!(model.provider_id, pid("alias-model-info"));
-        assert_eq!(model.id, mid("alias-model"));
-        assert_eq!(model.display_name, None);
-        assert_eq!(
-            model.capabilities.tool_calling,
-            CapabilitySupport::Supported
-        );
-    }
-
-    #[tokio::test]
-    async fn alias_capability_overrides_change_exposed_model_capabilities() {
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let provider = FlakyProvider {
-            provider_id: "override-target",
-            attempts,
-            fail_attempts: 0,
-            retryable: false,
-        };
-        let mut registry = ProviderRegistry::new();
-        registry.register(provider);
-        registry
-            .register_alias(
-                ProviderAliasRegistration::new("override-alias", "override-target")
-                    .with_default_model("alias-model")
-                    .with_capability_overrides(vec![ProviderCapabilityOverrideRule {
-                        model: "alias-model".to_owned(),
-                        match_mode: CapabilityOverrideMatchMode::Exact,
-                        capabilities: ModelCapabilityPatch {
-                            streaming: Some(CapabilitySupport::Unsupported),
-                            ..ModelCapabilityPatch::default()
-                        },
-                    }]),
-            )
-            .expect("alias registration should succeed");
-
-        let model = registry
-            .resolve_model(&model_ref("override-alias", "alias-model"))
-            .await
-            .expect("alias provider model should resolve");
-
-        assert_eq!(model.provider_id, pid("override-alias"));
-        assert_eq!(model.id, mid("alias-model"));
-        assert_eq!(model.capabilities.streaming, CapabilitySupport::Unsupported);
-        assert_eq!(
-            model.capabilities.tool_calling,
-            CapabilitySupport::Supported
-        );
-    }
-
-    #[tokio::test]
     async fn registry_rejects_explicitly_unsupported_image_inputs_before_request() {
         let calls = Arc::new(AtomicUsize::new(0));
         let provider = UnsupportedImageProvider {
@@ -1764,79 +1478,6 @@ mod tests {
 
         assert!(
             matches!(err, AppError::Provider(message) if message.contains("does not support requested input modalities") && message.contains("image (`pixel.png`)"))
-        );
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn alias_capability_overrides_participate_in_request_validation() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let provider = FlakyProvider {
-            provider_id: "validation-target",
-            attempts: Arc::clone(&calls),
-            fail_attempts: 0,
-            retryable: false,
-        };
-        let mut registry = ProviderRegistry::new();
-        registry.register(provider);
-        registry
-            .register_alias(
-                ProviderAliasRegistration::new("validation-alias", "validation-target")
-                    .with_default_model("alias-model")
-                    .with_capability_overrides(vec![ProviderCapabilityOverrideRule {
-                        model: "alias-model".to_owned(),
-                        match_mode: CapabilityOverrideMatchMode::Exact,
-                        capabilities: ModelCapabilityPatch {
-                            image_input: Some(CapabilitySupport::Unsupported),
-                            ..ModelCapabilityPatch::default()
-                        },
-                    }]),
-            )
-            .expect("alias registration should succeed");
-
-        let err = registry
-            .complete(
-                &model_ref("validation-alias", "alias-model"),
-                CompletionRequest {
-                    model: mid("alias-model"),
-                    system: None,
-                    messages: vec![Message::prompt_parts(
-                        crate::role::Role::User,
-                        vec![PartContent::attachments(vec![AttachmentItem {
-                            kind: AttachmentKind::Image,
-                            mime: "image/png".to_owned(),
-                            source: AttachmentSource::DataUrl {
-                                url: "data:image/png;base64,AAA".to_owned(),
-                            },
-                            filename: Some("pixel.png".to_owned()),
-                            title: None,
-                            size_bytes: None,
-                            sha256: None,
-                            width: Some(1),
-                            height: Some(1),
-                            duration_ms: None,
-                            page_count: None,
-                        }])],
-                    )],
-                    tools: Vec::new(),
-                    max_output_tokens: None,
-                    temperature: None,
-                    prompt_cache_key: None,
-                    previous_response_id: None,
-                    prompt_window_generation: None,
-                    stop_sequences: Vec::new(),
-                    top_p: None,
-                    top_k: None,
-                    seed: None,
-                    thinking: None,
-                    response_format: None,
-                },
-            )
-            .await
-            .expect_err("explicitly unsupported image input should be rejected");
-
-        assert!(
-            matches!(err, AppError::Provider(message) if message.contains("validation-alias") && message.contains("image"))
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }

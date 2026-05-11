@@ -50,8 +50,6 @@ function runtimeStatus(): RuntimeStatus {
     workspace_root: '/repo',
     config_path: '/repo/.agena/config.json',
     config_found: true,
-    active_mode: 'default',
-    active_mode_source: 'config',
     auth_store_path: '/repo/.agena/auth.json',
     provider_ids: ['anthropic'],
     plugin_count: 0,

@@ -384,7 +384,6 @@ provider 实现位于 `crates/agena/src/provider/` 下，并通过 `crates/agena
 
 本文不覆盖：
 
-- 在配置里声明的 provider aliases
 - plugin 通过 `provider_list` 在运行时注入的 provider 增删
 - 运行时加入的远程或自定义 provider
 

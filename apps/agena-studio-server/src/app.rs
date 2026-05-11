@@ -41,7 +41,6 @@ struct StudioHealthResponse {
     workspace_root: String,
     config_path: String,
     config_found: bool,
-    active_mode: Option<String>,
     provider_ids: Vec<String>,
     session_runtime_available: bool,
 }
@@ -59,11 +58,6 @@ async fn health(
         workspace_root: state.runtime.workspace_root().display().to_string(),
         config_path: resolution.meta.config_path.display().to_string(),
         config_found: resolution.meta.config_found,
-        active_mode: resolution
-            .meta
-            .active_mode
-            .clone()
-            .map(|mode| mode.to_string()),
         provider_ids: resolution.config.providers.keys().cloned().collect(),
         session_runtime_available: state.runtime.session_manager().is_some(),
     })

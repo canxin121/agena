@@ -351,12 +351,6 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         workspace_root: state.runtime().workspace_root().display().to_string(),
         config_path: resolution.meta.config_path.display().to_string(),
         config_found: resolution.meta.config_found,
-        active_mode: resolution
-            .meta
-            .active_mode
-            .as_ref()
-            .map(ToString::to_string),
-        active_mode_source: resolution.meta.active_mode_source,
         auth_store_path: resolution.config.auth.store_path.display().to_string(),
         provider_ids,
         plugin_count: snapshot.plugin_manager().plugins().len(),

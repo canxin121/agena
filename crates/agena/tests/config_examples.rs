@@ -15,7 +15,6 @@ fn try_load(content: &str, label: &str) {
     let loader = ConfigLoader::new(ProcessEnvironment);
     let request = LoadConfigRequest {
         config_path: Some(path),
-        mode: None,
         overrides: Vec::new(),
     };
     if let Err(err) = loader.load(&request) {

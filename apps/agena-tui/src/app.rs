@@ -4210,13 +4210,15 @@ impl App {
             parts.push(format!("#{session_id}"));
         }
 
+        parts.push(self.workspace_context_label());
+
         if let Some(theme) = self.plugin_theme.as_ref() {
-            parts.push(format!("theme={}", theme.id));
+            parts.push(format!("theme {}", theme.id));
         }
 
         let plugin_segments = self.backend.plugin_statusline_segments();
         if !plugin_segments.is_empty() {
-            parts.push(format!("statusline+{}", plugin_segments.len()));
+            parts.push(format!("status {}", plugin_segments.len()));
         }
 
         if let Some(session) = self.current_or_selected_session_summary() {
@@ -5099,14 +5101,19 @@ impl App {
                 .summary()
                 .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default")),
         ];
-        parts.extend(self.current_execution_context_parts());
+        parts.extend(
+            self.current_execution_context_parts()
+                .into_iter()
+                .filter(|part| !part.starts_with("cwd=")),
+        );
+        parts.push(self.workspace_context_label());
         parts.push(format!(
-            "queue_key={} submit_key={}",
+            "keys q={} send={}",
             self.keybindings.queue.len(),
             self.keybindings.submit.len()
         ));
         parts.push(format!(
-            "statusline={}",
+            "statusline {}",
             if self.backend.plugin_statusline_segments().is_empty() {
                 "default"
             } else {
@@ -5114,7 +5121,7 @@ impl App {
             }
         ));
         if let Some(theme) = self.plugin_theme.as_ref() {
-            parts.push(format!("theme={}", theme.id));
+            parts.push(format!("theme {}", theme.id));
         }
         self.i18n.text_args(
             "flash-runtime-status",
@@ -5127,9 +5134,7 @@ impl App {
             .run_options
             .summary()
             .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default"));
-        let cwd = std::env::current_dir()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|_| "<unavailable>".to_owned());
+        let cwd = self.backend.workspace_root().display().to_string();
         let session = self
             .transcript
             .session_id
@@ -5150,6 +5155,10 @@ impl App {
         self.sessions
             .view_mode
             .label(&self.i18n, self.sessions.subtree_root_id)
+    }
+
+    fn workspace_context_label(&self) -> String {
+        format!("ws {}", self.backend.workspace_name())
     }
 
     fn current_execution_context_parts(&self) -> Vec<String> {
@@ -10342,6 +10351,12 @@ mod tests {
         assert_eq!(view::session_sidebar_header_height(4), 2);
         assert_eq!(view::session_sidebar_header_height(6), 3);
         assert_eq!(view::session_sidebar_header_height(9), 4);
+    }
+
+    #[test]
+    fn truncate_display_text_adds_ellipsis_when_needed() {
+        assert_eq!(view::truncate_display_text("workspace-root", 8), "works...");
+        assert_eq!(view::truncate_display_text("agena", 8), "agena");
     }
 
     #[test]

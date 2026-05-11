@@ -104,6 +104,7 @@ impl App {
 
             let selected_title = self
                 .current_or_selected_session_title()
+                .map(|title| sanitize_display_text(title))
                 .unwrap_or_else(|| "new session".to_string());
             let selected_id = self
                 .current_or_selected_session_id()
@@ -228,7 +229,10 @@ impl App {
                     ),
                     marker_style,
                 )];
-                title_spans.push(Span::styled(session.title.clone(), title_style));
+                title_spans.push(Span::styled(
+                    sanitize_display_text(session.title.as_str()),
+                    title_style,
+                ));
                 let badge = if is_open {
                     Some((
                         ui_text::t(&self.i18n, "session-tag-current"),
@@ -948,6 +952,9 @@ impl App {
             return;
         }
 
+        let left = sanitize_display_text(left);
+        let right = sanitize_display_text(right);
+
         if right.trim().is_empty() {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
@@ -1016,7 +1023,10 @@ impl App {
                 let widget = Paragraph::new(Text::from(text))
                     .block(
                         Block::default()
-                            .title(format!(" {} ", ui_text::t(&self.i18n, "help-title")))
+                            .title(sanitize_display_text(format!(
+                                " {} ",
+                                ui_text::t(&self.i18n, "help-title")
+                            )))
                             .borders(Borders::ALL),
                     )
                     .wrap(Wrap { trim: false });
@@ -1058,7 +1068,7 @@ impl App {
         let area = centered_rect(area, 70, 7);
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(format!(" {} ", dialog.title))
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1072,7 +1082,10 @@ impl App {
             ])
             .split(inner);
 
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
+            rows[0],
+        );
         let view = dialog.input.render_view(rows[1].width, 1);
         frame.render_widget(
             Paragraph::new(Text::from(view.lines.clone()))
@@ -1098,7 +1111,7 @@ impl App {
         let area = centered_rect(area, 82, 11);
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(format!(" {} ", dialog.title))
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1113,7 +1126,10 @@ impl App {
             ])
             .split(inner);
 
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
+            rows[0],
+        );
         frame.render_widget(
             Paragraph::new(permission_rule_edit_help())
                 .block(Block::default().borders(Borders::BOTTOM))
@@ -1146,10 +1162,10 @@ impl App {
         let area = centered_rect(area, 88, 18);
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(format!(
+            .title(sanitize_display_text(format!(
                 " {} ",
                 ui_text::t(&self.i18n, "overlay-attach-title")
-            ))
+            )))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1185,7 +1201,7 @@ impl App {
             dialog
                 .results
                 .iter()
-                .map(|path| ListItem::new(path.to_string_lossy().to_string()))
+                .map(|path| ListItem::new(sanitize_display_text(path.to_string_lossy().as_ref())))
                 .collect::<Vec<_>>()
         };
         let list = List::new(result_items)
@@ -1220,10 +1236,10 @@ impl App {
         let area = centered_rect(area, 84, 15);
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(format!(
+            .title(sanitize_display_text(format!(
                 " {} ",
                 ui_text::t(&self.i18n, "overlay-permission-title")
-            ))
+            )))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1251,12 +1267,12 @@ impl App {
         )));
         lines.push(Line::from(self.i18n.text_args(
             "overlay-permission-reason",
-            &crate::fl_args!("reason" => dialog.request.reason.clone()),
+            &crate::fl_args!("reason" => sanitize_display_text(dialog.request.reason.as_str())),
         )));
         if !dialog.request.explanation.trim().is_empty() {
             lines.push(Line::from(format!(
                 "Explanation: {}",
-                dialog.request.explanation
+                sanitize_display_text(dialog.request.explanation.as_str())
             )));
         }
         let mut facts = Vec::new();
@@ -1265,13 +1281,13 @@ impl App {
             permission_risk_label(dialog.request.risk)
         ));
         if let Some(source) = dialog.request.source.as_deref() {
-            facts.push(format!("source={source}"));
+            facts.push(format!("source={}", sanitize_display_text(source)));
         }
         if let Some(scope) = dialog.request.scope {
             facts.push(format!("scope={scope}"));
         }
         if let Some(operator) = dialog.request.operator.as_deref() {
-            facts.push(format!("operator={operator}"));
+            facts.push(format!("operator={}", sanitize_display_text(operator)));
         }
         if !facts.is_empty() {
             lines.push(Line::from(facts.join(" · ")));
@@ -1313,10 +1329,10 @@ impl App {
         let area = centered_rect(area, 84, height);
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(format!(
+            .title(sanitize_display_text(format!(
                 " {} ",
                 ui_text::t(&self.i18n, "overlay-user-input-title")
-            ))
+            )))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1341,13 +1357,16 @@ impl App {
         lines.push(Line::from(""));
         for question in &dialog.request.questions {
             lines.push(Line::from(Span::styled(
-                format!("{} ({})", question.question, question.id),
+                sanitize_display_text(format!("{} ({})", question.question, question.id)),
                 Style::default().add_modifier(Modifier::BOLD),
             )));
             for option in &question.options {
-                let mut text = format!("  - {}", option.label);
+                let mut text = format!("  - {}", sanitize_display_text(option.label.as_str()));
                 if !option.description.trim().is_empty() {
-                    text.push_str(format!(" | {}", option.description).as_str());
+                    text.push_str(
+                        format!(" | {}", sanitize_display_text(option.description.as_str()))
+                            .as_str(),
+                    );
                 }
                 lines.push(Line::from(text));
             }
@@ -1394,7 +1413,7 @@ impl App {
         let area = centered_rect(area, 76, max(8, body_height.saturating_add(4)));
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(format!(" {} ", dialog.title))
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1411,11 +1430,11 @@ impl App {
             .map(|(index, line)| {
                 if index == 0 {
                     Line::from(Span::styled(
-                        line.clone(),
+                        sanitize_display_text(line.as_str()),
                         Style::default().add_modifier(Modifier::BOLD),
                     ))
                 } else {
-                    Line::from(line.clone())
+                    Line::from(sanitize_display_text(line.as_str()))
                 }
             })
             .collect::<Vec<_>>();
@@ -1424,7 +1443,7 @@ impl App {
             rows[0],
         );
         frame.render_widget(
-            Paragraph::new(dialog.footer.clone()).alignment(Alignment::Right),
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())).alignment(Alignment::Right),
             rows[1],
         );
     }
@@ -1433,7 +1452,7 @@ impl App {
         let area = centered_rect(area, 88, 18);
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(format!(" {} ", dialog.title))
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1448,7 +1467,10 @@ impl App {
             ])
             .split(inner);
 
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
+            rows[0],
+        );
 
         let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
         frame.render_widget(
@@ -1464,7 +1486,7 @@ impl App {
             )))]
         } else if dialog.items.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
-                dialog.empty_message.clone(),
+                sanitize_display_text(dialog.empty_message.as_str()),
                 Style::default().fg(Color::DarkGray),
             )))]
         } else {
@@ -1473,9 +1495,9 @@ impl App {
                 .iter()
                 .map(|item| {
                     ListItem::new(vec![
-                        Line::from(item.label.clone()),
+                        Line::from(sanitize_display_text(item.label.as_str())),
                         Line::from(Span::styled(
-                            item.detail.clone(),
+                            sanitize_display_text(item.detail.as_str()),
                             Style::default().fg(Color::DarkGray),
                         )),
                     ])
@@ -1491,7 +1513,10 @@ impl App {
         state.select((!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected));
         frame.render_stateful_widget(list, rows[2], &mut state);
 
-        frame.render_widget(Paragraph::new(dialog.footer.clone()), rows[3]);
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[3],
+        );
         frame.set_cursor_position((
             rows[1]
                 .x
@@ -1508,7 +1533,7 @@ impl App {
         let area = centered_rect(area, 94, 24);
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(format!(" {} ", dialog.title))
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1523,7 +1548,10 @@ impl App {
             ])
             .split(inner);
 
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
+            rows[0],
+        );
 
         let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
         frame.render_widget(
@@ -1555,14 +1583,14 @@ impl App {
             )))]
         } else if dialog.items.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
-                dialog.empty_message.clone(),
+                sanitize_display_text(dialog.empty_message.as_str()),
                 Style::default().fg(Color::DarkGray),
             )))]
         } else {
             dialog
                 .items
                 .iter()
-                .map(|item| ListItem::new(item.summary.clone()))
+                .map(|item| ListItem::new(sanitize_display_text(item.summary.as_str())))
                 .collect::<Vec<_>>()
         };
         let list = List::new(list_items)
@@ -1586,8 +1614,8 @@ impl App {
             dialog
                 .items
                 .get(dialog.selected)
-                .map(|item| item.detail.clone())
-                .unwrap_or_else(|| dialog.empty_message.clone())
+                .map(|item| sanitize_display_text(item.detail.as_str()))
+                .unwrap_or_else(|| sanitize_display_text(dialog.empty_message.as_str()))
         };
         frame.render_widget(
             Paragraph::new(detail)
@@ -1603,7 +1631,10 @@ impl App {
             content[1],
         );
 
-        frame.render_widget(Paragraph::new(dialog.footer.clone()), rows[3]);
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[3],
+        );
         frame.set_cursor_position((
             rows[1]
                 .x
@@ -1625,7 +1656,7 @@ impl App {
         let area = centered_rect(area, 96, 28);
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(format!(" {} ", dialog.title))
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1640,7 +1671,10 @@ impl App {
             ])
             .split(inner);
 
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
+            rows[0],
+        );
 
         let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
         frame.render_widget(
@@ -1670,7 +1704,7 @@ impl App {
 
         let list_items = if dialog.items.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
-                dialog.empty_message.clone(),
+                sanitize_display_text(dialog.empty_message.as_str()),
                 Style::default().fg(Color::DarkGray),
             )))]
         } else {
@@ -1692,7 +1726,10 @@ impl App {
                             Style::default().fg(Color::DarkGray)
                         }
                     };
-                    ListItem::new(Line::from(Span::styled(item.summary.clone(), style)))
+                    ListItem::new(Line::from(Span::styled(
+                        sanitize_display_text(item.summary.as_str()),
+                        style,
+                    )))
                 })
                 .collect::<Vec<_>>()
         };
@@ -1714,8 +1751,8 @@ impl App {
         let detail = dialog
             .items
             .get(dialog.selected)
-            .map(|item| item.detail.clone())
-            .unwrap_or_else(|| dialog.empty_message.clone());
+            .map(|item| sanitize_display_text(item.detail.as_str()))
+            .unwrap_or_else(|| sanitize_display_text(dialog.empty_message.as_str()));
         frame.render_widget(
             Paragraph::new(detail)
                 .block(
@@ -1733,8 +1770,8 @@ impl App {
         let logs = dialog
             .items
             .get(dialog.selected)
-            .map(|item| item.logs.clone())
-            .unwrap_or_else(|| dialog.empty_message.clone());
+            .map(|item| sanitize_display_text(item.logs.as_str()))
+            .unwrap_or_else(|| sanitize_display_text(dialog.empty_message.as_str()));
         frame.render_widget(
             Paragraph::new(logs)
                 .block(
@@ -1749,7 +1786,10 @@ impl App {
             logs_area,
         );
 
-        frame.render_widget(Paragraph::new(dialog.footer.clone()), rows[3]);
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[3],
+        );
         frame.set_cursor_position((
             rows[1]
                 .x
@@ -1953,6 +1993,10 @@ pub(super) fn truncate_display_text(text: &str, max_width: usize) -> String {
     }
     output.push_str("...");
     output
+}
+
+fn sanitize_display_text(text: impl AsRef<str>) -> String {
+    sanitize_terminal_text(text.as_ref())
 }
 
 pub(super) fn adaptive_modal_width(total_width: u16, target: u16) -> u16 {

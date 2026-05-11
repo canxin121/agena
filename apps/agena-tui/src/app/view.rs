@@ -4,12 +4,13 @@ impl App {
     pub(super) fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let composer_height = self.composer_height();
+        let status_height = self.status_row_height(area.width);
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(8),
                 Constraint::Length(composer_height),
-                Constraint::Length(1),
+                Constraint::Length(status_height),
             ])
             .split(area);
 
@@ -359,22 +360,9 @@ impl App {
     }
 
     fn render_composer(&self, frame: &mut Frame, area: Rect) {
-        let mut title = ui_text::composer_title(&self.i18n, self.transcript.session_id);
-        if let Some(summary) = self.run_options.summary() {
-            title = format!("{title}[{summary}] ");
-        }
-        if !self.queue.is_empty() {
-            let preview = self.queue.first_preview(40).unwrap_or_default();
-            if preview.is_empty() {
-                title = format!("{title}· {} queued ", self.queue.len());
-            } else {
-                title = format!("{title}· {} queued · {preview} ", self.queue.len());
-            }
-        }
-        if self.transcript.submitting {
-            title = format!("{title}· esc to interrupt ");
-        }
-        let block = Block::default().title(title).borders(Borders::ALL);
+        let block = Block::default()
+            .title(self.composer_panel_title())
+            .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -382,84 +370,346 @@ impl App {
             return;
         }
 
-        let view = self.composer.render_view(inner.width, inner.height);
-        let content = if self.composer.text().is_empty() {
-            Text::from(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "composer-placeholder"),
-                Style::default().fg(Color::DarkGray),
-            )))
+        let item_count = self.composer_items.len();
+        let item_rows = u16::from(item_count > 0);
+        let header_rows = 1_u16;
+        let footer_rows = if inner.height >= 4 { 1 } else { 0 };
+        let editor_rows = inner
+            .height
+            .saturating_sub(header_rows)
+            .saturating_sub(item_rows)
+            .saturating_sub(footer_rows)
+            .max(1);
+
+        let mut constraints = vec![Constraint::Length(header_rows)];
+        if item_rows > 0 {
+            constraints.push(Constraint::Length(item_rows));
+        }
+        constraints.push(Constraint::Length(editor_rows));
+        if footer_rows > 0 {
+            constraints.push(Constraint::Length(footer_rows));
+        }
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(inner);
+
+        let context_row = rows[0];
+        let mut next_row = 1;
+        let item_row = if item_rows > 0 {
+            let row = Some(rows[next_row]);
+            next_row += 1;
+            row
         } else {
-            Text::from(view.lines.clone())
+            None
+        };
+        let editor_row = rows[next_row];
+        let footer_row = if footer_rows > 0 {
+            Some(rows[next_row + 1])
+        } else {
+            None
         };
 
-        frame.render_widget(Paragraph::new(content), inner);
+        self.render_composer_context_row(frame, context_row);
+        if let Some(item_row) = item_row {
+            self.render_composer_items_row(frame, item_row);
+        }
+
+        let editor_width = editor_row.width.saturating_sub(2);
+        let editor_x = editor_row.x.saturating_add(1);
+        let editor_view = self
+            .composer
+            .render_view(editor_width.max(1), editor_row.height.max(1));
+
+        frame.render_widget(
+            Paragraph::new(Text::from(editor_view.lines.clone())).alignment(Alignment::Left),
+            Rect {
+                x: editor_x,
+                y: editor_row.y,
+                width: editor_width.max(1),
+                height: editor_row.height,
+            },
+        );
+
+        if self.composer.text().is_empty() {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    ui_text::t(&self.i18n, "composer-placeholder"),
+                    Style::default().fg(Color::DarkGray),
+                ))),
+                Rect {
+                    x: editor_x,
+                    y: editor_row.y,
+                    width: editor_width.max(1),
+                    height: 1,
+                },
+            );
+        }
+
+        if let Some(footer_row) = footer_row {
+            self.render_composer_footer_row(frame, footer_row);
+        }
 
         if self.overlay.is_none() && self.focus == Focus::Composer {
             frame.set_cursor_position((
-                inner.x.saturating_add(view.cursor_x),
-                inner.y.saturating_add(view.cursor_y),
+                editor_x.saturating_add(editor_view.cursor_x),
+                editor_row.y.saturating_add(editor_view.cursor_y),
             ));
         }
     }
 
     fn render_status(&self, frame: &mut Frame, area: Rect) {
-        if let Some(flash) = &self.flash {
-            let style = match flash.level {
-                FlashLevel::Success => {
-                    Style::default().fg(self.theme_color("flash_success", Color::Green))
-                }
-                FlashLevel::Warning => {
-                    Style::default().fg(self.theme_color("flash_warning", Color::Magenta))
-                }
-                FlashLevel::Error => {
-                    Style::default().fg(self.theme_color("flash_error", Color::Red))
-                }
-                FlashLevel::Info => {
-                    Style::default().fg(self.theme_color("flash_info", Color::Cyan))
-                }
-            };
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(flash.text.clone(), style))),
-                area,
-            );
+        if area.width == 0 || area.height == 0 {
             return;
         }
 
-        let base_style = Style::default().fg(self.theme_color("status", Color::DarkGray));
+        let lines = self.status_lines(area.width);
+        frame.render_widget(
+            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    fn composer_panel_title(&self) -> String {
+        let mut title = ui_text::composer_title(&self.i18n, self.transcript.session_id);
+        if self.transcript.submitting {
+            title.push_str("running");
+        } else {
+            title.push_str(self.focus.label());
+        }
+        title.push(' ');
+        title
+    }
+
+    fn render_composer_context_row(&self, frame: &mut Frame, area: Rect) {
+        let left = self
+            .status_context_summary()
+            .unwrap_or_else(|| self.default_status_hint());
+        let right = self.composer_context_right();
+        self.render_header_row(
+            frame,
+            area,
+            left,
+            right,
+            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::DarkGray),
+        );
+    }
+
+    fn render_composer_items_row(&self, frame: &mut Frame, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
         let mut spans = Vec::new();
-        let text = if let Some(text) = self
+        for (index, item) in self.composer_items.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+            }
+            spans.push(Span::styled(
+                format!("[{}]", item.short_label()),
+                self.composer_item_style(item),
+            ));
+        }
+
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    fn render_composer_footer_row(&self, frame: &mut Frame, area: Rect) {
+        let lines = self.composer_footer_lines(area.width);
+        frame.render_widget(
+            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    fn composer_footer_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+
+        if let Some(flash) = &self.flash {
+            lines.extend(self.wrap_styled_text(
+                flash.text.as_str(),
+                width,
+                self.flash_style(flash.level),
+            ));
+            return lines;
+        }
+
+        let left = self.composer_primary_footer_text();
+        let right = self.composer_secondary_footer_text();
+        let combined = if right.is_empty() {
+            left
+        } else if width >= 88 {
+            format!("{left}  |  {right}")
+        } else {
+            format!("{left}\n{right}")
+        };
+        lines.extend(self.wrap_styled_text(
+            combined.as_str(),
+            width,
+            Style::default().fg(Color::DarkGray),
+        ));
+        lines
+    }
+
+    fn composer_primary_footer_text(&self) -> String {
+        let mut parts = Vec::new();
+        if self.transcript.submitting {
+            parts.push("esc interrupt".to_string());
+            if !self.queue.is_empty() {
+                parts.push(format!("tab queue [{}]", self.queue.len()));
+            }
+        } else {
+            parts.push("enter send".to_string());
+            parts.push("tab focus".to_string());
+            parts.push("/ search".to_string());
+        }
+        if self.focus == Focus::Composer {
+            parts.push("ctrl+f transcript-find".to_string());
+        }
+        parts.join("  ·  ")
+    }
+
+    fn composer_secondary_footer_text(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.queue.is_empty() {
+            let preview = self.queue.first_preview(28).unwrap_or_default();
+            if preview.is_empty() {
+                parts.push(format!("queued {}", self.queue.len()));
+            } else {
+                parts.push(format!("queued {} {}", self.queue.len(), preview));
+            }
+        }
+        if let Some(summary) = self.run_options.summary() {
+            parts.push(summary);
+        }
+        if let Some(status_line) = self
+            .status_line
+            .as_ref()
+            .and_then(|status_line| status_line.text.as_ref())
+            .map(String::as_str)
+        {
+            if !status_line.trim().is_empty() {
+                parts.push(status_line.trim().to_string());
+            }
+        }
+        parts.join("  |  ")
+    }
+
+    fn composer_context_right(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(session_id) = self.transcript.session_id {
+            parts.push(format!("#{session_id}"));
+        } else {
+            parts.push("new session".to_string());
+        }
+        if self.transcript.submitting {
+            parts.push(ui_text::t(&self.i18n, "transcript-header-busy"));
+        } else {
+            parts.push(match self.focus {
+                Focus::Sessions => ui_text::t(&self.i18n, "status-sessions"),
+                Focus::Transcript => ui_text::t(&self.i18n, "status-transcript"),
+                Focus::Composer => ui_text::t(&self.i18n, "status-composer"),
+            });
+        }
+        parts.join("  |  ")
+    }
+
+    fn default_status_hint(&self) -> String {
+        match self.focus {
+            Focus::Sessions => ui_text::t(&self.i18n, "status-sessions"),
+            Focus::Transcript => ui_text::t(&self.i18n, "status-transcript"),
+            Focus::Composer => ui_text::t(&self.i18n, "status-composer"),
+        }
+    }
+
+    fn status_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let style = Style::default().fg(self.theme_color("status", Color::DarkGray));
+        if let Some(flash) = &self.flash {
+            return self.wrap_styled_text(
+                flash.text.as_str(),
+                width,
+                self.flash_style(flash.level),
+            );
+        }
+
+        let mut segments = Vec::new();
+        if let Some(text) = self
             .status_line
             .as_ref()
             .and_then(|status_line| status_line.text.clone())
         {
-            text
+            if !text.trim().is_empty() {
+                segments.push(text);
+            }
+        } else if let Some(context) = self.status_context_summary() {
+            segments.push(context);
         } else {
-            let default_hint = match self.focus {
-                Focus::Sessions => ui_text::t(&self.i18n, "status-sessions"),
-                Focus::Transcript => ui_text::t(&self.i18n, "status-transcript"),
-                Focus::Composer => ui_text::t(&self.i18n, "status-composer"),
-            };
-            self.status_context_summary()
-                .map(|context| format!("{context}  |  {default_hint}"))
-                .unwrap_or(default_hint)
-        };
-        spans.push(Span::styled(text, base_style));
+            segments.push(self.default_status_hint());
+        }
 
         for segment in self.backend.plugin_statusline_segments() {
             if segment.content.trim().is_empty() {
                 continue;
             }
-            spans.push(Span::styled("  |  ", base_style));
-            let style = segment
-                .color
-                .as_deref()
-                .and_then(parse_tui_color)
-                .map(|color| Style::default().fg(color))
-                .unwrap_or(base_style);
-            spans.push(Span::styled(segment.content, style));
+            segments.push(segment.content.clone());
         }
 
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        self.wrap_styled_text(segments.join("  |  ").as_str(), width, style)
+    }
+
+    fn status_row_height(&self, width: u16) -> u16 {
+        self.status_lines(width).len().max(1) as u16
+    }
+
+    fn composer_item_style(&self, item: &ComposerItem) -> Style {
+        match item {
+            ComposerItem::Attachment(_) => Style::default()
+                .fg(self.theme_color("flash_info", Color::Cyan))
+                .add_modifier(Modifier::BOLD),
+            ComposerItem::LargePaste(_) => Style::default()
+                .fg(self.theme_color("flash_warning", Color::Magenta))
+                .add_modifier(Modifier::BOLD),
+        }
+    }
+
+    fn flash_style(&self, level: FlashLevel) -> Style {
+        match level {
+            FlashLevel::Success => {
+                Style::default().fg(self.theme_color("flash_success", Color::Green))
+            }
+            FlashLevel::Warning => {
+                Style::default().fg(self.theme_color("flash_warning", Color::Magenta))
+            }
+            FlashLevel::Error => Style::default().fg(self.theme_color("flash_error", Color::Red)),
+            FlashLevel::Info => Style::default().fg(self.theme_color("flash_info", Color::Cyan)),
+        }
+    }
+
+    fn wrap_styled_text(&self, text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
+        let sanitized = sanitize_terminal_text(text);
+        let available = width.max(1) as usize;
+        let options = textwrap::Options::new(available)
+            .break_words(false)
+            .word_splitter(textwrap::WordSplitter::NoHyphenation);
+
+        sanitized
+            .split('\n')
+            .flat_map(|line| {
+                let wrapped = textwrap::wrap(line, options.clone());
+                if wrapped.is_empty() {
+                    vec![Line::from(Span::styled(String::new(), style))]
+                } else {
+                    wrapped
+                        .into_iter()
+                        .map(|segment| Line::from(Span::styled(segment.into_owned(), style)))
+                        .collect::<Vec<_>>()
+                }
+            })
+            .collect()
     }
 
     fn theme_color(&self, key: &str, fallback: Color) -> Color {
@@ -1286,7 +1536,9 @@ impl App {
 
     fn composer_height(&self) -> u16 {
         let line_count = max(1, self.composer.logical_line_count());
-        min(12, line_count as u16 + 2)
+        let item_rows = u16::from(!self.composer_items.is_empty());
+        let chrome_rows = 2_u16 + item_rows;
+        min(14, line_count as u16 + chrome_rows)
     }
 }
 

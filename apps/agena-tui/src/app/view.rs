@@ -1039,7 +1039,7 @@ impl App {
 
         let content = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(44), Constraint::Percentage(56)])
+            .constraints(adaptive_detail_split(rows[2].width, 40, 46))
             .split(rows[2]);
 
         let list_items = if dialog.loading {
@@ -1145,11 +1145,11 @@ impl App {
 
         let content = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+            .constraints(adaptive_detail_split(rows[2].width, 34, 48))
             .split(rows[2]);
         let right = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .constraints(adaptive_vertical_split(content[1].height, 7, 9))
             .split(content[1]);
 
         let list_items = if dialog.items.is_empty() {
@@ -1348,8 +1348,8 @@ fn parse_hex_color(value: &str) -> Option<Color> {
 }
 
 fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let width = min(width, area.width.saturating_sub(2));
-    let height = min(height, area.height.saturating_sub(2));
+    let width = adaptive_modal_width(area.width, width);
+    let height = adaptive_modal_height(area.height, height);
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 2;
     Rect {
@@ -1366,5 +1366,53 @@ fn inner_rect(area: Rect) -> Rect {
         y: area.y.saturating_add(1),
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
+    }
+}
+
+pub(super) fn adaptive_modal_width(total_width: u16, target: u16) -> u16 {
+    let max_width = total_width.saturating_sub(2);
+    if total_width <= 72 {
+        max(36, max_width)
+    } else if total_width <= 96 {
+        min(max_width, max(44, target.saturating_sub(10)))
+    } else {
+        min(target, max_width)
+    }
+}
+
+pub(super) fn adaptive_modal_height(total_height: u16, target: u16) -> u16 {
+    let max_height = total_height.saturating_sub(2);
+    if total_height <= 18 {
+        max(6, max_height)
+    } else if total_height <= 28 {
+        min(max_height, max(8, target.saturating_sub(6)))
+    } else {
+        min(target, max_height)
+    }
+}
+
+pub(super) fn adaptive_detail_split(
+    total_width: u16,
+    left_min: u16,
+    right_min: u16,
+) -> [Constraint; 2] {
+    let available = total_width.saturating_sub(2);
+    if available < left_min.saturating_add(right_min).saturating_add(8) {
+        [Constraint::Percentage(50), Constraint::Percentage(50)]
+    } else {
+        [Constraint::Min(left_min), Constraint::Min(right_min)]
+    }
+}
+
+pub(super) fn adaptive_vertical_split(
+    total_height: u16,
+    top_min: u16,
+    bottom_min: u16,
+) -> [Constraint; 2] {
+    let available = total_height.saturating_sub(2);
+    if available < top_min.saturating_add(bottom_min).saturating_add(3) {
+        [Constraint::Percentage(50), Constraint::Percentage(50)]
+    } else {
+        [Constraint::Min(top_min), Constraint::Min(bottom_min)]
     }
 }

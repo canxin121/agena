@@ -116,7 +116,10 @@ impl App {
                 selected_right.push(ui_text::t(&self.i18n, "transcript-header-busy"));
             }
 
-            let mut summary_right = vec![format!("{} listed", self.sessions.items.len())];
+            let mut summary_right = vec![
+                self.workspace_context_label(),
+                format!("{} listed", self.sessions.items.len()),
+            ];
             if self.sessions.loading {
                 summary_right.push(ui_text::t(&self.i18n, "transcript-header-loading"));
             } else if self.sessions.loading_more {
@@ -170,7 +173,7 @@ impl App {
 
                 let mut scope_parts = vec![self.current_session_view_summary()];
                 if !self.sessions.search_query.trim().is_empty() {
-                    scope_parts.push(format!("find={}", self.sessions.search_query.trim()));
+                    scope_parts.push(format!("/search {}", self.sessions.search_query.trim()));
                 }
                 self.render_header_row(
                     frame,
@@ -337,7 +340,7 @@ impl App {
                 };
                 let mut right_parts = Vec::new();
                 if !self.sessions.search_query.trim().is_empty() {
-                    right_parts.push(format!("find={}", self.sessions.search_query.trim()));
+                    right_parts.push(format!("/search {}", self.sessions.search_query.trim()));
                 }
                 if self.sessions.has_more {
                     right_parts.push(ui_text::t(&self.i18n, "sessions-more"));
@@ -471,12 +474,17 @@ impl App {
         let is_running = self.transcript.execution.as_ref().is_some_and(|execution| {
             execution.run_state != SessionRunState::Idle || execution.blocked
         });
-        ui_text::transcript_header_title(
+        let title = ui_text::transcript_header_title(
             &self.i18n,
             self.transcript.session_id,
             self.transcript.session_title.as_str(),
             is_running,
-        )
+        );
+        if self.transcript.session_id.is_some() {
+            title
+        } else {
+            format!(" {} · {} ", ui_text::t(&self.i18n, "pane-transcript"), self.workspace_context_label())
+        }
     }
 
     fn transcript_surface_primary_left(&self) -> String {
@@ -505,7 +513,7 @@ impl App {
             if let Some(session_id) = self.current_or_selected_session_id() {
                 parts.push(format!("#{session_id}"));
             }
-            parts.push(self.current_session_view_summary());
+            parts.push(self.workspace_context_label());
         }
         parts.join("  ·  ")
     }
@@ -549,13 +557,17 @@ impl App {
     }
 
     fn transcript_surface_secondary_left(&self) -> String {
-        let mut parts = self.current_lineage_context_parts();
+        let mut parts = vec![self.current_session_view_summary()];
+        parts.extend(self.current_lineage_context_parts());
         parts.extend(
             self.current_execution_context_parts()
                 .into_iter()
-                .filter(|part| !part.starts_with("cwd=")),
+                .filter(|part| {
+                    !part.starts_with("cwd=")
+                        && !part.starts_with("task=")
+                        && !part.starts_with("agent=")
+                }),
         );
-        parts.push(self.current_session_view_summary());
         if let Some(summary) = self.run_options.summary() {
             parts.push(summary);
         }
@@ -807,7 +819,7 @@ impl App {
         if let Some(session_id) = self.transcript.session_id {
             parts.push(format!("#{session_id}"));
         } else {
-            parts.push("new session".to_string());
+            parts.push(self.workspace_context_label());
         }
         if self.transcript.submitting {
             parts.push(ui_text::t(&self.i18n, "transcript-header-busy"));
@@ -938,13 +950,22 @@ impl App {
 
         if right.trim().is_empty() {
             frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(left, left_style))),
+                Paragraph::new(Line::from(Span::styled(
+                    truncate_display_text(left.as_str(), area.width as usize),
+                    left_style,
+                ))),
                 area,
             );
             return;
         }
 
-        let right_width = UnicodeWidthStr::width(right.as_str()).saturating_add(1) as u16;
+        let max_right_width = if area.width < 52 {
+            area.width.saturating_div(2).max(8)
+        } else {
+            area.width.saturating_mul(2).saturating_div(5).max(16)
+        };
+        let truncated_right = truncate_display_text(right.as_str(), max_right_width as usize);
+        let right_width = UnicodeWidthStr::width(truncated_right.as_str()).saturating_add(1) as u16;
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -952,13 +973,17 @@ impl App {
                 Constraint::Length(min(area.width, right_width)),
             ])
             .split(area);
+        let truncated_left = truncate_display_text(
+            left.as_str(),
+            columns[0].width.saturating_sub(1).max(1) as usize,
+        );
 
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(left, left_style))),
+            Paragraph::new(Line::from(Span::styled(truncated_left, left_style))),
             columns[0],
         );
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(right, right_style)))
+            Paragraph::new(Line::from(Span::styled(truncated_right, right_style)))
                 .alignment(Alignment::Right),
             columns[1],
         );
@@ -1902,6 +1927,32 @@ pub(super) fn session_sidebar_header_height(total_height: u16) -> u16 {
     } else {
         4
     }
+}
+
+pub(super) fn truncate_display_text(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let target = max_width.saturating_sub(3);
+    let mut width = 0_usize;
+    let mut output = String::new();
+    for grapheme in text.graphemes(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if width.saturating_add(grapheme_width) > target {
+            break;
+        }
+        output.push_str(grapheme);
+        width = width.saturating_add(grapheme_width);
+    }
+    output.push_str("...");
+    output
 }
 
 pub(super) fn adaptive_modal_width(total_width: u16, target: u16) -> u16 {

@@ -727,6 +727,19 @@ impl Backend {
             .statusline_segments()
     }
 
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
+    pub fn workspace_name(&self) -> String {
+        self.workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| self.workspace_root.display().to_string())
+    }
+
     pub fn plugin_theme_palettes(&self) -> Vec<agena::plugin::HostThemePalette> {
         self.runtime
             .current_snapshot()

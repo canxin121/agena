@@ -24,10 +24,7 @@ impl App {
         if stacked_sessions {
             let stacked = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(adaptive_sessions_height(main.height)),
-                    Constraint::Min(12),
-                ])
+                .constraints(adaptive_sessions_split(main.height))
                 .split(main);
             sessions_area = stacked[0];
             transcript_host_area = stacked[1];
@@ -64,7 +61,13 @@ impl App {
         } else {
             Borders::RIGHT
         });
-        let inner = inset_rect(frame_block.inner(area), 1, 1);
+        let horizontal_padding = u16::from(area.width > 24);
+        let vertical_padding = u16::from(area.height > 6);
+        let inner = inset_rect(
+            frame_block.inner(area),
+            horizontal_padding,
+            vertical_padding,
+        );
         frame.render_widget(frame_block, area);
 
         if inner.width == 0 || inner.height == 0 {
@@ -2044,6 +2047,16 @@ pub(super) fn should_stack_sessions_layout(total_width: u16) -> bool {
 
 pub(super) fn adaptive_sessions_height(total_height: u16) -> u16 {
     min(10, max(6, total_height.saturating_div(3)))
+}
+
+pub(super) fn adaptive_sessions_split(total_height: u16) -> [Constraint; 2] {
+    let sessions_height = adaptive_sessions_height(total_height);
+    let available = total_height.saturating_sub(2);
+    if available < sessions_height.saturating_add(12).saturating_add(3) {
+        [Constraint::Percentage(50), Constraint::Percentage(50)]
+    } else {
+        [Constraint::Length(sessions_height), Constraint::Min(12)]
+    }
 }
 
 pub(super) fn adaptive_vertical_split(

@@ -9781,6 +9781,74 @@ api_key = "test"
         let _ = fs::remove_file(path);
     }
 
+    #[tokio::test]
+    async fn draw_compact_layout_handles_stacked_sessions_without_panic() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key = "test"
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root.clone()),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        let now = Utc::now();
+        app.sessions.initialized = true;
+        app.sessions.items = vec![
+            test_session(1, None, "Root Session", now),
+            test_session(2, Some(1), "Child Session", now),
+        ];
+        app.sessions.selected = 1;
+        app.transcript.session_id = Some(2);
+        app.transcript.session_title = "Child Session".to_string();
+
+        let backend = TestBackend::new(72, 14);
+        let mut terminal = Terminal::new(backend).expect("test terminal should build");
+        terminal
+            .draw(|frame| app.draw(frame))
+            .expect("draw should succeed");
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Sessions"));
+        assert!(rendered.contains("Child Session"));
+        assert!(rendered.contains("current"));
+        assert!(rendered.contains("ws "));
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn rewind_message_preview_prefers_first_text_line() {
         let now = Utc::now();

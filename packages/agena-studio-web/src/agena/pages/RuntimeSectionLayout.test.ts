@@ -1,17 +1,26 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 
-const filePath = '/home/canxin/Git/ai/agena/packages/agena-studio-web/src/agena/pages/RuntimeSectionLayout.vue'
+import { renderVueSsr } from './test/renderVueSsr'
 
 describe('RuntimeSectionLayout', () => {
-  test('contains runtime section shell, tab bar, and refresh/reload actions', () => {
-    const source = readFileSync(filePath, 'utf8')
+  test('renders runtime actions and tabs', async () => {
+    const html = await renderVueSsr('/src/agena/pages/RuntimeSectionLayout.vue', {
+      activeTab: 'overview',
+      actionError: '',
+      actionMessage: '',
+      loading: false,
+      pageDescription: 'Runtime description',
+      pageTitle: 'Runtime title',
+      tabs: [
+        { id: 'overview', label: 'Overview' },
+        { id: 'skills', label: 'Skills' },
+      ],
+    })
 
-    expect(source.includes('SectionPageShell')).toBe(true)
-    expect(source.includes('SectionTabBar')).toBe(true)
-    expect(source.includes("emit('refresh')")).toBe(true)
-    expect(source.includes("emit('reload')")).toBe(true)
-    expect(source.includes("'update:activeTab'")).toBe(true)
-    expect(source.includes('<slot />')).toBe(true)
+    expect(html.includes('Runtime title')).toBe(true)
+    expect(html.includes('Refresh')).toBe(true)
+    expect(html.includes('Reload Runtime')).toBe(true)
+    expect(html.includes('Overview')).toBe(true)
+    expect(html.includes('Skills')).toBe(true)
   })
 })

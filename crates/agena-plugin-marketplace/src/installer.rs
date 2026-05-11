@@ -30,11 +30,21 @@ pub struct RegistryHandle<'a, F: HttpFetcher> {
 
 impl<'a, F: HttpFetcher> RegistryHandle<'a, F> {
     pub fn fetch_index(&self, force_refresh: bool) -> Result<RegistryIndex, MarketplaceError> {
+        self.fetch_index_with_cache(force_refresh, true)
+    }
+
+    fn fetch_index_with_cache(
+        &self,
+        force_refresh: bool,
+        persist_cache: bool,
+    ) -> Result<RegistryIndex, MarketplaceError> {
         if !force_refresh && let Some(bytes) = self.cache.load_index_raw(&self.spec.id)? {
             return Ok(serde_json::from_slice(&bytes)?);
         }
         let bytes = self.fetcher.fetch(&self.spec.url)?;
-        self.cache.save_index(&self.spec.id, &bytes)?;
+        if persist_cache {
+            self.cache.save_index(&self.spec.id, &bytes)?;
+        }
         Ok(serde_json::from_slice(&bytes)?)
     }
 }
@@ -89,9 +99,11 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         // resolved version is followed transitively through the same
         // registry, with cycle detection. Each dependency is installed
         // before its dependents.
-        self.cache.ensure_dirs()?;
+        if !req.dry_run {
+            self.cache.ensure_dirs()?;
+        }
         let registry_handle = self.registry(req.registry.clone());
-        let index = registry_handle.fetch_index(req.refresh_index)?;
+        let index = registry_handle.fetch_index_with_cache(req.refresh_index, !req.dry_run)?;
         let installed = self.cache.load_installed()?;
 
         let mut plan: Vec<(String, Option<String>)> = Vec::new();
@@ -202,9 +214,8 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
     }
 
     fn install_one(&self, req: InstallRequest) -> Result<InstallOutcome, MarketplaceError> {
-        self.cache.ensure_dirs()?;
         let registry = self.registry(req.registry.clone());
-        let index = registry.fetch_index(false)?;
+        let index = registry.fetch_index_with_cache(false, !req.dry_run)?;
         let plugin = index
             .plugins
             .into_iter()
@@ -222,6 +233,10 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
                 current_target_triple().to_string(),
             )
         })?;
+
+        if !req.dry_run {
+            self.cache.ensure_dirs()?;
+        }
 
         // Download artifact
         let bytes = self.fetcher.fetch(&version.url)?;
@@ -255,39 +270,45 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         // plugin/version dir; non-archive payloads go straight to a single
         // file named binary.<ext>.
         let plugin_dir = self.cache.plugin_dir(&plugin.id, &version.version);
-        std::fs::create_dir_all(&plugin_dir)?;
-        let (artifact_path, archive_extracted) = match version.archive.as_ref() {
-            Some(crate::manifest::ArchiveSpec::TarGz { entrypoint }) => {
-                extract_tar_gz(&bytes, &plugin_dir).map_err(|err| MarketplaceError::Archive {
-                    plugin: plugin.id.clone(),
-                    message: err,
-                })?;
-                let entrypoint_path = plugin_dir.join(entrypoint);
-                if !entrypoint_path.exists() {
-                    return Err(MarketplaceError::Archive {
+        let (artifact_path, archive_extracted) = if req.dry_run {
+            preview_artifact_path(&self.cache, &plugin.id, &version)?
+        } else {
+            std::fs::create_dir_all(&plugin_dir)?;
+            match version.archive.as_ref() {
+                Some(crate::manifest::ArchiveSpec::TarGz { entrypoint }) => {
+                    extract_tar_gz(&bytes, &plugin_dir).map_err(|err| MarketplaceError::Archive {
                         plugin: plugin.id.clone(),
-                        message: format!("entrypoint `{entrypoint}` not found in archive"),
-                    });
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if matches!(version.kind, PluginKind::Stdio) {
-                        let perms = std::fs::Permissions::from_mode(0o755);
-                        let _ = std::fs::set_permissions(&entrypoint_path, perms);
+                        message: err,
+                    })?;
+                    let entrypoint_path = plugin_dir.join(entrypoint);
+                    if !entrypoint_path.exists() {
+                        return Err(MarketplaceError::Archive {
+                            plugin: plugin.id.clone(),
+                            message: format!("entrypoint `{entrypoint}` not found in archive"),
+                        });
                     }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if matches!(version.kind, PluginKind::Stdio) {
+                            let perms = std::fs::Permissions::from_mode(0o755);
+                            let _ = std::fs::set_permissions(&entrypoint_path, perms);
+                        }
+                    }
+                    (entrypoint_path, true)
                 }
-                (entrypoint_path, true)
-            }
-            None => {
-                let path = self
-                    .cache
-                    .artifact_path(&plugin.id, &version.version, version.kind);
-                write_secure_file(&path, &bytes)?;
-                (path, false)
+                None => {
+                    let path = self
+                        .cache
+                        .artifact_path(&plugin.id, &version.version, version.kind);
+                    write_secure_file(&path, &bytes)?;
+                    (path, false)
+                }
             }
         };
-        self.cache.save_manifest_snapshot(&plugin.id, &version)?;
+        if !req.dry_run {
+            self.cache.save_manifest_snapshot(&plugin.id, &version)?;
+        }
 
         // Update config
         let config_path = req.config_path.clone();
@@ -519,7 +540,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
                 require_signature: false,
             };
             let handle = self.registry(registry);
-            let index = match handle.fetch_index(false) {
+            let index = match handle.fetch_index(true) {
                 Ok(idx) => idx,
                 Err(err) => {
                     tracing::warn!(plugin = %record.plugin_id, error = %err, "skip outdated check");
@@ -624,6 +645,39 @@ fn extract_tar_gz(bytes: &[u8], dest: &Path) -> Result<(), String> {
         entry
             .unpack_in(dest)
             .map_err(|e| format!("unpack {}: {e}", entry_path.display()))?;
+    }
+    Ok(())
+}
+
+fn preview_artifact_path(
+    cache: &MarketplaceCache,
+    plugin_id: &str,
+    version: &PluginVersion,
+) -> Result<(PathBuf, bool), MarketplaceError> {
+    match version.archive.as_ref() {
+        Some(crate::manifest::ArchiveSpec::TarGz { entrypoint }) => {
+            validate_archive_entrypoint(entrypoint, plugin_id)?;
+            Ok((cache.plugin_dir(plugin_id, &version.version).join(entrypoint), true))
+        }
+        None => Ok((
+            cache.artifact_path(plugin_id, &version.version, version.kind),
+            false,
+        )),
+    }
+}
+
+fn validate_archive_entrypoint(entrypoint: &str, plugin_id: &str) -> Result<(), MarketplaceError> {
+    let path = Path::new(entrypoint);
+    if entrypoint.trim().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(MarketplaceError::Archive {
+            plugin: plugin_id.to_string(),
+            message: format!("entrypoint `{entrypoint}` is not a safe relative path"),
+        });
     }
     Ok(())
 }
@@ -1641,5 +1695,401 @@ mod tests {
         let listed = client.list_installed().unwrap();
         assert!(listed.is_empty(), "installed records leaked: {listed:?}");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dry_run_reports_paths_without_writing_any_state() {
+        let root = temp_root("dry-run");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+
+        let wasm_bytes = b"DRYRUN".to_vec();
+        let wasm_sha = sha256_hex(&wasm_bytes);
+        fetcher.insert("https://example.com/dry-run.wasm", wasm_bytes);
+        let index = RegistryIndex {
+            version: 1,
+            plugins: vec![PluginRecord {
+                id: "demo".into(),
+                name: String::new(),
+                description: String::new(),
+                homepage: None,
+                versions: vec![PluginVersion {
+                    version: "0.1.0".into(),
+                    kind: PluginKind::Wasm,
+                    platform: "any".into(),
+                    url: "https://example.com/dry-run.wasm".into(),
+                    sha256: Some(wasm_sha),
+                    signature: None,
+                    command: None,
+                    args: Vec::new(),
+                    env: Default::default(),
+                    options: serde_json::Value::Null,
+                    min_agena_version: None,
+                    archive: None,
+                    dependencies: Vec::new(),
+                }],
+            }],
+        };
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&index).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache.clone(), Arc::clone(&fetcher), BTreeMap::new());
+        let config_path = root.join("config.toml");
+        let outcome = client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "test".into(),
+                    url: "https://registry.test/index.json".into(),
+                    require_signature: false,
+                },
+                plugin_id: "demo".into(),
+                version: None,
+                config_path: config_path.clone(),
+                force: false,
+                dry_run: true,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect("dry run succeeds");
+
+        assert!(outcome.dry_run);
+        assert_eq!(
+            outcome.artifact_path,
+            cache.artifact_path("demo", "0.1.0", PluginKind::Wasm)
+        );
+        assert!(!root.exists(), "dry run should not create cache directories");
+        assert!(!config_path.exists(), "dry run should not write config");
+        assert!(client.list_installed().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dry_run_rejects_unsafe_archive_entrypoint_without_writing() {
+        let root = temp_root("dry-run-archive");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+
+        let archive = build_tar_gz(&[("bin/agent-tool", b"#!/bin/sh\necho hi\n")]);
+        let archive_sha = sha256_hex(&archive);
+        fetcher.insert("https://example.com/bundle.tar.gz", archive);
+        let index = RegistryIndex {
+            version: 1,
+            plugins: vec![PluginRecord {
+                id: "bundle".into(),
+                name: String::new(),
+                description: String::new(),
+                homepage: None,
+                versions: vec![PluginVersion {
+                    version: "0.1.0".into(),
+                    kind: PluginKind::Stdio,
+                    platform: "any".into(),
+                    url: "https://example.com/bundle.tar.gz".into(),
+                    sha256: Some(archive_sha),
+                    signature: None,
+                    command: None,
+                    args: Vec::new(),
+                    env: Default::default(),
+                    options: serde_json::Value::Null,
+                    min_agena_version: None,
+                    archive: Some(crate::manifest::ArchiveSpec::TarGz {
+                        entrypoint: "../escape".into(),
+                    }),
+                    dependencies: Vec::new(),
+                }],
+            }],
+        };
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&index).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        let err = client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "test".into(),
+                    url: "https://registry.test/index.json".into(),
+                    require_signature: false,
+                },
+                plugin_id: "bundle".into(),
+                version: None,
+                config_path: root.join("config.toml"),
+                force: false,
+                dry_run: true,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect_err("unsafe archive path should fail");
+
+        assert!(matches!(err, MarketplaceError::Archive { .. }));
+        assert!(!root.exists(), "dry run failure should not create files");
+    }
+
+    #[test]
+    fn install_rejects_missing_signature_when_registry_requires_it() {
+        let root = temp_root("require-signature");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+
+        let wasm_bytes = b"SIGLESS".to_vec();
+        let wasm_sha = sha256_hex(&wasm_bytes);
+        fetcher.insert("https://example.com/sigless.wasm", wasm_bytes);
+        let index = RegistryIndex {
+            version: 1,
+            plugins: vec![PluginRecord {
+                id: "sigless".into(),
+                name: String::new(),
+                description: String::new(),
+                homepage: None,
+                versions: vec![PluginVersion {
+                    version: "1.0.0".into(),
+                    kind: PluginKind::Wasm,
+                    platform: "any".into(),
+                    url: "https://example.com/sigless.wasm".into(),
+                    sha256: Some(wasm_sha),
+                    signature: None,
+                    command: None,
+                    args: Vec::new(),
+                    env: Default::default(),
+                    options: serde_json::Value::Null,
+                    min_agena_version: None,
+                    archive: None,
+                    dependencies: Vec::new(),
+                }],
+            }],
+        };
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&index).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        let err = client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "test".into(),
+                    url: "https://registry.test/index.json".into(),
+                    require_signature: true,
+                },
+                plugin_id: "sigless".into(),
+                version: None,
+                config_path: root.join("config.toml"),
+                force: false,
+                dry_run: false,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect_err("missing signature should fail");
+
+        assert!(matches!(err, MarketplaceError::SignatureFailed { .. }));
+    }
+
+    #[test]
+    fn install_rejects_already_installed_without_force() {
+        let root = temp_root("already-installed");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+
+        let wasm_bytes = b"REINSTALL".to_vec();
+        let wasm_sha = sha256_hex(&wasm_bytes);
+        fetcher.insert("https://example.com/reinstall.wasm", wasm_bytes);
+        let index = RegistryIndex {
+            version: 1,
+            plugins: vec![PluginRecord {
+                id: "demo".into(),
+                name: String::new(),
+                description: String::new(),
+                homepage: None,
+                versions: vec![PluginVersion {
+                    version: "1.0.0".into(),
+                    kind: PluginKind::Wasm,
+                    platform: "any".into(),
+                    url: "https://example.com/reinstall.wasm".into(),
+                    sha256: Some(wasm_sha),
+                    signature: None,
+                    command: None,
+                    args: Vec::new(),
+                    env: Default::default(),
+                    options: serde_json::Value::Null,
+                    min_agena_version: None,
+                    archive: None,
+                    dependencies: Vec::new(),
+                }],
+            }],
+        };
+        fetcher.insert(
+            "https://registry.test/index.json",
+            serde_json::to_vec(&index).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        let config_path = root.join("config.toml");
+        let base_request = InstallRequest {
+            registry: RegistrySpec {
+                id: "test".into(),
+                url: "https://registry.test/index.json".into(),
+                require_signature: false,
+            },
+            plugin_id: "demo".into(),
+            version: None,
+            config_path: config_path.clone(),
+            force: false,
+            dry_run: false,
+            allow_unverified: false,
+            refresh_index: false,
+        };
+
+        client
+            .install(base_request.clone())
+            .expect("initial install succeeds");
+        let err = client
+            .install(base_request)
+            .expect_err("repeat install should fail");
+        assert!(matches!(err, MarketplaceError::AlreadyInstalled(plugin) if plugin == "demo"));
+    }
+
+    #[test]
+    fn list_outdated_skips_unreadable_registry_and_reports_newer_versions() {
+        let root = temp_root("outdated");
+        let cache = MarketplaceCache::new(&root);
+        let fetcher = Arc::new(MapFetcher::default());
+
+        let old_bytes = b"OLD".to_vec();
+        let new_bytes = b"NEW".to_vec();
+        let broken_bytes = b"BROKEN".to_vec();
+        let old_sha = sha256_hex(&old_bytes);
+        let new_sha = sha256_hex(&new_bytes);
+        let broken_sha = sha256_hex(&broken_bytes);
+        fetcher.insert("https://example.com/demo-1.0.0.wasm", old_bytes);
+        fetcher.insert("https://example.com/demo-2.0.0.wasm", new_bytes);
+        fetcher.insert("https://example.com/broken-1.0.0.wasm", broken_bytes);
+
+        let install_index = RegistryIndex {
+            version: 1,
+            plugins: vec![
+                PluginRecord {
+                    id: "demo".into(),
+                    name: String::new(),
+                    description: String::new(),
+                    homepage: None,
+                    versions: vec![PluginVersion {
+                        version: "1.0.0".into(),
+                        kind: PluginKind::Wasm,
+                        platform: "any".into(),
+                        url: "https://example.com/demo-1.0.0.wasm".into(),
+                        sha256: Some(old_sha),
+                        signature: None,
+                        command: None,
+                        args: Vec::new(),
+                        env: Default::default(),
+                        options: serde_json::Value::Null,
+                        min_agena_version: None,
+                        archive: None,
+                        dependencies: Vec::new(),
+                    }],
+                },
+                PluginRecord {
+                    id: "broken".into(),
+                    name: String::new(),
+                    description: String::new(),
+                    homepage: None,
+                    versions: vec![PluginVersion {
+                        version: "1.0.0".into(),
+                        kind: PluginKind::Wasm,
+                        platform: "any".into(),
+                        url: "https://example.com/broken-1.0.0.wasm".into(),
+                        sha256: Some(broken_sha),
+                        signature: None,
+                        command: None,
+                        args: Vec::new(),
+                        env: Default::default(),
+                        options: serde_json::Value::Null,
+                        min_agena_version: None,
+                        archive: None,
+                        dependencies: Vec::new(),
+                    }],
+                },
+            ],
+        };
+        fetcher.insert(
+            "https://registry.demo/index.json",
+            serde_json::to_vec(&install_index).unwrap(),
+        );
+        fetcher.insert(
+            "https://registry.broken/index.json",
+            serde_json::to_vec(&install_index).unwrap(),
+        );
+
+        let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
+        client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "demo-registry".into(),
+                    url: "https://registry.demo/index.json".into(),
+                    require_signature: false,
+                },
+                plugin_id: "demo".into(),
+                version: None,
+                config_path: root.join("config.toml"),
+                force: false,
+                dry_run: false,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect("demo install");
+        client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "broken-registry".into(),
+                    url: "https://registry.broken/index.json".into(),
+                    require_signature: false,
+                },
+                plugin_id: "broken".into(),
+                version: None,
+                config_path: root.join("config.toml"),
+                force: false,
+                dry_run: false,
+                allow_unverified: false,
+                refresh_index: false,
+            })
+            .expect("broken install");
+
+        let upgraded_index = RegistryIndex {
+            version: 1,
+            plugins: vec![PluginRecord {
+                id: "demo".into(),
+                name: String::new(),
+                description: String::new(),
+                homepage: None,
+                versions: vec![PluginVersion {
+                    version: "2.0.0".into(),
+                    kind: PluginKind::Wasm,
+                    platform: "any".into(),
+                    url: "https://example.com/demo-2.0.0.wasm".into(),
+                    sha256: Some(new_sha),
+                    signature: None,
+                    command: None,
+                    args: Vec::new(),
+                    env: Default::default(),
+                    options: serde_json::Value::Null,
+                    min_agena_version: None,
+                    archive: None,
+                    dependencies: Vec::new(),
+                }],
+            }],
+        };
+        fetcher.insert(
+            "https://registry.demo/index.json",
+            serde_json::to_vec(&upgraded_index).unwrap(),
+        );
+        // Deliberately poison the second registry so list_outdated must skip it.
+        fetcher.insert("https://registry.broken/index.json", b"{".to_vec());
+
+        let outdated = client.list_outdated().expect("outdated list");
+        assert_eq!(outdated.len(), 1);
+        assert_eq!(outdated[0].plugin_id, "demo");
+        assert_eq!(outdated[0].installed_version, "1.0.0");
+        assert_eq!(outdated[0].latest_version, "2.0.0");
     }
 }

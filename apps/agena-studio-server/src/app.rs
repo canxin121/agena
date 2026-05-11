@@ -272,3 +272,50 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         .await
         .context("server exited unexpectedly")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_origin_str_accepts_http_and_https_origins() {
+        assert_eq!(
+            normalize_origin_str(" https://studio.example/path?q=1 ").as_deref(),
+            Some("https://studio.example")
+        );
+        assert_eq!(
+            normalize_origin_str("http://localhost:5173/").as_deref(),
+            Some("http://localhost:5173")
+        );
+    }
+
+    #[test]
+    fn normalize_origin_str_rejects_invalid_and_non_http_schemes() {
+        assert_eq!(normalize_origin_str(""), None);
+        assert_eq!(normalize_origin_str("notaurl"), None);
+        assert_eq!(normalize_origin_str("file:///tmp/demo"), None);
+    }
+
+    #[test]
+    fn build_cors_layer_depends_on_allow_all_and_origin_list() {
+        assert!(build_cors_layer(&[], false).is_none());
+        assert!(build_cors_layer(&["https://studio.example".to_string()], false).is_some());
+        assert!(build_cors_layer(&[], true).is_some());
+    }
+
+    #[test]
+    fn resolve_same_site_auto_switches_for_cross_origin_usage() {
+        assert!(matches!(
+            resolve_same_site(crate::UiCookieSameSite::Auto, false),
+            SameSite::Strict
+        ));
+        assert!(matches!(
+            resolve_same_site(crate::UiCookieSameSite::Auto, true),
+            SameSite::None
+        ));
+        assert!(matches!(
+            resolve_same_site(crate::UiCookieSameSite::Lax, true),
+            SameSite::Lax
+        ));
+    }
+}

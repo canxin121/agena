@@ -647,10 +647,45 @@ fn build_command(command: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::time::Duration;
+    use tokio::time::Instant;
 
     fn workdir() -> std::path::PathBuf {
         std::env::temp_dir()
+    }
+
+    async fn collect_lines_until(
+        registry: &MonitorRegistry,
+        monitor_id: &str,
+        predicate: impl Fn(&BTreeSet<String>) -> bool,
+    ) -> BTreeSet<String> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut lines = BTreeSet::new();
+        let mut since_seq = 0;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let wait_ms = remaining.as_millis().min(500) as u64;
+            let read = registry
+                .read(ReadParams {
+                    monitor_id: monitor_id.to_string(),
+                    since_seq,
+                    limit: None,
+                    wait_ms,
+                })
+                .expect("read should succeed");
+            since_seq = read.last_seq;
+            for event in read.events {
+                lines.insert(event.line);
+            }
+            if predicate(&lines) {
+                return lines;
+            }
+            if remaining.is_zero() || read.status != MonitorStatus::Running {
+                return lines;
+            }
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -671,17 +706,12 @@ mod tests {
             .expect("start should succeed");
 
         let id = started.summary.monitor_id.clone();
-        let read = registry
-            .read(ReadParams {
-                monitor_id: id.clone(),
-                since_seq: 0,
-                limit: None,
-                wait_ms: 2_000,
-            })
-            .expect("read should succeed");
-        let lines: Vec<&str> = read.events.iter().map(|e| e.line.as_str()).collect();
+        let lines = collect_lines_until(&registry, &id, |lines| {
+            lines.contains("a") && lines.contains("b") && lines.contains("c")
+        })
+        .await;
         assert!(
-            lines.contains(&"a") && lines.contains(&"b") && lines.contains(&"c"),
+            lines.contains("a") && lines.contains("b") && lines.contains("c"),
             "unexpected lines: {lines:?}"
         );
     }
@@ -802,15 +832,10 @@ mod tests {
             })
             .expect("start should succeed");
         let id = started.summary.monitor_id.clone();
-        let read = registry
-            .read(ReadParams {
-                monitor_id: id,
-                since_seq: 0,
-                limit: None,
-                wait_ms: 2_000,
-            })
-            .expect("read should succeed");
-        let lines: Vec<&str> = read.events.iter().map(|e| e.line.as_str()).collect();
-        assert_eq!(lines, vec!["ERROR boom"]);
+        let lines = collect_lines_until(&registry, &id, |lines| lines.contains("ERROR boom")).await;
+        assert_eq!(
+            lines.into_iter().collect::<Vec<_>>(),
+            vec!["ERROR boom".to_string()]
+        );
     }
 }

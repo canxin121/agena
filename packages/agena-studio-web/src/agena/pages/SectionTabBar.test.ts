@@ -1,14 +1,28 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 
-const filePath = '/home/canxin/Git/ai/agena/packages/agena-studio-web/src/agena/pages/SectionTabBar.vue'
+import { renderVueSsr } from './test/renderVueSsr'
 
 describe('SectionTabBar', () => {
-  test('contains shared tab bar structure and active tab emit', () => {
-    const source = readFileSync(filePath, 'utf8')
+  test('renders active and inactive tabs', async () => {
+    const html = await renderVueSsr('/src/agena/pages/SectionTabBar.vue', {
+      activeTab: 'skills',
+      tabs: [
+        { id: 'overview', label: 'Overview' },
+        { id: 'skills', label: 'Skills' },
+      ],
+    })
 
-    expect(source.includes('props.tabs.length')).toBe(true)
-    expect(source.includes("props.activeTab === tab.id")).toBe(true)
-    expect(source.includes("emit('update:activeTab', tab.id)")).toBe(true)
+    expect(html.includes('Overview')).toBe(true)
+    expect(html.includes('Skills')).toBe(true)
+    expect(html.includes('primary button')).toBe(true)
+  })
+
+  test('omits wrapper when there are no tabs', async () => {
+    const html = await renderVueSsr('/src/agena/pages/SectionTabBar.vue', {
+      activeTab: 'overview',
+      tabs: [],
+    })
+
+    expect(html).toBe('<!---->')
   })
 })

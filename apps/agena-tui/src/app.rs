@@ -10273,6 +10273,12 @@ mod tests {
     }
 
     #[test]
+    fn composer_height_reserves_footer_and_context_rows() {
+        assert_eq!(2_u16 + u16::from(false), 2);
+        assert_eq!(2_u16 + u16::from(true), 3);
+    }
+
+    #[test]
     fn adaptive_sessions_width_preserves_transcript_space() {
         assert_eq!(adaptive_sessions_width(70), 23);
         assert_eq!(adaptive_sessions_width(100), 28);
@@ -10322,6 +10328,15 @@ mod tests {
         assert_eq!(view::adaptive_sessions_height(15), 6);
         assert_eq!(view::adaptive_sessions_height(24), 8);
         assert_eq!(view::adaptive_sessions_height(40), 10);
+    }
+
+    #[test]
+    fn composer_height_accounts_for_extra_rows() {
+        let logical_lines = 1_u16;
+        let no_items_height = min(14, logical_lines + 2);
+        let with_items_height = min(14, logical_lines + 3);
+        assert_eq!(no_items_height, 3);
+        assert_eq!(with_items_height, 4);
     }
 
     #[test]

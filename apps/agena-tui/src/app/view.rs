@@ -17,16 +17,33 @@ impl App {
         let composer = vertical[1];
         let status = vertical[2];
 
-        let sessions_width = adaptive_sessions_width(main.width);
-        let horizontal = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(sessions_width), Constraint::Min(24)])
-            .split(main);
+        let stacked_sessions = should_stack_sessions_layout(main.width);
+        let sessions_area;
+        let transcript_host_area;
+        if stacked_sessions {
+            let stacked = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(adaptive_sessions_height(main.height)),
+                    Constraint::Min(12),
+                ])
+                .split(main);
+            sessions_area = stacked[0];
+            transcript_host_area = stacked[1];
+        } else {
+            let sessions_width = adaptive_sessions_width(main.width);
+            let horizontal = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(sessions_width), Constraint::Min(24)])
+                .split(main);
+            sessions_area = horizontal[0];
+            transcript_host_area = horizontal[1];
+        }
 
         let transcript = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(4), Constraint::Min(4)])
-            .split(horizontal[1]);
+            .split(transcript_host_area);
 
         self.layout = LayoutCache {
             transcript_body: inner_rect(transcript[1]),
@@ -37,7 +54,7 @@ impl App {
             self.layout.transcript_body.height,
         );
 
-        self.render_sessions(frame, horizontal[0]);
+        self.render_sessions(frame, sessions_area);
         self.render_transcript_header(frame, transcript[0]);
         self.render_transcript(frame, transcript[1]);
         self.render_composer(frame, composer);
@@ -1427,6 +1444,14 @@ pub(super) fn adaptive_detail_split(
 pub(super) fn should_stack_detail_layout(total_width: u16, left_min: u16, right_min: u16) -> bool {
     let available = total_width.saturating_sub(2);
     available < left_min.saturating_add(right_min).saturating_add(8)
+}
+
+pub(super) fn should_stack_sessions_layout(total_width: u16) -> bool {
+    total_width < 92
+}
+
+pub(super) fn adaptive_sessions_height(total_height: u16) -> u16 {
+    min(10, max(6, total_height.saturating_div(3)))
 }
 
 pub(super) fn adaptive_vertical_split(

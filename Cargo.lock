@@ -229,6 +229,7 @@ dependencies = [
  "agena",
  "agena-api-server",
  "agena-otel",
+ "agena-tui",
  "async-trait",
  "clap",
  "tokio",

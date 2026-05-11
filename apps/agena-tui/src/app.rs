@@ -10931,6 +10931,13 @@ mod tests {
     }
 
     #[test]
+    fn detail_overlays_stack_before_side_by_side_becomes_unreadable() {
+        assert!(view::should_stack_detail_layout(70, 40, 46));
+        assert!(view::should_stack_detail_layout(74, 34, 48));
+        assert!(!view::should_stack_detail_layout(120, 40, 46));
+    }
+
+    #[test]
     fn build_lineage_session_items_marks_descendants_of_current_as_children() {
         let now = Utc::now();
         let mut current = test_session(1, None, "Current Root", now);

@@ -208,6 +208,9 @@ pub(super) fn sanitize_terminal_text(text: &str) -> String {
         .chars()
         .map(|ch| match ch {
             '\n' | '\t' => ch,
+            '\u{200e}' | '\u{200f}' => ' ',
+            '\u{202a}'..='\u{202e}' => ' ',
+            '\u{2066}'..='\u{2069}' => ' ',
             ch if ch.is_control() => ' ',
             _ => ch,
         })

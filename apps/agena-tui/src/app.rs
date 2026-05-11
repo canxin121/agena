@@ -9753,10 +9753,15 @@ api_key = "test"
         );
         let now = Utc::now();
         app.sessions.initialized = true;
-        app.sessions.items = vec![test_session(7, None, "bad\u{1b}[31mtitle\u{7}", now)];
+        app.sessions.items = vec![test_session(
+            7,
+            None,
+            "bad\u{1b}[31mtitle\u{7}\u{2068}rtl\u{2069}",
+            now,
+        )];
         app.sessions.selected = 0;
         app.transcript.session_id = Some(7);
-        app.transcript.session_title = "bad\u{1b}[31mtitle\u{7}".to_string();
+        app.transcript.session_title = "bad\u{1b}[31mtitle\u{7}\u{2068}rtl\u{2069}".to_string();
 
         let backend = TestBackend::new(80, 20);
         let mut terminal = Terminal::new(backend).expect("test terminal should build");
@@ -9774,8 +9779,11 @@ api_key = "test"
         assert!(rendered.contains("ws "));
         assert!(rendered.contains("bad"));
         assert!(rendered.contains("title"));
+        assert!(rendered.contains("rtl"));
         assert!(!rendered.contains("\u{1b}"));
         assert!(!rendered.contains("\u{7}"));
+        assert!(!rendered.contains("\u{2068}"));
+        assert!(!rendered.contains("\u{2069}"));
 
         runtime.shutdown();
         let _ = fs::remove_file(path);
@@ -10416,8 +10424,8 @@ api_key = "test"
 
     #[test]
     fn sanitize_terminal_text_strips_ansi_and_carriage_returns() {
-        let text = "\u{1b}[31mred\u{1b}[0m\r\nnext\u{7}";
-        assert_eq!(sanitize_terminal_text(text), "red\nnext ");
+        let text = "\u{1b}[31mred\u{1b}[0m\r\nnext\u{7}\u{2068}rtl\u{2069}";
+        assert_eq!(sanitize_terminal_text(text), "red\nnext  rtl ");
     }
 
     #[test]

@@ -171,7 +171,7 @@ impl App {
                                 &crate::fl_args!("count" => session.child_session_count as i64),
                             ));
                         }
-                        parts.join("  ·  ")
+                        sanitize_display_text(parts.join("  ·  "))
                     })
                     .unwrap_or_else(|| self.current_session_view_summary());
 
@@ -296,7 +296,7 @@ impl App {
                 ListItem::new(vec![
                     Line::from(title_spans),
                     Line::from(Span::styled(
-                        meta_parts.join("  ·  "),
+                        sanitize_display_text(meta_parts.join("  ·  ")),
                         Style::default().fg(Color::DarkGray),
                     )),
                 ])
@@ -583,7 +583,7 @@ impl App {
 
     fn render_composer(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
-            .title(self.composer_panel_title())
+            .title(sanitize_display_text(self.composer_panel_title()))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);

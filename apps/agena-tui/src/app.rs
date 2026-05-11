@@ -10516,7 +10516,7 @@ api_key = "test"
     #[test]
     fn sanitize_terminal_text_strips_ansi_and_carriage_returns() {
         let text = "\u{1b}[31mred\u{1b}[0m\r\nnext\u{7}\u{2068}rtl\u{2069}";
-        assert_eq!(sanitize_terminal_text(text), "red\nnext  rtl ");
+        assert_eq!(sanitize_terminal_text(text), "red\nnext rtl");
     }
 
     #[test]

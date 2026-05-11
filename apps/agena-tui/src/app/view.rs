@@ -695,9 +695,7 @@ impl App {
     fn composer_panel_title(&self) -> String {
         let mut title = ui_text::composer_title(&self.i18n, self.transcript.session_id);
         if self.transcript.submitting {
-            title.push_str("running");
-        } else {
-            title.push_str(self.focus.label());
+            title.push_str("busy");
         }
         title.push(' ');
         title

@@ -10907,6 +10907,30 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_modal_size_expands_to_available_space_on_small_terminals() {
+        assert_eq!(view::adaptive_modal_width(60, 92), 58);
+        assert_eq!(view::adaptive_modal_height(16, 24), 14);
+    }
+
+    #[test]
+    fn adaptive_modal_size_preserves_readable_padding_on_mid_sized_terminals() {
+        assert_eq!(view::adaptive_modal_width(88, 96), 86);
+        assert_eq!(view::adaptive_modal_height(24, 28), 22);
+    }
+
+    #[test]
+    fn adaptive_detail_split_falls_back_before_panels_collapse() {
+        assert_eq!(
+            view::adaptive_detail_split(70, 40, 46),
+            [Constraint::Percentage(50), Constraint::Percentage(50)]
+        );
+        assert_eq!(
+            view::adaptive_vertical_split(16, 7, 9),
+            [Constraint::Percentage(50), Constraint::Percentage(50)]
+        );
+    }
+
+    #[test]
     fn build_lineage_session_items_marks_descendants_of_current_as_children() {
         let now = Utc::now();
         let mut current = test_session(1, None, "Current Root", now);

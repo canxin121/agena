@@ -431,7 +431,9 @@ input = { supported = ["image"], unsupported = ["image"] }
         })
         .expect_err("overlapping compact patch should fail validation");
 
-    assert!(matches!(err, ConfigError::Validation(message) if message.contains("input capability `image` cannot be both supported and unsupported")));
+    assert!(
+        matches!(err, ConfigError::Validation(message) if message.contains("input capability `image` cannot be both supported and unsupported"))
+    );
 }
 
 #[test]

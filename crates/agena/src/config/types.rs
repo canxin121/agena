@@ -9,8 +9,7 @@ use crate::{
         ToolPermissionPolicy,
     },
     provider::{
-        ConfiguredModelDefinition,
-        OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
+        ConfiguredModelDefinition, OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
         ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
         ProviderStreamReplayConfig, ThinkingRequest,
         auth::{ConfiguredAuthStore, FileAuthStore, KeyringAuthStore},

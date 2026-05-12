@@ -457,10 +457,7 @@ fn build_provider(
         ),
     };
 
-    Ok(apply_configured_models(
-        provider,
-        resolved.models.clone(),
-    ))
+    Ok(apply_configured_models(provider, resolved.models.clone()))
 }
 
 fn build_cloudflare_provider(

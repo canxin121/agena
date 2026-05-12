@@ -17,8 +17,7 @@ use super::{
     AuthConfig, AuthStoreBackend, ConfigEnvironment, ConfigError, McpConfig, MemoryConfig,
     OpenAiApiModeConfig, PermissionConfig, PluginConfig, ProjectInstructionsConfig,
     ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, StreamTransportMode,
-    TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
-    provider_presets,
+    TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig, provider_presets,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -58,11 +57,10 @@ impl RawConfigFile {
 }
 
 fn reject_legacy_mode_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
-    let value = toml::from_str::<Value>(text)
-        .map_err(|source| ConfigError::ParseFile {
-            path: path.to_path_buf(),
-            source,
-        })?;
+    let value = toml::from_str::<Value>(text).map_err(|source| ConfigError::ParseFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
     let Some(table) = value.as_table() else {
         return Ok(());
     };

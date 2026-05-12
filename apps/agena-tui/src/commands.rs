@@ -501,6 +501,33 @@ pub fn command_matches_query(spec: &CommandSpec, query: &str) -> bool {
         || spec.arguments.to_ascii_lowercase().contains(query.as_str())
 }
 
+pub fn command_suggestions_for_prefix(query: &str) -> Vec<&'static CommandSpec> {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return COMMANDS.iter().collect();
+    }
+
+    let mut exact = Vec::new();
+    let mut prefix = Vec::new();
+    for spec in COMMANDS {
+        if command_name_exact_match(spec, query.as_str()) {
+            exact.push(spec);
+        } else if command_name_prefix_match(spec, query.as_str()) {
+            prefix.push(spec);
+        }
+    }
+    exact.extend(prefix);
+    exact
+}
+
+fn command_name_exact_match(spec: &CommandSpec, query: &str) -> bool {
+    spec.name == query || spec.aliases.iter().any(|alias| *alias == query)
+}
+
+fn command_name_prefix_match(spec: &CommandSpec, query: &str) -> bool {
+    spec.name.starts_with(query) || spec.aliases.iter().any(|alias| alias.starts_with(query))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,6 +556,32 @@ mod tests {
         let spec = find_command("model").expect("model command should exist");
         assert!(command_matches_query(spec, "models"));
         assert!(command_matches_query(spec, "provider_id"));
+    }
+
+    #[test]
+    fn command_suggestions_match_names_and_alias_prefixes() {
+        let names = command_suggestions_for_prefix("re")
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"resume"));
+        assert!(names.contains(&"rewind"));
+        assert!(names.contains(&"review"));
+
+        let alias_names = command_suggestions_for_prefix("temp")
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert_eq!(alias_names.first(), Some(&"temperature"));
+    }
+
+    #[test]
+    fn command_suggestions_do_not_match_arguments() {
+        let names = command_suggestions_for_prefix("number")
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert!(names.is_empty());
     }
 
     #[test]

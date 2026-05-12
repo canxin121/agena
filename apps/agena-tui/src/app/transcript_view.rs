@@ -1,4 +1,5 @@
 use super::*;
+use agena::message::{ExecutionStatus, MessageStatus};
 use textwrap::{Options as WrapOptions, WordSplitter, wrap};
 use unicode_width::UnicodeWidthStr;
 
@@ -28,33 +29,6 @@ pub(super) fn render_message(
                 ui_text::message_parts_not_loaded(i18n, message.part_count as usize),
             )));
         }
-    }
-
-    if let Some(usage) = &message.usage {
-        push_label_value(
-            &mut lines,
-            "  usage: ",
-            &ui_text::message_usage(
-                i18n,
-                usage.input_tokens,
-                usage.output_tokens,
-                usage.reasoning_tokens,
-            ),
-            Style::default().fg(Color::DarkGray),
-            width,
-        );
-    }
-
-    if let Some(finish) = &message.finish
-        && !finish.trim().is_empty()
-    {
-        push_label_value(
-            &mut lines,
-            "  finish: ",
-            &ui_text::message_finish(i18n, finish),
-            Style::default().fg(Color::DarkGray),
-            width,
-        );
     }
 
     lines
@@ -224,27 +198,23 @@ fn push_message_header(
     i18n: &I18n,
 ) {
     let role = ui_text::role_label(i18n, message.role);
-    let state = ui_text::message_state_label(i18n, message.state);
-    let header = format!("[{role}] {state}");
-    let metadata = format!("{} | #{}", format_timestamp(message.created_at), message.id);
-    let combined = format!("{header} | {metadata}");
+    let header = if message.state == MessageStatus::Completed {
+        role
+    } else {
+        format!(
+            "{role} {}",
+            ui_text::message_state_label(i18n, message.state)
+        )
+    };
     let header_style = style_for_role(message.role).add_modifier(Modifier::BOLD);
 
-    if UnicodeWidthStr::width(combined.as_str()) <= width.max(1) as usize {
+    if UnicodeWidthStr::width(header.as_str()) <= width.max(1) as usize {
         out.push(RenderedLine {
-            text: combined,
+            text: header,
             style: header_style,
         });
     } else {
         push_wrapped_line(out, "", "", header.as_str(), header_style, width);
-        push_wrapped_line(
-            out,
-            "  ",
-            "  ",
-            metadata.as_str(),
-            Style::default().fg(Color::DarkGray),
-            width,
-        );
     }
 }
 
@@ -279,7 +249,7 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
         Some(PartContent::CommandExecution(command)) => {
             push_label_value(
                 out,
-                "  command: ",
+                "  ",
                 &format!("$ {}", command.command),
                 Style::default().fg(Color::Magenta),
                 width,
@@ -287,35 +257,23 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
             if let Some(output) = &command.output
                 && !output.trim().is_empty()
             {
-                push_section_heading(
+                push_multiline(out, "    ", output, Style::default().fg(Color::Gray), width);
+            }
+            if command.status != ExecutionStatus::Completed || command.exit_code.unwrap_or(0) != 0 {
+                push_label_value(
                     out,
-                    "    output",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD),
-                    width,
-                );
-                push_multiline(
-                    out,
-                    "      ",
-                    output,
-                    Style::default().fg(Color::Gray),
+                    "  ",
+                    &i18n.text_args(
+                        "message-command-status",
+                        &crate::fl_args!(
+                            "status" => ui_text::execution_status_label(i18n, command.status),
+                            "exit" => command.exit_code.unwrap_or(-1),
+                        ),
+                    ),
+                    Style::default().fg(Color::DarkGray),
                     width,
                 );
             }
-            push_label_value(
-                out,
-                "  status: ",
-                &i18n.text_args(
-                    "message-command-status",
-                    &crate::fl_args!(
-                        "status" => ui_text::execution_status_label(i18n, command.status),
-                        "exit" => command.exit_code.unwrap_or(-1),
-                    ),
-                ),
-                Style::default().fg(Color::DarkGray),
-                width,
-            );
         }
         Some(PartContent::FileChange(change)) => {
             push_section_heading(
@@ -539,15 +497,7 @@ fn render_tool_execution(
                 width,
             );
             if !output_text.trim().is_empty() {
-                push_section_heading(
-                    out,
-                    "    output",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD),
-                    width,
-                );
-                push_tool_output_preview(out, "      ", output_text, Style::default(), width, i18n);
+                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
             }
         }
         ToolExecutionPart::Completed {
@@ -568,15 +518,7 @@ fn render_tool_execution(
                 width,
             );
             if !output_text.trim().is_empty() {
-                push_section_heading(
-                    out,
-                    "    output",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD),
-                    width,
-                );
-                push_tool_output_preview(out, "      ", output_text, Style::default(), width, i18n);
+                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
             }
             if let Some(diff) = apply_patch_diff(details) {
                 push_label_value(
@@ -588,7 +530,7 @@ fn render_tool_execution(
                 );
                 push_tool_output_preview(
                     out,
-                    "      ",
+                    "    ",
                     diff.as_str(),
                     Style::default().fg(Color::DarkGray),
                     width,
@@ -622,30 +564,16 @@ fn render_tool_execution(
                 width,
             );
             if !error_message.trim().is_empty() {
-                push_section_heading(
-                    out,
-                    "    error",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                    width,
-                );
                 push_multiline(
                     out,
-                    "      ",
+                    "    ",
                     error_message,
                     Style::default().fg(Color::Red),
                     width,
                 );
             }
             if !output_text.trim().is_empty() {
-                push_section_heading(
-                    out,
-                    "    output",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD),
-                    width,
-                );
-                push_tool_output_preview(out, "      ", output_text, Style::default(), width, i18n);
+                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
             }
         }
     }

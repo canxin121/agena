@@ -4,19 +4,13 @@ impl App {
     pub(super) fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let composer_height = self.composer_height();
-        let status_height = self.status_row_height(area.width);
         let vertical = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(8),
-                Constraint::Length(composer_height),
-                Constraint::Length(status_height),
-            ])
+            .constraints([Constraint::Min(8), Constraint::Length(composer_height)])
             .split(area);
 
         let main = vertical[0];
         let composer = vertical[1];
-        let status = vertical[2];
 
         let stacked_sessions = should_stack_sessions_layout(main.width);
         let sessions_area;
@@ -51,7 +45,6 @@ impl App {
         self.render_sessions(frame, sessions_area, stacked_sessions);
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
-        self.render_status(frame, status);
         self.render_overlay(frame, area);
     }
 
@@ -75,54 +68,28 @@ impl App {
         }
 
         let header_height = session_sidebar_header_height(inner.height);
-        let footer_height = u16::from(inner.height > header_height.saturating_add(2));
-        let mut constraints = vec![Constraint::Length(header_height), Constraint::Min(1)];
-        if footer_height > 0 {
-            constraints.push(Constraint::Length(footer_height));
-        }
+        let constraints = vec![Constraint::Length(header_height), Constraint::Min(1)];
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints(constraints)
             .split(inner);
         let header_area = sections[0];
         let list_area = sections[1];
-        let footer_area = sections.get(2).copied();
 
         let header_frame = Block::default().borders(Borders::BOTTOM);
         let header_inner = inset_rect(header_frame.inner(header_area), 0, 0);
         frame.render_widget(header_frame, header_area);
 
         if header_inner.width > 0 && header_inner.height > 0 {
-            let mut header_constraints = vec![Constraint::Length(1)];
-            if header_inner.height >= 2 {
-                header_constraints.push(Constraint::Length(1));
-            }
-            if header_inner.height >= 3 {
-                header_constraints.push(Constraint::Length(1));
-            }
+            let header_constraints = vec![Constraint::Length(1)];
             let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(header_constraints)
                 .split(header_inner);
 
-            let selected_title = self
-                .current_or_selected_session_title()
-                .map(|title| sanitize_display_text(title))
-                .unwrap_or_else(|| "new session".to_string());
-            let selected_id = self
-                .current_or_selected_session_id()
-                .map(|id| format!("#{id}"))
-                .unwrap_or_else(|| "new".to_string());
-            let mut selected_right = vec![selected_id];
-            if let Some(session_id) = self.current_or_selected_session_id()
-                && self.session_is_busy(session_id)
-            {
-                selected_right.push(ui_text::t(&self.i18n, "transcript-header-busy"));
-            }
-
             let mut summary_right = vec![
                 self.workspace_context_label(),
-                format!("{} listed", self.sessions.items.len()),
+                self.sessions.items.len().to_string(),
             ];
             if self.sessions.loading {
                 summary_right.push(ui_text::t(&self.i18n, "transcript-header-loading"));
@@ -138,56 +105,6 @@ impl App {
                 Style::default().add_modifier(Modifier::BOLD),
                 Style::default().fg(Color::DarkGray),
             );
-            if rows.len() > 1 {
-                self.render_header_row(
-                    frame,
-                    rows[1],
-                    selected_title,
-                    selected_right.join("  ·  "),
-                    Style::default(),
-                    Style::default().fg(Color::DarkGray),
-                );
-            }
-
-            if rows.len() > 2 {
-                let selected_meta = self
-                    .current_or_selected_session_summary()
-                    .map(|session| {
-                        let mut parts = vec![ui_text::session_meta(
-                            &self.i18n,
-                            session.id,
-                            session.message_count,
-                            session.updated_at,
-                        )];
-                        if let Some(parent_id) = session.parent_id {
-                            parts.push(self.i18n.text_args(
-                                "session-summary-parent",
-                                &crate::fl_args!("id" => parent_id),
-                            ));
-                        }
-                        if session.child_session_count > 0 {
-                            parts.push(self.i18n.text_args(
-                                "session-summary-children",
-                                &crate::fl_args!("count" => session.child_session_count as i64),
-                            ));
-                        }
-                        sanitize_display_text(parts.join("  ·  "))
-                    })
-                    .unwrap_or_else(|| self.current_session_view_summary());
-
-                let mut scope_parts = vec![self.current_session_view_summary()];
-                if !self.sessions.search_query.trim().is_empty() {
-                    scope_parts.push(format!("/search {}", self.sessions.search_query.trim()));
-                }
-                self.render_header_row(
-                    frame,
-                    rows[2],
-                    selected_meta,
-                    scope_parts.join("  ·  "),
-                    Style::default().fg(Color::DarkGray),
-                    Style::default().fg(Color::DarkGray),
-                );
-            }
         }
 
         let current_session_id = self.transcript.session_id;
@@ -240,72 +157,11 @@ impl App {
                     sanitize_display_text(session.title.as_str()),
                     title_style,
                 ));
-                let badge = if is_open {
-                    Some((
-                        ui_text::t(&self.i18n, "session-tag-current"),
-                        Style::default().fg(Color::Cyan),
-                    ))
-                } else if is_busy {
-                    Some((
-                        ui_text::t(&self.i18n, "transcript-header-busy"),
-                        Style::default().fg(Color::Magenta),
-                    ))
-                } else if is_current_parent {
-                    Some((
-                        ui_text::t(&self.i18n, "session-tag-parent"),
-                        Style::default().fg(Color::Magenta),
-                    ))
-                } else if matches!(lineage_relation, Some(LineageRelation::Ancestor)) {
-                    Some((
-                        ui_text::t(&self.i18n, "session-tag-ancestor"),
-                        Style::default().fg(Color::Magenta),
-                    ))
-                } else if is_current_child
-                    || matches!(lineage_relation, Some(LineageRelation::Child))
-                {
-                    Some((
-                        ui_text::t(&self.i18n, "session-tag-child"),
-                        Style::default().fg(Color::Green),
-                    ))
-                } else if matches!(lineage_relation, Some(LineageRelation::Sibling)) {
-                    Some((
-                        ui_text::t(&self.i18n, "session-tag-sibling"),
-                        Style::default().fg(Color::DarkGray),
-                    ))
-                } else {
-                    None
-                };
-                if let Some((label, style)) = badge {
-                    title_spans.push(Span::styled("  ", Style::default()));
-                    title_spans.push(Span::styled(label, style));
+                if is_busy {
+                    title_spans.push(Span::styled(" *", Style::default().fg(Color::Magenta)));
                 }
 
-                let meta = ui_text::session_meta(
-                    &self.i18n,
-                    session.id,
-                    session.message_count,
-                    session.updated_at,
-                );
-                let mut meta_parts = vec![meta];
-                if let Some(parent_id) = session.parent_id {
-                    meta_parts.push(self.i18n.text_args(
-                        "session-summary-parent",
-                        &crate::fl_args!("id" => parent_id),
-                    ));
-                }
-                if session.child_session_count > 0 {
-                    meta_parts.push(self.i18n.text_args(
-                        "session-summary-children",
-                        &crate::fl_args!("count" => session.child_session_count as i64),
-                    ));
-                }
-                ListItem::new(vec![
-                    Line::from(title_spans),
-                    Line::from(Span::styled(
-                        sanitize_display_text(meta_parts.join("  ·  ")),
-                        Style::default().fg(Color::DarkGray),
-                    )),
-                ])
+                ListItem::new(Line::from(title_spans))
             })
             .collect::<Vec<_>>();
 
@@ -336,39 +192,6 @@ impl App {
             state.select(self.sessions.selection_for_render());
             frame.render_stateful_widget(list, list_area, &mut state);
         }
-
-        if let Some(footer_area) = footer_area {
-            let footer_frame = Block::default().borders(Borders::TOP);
-            let footer_inner = inset_rect(footer_frame.inner(footer_area), 0, 0);
-            frame.render_widget(footer_frame, footer_area);
-            if footer_inner.width > 0 && footer_inner.height > 0 {
-                let left = if self.sessions.items.is_empty() {
-                    self.current_session_view_summary()
-                } else {
-                    format!(
-                        "{}  ·  {}/{}",
-                        self.current_session_view_summary(),
-                        self.sessions.selected.saturating_add(1),
-                        self.sessions.items.len(),
-                    )
-                };
-                let mut right_parts = Vec::new();
-                if !self.sessions.search_query.trim().is_empty() {
-                    right_parts.push(format!("/search {}", self.sessions.search_query.trim()));
-                }
-                if self.sessions.has_more {
-                    right_parts.push(ui_text::t(&self.i18n, "sessions-more"));
-                }
-                self.render_header_row(
-                    frame,
-                    footer_inner,
-                    left,
-                    right_parts.join("  ·  "),
-                    Style::default().fg(Color::DarkGray),
-                    Style::default().fg(Color::DarkGray),
-                );
-            }
-        }
     }
 
     fn render_transcript_surface(&mut self, frame: &mut Frame, area: Rect) {
@@ -378,13 +201,7 @@ impl App {
         frame.render_widget(header_frame, layout.header);
 
         if header_inner.width > 0 && header_inner.height > 0 {
-            let mut constraints = vec![Constraint::Length(1)];
-            if header_inner.height >= 2 {
-                constraints.push(Constraint::Length(1));
-            }
-            if header_inner.height >= 3 {
-                constraints.push(Constraint::Length(1));
-            }
+            let constraints = vec![Constraint::Length(1)];
             let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(constraints)
@@ -400,29 +217,6 @@ impl App {
                 Style::default().add_modifier(Modifier::BOLD),
                 Style::default().fg(Color::DarkGray),
             );
-
-            if rows.len() > 1 {
-                let primary_left = self.transcript_surface_primary_left();
-                let primary_right = self.transcript_surface_primary_right();
-                self.render_header_row(
-                    frame,
-                    rows[1],
-                    primary_left,
-                    primary_right,
-                    Style::default().fg(Color::DarkGray),
-                    Style::default().fg(Color::DarkGray),
-                );
-            }
-            if rows.len() > 2 {
-                let secondary_left = self.transcript_surface_secondary_left();
-                frame.render_widget(
-                    Paragraph::new(Line::from(Span::styled(
-                        secondary_left,
-                        Style::default().fg(Color::DarkGray),
-                    ))),
-                    rows[2],
-                );
-            }
         }
 
         if layout.body.width == 0 || layout.body.height == 0 {
@@ -430,10 +224,7 @@ impl App {
         }
 
         let lines = if self.transcript.session_id.is_none() {
-            vec![
-                Line::from(ui_text::t(&self.i18n, "no-session-selected")),
-                Line::from(ui_text::t(&self.i18n, "no-session-selected-hint")),
-            ]
+            vec![Line::from(ui_text::t(&self.i18n, "no-session-selected"))]
         } else {
             let rendered = self.transcript.rendered(layout.body.width).clone();
             let matches = rendered.search_matches.clone();
@@ -481,6 +272,14 @@ impl App {
         } else if self.transcript.loading_older {
             top_right.push(ui_text::t(&self.i18n, "transcript-header-loading-older"));
         }
+        if !self.transcript.search_query.trim().is_empty() {
+            top_right.push(ui_text::transcript_search_summary(
+                &self.i18n,
+                self.transcript.search_query.as_str(),
+                self.transcript.current_search_match_number(),
+                self.transcript.current_search_match_count(),
+            ));
+        }
         top_right
     }
 
@@ -505,93 +304,6 @@ impl App {
         }
     }
 
-    fn transcript_surface_primary_left(&self) -> String {
-        let mut parts = Vec::new();
-        if let Some(execution) = self.transcript.execution.as_ref() {
-            parts.push(ui_text::session_meta(
-                &self.i18n,
-                execution.session.id,
-                execution.session.message_count,
-                execution.session.updated_at,
-            ));
-            if let Some(parent_id) = execution.session.parent_id {
-                parts.push(self.i18n.text_args(
-                    "session-summary-parent",
-                    &crate::fl_args!("id" => parent_id),
-                ));
-            }
-            if execution.session.child_session_count > 0 {
-                parts.push(self.i18n.text_args(
-                    "session-summary-children",
-                    &crate::fl_args!("count" => execution.session.child_session_count as i64),
-                ));
-            }
-        }
-        if parts.is_empty() {
-            if let Some(session_id) = self.current_or_selected_session_id() {
-                parts.push(format!("#{session_id}"));
-            }
-            parts.push(self.workspace_context_label());
-        }
-        parts.join("  ·  ")
-    }
-
-    fn transcript_surface_primary_right(&mut self) -> String {
-        let mut parts = Vec::new();
-        let total_lines = self
-            .transcript
-            .rendered(self.layout.transcript_body.width.max(1))
-            .lines
-            .len();
-        if total_lines > 0 {
-            let first_line = min(self.transcript.scroll.saturating_add(1), total_lines);
-            let last_line = min(
-                self.transcript
-                    .scroll
-                    .saturating_add(self.layout.transcript_body.height.max(1) as usize),
-                total_lines,
-            );
-            let percent = ((last_line as f64 / total_lines as f64) * 100.0).round() as u16;
-            parts.push(ui_text::transcript_lines_summary(
-                &self.i18n,
-                first_line,
-                last_line,
-                total_lines,
-                percent,
-            ));
-        }
-        if self.transcript.follow_tail {
-            parts.push(ui_text::t(&self.i18n, "transcript-header-tail"));
-        }
-        if !self.transcript.search_query.trim().is_empty() {
-            parts.push(ui_text::transcript_search_summary(
-                &self.i18n,
-                self.transcript.search_query.as_str(),
-                self.transcript.current_search_match_number(),
-                self.transcript.current_search_match_count(),
-            ));
-        }
-        parts.join("  ·  ")
-    }
-
-    fn transcript_surface_secondary_left(&self) -> String {
-        let mut parts = vec![self.current_session_view_summary()];
-        parts.extend(self.current_lineage_context_parts());
-        parts.extend(
-            self.current_execution_context_parts()
-                .into_iter()
-                .filter(|part| {
-                    !part.starts_with("cwd=")
-                        && !part.starts_with("task=")
-                        && !part.starts_with("agent=")
-                }),
-        );
-        if let Some(summary) = self.run_options.summary() {
-            parts.push(summary);
-        }
-        parts.join("  ·  ")
-    }
-
     fn render_composer(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
             .title(sanitize_display_text(self.composer_panel_title()))
@@ -605,18 +317,28 @@ impl App {
 
         let item_count = self.composer_items.len();
         let item_rows = u16::from(item_count > 0);
-        let header_rows = 1_u16;
-        let footer_rows = if inner.height >= 4 { 1 } else { 0 };
+        let footer_rows = u16::from(self.should_render_composer_footer() && inner.height >= 2);
+        let suggestion_rows = min(
+            self.slash_command_suggestion_rows(),
+            inner
+                .height
+                .saturating_sub(item_rows)
+                .saturating_sub(footer_rows)
+                .saturating_sub(1),
+        );
         let editor_rows = inner
             .height
-            .saturating_sub(header_rows)
             .saturating_sub(item_rows)
+            .saturating_sub(suggestion_rows)
             .saturating_sub(footer_rows)
             .max(1);
 
-        let mut constraints = vec![Constraint::Length(header_rows)];
+        let mut constraints = Vec::new();
         if item_rows > 0 {
             constraints.push(Constraint::Length(item_rows));
+        }
+        if suggestion_rows > 0 {
+            constraints.push(Constraint::Length(suggestion_rows));
         }
         constraints.push(Constraint::Length(editor_rows));
         if footer_rows > 0 {
@@ -627,9 +349,15 @@ impl App {
             .constraints(constraints)
             .split(inner);
 
-        let context_row = rows[0];
-        let mut next_row = 1;
+        let mut next_row = 0;
         let item_row = if item_rows > 0 {
+            let row = Some(rows[next_row]);
+            next_row += 1;
+            row
+        } else {
+            None
+        };
+        let suggestion_row = if suggestion_rows > 0 {
             let row = Some(rows[next_row]);
             next_row += 1;
             row
@@ -643,9 +371,11 @@ impl App {
             None
         };
 
-        self.render_composer_context_row(frame, context_row);
         if let Some(item_row) = item_row {
             self.render_composer_items_row(frame, item_row);
+        }
+        if let Some(suggestion_row) = suggestion_row {
+            self.render_slash_command_suggestions(frame, suggestion_row);
         }
 
         let editor_width = editor_row.width.saturating_sub(2);
@@ -691,40 +421,95 @@ impl App {
         }
     }
 
-    fn render_status(&self, frame: &mut Frame, area: Rect) {
-        if area.width == 0 || area.height == 0 {
+    fn render_slash_command_suggestions(&self, frame: &mut Frame, area: Rect) {
+        let Some(state) = self.slash_command_suggestions.as_ref() else {
+            return;
+        };
+        if area.width == 0 || area.height == 0 || state.items.is_empty() {
             return;
         }
 
-        let lines = self.status_lines(area.width);
-        frame.render_widget(
-            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
-            area,
+        let selected = min(state.selected, state.items.len().saturating_sub(1));
+        let visible_rows = min(
+            area.height as usize,
+            min(MAX_SLASH_COMMAND_SUGGESTIONS, state.items.len()),
         );
+        let start = selected.saturating_add(1).saturating_sub(visible_rows);
+        let width = area.width as usize;
+        let lines = state
+            .items
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible_rows)
+            .map(|(index, item)| {
+                let is_selected = index == selected;
+                let base_style = if is_selected {
+                    selection_highlight_style()
+                } else {
+                    Style::default()
+                };
+                let name_style = if is_selected {
+                    base_style
+                } else {
+                    Style::default()
+                        .fg(self.theme_color("accent", Color::Cyan))
+                        .add_modifier(Modifier::BOLD)
+                };
+                let detail_style = if is_selected {
+                    base_style
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+
+                let marker = if is_selected { "> " } else { "  " };
+                let marker_width = UnicodeWidthStr::width(marker);
+                let name_max = min(24, width.saturating_sub(marker_width));
+                let name = truncate_display_text(
+                    sanitize_display_text(item.label.as_str()).as_str(),
+                    name_max,
+                );
+                let name_width = UnicodeWidthStr::width(name.as_str());
+                let detail_max = width
+                    .saturating_sub(marker_width)
+                    .saturating_sub(name_width)
+                    .saturating_sub(2);
+
+                let mut spans = vec![
+                    Span::styled(marker, base_style),
+                    Span::styled(name, name_style),
+                ];
+                let mut used_width = marker_width.saturating_add(name_width);
+                if detail_max > 0 {
+                    let detail = truncate_display_text(
+                        sanitize_display_text(item.detail.as_str()).as_str(),
+                        detail_max,
+                    );
+                    if !detail.is_empty() {
+                        let detail_width = UnicodeWidthStr::width(detail.as_str());
+                        spans.push(Span::styled("  ", base_style));
+                        spans.push(Span::styled(detail, detail_style));
+                        used_width = used_width.saturating_add(2).saturating_add(detail_width);
+                    }
+                }
+                if is_selected && used_width < width {
+                    spans.push(Span::styled(" ".repeat(width - used_width), base_style));
+                }
+
+                Line::from(spans)
+            })
+            .collect::<Vec<_>>();
+
+        frame.render_widget(Paragraph::new(Text::from(lines)), area);
     }
 
     fn composer_panel_title(&self) -> String {
         let mut title = ui_text::composer_title(&self.i18n, self.transcript.session_id);
         if self.transcript.submitting {
-            title.push_str("busy");
+            title.push_str(ui_text::t(&self.i18n, "transcript-header-busy").as_str());
         }
         title.push(' ');
         title
-    }
-
-    fn render_composer_context_row(&self, frame: &mut Frame, area: Rect) {
-        let left = self
-            .status_context_summary()
-            .unwrap_or_else(|| self.default_status_hint());
-        let right = self.composer_context_right();
-        self.render_header_row(
-            frame,
-            area,
-            left,
-            right,
-            Style::default().fg(Color::DarkGray),
-            Style::default().fg(Color::DarkGray),
-        );
     }
 
     fn render_composer_items_row(&self, frame: &mut Frame, area: Rect) {
@@ -769,15 +554,7 @@ impl App {
             return lines;
         }
 
-        let left = self.composer_primary_footer_text();
-        let right = self.composer_secondary_footer_text();
-        let combined = if right.is_empty() {
-            left
-        } else if width >= 88 {
-            format!("{left}  |  {right}")
-        } else {
-            format!("{left}\n{right}")
-        };
+        let combined = self.composer_footer_text();
         lines.extend(self.wrap_styled_text(
             combined.as_str(),
             width,
@@ -786,32 +563,17 @@ impl App {
         lines
     }
 
-    fn composer_primary_footer_text(&self) -> String {
+    fn composer_footer_text(&self) -> String {
         let mut parts = Vec::new();
         if self.transcript.submitting {
-            parts.push("esc interrupt".to_string());
-            if !self.queue.is_empty() {
-                parts.push(format!("tab queue [{}]", self.queue.len()));
-            }
-        } else {
-            parts.push("enter send".to_string());
-            parts.push("tab focus".to_string());
-            parts.push("/ search".to_string());
+            parts.push("Esc cancel".to_string());
         }
-        if self.focus == Focus::Composer {
-            parts.push("ctrl+f transcript-find".to_string());
-        }
-        parts.join("  ·  ")
-    }
-
-    fn composer_secondary_footer_text(&self) -> String {
-        let mut parts = Vec::new();
         if !self.queue.is_empty() {
             let preview = self.queue.first_preview(28).unwrap_or_default();
             if preview.is_empty() {
-                parts.push(format!("queued {}", self.queue.len()));
+                parts.push(format!("queue {}", self.queue.len()));
             } else {
-                parts.push(format!("queued {} {}", self.queue.len(), preview));
+                parts.push(format!("queue {} {}", self.queue.len(), preview));
             }
         }
         if let Some(summary) = self.run_options.summary() {
@@ -827,73 +589,41 @@ impl App {
                 parts.push(status_line.trim().to_string());
             }
         }
-        parts.join("  |  ")
-    }
-
-    fn composer_context_right(&self) -> String {
-        let mut parts = Vec::new();
-        if let Some(session_id) = self.transcript.session_id {
-            parts.push(format!("#{session_id}"));
-        } else {
-            parts.push(self.workspace_context_label());
-        }
-        if self.transcript.submitting {
-            parts.push(ui_text::t(&self.i18n, "transcript-header-busy"));
-        } else {
-            parts.push(match self.focus {
-                Focus::Sessions => ui_text::t(&self.i18n, "status-sessions"),
-                Focus::Transcript => ui_text::t(&self.i18n, "status-transcript"),
-                Focus::Composer => ui_text::t(&self.i18n, "status-composer"),
-            });
-        }
-        parts.join("  |  ")
-    }
-
-    fn default_status_hint(&self) -> String {
-        match self.focus {
-            Focus::Sessions => ui_text::t(&self.i18n, "status-sessions"),
-            Focus::Transcript => ui_text::t(&self.i18n, "status-transcript"),
-            Focus::Composer => ui_text::t(&self.i18n, "status-composer"),
-        }
-    }
-
-    fn status_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let style = Style::default().fg(self.theme_color("status", Color::DarkGray));
-        if let Some(flash) = &self.flash {
-            return self.wrap_styled_text(
-                flash.text.as_str(),
-                width,
-                self.flash_style(flash.level),
-            );
-        }
-
-        let mut segments = Vec::new();
-        if let Some(text) = self
-            .status_line
-            .as_ref()
-            .and_then(|status_line| status_line.text.clone())
-        {
-            if !text.trim().is_empty() {
-                segments.push(text);
-            }
-        } else if let Some(context) = self.status_context_summary() {
-            segments.push(context);
-        } else {
-            segments.push(self.default_status_hint());
-        }
-
         for segment in self.backend.plugin_statusline_segments() {
             if segment.content.trim().is_empty() {
                 continue;
             }
-            segments.push(segment.content.clone());
+            parts.push(segment.content.clone());
         }
 
-        self.wrap_styled_text(segments.join("  |  ").as_str(), width, style)
+        parts.join("  |  ")
     }
 
-    fn status_row_height(&self, width: u16) -> u16 {
-        self.status_lines(width).len().max(1) as u16
+    fn should_render_composer_footer(&self) -> bool {
+        self.flash.is_some()
+            || self.transcript.submitting
+            || !self.queue.is_empty()
+            || self.run_options.summary().is_some()
+            || self
+                .status_line
+                .as_ref()
+                .and_then(|status_line| status_line.text.as_ref())
+                .is_some_and(|text| !text.trim().is_empty())
+            || self
+                .backend
+                .plugin_statusline_segments()
+                .iter()
+                .any(|segment| !segment.content.trim().is_empty())
+    }
+
+    fn slash_command_suggestion_rows(&self) -> u16 {
+        if self.overlay.is_some() || self.focus != Focus::Composer {
+            return 0;
+        }
+        self.slash_command_suggestions
+            .as_ref()
+            .map(|state| min(MAX_SLASH_COMMAND_SUGGESTIONS, state.items.len()) as u16)
+            .unwrap_or(0)
     }
 
     fn composer_item_style(&self, item: &ComposerItem) -> Style {
@@ -1015,7 +745,7 @@ impl App {
 
         match overlay {
             Overlay::Help => {
-                let area = centered_rect(area, 92, 36);
+                let area = centered_rect(area, 72, 8);
                 frame.render_widget(Clear, area);
                 let help_lines = ui_text::help_lines(&self.i18n);
                 let text = help_lines
@@ -1822,8 +1552,10 @@ impl App {
     fn composer_height(&self) -> u16 {
         let line_count = max(1, self.composer.logical_line_count());
         let item_rows = u16::from(!self.composer_items.is_empty());
-        let chrome_rows = 2_u16 + item_rows;
-        min(14, line_count as u16 + chrome_rows)
+        let suggestion_rows = self.slash_command_suggestion_rows();
+        let footer_rows = u16::from(self.should_render_composer_footer());
+        let chrome_rows = 2_u16 + item_rows + suggestion_rows + footer_rows;
+        min(12, line_count as u16 + chrome_rows)
     }
 }
 
@@ -1951,13 +1683,7 @@ fn inset_rect(area: Rect, horizontal: u16, vertical: u16) -> Rect {
 }
 
 pub(super) fn transcript_surface_header_height(total_height: u16) -> u16 {
-    if total_height <= 10 {
-        2
-    } else if total_height <= 18 {
-        3
-    } else {
-        4
-    }
+    min(2, total_height)
 }
 
 fn transcript_surface_layout(area: Rect) -> TranscriptSurfaceLayout {
@@ -1977,13 +1703,7 @@ fn transcript_surface_layout(area: Rect) -> TranscriptSurfaceLayout {
 }
 
 pub(super) fn session_sidebar_header_height(total_height: u16) -> u16 {
-    if total_height <= 4 {
-        2
-    } else if total_height <= 8 {
-        3
-    } else {
-        4
-    }
+    min(2, total_height)
 }
 
 pub(super) fn truncate_display_text(text: &str, max_width: usize) -> String {

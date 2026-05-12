@@ -94,12 +94,15 @@ const props = defineProps<{
       <ChatRunOptionsPanel
         :selected-provider-id="props.state.selectedProviderId.value"
         :selected-model-id="props.state.selectedModelId.value"
+        :selected-variant="props.state.selectedVariant.value"
         :providers="props.state.providers.value"
         :provider-default-model="props.state.providerDefaultModel"
         :provider-model-options="props.state.providerModelOptions"
         :provider-model-label="props.state.providerModelLabel"
+        :model-variant-options="props.state.modelVariantOptions"
         @update:selected-provider-id="props.state.selectedProviderId.value = $event"
         @update:selected-model-id="props.state.selectedModelId.value = $event"
+        @update:selected-variant="props.state.selectedVariant.value = $event"
       />
 
       <ChatSessionTransferPanel

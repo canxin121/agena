@@ -55,8 +55,8 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`cancelUserInput:${sessionId}:${requestId}`)
       return sessionState()
     },
-    continueSession: async ({ sessionId, providerId, modelId }) => {
-      calls.push(`continueSession:${sessionId}:${providerId || ''}:${modelId || ''}`)
+    continueSession: async ({ sessionId, providerId, modelId, variant }) => {
+      calls.push(`continueSession:${sessionId}:${providerId || ''}:${modelId || ''}:${variant || ''}`)
       return sessionState({ run_state: 'awaiting_model' })
     },
     createSession: async ({ workspaceId, title, parentId }) => {
@@ -130,8 +130,8 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`rewindSession:${sessionId}:${messageId}`)
       return sessionState()
     },
-    submitTurn: async ({ sessionId, text, providerId, modelId }) => {
-      calls.push(`submitTurn:${sessionId}:${text}:${providerId || ''}:${modelId || ''}`)
+    submitTurn: async ({ sessionId, text, providerId, modelId, variant }) => {
+      calls.push(`submitTurn:${sessionId}:${text}:${providerId || ''}:${modelId || ''}:${variant || ''}`)
       return sessionState({ run_state: 'awaiting_model' })
     },
     unrewindSession: async ({ sessionId, messageId }) => {
@@ -181,6 +181,7 @@ function createInput() {
     runSlashCommand: async (_inputText: string) => ({ matched: false, command: undefined }),
     selectedModelId: ref('claude-opus-4-7'),
     selectedProviderId: ref('anthropic'),
+    selectedVariant: ref(''),
     selectedSessionId: ref<number | null>(3),
     selectedWorkspaceId: ref<number | null>(1),
     sending: ref(false),
@@ -234,7 +235,7 @@ describe('useChatSessionActions', () => {
     const actions = useChatSessionActions(input, deps)
     await actions.sendPrompt()
 
-    expect(deps.calls.includes('submitTurn:3:hello world:anthropic:claude-opus-4-7')).toBe(true)
+    expect(deps.calls.includes('submitTurn:3:hello world:anthropic:claude-opus-4-7:')).toBe(true)
     expect(input.sessionState.value?.run_state).toBe('awaiting_model')
     expect(input.composer.value).toBe('')
     expect(syncCalls).toEqual(['sync'])

@@ -167,6 +167,7 @@ mod tests {
             generated_by_call_id: None,
             model_provider_id: provider.to_string(),
             model_id: model.to_string(),
+            model_variant: None,
             provider_metadata: None,
             tags: Vec::new(),
         };

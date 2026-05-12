@@ -10,8 +10,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ManagedCredential, ModelProvider, ProviderModel, ResponseFormat, ThinkingRequest,
-        should_retry_credential, sse, utils, wire_message,
+        ManagedCredential, ModelProvider, ProviderModel, ResponseFormat, should_retry_credential,
+        sse, utils, wire_message,
     },
     role::Role,
 };
@@ -26,7 +26,6 @@ pub struct GeminiProvider {
     default_model: ModelId,
     auth_mode: GeminiAuthMode,
     extra_headers: HashMap<String, String>,
-    default_thinking: Option<ThinkingRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,13 +69,7 @@ impl GeminiProvider {
                 name: "key".to_owned(),
             },
             extra_headers: HashMap::new(),
-            default_thinking: None,
         }
-    }
-
-    pub fn with_default_thinking(mut self, thinking: Option<ThinkingRequest>) -> Self {
-        self.default_thinking = thinking;
-        self
     }
 
     pub fn with_auth_header(

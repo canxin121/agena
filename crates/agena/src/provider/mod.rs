@@ -29,7 +29,7 @@ mod wire_message;
 
 pub use crate::model::{
     CapabilitySupport, Model, ModelCapabilities, ModelFamily, ModelId, ModelInputModality,
-    ModelLifecycle, ModelMetadata, ModelRef, ModelTokenLimits, ProviderId,
+    ModelLifecycle, ModelMetadata, ModelRef, ModelTokenLimits, ModelVariant, ProviderId,
 };
 pub use amazon_bedrock::AmazonBedrockProvider;
 pub use anthropic::AnthropicProvider;
@@ -37,8 +37,8 @@ pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_
 pub use cloudflare_ai_gateway::CloudflareAiGatewayProvider;
 pub use codex::CodexProvider;
 pub use configured_models::{
-    ConfiguredModelDefinition, ConfiguredModelsProvider, ModelCapabilityFeature,
-    ModelCapabilityPatch,
+    ConfiguredModelDefinition, ConfiguredModelVariant, ConfiguredModelsProvider,
+    ModelCapabilityFeature, ModelCapabilityPatch,
 };
 pub use copilot::{CopilotProvider, CopilotProviderOptions};
 pub use core::{ModelProvider, StreamResumePolicy};
@@ -67,5 +67,5 @@ pub(crate) use wire_message::{
 pub type ProviderModel = Model;
 pub use types::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionToolCall, CompletionUsage, ResponseFormat, ThinkingRequest,
+    CompletionToolCall, CompletionUsage, ReasoningEffort, ResponseFormat, ThinkingRequest,
 };

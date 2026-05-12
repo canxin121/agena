@@ -1512,6 +1512,7 @@ impl Backend {
     ) -> Result<agena::session::SessionRunOptions> {
         let RunOptions {
             model,
+            variant,
             agent_profile,
             system,
             temperature,
@@ -1527,6 +1528,23 @@ impl Backend {
 
         if let Some(model) = model {
             options.model = model;
+        }
+        if let Some(variant) = variant
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let variants = self
+                .runtime
+                .current_snapshot()
+                .provider_registry()
+                .model_variants(&options.model)
+                .context("failed to resolve selected model variants")?;
+            let definition = variants
+                .get(variant)
+                .ok_or_else(|| anyhow!("model {} has no variant {variant}", options.model))?;
+            options.variant = Some(variant.to_string());
+            options.thinking = definition.thinking.clone();
         }
 
         if let Some(system) = system {

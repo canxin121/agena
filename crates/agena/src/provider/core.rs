@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::stream;
+use std::collections::BTreeMap;
 
 use crate::error::AppError;
-use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata};
+use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata, ModelVariant};
 
 use super::{
     CapabilityFamily, CompletionRequest, CompletionResponse, CompletionStreamEvent,
@@ -42,6 +43,11 @@ pub trait ModelProvider: Send + Sync {
             }
             None => ModelMetadata::default(),
         }
+    }
+
+    fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
+        let _ = model;
+        BTreeMap::new()
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {

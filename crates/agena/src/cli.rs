@@ -1974,6 +1974,8 @@ impl AgenaCli {
                     session_id,
                     options: SessionRunOptions {
                         model: default_model(&runtime)?,
+                        variant: None,
+                        thinking: None,
                         system: None,
                         temperature: None,
                         max_output_tokens: None,
@@ -3621,6 +3623,8 @@ fn resolve_continue_options(
 
     Ok(SessionRunOptions {
         model,
+        variant: None,
+        thinking: None,
         system: None,
         temperature: args.temperature,
         max_output_tokens: args.max_output_tokens,
@@ -3651,6 +3655,8 @@ fn resolve_run_options(
 
     Ok(SessionRunOptions {
         model,
+        variant: None,
+        thinking: None,
         system: None,
         temperature,
         max_output_tokens,

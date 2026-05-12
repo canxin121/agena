@@ -11,7 +11,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        StreamResumePolicy, ThinkingRequest,
+        StreamResumePolicy,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
@@ -32,7 +32,6 @@ pub struct OpenAiProvider {
     extra_headers: HashMap<String, String>,
     stream_mode: OpenAiStreamMode,
     realtime_ws_url: Option<String>,
-    default_thinking: Option<ThinkingRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,17 +104,11 @@ impl OpenAiProvider {
             extra_headers: HashMap::new(),
             stream_mode: OpenAiStreamMode::Sse,
             realtime_ws_url: None,
-            default_thinking: None,
         }
     }
 
     pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.extra_headers = headers;
-        self
-    }
-
-    pub fn with_default_thinking(mut self, thinking: Option<ThinkingRequest>) -> Self {
-        self.default_thinking = thinking;
         self
     }
 
@@ -301,7 +294,7 @@ impl OpenAiProvider {
             seed: request.seed,
             response_format: chat_wire::map_response_format(request.response_format.as_ref()),
             reasoning_effort: chat_wire::reasoning_effort(
-                request.thinking.as_ref().or(self.default_thinking.as_ref()),
+                request.thinking.as_ref(),
                 model.as_str(),
             ),
         };
@@ -350,7 +343,7 @@ impl OpenAiProvider {
             seed: request.seed,
             response_format: chat_wire::map_response_format(request.response_format.as_ref()),
             reasoning_effort: chat_wire::reasoning_effort(
-                request.thinking.as_ref().or(self.default_thinking.as_ref()),
+                request.thinking.as_ref(),
                 model.as_str(),
             ),
         };
@@ -1354,7 +1347,7 @@ impl ModelProvider for OpenAiProvider {
             seed: request.seed,
             response_format: chat_wire::map_response_format(request.response_format.as_ref()),
             reasoning_effort: chat_wire::reasoning_effort(
-                request.thinking.as_ref().or(self.default_thinking.as_ref()),
+                request.thinking.as_ref(),
                 model.as_str(),
             ),
         };
@@ -1439,7 +1432,7 @@ impl ModelProvider for OpenAiProvider {
             seed: request.seed,
             response_format: chat_wire::map_response_format(request.response_format.as_ref()),
             reasoning_effort: chat_wire::reasoning_effort(
-                request.thinking.as_ref().or(self.default_thinking.as_ref()),
+                request.thinking.as_ref(),
                 model.as_str(),
             ),
         };

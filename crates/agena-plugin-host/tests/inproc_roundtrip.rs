@@ -1059,14 +1059,12 @@ impl Plugin for PermissionUiPlugin {
         &self,
         _input: PermissionAskInput,
     ) -> Result<Option<PermissionAskDecision>> {
-        Ok(Some(PermissionAskDecision::Advise(
-            PermissionAdvice {
-                decision: PermissionDecision::Allow,
-                reason: "ui handler approved".to_string(),
-                risk: PermissionRiskLevel::Low,
-                requested_scope: None,
-            },
-        )))
+        Ok(Some(PermissionAskDecision::Advise(PermissionAdvice {
+            decision: PermissionDecision::Allow,
+            reason: "ui handler approved".to_string(),
+            risk: PermissionRiskLevel::Low,
+            requested_scope: None,
+        })))
     }
 }
 

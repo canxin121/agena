@@ -4,16 +4,19 @@ use std::{
     sync::Arc,
 };
 
-use sea_orm::{Database, DatabaseConnection};
+use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
     AppError,
-    config::{ConfigLoader, ConfigResolution, LoadConfigRequest, ProcessEnvironment},
+    config::{
+        ConfigLoader, ConfigResolution, LoadConfigRequest, ProcessEnvironment, TracingConfig,
+    },
     db::init_schema,
     provider::auth::AuthManager,
     session::SessionManager,
+    tracing as tracing_config,
 };
 
 use super::{
@@ -91,8 +94,15 @@ impl AgenaRuntimeBuilder {
             tracing_reload_handle,
         } = self;
         let workspace_root = workspace_root.unwrap_or(env::current_dir()?);
-        let database = connect_database(database_connection, database_url, auto_migrate).await?;
         let loader = ConfigLoader::new(ProcessEnvironment);
+        let initial_resolution = loader.load(&load_request)?;
+        let database = connect_database(
+            database_connection,
+            database_url,
+            auto_migrate,
+            &initial_resolution.config.tracing,
+        )
+        .await?;
         let initial_snapshot = Arc::new(
             RuntimeSnapshot::build(
                 1,
@@ -126,14 +136,7 @@ impl AgenaRuntimeBuilder {
             host_handle.install_client(client).await;
         }
 
-        runtime.apply_tracing_filter(
-            initial_snapshot
-                .config_resolution()
-                .config
-                .tracing
-                .filter
-                .as_str(),
-        );
+        runtime.apply_tracing_filter(&initial_snapshot.config_resolution().config.tracing);
         runtime.spawn_background_tasks();
         Ok(runtime)
     }
@@ -143,11 +146,14 @@ async fn connect_database(
     database_connection: Option<Arc<DatabaseConnection>>,
     database_url: Option<String>,
     auto_migrate: bool,
+    tracing: &TracingConfig,
 ) -> Result<Option<Arc<DatabaseConnection>>, AppError> {
     let database = if let Some(db) = database_connection {
         Some(db)
     } else if let Some(url) = database_url {
-        Some(Arc::new(Database::connect(url.as_str()).await?))
+        Some(Arc::new(
+            tracing_config::connect_database(url.as_str(), tracing).await?,
+        ))
     } else {
         None
     };
@@ -254,7 +260,7 @@ impl AgenaRuntime {
             .await?,
         );
 
-        self.apply_tracing_filter(next.config_resolution().config.tracing.filter.as_str());
+        self.apply_tracing_filter(&next.config_resolution().config.tracing);
         let previous_generation = previous.generation();
         // Install runtime-backed HostClient into the new snapshot's plugin
         // host so post-reload plugin callbacks keep working.
@@ -293,19 +299,24 @@ impl AgenaRuntime {
         });
     }
 
-    fn apply_tracing_filter(&self, filter: &str) {
+    fn apply_tracing_filter(&self, tracing: &TracingConfig) {
         let Some(handle) = self.inner.tracing_reload_handle.as_ref() else {
             return;
         };
 
-        match EnvFilter::try_new(filter) {
+        match tracing_config::env_filter(tracing) {
             Ok(next) => {
                 if let Err(err) = handle.reload(next) {
                     tracing::warn!(error = %err, "failed to reload tracing filter");
                 }
             }
             Err(err) => {
-                tracing::warn!(error = %err, filter, "invalid tracing filter in runtime config");
+                tracing::warn!(
+                    error = %err,
+                    filter = tracing.filter,
+                    database_level = tracing.database_level,
+                    "invalid tracing filter in runtime config"
+                );
             }
         }
     }

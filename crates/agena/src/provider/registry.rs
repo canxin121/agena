@@ -8,6 +8,7 @@ use std::{
 use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
 use tracing::Instrument;
 
 use crate::error::{AppError, ProviderErrorKind};
@@ -173,7 +174,56 @@ impl ModelProvider for NamedProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        self.target.complete_stream(request).await
+        let provider_id = self.provider_id.clone();
+        let stream = self.target.complete_stream(request).await?;
+        let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
+            Box::pin(stream.map(move |item| {
+                item.map(|event| match event {
+                    CompletionStreamEvent::TextDelta { model, delta, .. } => {
+                        CompletionStreamEvent::TextDelta {
+                            provider_id: ProviderId::new(provider_id.clone()),
+                            model,
+                            delta,
+                        }
+                    }
+                    CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
+                        CompletionStreamEvent::ThinkingDelta {
+                            provider_id: ProviderId::new(provider_id.clone()),
+                            model,
+                            delta,
+                        }
+                    }
+                    CompletionStreamEvent::ToolCallDelta {
+                        model,
+                        stream_key,
+                        id,
+                        name,
+                        arguments_delta,
+                        ..
+                    } => CompletionStreamEvent::ToolCallDelta {
+                        provider_id: ProviderId::new(provider_id.clone()),
+                        model,
+                        stream_key,
+                        id,
+                        name,
+                        arguments_delta,
+                    },
+                    CompletionStreamEvent::Completed {
+                        model,
+                        finish_reason,
+                        usage,
+                        provider_metadata,
+                        ..
+                    } => CompletionStreamEvent::Completed {
+                        provider_id: ProviderId::new(provider_id.clone()),
+                        model,
+                        finish_reason,
+                        usage,
+                        provider_metadata,
+                    },
+                })
+            }));
+        Ok(Box::pin(stream))
     }
 }
 
@@ -942,6 +992,12 @@ mod tests {
         resume_policy: StreamResumePolicy,
     }
 
+    struct MultiStartupFailureProvider {
+        provider_id: &'static str,
+        stream_starts: Arc<AtomicUsize>,
+        fail_attempts: usize,
+    }
+
     fn retryable_api_error(provider_id: &str, message: &str) -> AppError {
         AppError::ProviderClassified {
             provider: provider_id.to_owned(),
@@ -1186,6 +1242,77 @@ mod tests {
                     ])))
                 }
             }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ModelProvider for MultiStartupFailureProvider {
+        fn id(&self) -> &str {
+            self.provider_id
+        }
+
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: LazyLock<ModelId> =
+                LazyLock::new(|| ModelId::new("flaky-stream-model"));
+            &DEFAULT_MODEL
+        }
+
+        fn model_capabilities(&self, _model: &ModelId) -> ModelCapabilities {
+            ModelCapabilities::default().with_streaming(CapabilitySupport::Supported)
+        }
+
+        async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+            Ok(vec![
+                ProviderModel::new(self.provider_id, self.default_model().as_str())
+                    .with_display_name("Flaky Stream Model"),
+            ])
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            Ok(CompletionResponse {
+                provider_id: pid(self.provider_id),
+                model: self.default_model().clone(),
+                text: "ok".to_owned(),
+                reasoning_text: None,
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+            AppError,
+        > {
+            let start = self.stream_starts.fetch_add(1, Ordering::SeqCst);
+            if start < self.fail_attempts {
+                return Err(retryable_api_error(
+                    self.provider_id,
+                    "startup stream failure",
+                ));
+            }
+
+            Ok(Box::pin(stream::iter(vec![
+                Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: pid(self.provider_id),
+                    model: self.default_model().clone(),
+                    delta: "ok".to_owned(),
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id: pid(self.provider_id),
+                    model: self.default_model().clone(),
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                }),
+            ])))
         }
     }
 
@@ -1524,6 +1651,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn registry_default_retry_policy_recovers_after_multiple_startup_failures() {
+        let stream_starts = Arc::new(AtomicUsize::new(0));
+        let provider = MultiStartupFailureProvider {
+            provider_id: "flaky-stream-default-retries",
+            stream_starts: Arc::clone(&stream_starts),
+            fail_attempts: 2,
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+
+        let mut stream = registry
+            .complete_stream(
+                &model_ref("flaky-stream-default-retries", "flaky-stream-model"),
+                CompletionRequest {
+                    model: mid("flaky-stream-model"),
+                    max_output_tokens: Some(32),
+                    ..completion_request("flaky-stream-model")
+                },
+            )
+            .await
+            .expect("default retry policy should absorb multiple startup failures");
+        let mut text = String::new();
+        let mut done = false;
+        while let Some(item) = stream.next().await {
+            match item.expect("stream item should succeed") {
+                CompletionStreamEvent::TextDelta { delta, .. } => text.push_str(delta.as_str()),
+                CompletionStreamEvent::Completed { .. } => done = true,
+                CompletionStreamEvent::ToolCallDelta { .. } => {}
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
+            }
+        }
+
+        assert_eq!(text, "ok");
+        assert!(done);
+        assert_eq!(stream_starts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
     async fn registry_retries_stream_when_first_item_is_retryable_error() {
         let stream_starts = Arc::new(AtomicUsize::new(0));
         let provider = FlakyStreamProvider {
@@ -1699,5 +1864,55 @@ mod tests {
             matches!(second, AppError::Provider(message) if message.contains("replay prefix diverged"))
         );
         assert_eq!(stream_starts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn named_provider_rewrites_stream_event_provider_ids_to_registered_alias() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let native = FlakyProvider {
+            provider_id: "native-openai",
+            attempts,
+            fail_attempts: 0,
+            retryable: false,
+        };
+        let alias = NamedProvider::new("configured-codex", Arc::new(native));
+        let mut registry = ProviderRegistry::new();
+        registry.register(alias);
+
+        let mut stream = registry
+            .complete_stream(
+                &model_ref("configured-codex", "flaky-model"),
+                CompletionRequest {
+                    model: mid("flaky-model"),
+                    max_output_tokens: Some(32),
+                    ..completion_request("flaky-model")
+                },
+            )
+            .await
+            .expect("stream should start");
+
+        let first = stream
+            .next()
+            .await
+            .expect("first item should exist")
+            .expect("first item should succeed");
+        match first {
+            CompletionStreamEvent::TextDelta { provider_id, .. } => {
+                assert_eq!(provider_id.as_str(), "configured-codex");
+            }
+            other => panic!("unexpected first event: {other:?}"),
+        }
+
+        let second = stream
+            .next()
+            .await
+            .expect("completed item should exist")
+            .expect("completed item should succeed");
+        match second {
+            CompletionStreamEvent::Completed { provider_id, .. } => {
+                assert_eq!(provider_id.as_str(), "configured-codex");
+            }
+            other => panic!("unexpected second event: {other:?}"),
+        }
     }
 }

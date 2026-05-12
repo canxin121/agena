@@ -291,6 +291,7 @@ pub struct ToolExecutor {
     workspace_root: PathBuf,
     agent: Agent,
     model_id: Option<String>,
+    subagent_registry: crate::agents::SubagentRegistry,
     monitor_registry: Option<Arc<dyn MonitorService>>,
     truncator: ToolOutputTruncator,
     sandbox_policy: ExecutionPolicy,
@@ -317,6 +318,7 @@ impl ToolExecutor {
             workspace_root: workspace_root.into(),
             agent,
             model_id: None,
+            subagent_registry: crate::agents::SubagentRegistry::empty(),
             monitor_registry: monitor::default_registry(),
             truncator: ToolOutputTruncator::default(),
             sandbox_policy,
@@ -343,6 +345,15 @@ impl ToolExecutor {
     pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
         self.model_id = Some(model_id.into());
         self
+    }
+
+    pub fn with_subagent_registry(mut self, registry: crate::agents::SubagentRegistry) -> Self {
+        self.subagent_registry = registry;
+        self
+    }
+
+    pub fn subagent_registry(&self) -> &crate::agents::SubagentRegistry {
+        &self.subagent_registry
     }
 
     pub fn with_plugin_manager(mut self, manager: Arc<PluginHost>) -> Self {
@@ -466,6 +477,12 @@ impl ToolExecutor {
         let mut scoped = self.clone();
         if let Some(root) = session_context.effective_workspace_root.as_ref() {
             scoped.workspace_root = root.clone();
+        }
+        if !session_context.agent_permission.is_empty() {
+            scoped.agent = scoped
+                .agent
+                .clone()
+                .with_permission_config(&session_context.agent_permission);
         }
         if !session_context.allowed_tools.is_empty() {
             scoped.agent = scoped
@@ -1257,10 +1274,7 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<ToolInvocationExecution, ToolError> {
         self.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
-            invocation,
-            session_id,
-            call_id,
-            None,
+            invocation, session_id, call_id, None,
         )
     }
 

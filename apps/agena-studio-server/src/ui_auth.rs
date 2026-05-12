@@ -805,14 +805,14 @@ mod tests {
     #[test]
     fn same_host_origin_is_allowed_without_explicit_cors_allowlist() {
         let mut headers = HeaderMap::new();
-        headers.insert(header::ORIGIN, HeaderValue::from_static("https://studio.example"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://studio.example"),
+        );
         headers.insert(header::HOST, HeaderValue::from_static("studio.example"));
         assert!(is_allowed_origin(&headers, &[], false));
 
-        headers.insert(
-            header::HOST,
-            HeaderValue::from_static("studio.example:443"),
-        );
+        headers.insert(header::HOST, HeaderValue::from_static("studio.example:443"));
         assert!(is_allowed_origin(&headers, &[], false));
     }
 
@@ -832,7 +832,10 @@ mod tests {
         assert!(login_lockout_remaining_seconds(&inner, attempt_key, now).is_some());
 
         clear_failed_login_attempts(&inner, attempt_key);
-        assert_eq!(login_lockout_remaining_seconds(&inner, attempt_key, now), None);
+        assert_eq!(
+            login_lockout_remaining_seconds(&inner, attempt_key, now),
+            None
+        );
     }
 
     #[test]
@@ -849,7 +852,10 @@ mod tests {
             },
         );
 
-        assert_eq!(login_lockout_remaining_seconds(&inner, attempt_key, now), None);
+        assert_eq!(
+            login_lockout_remaining_seconds(&inner, attempt_key, now),
+            None
+        );
         let entry = inner
             .login_attempts
             .get(attempt_key)

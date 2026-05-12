@@ -6684,7 +6684,10 @@ impl App {
             )));
         }
         let mut facts = Vec::new();
-        facts.push(format!("risk={}", permission_risk_label(dialog.request.risk)));
+        facts.push(format!(
+            "risk={}",
+            permission_risk_label(dialog.request.risk)
+        ));
         if let Some(source) = dialog.request.source.as_deref() {
             facts.push(format!("source={source}"));
         }
@@ -9925,7 +9928,7 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
             }
             append_permission_trace_strings(&mut lines, &event.trace);
             lines
-        },
+        }
         AgenaSessionEvent::PermissionReplied(event) => vec![
             format!("session_id: {}", event.session_id),
             format!("request_id: {}", event.request_id),
@@ -10029,7 +10032,11 @@ fn append_permission_trace_lines(lines: &mut Vec<Line<'static>>, trace: &[Decisi
         return;
     }
     lines.push(Line::from("Trace:"));
-    lines.extend(trace.iter().map(|step| Line::from(permission_trace_step_label(step))));
+    lines.extend(
+        trace
+            .iter()
+            .map(|step| Line::from(permission_trace_step_label(step))),
+    );
 }
 
 fn append_permission_trace_strings(lines: &mut Vec<String>, trace: &[DecisionTraceStep]) {
@@ -10985,9 +10992,11 @@ impl RunOptionsState {
     fn to_request(&self) -> RunOptions {
         RunOptions {
             model: self.model.clone(),
+            agent_profile: None,
             system: self.system.clone(),
             temperature: self.temperature,
             max_output_tokens: self.max_output_tokens,
+            max_turn_loops: None,
         }
     }
 

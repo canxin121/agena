@@ -6,8 +6,8 @@ mod anthropic;
 mod capabilities;
 mod chat_wire;
 mod cloudflare_ai_gateway;
-mod configured_models;
 mod codex;
+mod configured_models;
 mod copilot;
 mod core;
 mod gemini;
@@ -34,12 +34,12 @@ pub use crate::model::{
 pub use amazon_bedrock::AmazonBedrockProvider;
 pub use anthropic::AnthropicProvider;
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
+pub use cloudflare_ai_gateway::CloudflareAiGatewayProvider;
+pub use codex::CodexProvider;
 pub use configured_models::{
     ConfiguredModelDefinition, ConfiguredModelsProvider, ModelCapabilityFeature,
     ModelCapabilityPatch,
 };
-pub use cloudflare_ai_gateway::CloudflareAiGatewayProvider;
-pub use codex::CodexProvider;
 pub use copilot::{CopilotProvider, CopilotProviderOptions};
 pub use core::{ModelProvider, StreamResumePolicy};
 pub use credential::{

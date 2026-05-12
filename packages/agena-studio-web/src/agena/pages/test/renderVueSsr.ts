@@ -1,11 +1,12 @@
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { afterAll } from 'bun:test'
 import { createSSRApp, h, type Component } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { createServer, type InlineConfig, type ViteDevServer } from 'vite'
 
-const rootDir = path.resolve(import.meta.dir, '../../../..')
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
 let sharedServerPromise: Promise<ViteDevServer> | null = null
 
 function createTestServer(config: InlineConfig = {}) {

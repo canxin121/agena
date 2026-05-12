@@ -46,6 +46,86 @@ struct PermissionTestProvider;
 use mockito::ServerGuard;
 use sea_orm::Database;
 
+struct PermissionTestHostClient;
+
+#[async_trait::async_trait]
+impl agena::plugin::sdk::host_api::HostClient for PermissionTestHostClient {
+    async fn log(
+        &self,
+        _level: agena::plugin::sdk::host_api::LogLevel,
+        _message: String,
+        _fields: serde_json::Value,
+    ) {
+    }
+
+    async fn publish_event(
+        &self,
+        _env: agena::plugin::EventEnvelope,
+    ) -> agena::plugin::sdk::Result<()> {
+        Err(agena::plugin::PluginError::new(
+            "publish_event is not used by this test host",
+        ))
+    }
+
+    async fn subscribe_events(
+        &self,
+        _filter: agena::plugin::EventFilter,
+    ) -> agena::plugin::sdk::Result<agena::plugin::sdk::host_api::EventSubscription> {
+        Err(agena::plugin::PluginError::new(
+            "subscribe_events is not used by this test host",
+        ))
+    }
+
+    async fn ask_permission(
+        &self,
+        _req: agena::plugin::PermissionAskInput,
+    ) -> agena::plugin::sdk::Result<agena::plugin::PermissionDecision> {
+        Err(agena::plugin::PluginError::new(
+            "ask_permission is not used by this test host",
+        ))
+    }
+
+    async fn read_config(
+        &self,
+        _path: Option<String>,
+    ) -> agena::plugin::sdk::Result<serde_json::Value> {
+        Err(agena::plugin::PluginError::new(
+            "read_config is not used by this test host",
+        ))
+    }
+
+    async fn invoke_tool(
+        &self,
+        tool: String,
+        _input: serde_json::Value,
+    ) -> agena::plugin::sdk::Result<agena::plugin::ToolInvokeOutput> {
+        Err(agena::plugin::PluginError::new(format!(
+            "invoke_tool is not used by this test host: {tool}",
+        )))
+    }
+
+    async fn todo_write(
+        &self,
+        req: agena::plugin::sdk::host_api::HostTodoWriteRequest,
+    ) -> agena::plugin::sdk::Result<agena::plugin::ToolInvokeOutput> {
+        let items = serde_json::to_value(&req.items)
+            .map_err(|err| agena::plugin::PluginError::new(err.to_string()))?;
+        Ok(agena::plugin::ToolInvokeOutput {
+            title: "Todo write".to_string(),
+            output_text: format!("Updated todo list with {} item(s):", req.items.len()),
+            payload: Some(serde_json::json!({
+                "output": {
+                    "tool": "todo_write",
+                    "items": items,
+                },
+                "apply_patch": null,
+            })),
+            metadata: Default::default(),
+            attachments: Vec::new(),
+        })
+    }
+}
+
 #[async_trait::async_trait]
 impl ModelProvider for PermissionTestProvider {
     fn id(&self) -> &str {
@@ -281,7 +361,7 @@ api_key = "test"
         .expect("runtime build");
     plugins
         .host_handle()
-        .install_client(agena::runtime::host_client_for(runtime.clone()))
+        .install_client(Arc::new(PermissionTestHostClient))
         .await;
     let shared_db = Arc::new(db.clone());
     let state =
@@ -636,6 +716,8 @@ async fn rest_permission_rule_and_reply_flows_round_trip_via_sdk() {
                 system: None,
                 temperature: None,
                 max_output_tokens: Some(128),
+                agent_profile: None,
+                max_turn_loops: None,
             },
             parts: vec![PartContent::text("permission todo")],
         }))
@@ -661,6 +743,8 @@ async fn rest_permission_rule_and_reply_flows_round_trip_via_sdk() {
                 system: None,
                 temperature: None,
                 max_output_tokens: Some(128),
+                agent_profile: None,
+                max_turn_loops: None,
             },
             reply: agena_api::resource::PermissionReply {
                 request_id,

@@ -37,12 +37,39 @@ pub enum AgentScope {
     FirstParty,
 }
 
+impl AgentScope {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::User => "user",
+            Self::FirstParty => "first_party",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentFrontmatter {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    #[serde(default, skip_serializing_if = "crate::agent::AgentMode::is_primary")]
+    pub mode: crate::agent::AgentMode,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<crate::agent::AgentTemperature>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
+    )]
+    pub permission: crate::agent::AgentPermissionConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -56,6 +83,38 @@ pub struct AgentProfile {
     pub prompt: String,
     pub source_path: Option<PathBuf>,
     pub scope: AgentScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDescriptor {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    pub mode: crate::agent::AgentMode,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<crate::agent::AgentTemperature>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
+    )]
+    pub permission: crate::agent::AgentPermissionConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    pub scope: AgentScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Error)]
@@ -99,6 +158,9 @@ impl SubagentRegistry {
     pub fn reload_disk(&self, workspace_root: &Path, user_root: Option<&Path>) {
         let mut inner = self.inner.write();
         inner.by_name.clear();
+        for profile in builtin_profiles() {
+            agents_upsert(&mut inner.by_name, profile, AgentScope::FirstParty);
+        }
         if let Some(user) = user_root {
             agents_load_dir(&mut inner.by_name, user, AgentScope::User);
         }
@@ -140,6 +202,16 @@ impl SubagentRegistry {
                 .or_insert_with(|| profile.clone());
         }
         seen.into_values().collect()
+    }
+
+    pub fn list_descriptors(&self) -> Vec<AgentDescriptor> {
+        let mut descriptors = self
+            .list()
+            .into_iter()
+            .map(AgentDescriptor::from)
+            .collect::<Vec<_>>();
+        descriptors.sort_by(|left, right| left.name.cmp(&right.name));
+        descriptors
     }
 
     pub fn get(&self, name: &str) -> Option<AgentProfile> {
@@ -228,6 +300,27 @@ impl AgentProfile {
     }
 }
 
+impl From<AgentProfile> for AgentDescriptor {
+    fn from(profile: AgentProfile) -> Self {
+        Self {
+            name: profile.name,
+            description: profile.frontmatter.description,
+            mode: profile.frontmatter.mode,
+            hidden: profile.frontmatter.hidden,
+            color: profile.frontmatter.color,
+            temperature: profile.frontmatter.temperature,
+            max_output_tokens: profile.frontmatter.max_output_tokens,
+            steps: profile.frontmatter.steps,
+            allowed_tools: profile.frontmatter.allowed_tools,
+            permission: profile.frontmatter.permission,
+            model: profile.frontmatter.model,
+            aliases: profile.frontmatter.aliases,
+            scope: profile.scope,
+            source_path: profile.source_path,
+        }
+    }
+}
+
 fn parse_frontmatter(raw: &str) -> AgentResult<(AgentFrontmatter, String)> {
     let normalized = raw.replace("\r\n", "\n");
     let Some(stripped) = normalized.strip_prefix("---\n") else {
@@ -267,6 +360,336 @@ fn scope_priority(scope: AgentScope) -> u8 {
         AgentScope::FirstParty => 0,
         AgentScope::User => 1,
         AgentScope::Project => 2,
+    }
+}
+
+pub fn default_user_agents_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".agena").join("agents"))
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+}
+
+fn builtin_profiles() -> Vec<AgentProfile> {
+    vec![
+        builtin_profile(
+            "build",
+            "Primary coding agent for normal end-to-end implementation work.",
+            &[],
+            crate::agent::AgentPermissionConfig {
+                default_read: Some(crate::permission::PermissionMode::Allow),
+                default_write: Some(crate::permission::PermissionMode::Ask),
+                default_external_directory: Some(crate::permission::PermissionMode::Ask),
+                execution_mode: Some(crate::permission::ExecutionMode::Auto),
+                tools: std::collections::BTreeMap::from([
+                    (
+                        "ask_user".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "todo_write".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "enter_plan_mode".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "exit_plan_mode".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    ("task".to_string(), crate::permission::PermissionMode::Allow),
+                    (
+                        "tool_search".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                ]),
+                ..Default::default()
+            },
+            Some("openai/gpt-5.3-codex"),
+            &["default", "main"],
+            "You are the primary engineering agent. Own the task end to end, choose tools pragmatically, delegate when it helps, preserve surrounding behavior, and avoid reverting unrelated work.",
+        ),
+        builtin_profile(
+            "general",
+            "General-purpose delegated agent for broad research and mixed tasks.",
+            &[
+                "read",
+                "view_file",
+                "glob",
+                "grep",
+                "bash",
+                "web_fetch",
+                "web_search",
+                "todo_write",
+                "ask_user",
+                "tool_search",
+            ],
+            crate::agent::AgentPermissionConfig {
+                default_read: Some(crate::permission::PermissionMode::Allow),
+                default_write: Some(crate::permission::PermissionMode::Deny),
+                default_external_directory: Some(crate::permission::PermissionMode::Ask),
+                execution_mode: Some(crate::permission::ExecutionMode::Ask),
+                tools: std::collections::BTreeMap::from([
+                    ("read".to_string(), crate::permission::PermissionMode::Allow),
+                    (
+                        "view_file".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    ("glob".to_string(), crate::permission::PermissionMode::Allow),
+                    ("grep".to_string(), crate::permission::PermissionMode::Allow),
+                    (
+                        "web_fetch".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "web_search".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "tool_search".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "todo_write".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "ask_user".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    ("bash".to_string(), crate::permission::PermissionMode::Ask),
+                ]),
+                ..Default::default()
+            },
+            None,
+            &["delegate", "helper"],
+            "You are a general-purpose delegated agent. Investigate broadly, combine code reading with focused web research when useful, and return evidence-backed conclusions without making workspace edits unless explicitly allowed.",
+        ),
+        builtin_profile(
+            "explore",
+            "Read-only codebase explorer for fast repo analysis.",
+            &[
+                "read",
+                "view_file",
+                "glob",
+                "grep",
+                "bash",
+                "web_fetch",
+                "web_search",
+            ],
+            crate::agent::AgentPermissionConfig {
+                default_read: Some(crate::permission::PermissionMode::Allow),
+                default_write: Some(crate::permission::PermissionMode::Deny),
+                default_external_directory: Some(crate::permission::PermissionMode::Ask),
+                execution_mode: Some(crate::permission::ExecutionMode::Ask),
+                tools: std::collections::BTreeMap::from([
+                    ("read".to_string(), crate::permission::PermissionMode::Allow),
+                    (
+                        "view_file".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    ("glob".to_string(), crate::permission::PermissionMode::Allow),
+                    ("grep".to_string(), crate::permission::PermissionMode::Allow),
+                    ("bash".to_string(), crate::permission::PermissionMode::Ask),
+                    (
+                        "web_fetch".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "web_search".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                ]),
+                ..Default::default()
+            },
+            None,
+            &["read", "reader"],
+            "You are a focused read-only engineering explorer. Gather evidence quickly, inspect code paths, summarize findings concisely, and do not make edits.",
+        ),
+        builtin_profile(
+            "scout",
+            "Read-only external research agent for docs, APIs, and dependency behavior.",
+            &[
+                "read",
+                "view_file",
+                "glob",
+                "grep",
+                "bash",
+                "web_fetch",
+                "web_search",
+            ],
+            crate::agent::AgentPermissionConfig {
+                default_read: Some(crate::permission::PermissionMode::Allow),
+                default_write: Some(crate::permission::PermissionMode::Deny),
+                default_external_directory: Some(crate::permission::PermissionMode::Ask),
+                execution_mode: Some(crate::permission::ExecutionMode::Ask),
+                tools: std::collections::BTreeMap::from([
+                    ("read".to_string(), crate::permission::PermissionMode::Allow),
+                    (
+                        "view_file".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    ("glob".to_string(), crate::permission::PermissionMode::Allow),
+                    ("grep".to_string(), crate::permission::PermissionMode::Allow),
+                    (
+                        "web_fetch".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "web_search".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    ("bash".to_string(), crate::permission::PermissionMode::Ask),
+                ]),
+                ..Default::default()
+            },
+            None,
+            &["research", "docs"],
+            "You are a read-only research agent for external documentation, APIs, and dependency behavior. Prefer direct evidence from docs, source, or fetched pages, separate verified facts from inference, and do not modify the user's workspace.",
+        ),
+        builtin_profile(
+            "implement",
+            "Editing agent for making targeted code changes.",
+            &[
+                "read",
+                "view_file",
+                "glob",
+                "grep",
+                "bash",
+                "apply_patch",
+                "notebook_edit",
+                "todo_write",
+            ],
+            crate::agent::AgentPermissionConfig {
+                default_read: Some(crate::permission::PermissionMode::Allow),
+                default_write: Some(crate::permission::PermissionMode::Ask),
+                default_external_directory: Some(crate::permission::PermissionMode::Ask),
+                execution_mode: Some(crate::permission::ExecutionMode::Auto),
+                tools: std::collections::BTreeMap::new(),
+                ..Default::default()
+            },
+            Some("openai/gpt-5.3-codex"),
+            &["edit", "builder", "codex"],
+            "You are a pragmatic implementation agent. Make the requested code changes, preserve surrounding behavior, adapt to concurrent edits, and avoid reverting unrelated work.",
+        ),
+        builtin_profile(
+            "verify",
+            "Validation agent for targeted testing and regression checks.",
+            &["read", "view_file", "glob", "grep", "bash", "todo_write"],
+            crate::agent::AgentPermissionConfig {
+                default_read: Some(crate::permission::PermissionMode::Allow),
+                default_write: Some(crate::permission::PermissionMode::Deny),
+                default_external_directory: Some(crate::permission::PermissionMode::Ask),
+                execution_mode: Some(crate::permission::ExecutionMode::Ask),
+                tools: std::collections::BTreeMap::from([(
+                    "bash".to_string(),
+                    crate::permission::PermissionMode::Ask,
+                )]),
+                ..Default::default()
+            },
+            None,
+            &["review", "reviewer", "test"],
+            "You are a verification agent. Run focused checks, inspect outputs critically, look for regressions, and report the remaining risks plainly.",
+        ),
+        builtin_profile(
+            "planner",
+            "Planning agent for read-only decomposition and execution strategy.",
+            &[
+                "read",
+                "view_file",
+                "glob",
+                "grep",
+                "bash",
+                "todo_write",
+                "enter_plan_mode",
+                "exit_plan_mode",
+            ],
+            crate::agent::AgentPermissionConfig {
+                default_read: Some(crate::permission::PermissionMode::Allow),
+                default_write: Some(crate::permission::PermissionMode::Deny),
+                default_external_directory: Some(crate::permission::PermissionMode::Ask),
+                execution_mode: Some(crate::permission::ExecutionMode::Ask),
+                tools: std::collections::BTreeMap::from([
+                    (
+                        "enter_plan_mode".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "exit_plan_mode".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                    (
+                        "todo_write".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    ),
+                ]),
+                ..Default::default()
+            },
+            None,
+            &["plan", "planning", "design"],
+            "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable. Prefer read-only investigation unless the user explicitly asks to execute.",
+        ),
+        builtin_profile(
+            "reviewer",
+            "Code review agent focused on bugs, risks, and missing tests.",
+            &["read", "view_file", "glob", "grep", "bash"],
+            crate::agent::AgentPermissionConfig {
+                default_read: Some(crate::permission::PermissionMode::Allow),
+                default_write: Some(crate::permission::PermissionMode::Deny),
+                default_external_directory: Some(crate::permission::PermissionMode::Ask),
+                execution_mode: Some(crate::permission::ExecutionMode::Ask),
+                tools: std::collections::BTreeMap::from([(
+                    "bash".to_string(),
+                    crate::permission::PermissionMode::Ask,
+                )]),
+                ..Default::default()
+            },
+            None,
+            &["audit", "critic"],
+            "You are a strict code review agent. Prioritize correctness issues, behavioral regressions, and test gaps. Findings come first; summaries are secondary.",
+        ),
+    ]
+}
+
+fn builtin_profile(
+    name: &str,
+    description: &str,
+    allowed_tools: &[&str],
+    permission: crate::agent::AgentPermissionConfig,
+    model: Option<&str>,
+    aliases: &[&str],
+    prompt: &str,
+) -> AgentProfile {
+    AgentProfile {
+        name: name.to_string(),
+        frontmatter: AgentFrontmatter {
+            description: description.to_string(),
+            mode: crate::agent::AgentMode::All,
+            hidden: false,
+            color: None,
+            temperature: None,
+            max_output_tokens: None,
+            steps: None,
+            allowed_tools: allowed_tools
+                .iter()
+                .map(|tool| (*tool).to_string())
+                .collect(),
+            permission,
+            model: model.map(ToOwned::to_owned),
+            aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
+        },
+        prompt: prompt.to_string(),
+        source_path: None,
+        scope: AgentScope::FirstParty,
     }
 }
 
@@ -350,7 +773,19 @@ mod tests {
         assert_eq!(registry.get("explorer").unwrap().name, "explorer");
         assert_eq!(registry.get("scout").unwrap().name, "explorer");
         assert_eq!(registry.get("recon").unwrap().name, "explorer");
-        assert_eq!(registry.list().len(), 1);
+        let names = registry
+            .list()
+            .into_iter()
+            .map(|profile| profile.name)
+            .collect::<Vec<_>>();
+        assert!(names.iter().any(|name| name == "explorer"));
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.as_str() == "explorer")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -386,5 +821,21 @@ mod tests {
         let registry = SubagentRegistry::discover(&work, None);
         assert!(registry.get("ok").is_some());
         assert!(registry.get("bad").is_none());
+    }
+
+    #[test]
+    fn builtins_are_available_in_empty_registry_discovery() {
+        let work = temp_dir("builtins");
+        let registry = SubagentRegistry::discover(&work, None);
+        let explore = registry.get("explore").expect("builtin explore profile");
+        assert_eq!(explore.scope, AgentScope::FirstParty);
+        assert!(
+            explore
+                .frontmatter
+                .allowed_tools
+                .iter()
+                .any(|tool| tool == "read")
+        );
+        assert!(registry.get("review").is_some(), "alias should resolve");
     }
 }

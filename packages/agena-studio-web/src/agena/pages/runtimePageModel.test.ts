@@ -77,6 +77,14 @@ function sampleRuntime(): RuntimeStatus {
           },
         ],
       },
+      agents: {
+        default_agent: 'build',
+        total_count: 8,
+        primary_count: 7,
+        subagent_count: 6,
+        hidden_count: 0,
+        agents: [],
+      },
       skills: {
         skill_count: 6,
         command_count: 1,
@@ -227,6 +235,7 @@ describe('runtimePageModel', () => {
       { label: 'Generation', value: '7' },
       { label: 'Providers', value: '2' },
       { label: 'Plugins', value: '3' },
+      { label: 'Agents', value: '8' },
       { label: 'MCP Servers', value: '4' },
       { label: 'LSP Servers', value: '2' },
       { label: 'Skills', value: '6' },
@@ -239,8 +248,8 @@ describe('runtimePageModel', () => {
 
   test('buildRuntimeSnapshotFacts omits removed mode facts', () => {
     const facts = buildRuntimeSnapshotFacts(sampleRuntime())
-    expect(facts.find((fact) => fact.label === 'Mode Source')).toBeUndefined()
-    expect(facts.find((fact) => fact.label === 'Active Mode')).toBeUndefined()
+    expect(facts.find((fact) => fact.label === 'Mode Source')).toBe(undefined)
+    expect(facts.find((fact) => fact.label === 'Active Mode')).toBe(undefined)
   })
 
   test('buildSessionCacheFacts includes max bytes', () => {

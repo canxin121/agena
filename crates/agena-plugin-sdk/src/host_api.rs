@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 
 use async_trait::async_trait;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PluginError, Result};
@@ -914,13 +915,99 @@ pub struct HostSchedulerDeleteResponse {
 
 // ---------------- agents ----------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPermissionMode {
+    Allow,
+    Ask,
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentExecutionMode {
+    #[default]
+    Auto,
+    Ask,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AgentPermissionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_read: Option<AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_write: Option<AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_external_directory: Option<AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<AgentExecutionMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<AgentPermissionRules>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write: Option<AgentPermissionRules>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_directory: Option<AgentPermissionRules>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_rules: BTreeMap<String, AgentPermissionRules>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bash_rules: Vec<AgentBashRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bash_deny_patterns: Vec<String>,
+}
+
+impl AgentPermissionConfig {
+    pub fn is_empty(&self) -> bool {
+        self.default_read.is_none()
+            && self.default_write.is_none()
+            && self.default_external_directory.is_none()
+            && self.execution_mode.is_none()
+            && self.tools.is_empty()
+            && self.read.is_none()
+            && self.write.is_none()
+            && self.external_directory.is_none()
+            && self.tool_rules.is_empty()
+            && self.bash_rules.is_empty()
+            && self.bash_deny_patterns.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentBashRule {
+    pub pattern: String,
+    pub mode: AgentPermissionMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AgentPermissionRules {
+    Mode(AgentPermissionMode),
+    Ordered(IndexMap<String, AgentPermissionMode>),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostAgentDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "AgentPermissionConfig::is_empty")]
+    pub permission: AgentPermissionConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -45,7 +45,9 @@ lru = { workspace = true }
 parking_lot = { workspace = true }
 regex = { workspace = true }
 html_escape = { workspace = true }
+indexmap = { workspace = true }
 urlencoding = { workspace = true }
+log = { workspace = true }
 sea-orm = { workspace = true }
 sea-orm-migration = { workspace = true }
 schemars = { workspace = true, features = ["derive"] }

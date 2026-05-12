@@ -122,6 +122,32 @@ cargo run -p agena-studio-server -- --help
 - `GET|POST /api/v1/permission-rules`
 - `GET|PUT|DELETE /api/v1/permission-rules/{rule_id}`
 
+## Agent Profiles
+
+`agena` 现在支持 agent-first 的 profile 系统：
+
+- 内置 profile：`build`、`plan`/`planner`、`general`、`explore`、`scout`、`implement`、`verify`、`reviewer`
+- 项目级 profile：`<workspace>/.agena/agents/*.md`
+- 用户级 profile：`~/.agena/agents/*.md`
+- runtime 可通过 `runtime.default_agent` 选择新的 root session 默认 agent；未配置时默认是 `build`
+- 插件可通过 `host/agent.register`、`host/agent.remove`、`host/agent.list` 动态管理 runtime profile
+
+Markdown profile 的 frontmatter 当前支持：
+
+- `description`
+- `mode`
+- `hidden`
+- `color`
+- `temperature`
+- `max_output_tokens`
+- `steps`
+- `allowed_tools`
+- `permission`
+- `model`
+- `aliases`
+
+文件 body 会作为该 agent 的 system prompt；root session 选择 agent 时会把 prompt / model / run defaults / permissions 注入执行上下文，`Task` / `spawn_subtask` 也会继承并校验这些 profile 元数据。
+
 分页与懒加载设计：
 
 - 列表接口统一使用**不透明游标**（`cursor` + `limit`），而不是脆弱的 `offset/limit`
@@ -285,12 +311,12 @@ let client = ProviderRegistry::build_http_client(ProviderHttpClientConfig {
 
 let mut registry = ProviderRegistry::with_runtime_config(ProviderRuntimeConfig {
     request_retry: ProviderRequestRetryConfig {
-        max_retries: 1,
+        max_retries: 5,
         base_delay: Duration::from_millis(250),
         max_delay: Duration::from_millis(2_000),
     },
     stream_replay: ProviderStreamReplayConfig {
-        max_retries_after_output: 1,
+        max_retries_after_output: 5,
         max_tracked_events: 2_048,
     },
 });

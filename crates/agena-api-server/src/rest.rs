@@ -13,23 +13,22 @@ use crate::local_api::{
     AuthCopilotDevicePollRequest, AuthCopilotDeviceStartRequest, AuthCredentialType,
     AuthDeviceStartResource, AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest,
     AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
-    AuthProviderResource, HealthResponse,
-    MarketplaceInstallOutcomeResource, MarketplaceInstallRequestBody,
-    MarketplaceInstalledListResponse, MarketplaceInstalledPluginResource,
-    MarketplaceOutdatedListResponse, MarketplaceOutdatedPluginResource,
-    MarketplacePluginResource, MarketplaceRegistryRequestBody, MarketplaceSearchRequestBody,
-    MarketplaceSearchResponse, MarketplaceSyncResponse, MarketplaceUninstallOutcomeResource,
-    MarketplaceUninstallRequestBody, MarketplaceUninstallResponse,
-    MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
+    AuthProviderResource, HealthResponse, MarketplaceInstallOutcomeResource,
+    MarketplaceInstallRequestBody, MarketplaceInstalledListResponse,
+    MarketplaceInstalledPluginResource, MarketplaceOutdatedListResponse,
+    MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequestBody,
+    MarketplaceSearchRequestBody, MarketplaceSearchResponse, MarketplaceSyncResponse,
+    MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
+    MarketplaceUninstallResponse, MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
     MarketplaceUpgradeResponse, MessageListQuery, PartLoadMode, PermissionRuleListQuery,
     PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
-    PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
-    RuntimeReloadResponse, SessionContinueRequestBody, SessionCreateRequest,
-    SessionEventStreamQuery, SessionListQuery, SessionPermissionReplyRequestBody,
-    SessionReplaceRequest, SessionRewindRequestBody, SessionRunOptionsRequest,
-    SessionTurnRequest, SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery,
-    WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
+    PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse, RuntimeReloadResponse,
+    SessionContinueRequestBody, SessionCreateRequest, SessionEventStreamQuery, SessionListQuery,
+    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
+    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
+    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
+use agena::config::ProviderDefinition;
 use agena::event::{EventStore, StoreRange};
 use agena_api::queries::{ListEventsParams, Query, QueryResult};
 use async_stream::stream;
@@ -624,16 +623,18 @@ pub async fn upgrade_marketplace_plugins(
         cache,
         std::collections::BTreeMap::new(),
     );
-    let override_spec = request.registry_url.as_ref().map(|registry_url| {
-        agena_plugin_marketplace::RegistrySpec {
-            id: request
-                .registry_id
-                .clone()
-                .unwrap_or_else(|| "default".to_string()),
-            url: registry_url.trim().to_string(),
-            require_signature: false,
-        }
-    });
+    let override_spec =
+        request
+            .registry_url
+            .as_ref()
+            .map(|registry_url| agena_plugin_marketplace::RegistrySpec {
+                id: request
+                    .registry_id
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string()),
+                url: registry_url.trim().to_string(),
+                require_signature: false,
+            });
 
     let targets = if request.all {
         client
@@ -643,7 +644,14 @@ pub async fn upgrade_marketplace_plugins(
             .map(|record| record.plugin_id)
             .collect::<Vec<_>>()
     } else {
-        vec![request.plugin_id.clone().unwrap_or_default().trim().to_string()]
+        vec![
+            request
+                .plugin_id
+                .clone()
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+        ]
     };
 
     let mut entries = Vec::new();
@@ -656,14 +664,16 @@ pub async fn upgrade_marketplace_plugins(
             previous_version: outcome.previous_version,
             installed_version: outcome.installed_version,
             upgraded: outcome.upgraded,
-            outcome: outcome.outcome.map(|inner| MarketplaceInstallOutcomeResource {
-                plugin_id: inner.plugin_id,
-                version: inner.version,
-                kind: inner.kind.as_str().to_string(),
-                artifact_path: inner.artifact_path.display().to_string(),
-                config_path: inner.config_path.display().to_string(),
-                dry_run: inner.dry_run,
-            }),
+            outcome: outcome
+                .outcome
+                .map(|inner| MarketplaceInstallOutcomeResource {
+                    plugin_id: inner.plugin_id,
+                    version: inner.version,
+                    kind: inner.kind.as_str().to_string(),
+                    artifact_path: inner.artifact_path.display().to_string(),
+                    config_path: inner.config_path.display().to_string(),
+                    dry_run: inner.dry_run,
+                }),
         });
     }
 
@@ -673,7 +683,7 @@ pub async fn upgrade_marketplace_plugins(
 pub async fn list_auth_providers(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let configured_ids = configured_provider_ids(&state);
+    let configured_ids = configured_auth_provider_ids(&state);
     let auth_map = state
         .runtime()
         .auth_manager()
@@ -699,7 +709,7 @@ pub async fn get_auth_provider(
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
     ensure_public_auth_provider_id(provider_id.as_str())?;
-    let configured = configured_provider_ids(&state);
+    let configured = configured_auth_provider_ids(&state);
     let auth = state
         .runtime()
         .auth_manager()
@@ -723,7 +733,7 @@ pub async fn set_auth_provider_api_key(
     Json(request): Json<AuthApiKeyWriteRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     ensure_public_auth_provider_id(provider_id.as_str())?;
-    let configured = configured_provider_ids(&state);
+    let configured = configured_auth_provider_ids(&state);
     let existing = state
         .runtime()
         .auth_manager()
@@ -780,7 +790,7 @@ pub async fn finish_openai_browser_auth(
         .finish_openai_browser_login(request.code, request.pkce_verifier, request.redirect_uri)
         .await
         .map_err(ServerError::Core)?;
-    let configured = configured_provider_ids(&state);
+    let configured = configured_auth_provider_ids(&state);
     Ok(Json(AuthLoginResultResource {
         completed: true,
         provider: Some(auth_provider_resource(
@@ -820,7 +830,7 @@ pub async fn poll_openai_device_auth(
         .poll_openai_headless_login(request.device_code, request.user_code)
         .await
         .map_err(ServerError::Core)?;
-    let configured = configured_provider_ids(&state);
+    let configured = configured_auth_provider_ids(&state);
     let provider = if let Some(value) = auth.as_ref() {
         Some(auth_provider_resource(
             configured.contains("openai"),
@@ -869,7 +879,7 @@ pub async fn finish_gitlab_browser_auth(
         )
         .await
         .map_err(ServerError::Core)?;
-    let configured = configured_provider_ids(&state);
+    let configured = configured_auth_provider_ids(&state);
     Ok(Json(AuthLoginResultResource {
         completed: true,
         provider: Some(auth_provider_resource(
@@ -929,7 +939,7 @@ pub async fn poll_copilot_device_auth(
         .poll_copilot_login(request.device_code, deployment)
         .await
         .map_err(ServerError::Core)?;
-    let configured = configured_provider_ids(&state);
+    let configured = configured_auth_provider_ids(&state);
     let provider = if let Some(value) = auth.as_ref() {
         Some(auth_provider_resource(
             configured.contains(provider_id),
@@ -950,7 +960,7 @@ pub async fn delete_auth_provider(
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
     ensure_public_auth_provider_id(provider_id.as_str())?;
-    let configured = configured_provider_ids(&state);
+    let configured = configured_auth_provider_ids(&state);
     let auth = state
         .runtime()
         .auth_manager()
@@ -986,7 +996,7 @@ pub async fn refresh_auth_provider(
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
     ensure_public_auth_provider_id(provider_id.as_str())?;
-    let configured = configured_provider_ids(&state);
+    let configured = configured_auth_provider_ids(&state);
     let existing = state
         .runtime()
         .auth_manager()
@@ -2027,14 +2037,61 @@ async fn plugin_rpc_response(
     }
 }
 
-fn configured_provider_ids(state: &AppState) -> BTreeSet<String> {
-    state
-        .runtime()
-        .current_snapshot()
-        .provider_registry()
-        .provider_ids()
-        .into_iter()
+fn configured_auth_provider_ids(state: &AppState) -> BTreeSet<String> {
+    let snapshot = state.runtime().current_snapshot();
+    snapshot
+        .config_resolution()
+        .config
+        .providers
+        .iter()
+        .filter_map(|(provider_id, resolved)| {
+            configured_auth_provider_id(provider_id, &resolved.definition)
+        })
         .collect()
+}
+
+fn configured_auth_provider_id(
+    provider_id: &str,
+    definition: &ProviderDefinition,
+) -> Option<String> {
+    match definition {
+        ProviderDefinition::OpenAi(_)
+        | ProviderDefinition::Anthropic(_)
+        | ProviderDefinition::Gemini(_)
+        | ProviderDefinition::OpenAiCompatible(_)
+        | ProviderDefinition::SapAiCore(_)
+        | ProviderDefinition::CloudflareAiGateway(_)
+        | ProviderDefinition::GoogleVertex(_)
+        | ProviderDefinition::AmazonBedrock(_)
+        | ProviderDefinition::Ollama(_) => Some(provider_id.to_owned()),
+        ProviderDefinition::Codex(config) => Some(config.auth_provider_id.clone()),
+        ProviderDefinition::Gitlab(config) => {
+            if has_gitlab_direct_api_key(config)
+                || config
+                    .api_key_env
+                    .as_deref()
+                    .is_some_and(has_present_env_var)
+            {
+                Some(provider_id.to_owned())
+            } else {
+                Some(config.auth_provider_id.clone())
+            }
+        }
+        ProviderDefinition::Copilot(config) => Some(config.auth_provider_id.clone()),
+    }
+}
+
+fn has_gitlab_direct_api_key(config: &agena::config::GitlabProviderOptions) -> bool {
+    config
+        .api_key
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn has_present_env_var(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn public_auth_provider_ids(
@@ -2135,4 +2192,137 @@ fn secret_preview(secret: &str) -> Option<String> {
         &trimmed[..4],
         &trimmed[trimmed.len() - 4..]
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena::config::{
+        CloudflareAiGatewayProviderOptions, CodexProviderOptions, CopilotProviderOptions,
+        GitlabProviderOptions, HttpProviderConfig, OpenAiApiModeConfig, OpenAiProviderOptions,
+        StreamTransportMode,
+    };
+
+    #[test]
+    fn configured_auth_provider_id_uses_openai_for_codex_alias() {
+        let provider = ProviderDefinition::Codex(CodexProviderOptions {
+            default_model: "gpt-5-codex".to_owned(),
+            auth_provider_id: "openai".to_owned(),
+        });
+
+        assert_eq!(
+            configured_auth_provider_id("codex", &provider).as_deref(),
+            Some("openai")
+        );
+    }
+
+    #[test]
+    fn configured_auth_provider_id_prefers_gitlab_auth_provider_when_no_api_key_is_set() {
+        let provider = ProviderDefinition::Gitlab(GitlabProviderOptions {
+            instance_url: "https://gitlab.com".to_owned(),
+            ai_gateway_url: "https://gitlab.com/api/v4/ai".to_owned(),
+            default_model: "claude-sonnet-4".to_owned(),
+            auth_provider_id: "gitlab".to_owned(),
+            api_key: None,
+            api_key_env: None,
+            ai_gateway_headers: Default::default(),
+            feature_flags: Default::default(),
+        });
+
+        assert_eq!(
+            configured_auth_provider_id("gitlab-duo", &provider).as_deref(),
+            Some("gitlab")
+        );
+    }
+
+    #[test]
+    fn configured_auth_provider_id_uses_provider_id_for_direct_gitlab_api_key() {
+        let provider = ProviderDefinition::Gitlab(GitlabProviderOptions {
+            instance_url: "https://gitlab.example.com".to_owned(),
+            ai_gateway_url: "https://gitlab.example.com/api/v4/ai".to_owned(),
+            default_model: "claude-sonnet-4".to_owned(),
+            auth_provider_id: "gitlab".to_owned(),
+            api_key: Some("glpat-test".to_owned()),
+            api_key_env: None,
+            ai_gateway_headers: Default::default(),
+            feature_flags: Default::default(),
+        });
+
+        assert_eq!(
+            configured_auth_provider_id("gitlab-self", &provider).as_deref(),
+            Some("gitlab-self")
+        );
+    }
+
+    #[test]
+    fn configured_auth_provider_id_ignores_empty_gitlab_api_key_overrides() {
+        let provider = ProviderDefinition::Gitlab(GitlabProviderOptions {
+            instance_url: "https://gitlab.com".to_owned(),
+            ai_gateway_url: "https://gitlab.com/api/v4/ai".to_owned(),
+            default_model: "claude-sonnet-4".to_owned(),
+            auth_provider_id: "gitlab".to_owned(),
+            api_key: Some("   ".to_owned()),
+            api_key_env: Some("GITLAB_TOKEN".to_owned()),
+            ai_gateway_headers: Default::default(),
+            feature_flags: Default::default(),
+        });
+
+        assert_eq!(
+            configured_auth_provider_id("gitlab", &provider).as_deref(),
+            Some("gitlab")
+        );
+    }
+
+    #[test]
+    fn configured_auth_provider_id_keeps_direct_http_provider_ids() {
+        let provider = ProviderDefinition::OpenAi(HttpProviderConfig {
+            base_url: "https://api.openai.com/v1".to_owned(),
+            default_model: "gpt-5".to_owned(),
+            api_key: Some("sk-test".to_owned()),
+            api_key_env: None,
+            extra_headers: Default::default(),
+            default_thinking: None,
+            options: OpenAiProviderOptions {
+                api_mode: OpenAiApiModeConfig::Responses,
+                stream_mode: StreamTransportMode::Sse,
+                realtime_ws_url: None,
+            },
+        });
+
+        assert_eq!(
+            configured_auth_provider_id("openai", &provider).as_deref(),
+            Some("openai")
+        );
+    }
+
+    #[test]
+    fn configured_auth_provider_id_uses_configured_copilot_auth_provider() {
+        let provider = ProviderDefinition::Copilot(CopilotProviderOptions {
+            default_model: "gpt-4.1".to_owned(),
+            base_url: "https://api.githubcopilot.com".to_owned(),
+            models_url: None,
+            auth_provider_id: "github-copilot-enterprise".to_owned(),
+        });
+
+        assert_eq!(
+            configured_auth_provider_id("copilot-enterprise", &provider).as_deref(),
+            Some("github-copilot-enterprise")
+        );
+    }
+
+    #[test]
+    fn configured_auth_provider_id_keeps_cloudflare_gateway_provider_id() {
+        let provider =
+            ProviderDefinition::CloudflareAiGateway(CloudflareAiGatewayProviderOptions {
+                base_url: "https://gateway.ai.cloudflare.com/account/gateway/openai".to_owned(),
+                default_model: "gpt-4.1-mini".to_owned(),
+                api_key: Some("cf-test".to_owned()),
+                api_key_env: None,
+            });
+
+        assert_eq!(
+            configured_auth_provider_id("cloudflare-ai-gateway", &provider).as_deref(),
+            Some("cloudflare-ai-gateway")
+        );
+    }
 }

@@ -48,10 +48,7 @@ use crate::{
 /// Build a `HostClient` impl for a runtime; use [`NoopHostClient`] when no
 /// runtime is available (e.g. before bootstrap completes).
 pub fn host_client_for(runtime: AgenaRuntime) -> Arc<dyn HostClient> {
-    Arc::new(RuntimeHostClient {
-        runtime,
-        agents: crate::agents::SubagentRegistry::empty(),
-    })
+    Arc::new(RuntimeHostClient { runtime })
 }
 
 pub fn noop_host_client() -> Arc<dyn HostClient> {
@@ -60,7 +57,6 @@ pub fn noop_host_client() -> Arc<dyn HostClient> {
 
 struct RuntimeHostClient {
     runtime: AgenaRuntime,
-    agents: crate::agents::SubagentRegistry,
 }
 
 impl RuntimeHostClient {
@@ -73,6 +69,42 @@ impl RuntimeHostClient {
 
     fn tool_executor(&self) -> Result<crate::tool::ToolExecutor, PluginError> {
         Ok(self.session_manager()?.tool_executor())
+    }
+
+    async fn callback_session_context(
+        &self,
+    ) -> Result<Option<crate::session::SessionExecutionContext>, PluginError> {
+        let Some(session_id) =
+            current_host_callback_context().and_then(|context| context.session_id)
+        else {
+            return Ok(None);
+        };
+        let Some(manager) = self.runtime.current_snapshot().session_manager() else {
+            return Ok(None);
+        };
+        let session = manager
+            .get_session(session_id)
+            .await
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(Some(session.runtime.execution))
+    }
+
+    async fn callback_scoped_tool_executor(
+        &self,
+    ) -> Result<
+        (
+            crate::tool::ToolExecutor,
+            Option<crate::session::SessionExecutionContext>,
+        ),
+        PluginError,
+    > {
+        let executor = self.tool_executor()?;
+        let session_context = self.callback_session_context().await?;
+        let executor = session_context
+            .as_ref()
+            .map(|context| executor.for_session_context(context))
+            .unwrap_or(executor);
+        Ok((executor, session_context))
     }
 
     fn callback_context(&self) -> Result<HostCallbackContext, PluginError> {
@@ -113,6 +145,10 @@ impl RuntimeHostClient {
             .config
             .plugin_secret_store()
     }
+
+    fn agents(&self) -> crate::agents::SubagentRegistry {
+        self.runtime.current_snapshot().agents()
+    }
 }
 
 fn host_unavailable(message: impl Into<String>) -> PluginError {
@@ -146,7 +182,7 @@ fn map_storage_error(err: PluginStorageError) -> PluginError {
 }
 
 fn parse_subagent_type(value: &str) -> Result<TaskSubagentType, PluginError> {
-    match value.trim() {
+    match value.trim().to_ascii_lowercase().as_str() {
         "explore" => Ok(TaskSubagentType::Explore),
         "implement" => Ok(TaskSubagentType::Implement),
         "verify" => Ok(TaskSubagentType::Verify),
@@ -336,6 +372,7 @@ fn workflow_first_party_output(
     input: FirstPartyToolInput,
     session_id: Option<i64>,
     call_id: Option<i64>,
+    session_context: Option<&crate::session::SessionExecutionContext>,
 ) -> Result<ToolInvokeOutput, PluginError> {
     let execution = crate::entry::orchestrator::execute_first_party(
         executor,
@@ -343,7 +380,7 @@ fn workflow_first_party_output(
         FirstPartyExecutionContext {
             session_id,
             call_id,
-            session_context: None,
+            session_context: session_context.cloned(),
             prepared_shell_command: None,
         },
     )
@@ -541,15 +578,22 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<SpawnSubtaskResponse, PluginError> {
         let (parent_session_id, _) = self.callback_session_and_call()?;
         let executor = self.tool_executor()?;
-        let subagent_type = parse_subagent_type(req.subagent_type.as_str())?;
-        let prompt = subagent_type.apply_prompt_guidance(&req.prompt);
+        let requested_profile = req.subagent_type.trim();
+        if requested_profile.is_empty() {
+            return Err(PluginError::invalid_params(
+                "subagent_type must not be empty",
+            ));
+        }
+        let subagent_type =
+            parse_subagent_type(requested_profile).unwrap_or(TaskSubagentType::Explore);
         let response = self
             .session_manager()?
             .spawn_subtask(crate::session::SessionSubtaskRequest {
                 parent_session_id,
                 description: req.description.clone(),
-                prompt,
+                prompt: req.prompt.clone(),
                 subagent_type,
+                profile_name: Some(requested_profile.to_string()),
                 task_id: req.task_id.clone(),
                 command: req.command.clone(),
                 requested_model: req.model.clone(),
@@ -560,7 +604,13 @@ impl HostClient for RuntimeHostClient {
         let session = response.session;
         let mut metadata = BTreeMap::new();
         metadata.insert("session_id".to_string(), session.id.to_string());
-        metadata.insert("subagent_type".to_string(), subagent_type.to_string());
+        metadata.insert(
+            "subagent_type".to_string(),
+            response
+                .profile_name
+                .clone()
+                .unwrap_or_else(|| requested_profile.to_string()),
+        );
         if let Some(model) = req.model {
             metadata.insert("requested_model".to_string(), model);
         }
@@ -579,7 +629,10 @@ impl HostClient for RuntimeHostClient {
             final_text: format!(
                 "Created/resumed subtask session {} for profile '{}' in workspace {}.",
                 session.id,
-                subagent_type,
+                response
+                    .profile_name
+                    .as_deref()
+                    .unwrap_or(requested_profile),
                 executor.display_path(executor.workspace_root())
             ),
             metadata,
@@ -596,8 +649,8 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn todo_write(&self, req: HostTodoWriteRequest) -> Result<ToolInvokeOutput, PluginError> {
-        let executor = self.tool_executor()?;
         let context = self.callback_context()?;
+        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
         workflow_first_party_output(
             &executor,
             FirstPartyToolInput::TodoWrite(TodoWriteToolInput {
@@ -605,6 +658,7 @@ impl HostClient for RuntimeHostClient {
             }),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
+            session_context.as_ref(),
         )
     }
 
@@ -612,13 +666,14 @@ impl HostClient for RuntimeHostClient {
         &self,
         _req: HostEnterPlanModeRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let executor = self.tool_executor()?;
         let context = self.callback_context()?;
+        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
         workflow_first_party_output(
             &executor,
             FirstPartyToolInput::EnterPlanMode(EnterPlanModeToolInput::default()),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
+            session_context.as_ref(),
         )
     }
 
@@ -626,13 +681,14 @@ impl HostClient for RuntimeHostClient {
         &self,
         _req: HostExitPlanModeRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let executor = self.tool_executor()?;
         let context = self.callback_context()?;
+        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
         workflow_first_party_output(
             &executor,
             FirstPartyToolInput::ExitPlanMode(ExitPlanModeToolInput::default()),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
+            session_context.as_ref(),
         )
     }
 
@@ -640,8 +696,8 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostEnterWorktreeRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let executor = self.tool_executor()?;
         let context = self.callback_context()?;
+        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
         workflow_first_party_output(
             &executor,
             FirstPartyToolInput::EnterWorktree(EnterWorktreeToolInput {
@@ -650,6 +706,7 @@ impl HostClient for RuntimeHostClient {
             }),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
+            session_context.as_ref(),
         )
     }
 
@@ -657,8 +714,8 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostExitWorktreeRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let executor = self.tool_executor()?;
         let context = self.callback_context()?;
+        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
         workflow_first_party_output(
             &executor,
             FirstPartyToolInput::ExitWorktree(ExitWorktreeToolInput {
@@ -667,6 +724,7 @@ impl HostClient for RuntimeHostClient {
             }),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
+            session_context.as_ref(),
         )
     }
 
@@ -1043,11 +1101,39 @@ impl HostClient for RuntimeHostClient {
             return Err(PluginError::invalid_params("agent.name must not be empty"));
         }
         let scope = agent_scope_from_str(req.agent.scope.as_str());
+        let snapshot = self.runtime.current_snapshot();
+        let mut permission = core_agent_permission_from_sdk(req.agent.permission);
+        if snapshot.config_resolution().config.permission_explicit {
+            permission = snapshot
+                .config_resolution()
+                .config
+                .agent_permission_with_legacy_fallback(&permission);
+        }
+        let mode = core_agent_mode_from_sdk(req.agent.mode.as_str());
+        let temperature = req.agent.temperature.map(crate::agent::AgentTemperature);
+        crate::agent::Agent::new(
+            req.agent.name.clone(),
+            crate::permission::PermissionPolicy::allow_all(),
+        )
+        .try_with_permission_config(&permission)
+        .map_err(|err| {
+            PluginError::invalid_params(format!(
+                "agent.permission is invalid for '{}': {err}",
+                req.agent.name
+            ))
+        })?;
         let profile = crate::agents::AgentProfile {
             name: req.agent.name.clone(),
             frontmatter: crate::agents::AgentFrontmatter {
                 description: req.agent.description,
+                mode,
+                hidden: req.agent.hidden,
+                color: req.agent.color,
+                temperature,
+                max_output_tokens: req.agent.max_output_tokens,
+                steps: req.agent.steps.map(|value| value as usize),
                 allowed_tools: req.agent.allowed_tools,
+                permission,
                 model: req.agent.model,
                 aliases: req.agent.aliases,
             },
@@ -1055,7 +1141,7 @@ impl HostClient for RuntimeHostClient {
             source_path: None,
             scope,
         };
-        self.agents.register_runtime(profile);
+        self.agents().register_runtime(profile);
         Ok(())
     }
 
@@ -1063,13 +1149,13 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostAgentRemoveRequest,
     ) -> Result<HostAgentRemoveResponse, PluginError> {
-        let removed = self.agents.remove_runtime(&req.name);
+        let removed = self.agents().remove_runtime(&req.name);
         Ok(HostAgentRemoveResponse { removed })
     }
 
     async fn agent_list(&self) -> Result<HostAgentListResponse, PluginError> {
         let agents = self
-            .agents
+            .agents()
             .list()
             .into_iter()
             .map(agent_to_descriptor)
@@ -1151,11 +1237,35 @@ fn agent_scope_from_str(scope: &str) -> crate::agents::AgentScope {
     }
 }
 
+fn core_agent_mode_from_sdk(mode: &str) -> crate::agent::AgentMode {
+    match mode.trim() {
+        "subagent" => crate::agent::AgentMode::Subagent,
+        "all" => crate::agent::AgentMode::All,
+        _ => crate::agent::AgentMode::Primary,
+    }
+}
+
+fn sdk_agent_mode_from_core(mode: crate::agent::AgentMode) -> String {
+    match mode {
+        crate::agent::AgentMode::Primary => "primary",
+        crate::agent::AgentMode::Subagent => "subagent",
+        crate::agent::AgentMode::All => "all",
+    }
+    .to_string()
+}
+
 fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostAgentDescriptor {
     HostAgentDescriptor {
         name: profile.name,
         description: profile.frontmatter.description,
+        mode: sdk_agent_mode_from_core(profile.frontmatter.mode),
+        hidden: profile.frontmatter.hidden,
+        color: profile.frontmatter.color,
+        temperature: profile.frontmatter.temperature.map(|value| value.0),
+        max_output_tokens: profile.frontmatter.max_output_tokens,
+        steps: profile.frontmatter.steps.map(|value| value as u32),
         allowed_tools: profile.frontmatter.allowed_tools,
+        permission: sdk_agent_permission_from_core(profile.frontmatter.permission),
         model: profile.frontmatter.model,
         aliases: profile.frontmatter.aliases,
         prompt: profile.prompt,
@@ -1165,6 +1275,177 @@ fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostAgentDescrip
             crate::agents::AgentScope::FirstParty => "first_party",
         }
         .to_string(),
+    }
+}
+
+fn core_agent_permission_from_sdk(
+    permission: crate::plugin::sdk::host_api::AgentPermissionConfig,
+) -> crate::agent::AgentPermissionConfig {
+    crate::agent::AgentPermissionConfig {
+        default_read: permission.default_read.map(core_permission_mode_from_sdk),
+        default_write: permission.default_write.map(core_permission_mode_from_sdk),
+        default_external_directory: permission
+            .default_external_directory
+            .map(core_permission_mode_from_sdk),
+        execution_mode: permission.execution_mode.map(core_execution_mode_from_sdk),
+        tools: permission
+            .tools
+            .into_iter()
+            .map(|(tool, mode)| (tool, core_permission_mode_from_sdk(mode)))
+            .collect(),
+        read: permission.read.map(core_agent_permission_rules_from_sdk),
+        write: permission.write.map(core_agent_permission_rules_from_sdk),
+        external_directory: permission
+            .external_directory
+            .map(core_agent_permission_rules_from_sdk),
+        tool_rules: permission
+            .tool_rules
+            .into_iter()
+            .map(|(tool, rules)| (tool, core_agent_permission_rules_from_sdk(rules)))
+            .collect(),
+        bash_rules: permission
+            .bash_rules
+            .into_iter()
+            .map(|rule| crate::agent::AgentBashRule {
+                pattern: rule.pattern,
+                mode: core_permission_mode_from_sdk(rule.mode),
+            })
+            .collect(),
+        bash_deny_patterns: permission.bash_deny_patterns,
+        ..Default::default()
+    }
+}
+
+fn sdk_agent_permission_from_core(
+    permission: crate::agent::AgentPermissionConfig,
+) -> crate::plugin::sdk::host_api::AgentPermissionConfig {
+    crate::plugin::sdk::host_api::AgentPermissionConfig {
+        default_read: permission.default_read.map(sdk_permission_mode_from_core),
+        default_write: permission.default_write.map(sdk_permission_mode_from_core),
+        default_external_directory: permission
+            .default_external_directory
+            .map(sdk_permission_mode_from_core),
+        execution_mode: permission.execution_mode.map(sdk_execution_mode_from_core),
+        tools: permission
+            .tools
+            .into_iter()
+            .map(|(tool, mode)| (tool, sdk_permission_mode_from_core(mode)))
+            .collect(),
+        read: permission.read.map(sdk_agent_permission_rules_from_core),
+        write: permission.write.map(sdk_agent_permission_rules_from_core),
+        external_directory: permission
+            .external_directory
+            .map(sdk_agent_permission_rules_from_core),
+        tool_rules: permission
+            .tool_rules
+            .into_iter()
+            .map(|(tool, rules)| (tool, sdk_agent_permission_rules_from_core(rules)))
+            .collect(),
+        bash_rules: permission
+            .bash_rules
+            .into_iter()
+            .map(|rule| crate::plugin::sdk::host_api::AgentBashRule {
+                pattern: rule.pattern,
+                mode: sdk_permission_mode_from_core(rule.mode),
+            })
+            .collect(),
+        bash_deny_patterns: permission.bash_deny_patterns,
+    }
+}
+
+fn core_agent_permission_rules_from_sdk(
+    rules: crate::plugin::sdk::host_api::AgentPermissionRules,
+) -> crate::agent::AgentPermissionRules {
+    match rules {
+        crate::plugin::sdk::host_api::AgentPermissionRules::Mode(mode) => {
+            crate::agent::AgentPermissionRules::Mode(core_permission_mode_from_sdk(mode))
+        }
+        crate::plugin::sdk::host_api::AgentPermissionRules::Ordered(entries) => {
+            crate::agent::AgentPermissionRules::Ordered(
+                entries
+                    .into_iter()
+                    .map(|(pattern, mode)| (pattern, core_permission_mode_from_sdk(mode)))
+                    .collect(),
+            )
+        }
+    }
+}
+
+fn sdk_agent_permission_rules_from_core(
+    rules: crate::agent::AgentPermissionRules,
+) -> crate::plugin::sdk::host_api::AgentPermissionRules {
+    match rules {
+        crate::agent::AgentPermissionRules::Mode(mode) => {
+            crate::plugin::sdk::host_api::AgentPermissionRules::Mode(sdk_permission_mode_from_core(
+                mode,
+            ))
+        }
+        crate::agent::AgentPermissionRules::Ordered(entries) => {
+            crate::plugin::sdk::host_api::AgentPermissionRules::Ordered(
+                entries
+                    .into_iter()
+                    .map(|(pattern, mode)| (pattern, sdk_permission_mode_from_core(mode)))
+                    .collect(),
+            )
+        }
+    }
+}
+
+fn core_permission_mode_from_sdk(
+    mode: crate::plugin::sdk::host_api::AgentPermissionMode,
+) -> crate::permission::PermissionMode {
+    match mode {
+        crate::plugin::sdk::host_api::AgentPermissionMode::Allow => {
+            crate::permission::PermissionMode::Allow
+        }
+        crate::plugin::sdk::host_api::AgentPermissionMode::Ask => {
+            crate::permission::PermissionMode::Ask
+        }
+        crate::plugin::sdk::host_api::AgentPermissionMode::Deny => {
+            crate::permission::PermissionMode::Deny
+        }
+    }
+}
+
+fn sdk_permission_mode_from_core(
+    mode: crate::permission::PermissionMode,
+) -> crate::plugin::sdk::host_api::AgentPermissionMode {
+    match mode {
+        crate::permission::PermissionMode::Allow => {
+            crate::plugin::sdk::host_api::AgentPermissionMode::Allow
+        }
+        crate::permission::PermissionMode::Ask => {
+            crate::plugin::sdk::host_api::AgentPermissionMode::Ask
+        }
+        crate::permission::PermissionMode::Deny => {
+            crate::plugin::sdk::host_api::AgentPermissionMode::Deny
+        }
+    }
+}
+
+fn core_execution_mode_from_sdk(
+    mode: crate::plugin::sdk::host_api::AgentExecutionMode,
+) -> crate::permission::ExecutionMode {
+    match mode {
+        crate::plugin::sdk::host_api::AgentExecutionMode::Auto => {
+            crate::permission::ExecutionMode::Auto
+        }
+        crate::plugin::sdk::host_api::AgentExecutionMode::Ask => {
+            crate::permission::ExecutionMode::Ask
+        }
+    }
+}
+
+fn sdk_execution_mode_from_core(
+    mode: crate::permission::ExecutionMode,
+) -> crate::plugin::sdk::host_api::AgentExecutionMode {
+    match mode {
+        crate::permission::ExecutionMode::Auto => {
+            crate::plugin::sdk::host_api::AgentExecutionMode::Auto
+        }
+        crate::permission::ExecutionMode::Ask => {
+            crate::plugin::sdk::host_api::AgentExecutionMode::Ask
+        }
     }
 }
 

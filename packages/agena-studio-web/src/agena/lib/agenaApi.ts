@@ -104,6 +104,39 @@ export type RuntimeStatus = {
         root_markers: string[]
       }>
     }
+    agents: {
+      default_agent: string
+      total_count: number
+      primary_count: number
+      subagent_count: number
+      hidden_count: number
+      agents: Array<{
+        name: string
+        description: string
+        mode: 'primary' | 'subagent' | 'all'
+        hidden: boolean
+        color?: string | null
+        temperature?: number | null
+        max_output_tokens?: number | null
+        steps?: number | null
+        allowed_tools: string[]
+        permission?: {
+          default_read?: 'allow' | 'ask' | 'deny'
+          default_write?: 'allow' | 'ask' | 'deny'
+          default_external_directory?: 'allow' | 'ask' | 'deny'
+          execution_mode?: 'auto' | 'ask'
+          tools?: Record<string, 'allow' | 'ask' | 'deny'>
+          read?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
+          write?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
+          external_directory?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
+          tool_rules?: Record<string, 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>>
+        }
+        model?: string | null
+        aliases: string[]
+        scope: 'project' | 'user' | 'first_party'
+        source_path?: string | null
+      }>
+    }
     skills: {
       skill_count: number
       command_count: number
@@ -407,11 +440,30 @@ export type UserInputRequest = {
 
 export type SessionExecutionContextResource = {
   agent_profile?: string | null
+  agent_mode?: 'primary' | 'subagent' | 'all' | null
+  agent_hidden?: boolean
+  agent_color?: string | null
   active_skill_name?: string | null
   system_prompt_override?: string | null
   allowed_tools: string[]
+  agent_permission?: {
+    default_read?: 'allow' | 'ask' | 'deny'
+    default_write?: 'allow' | 'ask' | 'deny'
+    default_external_directory?: 'allow' | 'ask' | 'deny'
+    execution_mode?: 'auto' | 'ask'
+    tools?: Record<string, 'allow' | 'ask' | 'deny'>
+    read?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
+    write?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
+    external_directory?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
+    tool_rules?: Record<string, 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>>
+  }
   model_provider_id?: string | null
   model_id?: string | null
+  agent_run?: {
+    temperature?: number | null
+    max_output_tokens?: number | null
+    steps?: number | null
+  }
   effective_workspace_root?: string | null
   task_id?: string | null
 }
@@ -515,7 +567,6 @@ async function collectPagedItems<T>(
   throw new Error(`Pagination exceeded ${maxPages} pages while loading ${resourceName}`)
 }
 
-
 function extractErrorCode(bodyText: string): string {
   const txt = String(bodyText || '').trim()
   if (!txt) return ''
@@ -614,12 +665,16 @@ export async function syncMarketplaceRegistry(input: {
 }
 
 export async function listMarketplaceInstalledPlugins(): Promise<MarketplaceInstalledPluginResource[]> {
-  const response = await apiJson<{ entries: MarketplaceInstalledPluginResource[] }>('/api/v1/plugins/marketplace/installed')
+  const response = await apiJson<{ entries: MarketplaceInstalledPluginResource[] }>(
+    '/api/v1/plugins/marketplace/installed',
+  )
   return response.entries ?? []
 }
 
 export async function listMarketplaceOutdatedPlugins(): Promise<MarketplaceOutdatedPluginResource[]> {
-  const response = await apiJson<{ entries: MarketplaceOutdatedPluginResource[] }>('/api/v1/plugins/marketplace/outdated')
+  const response = await apiJson<{ entries: MarketplaceOutdatedPluginResource[] }>(
+    '/api/v1/plugins/marketplace/outdated',
+  )
   return response.entries ?? []
 }
 
@@ -655,14 +710,17 @@ export async function uninstallMarketplacePlugin(input: {
   pluginId: string
   cascade?: boolean
 }): Promise<MarketplaceUninstallOutcomeResource[]> {
-  const response = await apiJson<{ entries: MarketplaceUninstallOutcomeResource[] }>('/api/v1/plugins/marketplace/uninstall', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      plugin_id: input.pluginId.trim(),
-      ...(input.cascade ? { cascade: true } : {}),
-    }),
-  })
+  const response = await apiJson<{ entries: MarketplaceUninstallOutcomeResource[] }>(
+    '/api/v1/plugins/marketplace/uninstall',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        plugin_id: input.pluginId.trim(),
+        ...(input.cascade ? { cascade: true } : {}),
+      }),
+    },
+  )
   return response.entries ?? []
 }
 
@@ -672,16 +730,19 @@ export async function upgradeMarketplacePlugins(input: {
   registryId?: string
   registryUrl?: string
 }): Promise<MarketplaceUpgradeOutcomeResource[]> {
-  const response = await apiJson<{ entries: MarketplaceUpgradeOutcomeResource[] }>('/api/v1/plugins/marketplace/upgrade', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      ...(input.pluginId?.trim() ? { plugin_id: input.pluginId.trim() } : {}),
-      ...(input.all ? { all: true } : {}),
-      ...(input.registryId?.trim() ? { registry_id: input.registryId.trim() } : {}),
-      ...(input.registryUrl?.trim() ? { registry_url: input.registryUrl.trim() } : {}),
-    }),
-  })
+  const response = await apiJson<{ entries: MarketplaceUpgradeOutcomeResource[] }>(
+    '/api/v1/plugins/marketplace/upgrade',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...(input.pluginId?.trim() ? { plugin_id: input.pluginId.trim() } : {}),
+        ...(input.all ? { all: true } : {}),
+        ...(input.registryId?.trim() ? { registry_id: input.registryId.trim() } : {}),
+        ...(input.registryUrl?.trim() ? { registry_url: input.registryUrl.trim() } : {}),
+      }),
+    },
+  )
   return response.entries ?? []
 }
 
@@ -844,10 +905,7 @@ export async function createWorkspace(path: string): Promise<WorkspaceResource> 
   })
 }
 
-export async function updateWorkspace(input: {
-  workspaceId: number
-  path: string
-}): Promise<WorkspaceResource> {
+export async function updateWorkspace(input: { workspaceId: number; path: string }): Promise<WorkspaceResource> {
   return await apiJson<WorkspaceResource>(`/api/v1/workspaces/${input.workspaceId}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
@@ -1040,10 +1098,7 @@ export async function updateSession(input: {
   })
 }
 
-export async function deleteSession(input: {
-  sessionId: number
-  version?: number | null
-}): Promise<SessionResource> {
+export async function deleteSession(input: { sessionId: number; version?: number | null }): Promise<SessionResource> {
   const headers: Record<string, string> = {}
   if (input.version !== undefined && input.version !== null) {
     headers['if-match'] = String(input.version)
@@ -1134,7 +1189,13 @@ export async function listGlobalEvents(options?: {
   if (options?.workspaceId !== undefined) params.set('workspace_id', String(options.workspaceId))
   if (options?.sessionId !== undefined) params.set('session_id', String(options.sessionId))
   if (options?.kinds?.length) {
-    params.set('kinds', options.kinds.map((item) => item.trim()).filter(Boolean).join(','))
+    params.set(
+      'kinds',
+      options.kinds
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .join(','),
+    )
   }
   const query = params.toString()
   const response = await apiJson<PaginatedResponse<GlobalEventRecord>>(`/api/v1/events${query ? `?${query}` : ''}`)
@@ -1306,6 +1367,7 @@ export async function continueSession(input: {
   sessionId: number
   providerId?: string
   modelId?: string
+  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const body: Record<string, unknown> = {}
 
@@ -1314,6 +1376,9 @@ export async function continueSession(input: {
       provider_id: input.providerId,
       model_id: input.modelId,
     }
+  }
+  if (input.agentProfile?.trim()) {
+    body.agent_profile = input.agentProfile.trim()
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/continue`, {
@@ -1342,6 +1407,7 @@ export async function submitTurn(input: {
   text: string
   providerId?: string
   modelId?: string
+  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const body: Record<string, unknown> = {
     parts: [
@@ -1358,6 +1424,9 @@ export async function submitTurn(input: {
       model_id: input.modelId,
     }
   }
+  if (input.agentProfile?.trim()) {
+    body.agent_profile = input.agentProfile.trim()
+  }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/turns`, {
     method: 'POST',
@@ -1372,11 +1441,13 @@ export async function replyPermission(input: {
   kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always'
   reason?: string
   scope?: 'session' | 'workspace' | 'global'
+  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/permission-replies`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
+      ...(input.agentProfile?.trim() ? { agent_profile: input.agentProfile.trim() } : {}),
       reply: {
         request_id: input.requestId,
         kind: input.kind,
@@ -1391,11 +1462,13 @@ export async function replyUserInput(input: {
   sessionId: number
   requestId: string
   answers: Record<string, string[]>
+  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/user-input-replies`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
+      ...(input.agentProfile?.trim() ? { agent_profile: input.agentProfile.trim() } : {}),
       reply: {
         request_id: input.requestId,
         kind: 'submit',
@@ -1409,11 +1482,13 @@ export async function cancelUserInput(input: {
   sessionId: number
   requestId: string
   reason?: string
+  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/user-input-replies`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
+      ...(input.agentProfile?.trim() ? { agent_profile: input.agentProfile.trim() } : {}),
       reply: {
         request_id: input.requestId,
         kind: 'cancel',

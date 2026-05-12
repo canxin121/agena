@@ -276,9 +276,11 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             std::fs::create_dir_all(&plugin_dir)?;
             match version.archive.as_ref() {
                 Some(crate::manifest::ArchiveSpec::TarGz { entrypoint }) => {
-                    extract_tar_gz(&bytes, &plugin_dir).map_err(|err| MarketplaceError::Archive {
-                        plugin: plugin.id.clone(),
-                        message: err,
+                    extract_tar_gz(&bytes, &plugin_dir).map_err(|err| {
+                        MarketplaceError::Archive {
+                            plugin: plugin.id.clone(),
+                            message: err,
+                        }
                     })?;
                     let entrypoint_path = plugin_dir.join(entrypoint);
                     if !entrypoint_path.exists() {
@@ -657,7 +659,12 @@ fn preview_artifact_path(
     match version.archive.as_ref() {
         Some(crate::manifest::ArchiveSpec::TarGz { entrypoint }) => {
             validate_archive_entrypoint(entrypoint, plugin_id)?;
-            Ok((cache.plugin_dir(plugin_id, &version.version).join(entrypoint), true))
+            Ok((
+                cache
+                    .plugin_dir(plugin_id, &version.version)
+                    .join(entrypoint),
+                true,
+            ))
         }
         None => Ok((
             cache.artifact_path(plugin_id, &version.version, version.kind),
@@ -1759,7 +1766,10 @@ mod tests {
             outcome.artifact_path,
             cache.artifact_path("demo", "0.1.0", PluginKind::Wasm)
         );
-        assert!(!root.exists(), "dry run should not create cache directories");
+        assert!(
+            !root.exists(),
+            "dry run should not create cache directories"
+        );
         assert!(!config_path.exists(), "dry run should not write config");
         assert!(client.list_installed().unwrap().is_empty());
     }

@@ -21,10 +21,9 @@ use crate::{
     role::Role,
 };
 
-const PROVIDER_ID: &str = "openai";
-
 #[derive(Clone)]
 pub struct OpenAiProvider {
+    id: String,
     client: reqwest::Client,
     api_key: ManagedCredential,
     base_url: String,
@@ -64,13 +63,40 @@ impl OpenAiProvider {
         )
     }
 
+    pub fn new_with_id(
+        id: impl Into<String>,
+        client: reqwest::Client,
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+    ) -> Self {
+        Self::new_managed_with_id(
+            id,
+            client,
+            ManagedCredential::static_value("openai api key", api_key.into()),
+            base_url,
+            default_model,
+        )
+    }
+
     pub fn new_managed(
         client: reqwest::Client,
         api_key: ManagedCredential,
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        Self::new_managed_with_id("openai", client, api_key, base_url, default_model)
+    }
+
+    pub fn new_managed_with_id(
+        id: impl Into<String>,
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+    ) -> Self {
         Self {
+            id: id.into(),
             client,
             api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
@@ -292,9 +318,9 @@ impl OpenAiProvider {
         .await?;
 
         let payload: ChatCompletionResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+            utils::parse_json_response(self.id.as_str(), response).await?;
 
-        chat_wire::parse_completion_response(PROVIDER_ID, model.as_str(), payload)
+        chat_wire::parse_completion_response(self.id.as_str(), model.as_str(), payload)
     }
 
     async fn complete_stream_with_chat_api(
@@ -341,11 +367,12 @@ impl OpenAiProvider {
         .await?;
 
         if !response.status().is_success() {
-            return Err(utils::http_status_error_from_response(PROVIDER_ID, response).await);
+            return Err(utils::http_status_error_from_response(self.id.as_str(), response).await);
         }
 
+        let provider_name = self.id.clone();
         let mut events = sse::json_events(response);
-        let provider_id = ProviderId::new(PROVIDER_ID);
+        let provider_id = ProviderId::new(provider_name.as_str());
         let model_name = ModelId::new(model);
 
         let stream = async_stream::try_stream! {
@@ -358,7 +385,7 @@ impl OpenAiProvider {
                 let event = event?;
 
                 let chunk: utils::ChatStreamChunk =
-                    utils::parse_json_value(PROVIDER_ID, "chat stream chunk", event)?;
+                    utils::parse_json_value(provider_name.as_str(), "chat stream chunk", event)?;
                 let choice = chunk.choices.first();
 
                 let delta = choice
@@ -384,7 +411,7 @@ impl OpenAiProvider {
 
                 for raw_tool in tool_deltas {
                     let tool = utils::parse_json_value::<chat_wire::ChatToolCallWire>(
-                        PROVIDER_ID,
+                        provider_name.as_str(),
                         "chat stream tool_call delta",
                         raw_tool,
                     )?;
@@ -444,7 +471,7 @@ impl OpenAiProvider {
 
                 if let Some(raw_usage) = chunk.usage {
                     let usage = utils::parse_json_value::<chat_wire::ChatUsage>(
-                        PROVIDER_ID,
+                        provider_name.as_str(),
                         "chat stream usage",
                         raw_usage,
                     )?;
@@ -494,7 +521,8 @@ impl OpenAiProvider {
                 AppError::Provider(format!("openai realtime websocket connect failed: {err}"))
             })?;
 
-        let provider_id = ProviderId::new(PROVIDER_ID);
+        let provider_name = self.id.clone();
+        let provider_id = ProviderId::new(provider_name.as_str());
         let model_name = ModelId::new(model);
         let input_text = build_realtime_input_text(request.messages.as_slice());
         let response_tools = (!request.tools.is_empty()).then(|| {
@@ -605,7 +633,7 @@ impl OpenAiProvider {
                     AppError::Provider(format!("openai realtime websocket event decode failed: {err}"))
                 })?;
 
-                if let Some(err) = utils::responses_stream_error(PROVIDER_ID, &event)? {
+                if let Some(err) = utils::responses_stream_error(provider_name.as_str(), &event)? {
                     Err(err)?;
                 }
 
@@ -618,8 +646,8 @@ impl OpenAiProvider {
                     };
                 }
 
-                if let Some(tool_event) = utils::responses_tool_event(PROVIDER_ID, &event)? {
-                    let key = tool_event.stream_key(PROVIDER_ID)?;
+                if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
+                    let key = tool_event.stream_key(provider_name.as_str())?;
 
                     let is_added = matches!(tool_event.kind, utils::ResponsesToolEventKind::Added);
                     let was_new = !pending_tool_calls.contains_key(&key);
@@ -730,7 +758,7 @@ impl OpenAiProvider {
 
                 if let Some(raw_usage) = utils::responses_usage_value(&event) {
                     let usage = utils::parse_json_value::<OpenAiUsage>(
-                        PROVIDER_ID,
+                        provider_name.as_str(),
                         "realtime stream usage",
                         raw_usage,
                     )?;
@@ -815,7 +843,7 @@ impl OpenAiProvider {
     ) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
         let stream = ModelProvider::complete_stream(self, request).await?;
-        utils::aggregate_stream(PROVIDER_ID, fallback_model, stream).await
+        utils::aggregate_stream(self.id.as_str(), fallback_model, stream).await
     }
 
     fn map_usage(usage: Option<OpenAiUsage>) -> Option<CompletionUsage> {
@@ -1226,11 +1254,11 @@ impl OpenAiProvider {
             request
         })
         .await?;
-        utils::parse_json_response(PROVIDER_ID, response).await
+        utils::parse_json_response(self.id.as_str(), response).await
     }
 
     fn apply_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        utils::apply_request_headers(PROVIDER_ID, req, &self.extra_headers)
+        utils::apply_request_headers(self.id.as_str(), req, &self.extra_headers)
     }
 }
 
@@ -1241,7 +1269,7 @@ fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value
 #[async_trait]
 impl ModelProvider for OpenAiProvider {
     fn id(&self) -> &str {
-        PROVIDER_ID
+        self.id.as_str()
     }
 
     fn default_model(&self) -> &ModelId {
@@ -1263,7 +1291,7 @@ impl ModelProvider for OpenAiProvider {
 
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
         Some(
-            crate::provider::PromptCacheShape::new(PROVIDER_ID)
+            crate::provider::PromptCacheShape::new(self.id.as_str())
                 .with_string("auth_scope", self.api_key.prompt_cache_scope())
                 .with_string("base_url", self.base_url.as_str())
                 .with_string("api_mode", self.api_mode_key())
@@ -1284,20 +1312,24 @@ impl ModelProvider for OpenAiProvider {
         .await?;
 
         let payload: OpenAiModelListResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+            utils::parse_json_response(self.id.as_str(), response).await?;
         Ok(payload
             .data
             .into_iter()
             .map(|m| {
-                let model = ProviderModel::new(PROVIDER_ID, m.id);
+                let model = ProviderModel::new(self.id.as_str(), m.id);
                 let capabilities = self.model_capabilities(&model.id);
                 model.with_capabilities(capabilities)
             })
             .collect())
     }
 
-    #[tracing::instrument(skip_all, fields(provider = "openai", model = %request.model))]
+    #[tracing::instrument(
+        skip_all,
+        fields(provider = tracing::field::Empty, model = %request.model)
+    )]
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        tracing::Span::current().record("provider", &tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
 
         if !self.should_use_responses(model.as_str()) {
@@ -1354,7 +1386,7 @@ impl ModelProvider for OpenAiProvider {
         let usage = Self::map_usage(response.usage);
 
         Ok(CompletionResponse {
-            provider_id: ProviderId::new(PROVIDER_ID),
+            provider_id: ProviderId::new(self.id.as_str()),
             model: response_model,
             text,
             reasoning_text,
@@ -1365,7 +1397,10 @@ impl ModelProvider for OpenAiProvider {
         })
     }
 
-    #[tracing::instrument(skip_all, fields(provider = "openai", model = %request.model))]
+    #[tracing::instrument(
+        skip_all,
+        fields(provider = tracing::field::Empty, model = %request.model)
+    )]
     async fn complete_stream(
         &self,
         request: CompletionRequest,
@@ -1373,6 +1408,7 @@ impl ModelProvider for OpenAiProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        tracing::Span::current().record("provider", &tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
 
         if matches!(self.stream_mode, OpenAiStreamMode::RealtimeWebSocket) {
@@ -1425,11 +1461,13 @@ impl ModelProvider for OpenAiProvider {
                     .complete_stream_with_chat_api(&request, model.to_string())
                     .await;
             }
-            return Err(utils::http_status_error_from_response(PROVIDER_ID, response).await);
+            return Err(utils::http_status_error_from_response(self.id.as_str(), response).await);
         }
 
+        utils::ensure_response_content_type(self.id.as_str(), &response, "text/event-stream")?;
+        let provider_name = self.id.clone();
         let mut events = sse::json_events(response);
-        let provider_id = ProviderId::new(PROVIDER_ID);
+        let provider_id = ProviderId::new(provider_name.as_str());
         let model_name = model;
 
         let stream = async_stream::try_stream! {
@@ -1443,7 +1481,7 @@ impl ModelProvider for OpenAiProvider {
             while let Some(event) = events.next().await {
                 let event = event?;
 
-                if let Some(err) = utils::responses_stream_error(PROVIDER_ID, &event)? {
+                if let Some(err) = utils::responses_stream_error(provider_name.as_str(), &event)? {
                     Err(err)?;
                 }
 
@@ -1465,8 +1503,8 @@ impl ModelProvider for OpenAiProvider {
                     };
                 }
 
-                if let Some(tool_event) = utils::responses_tool_event(PROVIDER_ID, &event)? {
-                    let key = tool_event.stream_key(PROVIDER_ID)?;
+                if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
+                    let key = tool_event.stream_key(provider_name.as_str())?;
 
                     let is_added = matches!(tool_event.kind, utils::ResponsesToolEventKind::Added);
                     let was_new = !pending_tool_calls.contains_key(&key);
@@ -1577,7 +1615,7 @@ impl ModelProvider for OpenAiProvider {
 
                 if let Some(raw_usage) = utils::responses_usage_value(&event) {
                     let usage = utils::parse_json_value::<OpenAiUsage>(
-                        PROVIDER_ID,
+                        provider_name.as_str(),
                         "responses stream usage",
                         raw_usage,
                     )?;
@@ -2314,6 +2352,99 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("resp_stream")
         );
+    }
+
+    #[tokio::test]
+    async fn complete_rejects_html_response_body_for_json_endpoint() {
+        let mut server = mockito::Server::new_async().await;
+        let _responses = server
+            .mock("POST", "/responses")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "text/html; charset=utf-8")
+            .with_body("<html><body>not an api</body></html>")
+            .create_async()
+            .await;
+
+        let provider =
+            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+
+        let err = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("gpt-5"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
+            })
+            .await
+            .expect_err("html payload should be rejected for json endpoint");
+
+        assert!(matches!(
+            err,
+            AppError::Provider(message)
+                if message.contains("unexpected content-type")
+                    && message.contains("text/html")
+                    && message.contains("application/json")
+        ));
+    }
+
+    #[tokio::test]
+    async fn complete_stream_rejects_html_response_body_for_sse_endpoint() {
+        let mut server = mockito::Server::new_async().await;
+        let _responses = server
+            .mock("POST", "/responses")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "text/html; charset=utf-8")
+            .with_body("<html><body>not an api</body></html>")
+            .create_async()
+            .await;
+
+        let provider =
+            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+
+        let err = match provider
+            .complete_stream(CompletionRequest {
+                model: ModelId::new("gpt-5"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
+            })
+            .await
+        {
+            Ok(_) => panic!("html payload should be rejected for sse endpoint"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            AppError::Provider(message)
+                if message.contains("unexpected content-type")
+                    && message.contains("text/html")
+                    && message.contains("text/event-stream")
+        ));
     }
 
     #[tokio::test]

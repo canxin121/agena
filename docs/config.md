@@ -73,6 +73,7 @@ agena config validate
 ```toml
 [tracing]
 filter = "info"
+database_level = "error"
 
 [telemetry]
 enabled = false
@@ -89,17 +90,20 @@ store_path = "~/.agena/auth.json"
 [ui]
 locale = "zh-CN"
 
+[runtime]
+default_agent = "build"
+
 [runtime.provider_http]
 timeout_secs = 120
 connect_timeout_secs = 15
 
 [runtime.request_retry]
-max_retries = 1
+max_retries = 5
 base_delay_ms = 250
 max_delay_ms = 2000
 
 [runtime.stream_replay]
-max_retries_after_output = 1
+max_retries_after_output = 5
 max_tracked_events = 2048
 
 [runtime.reload]
@@ -115,18 +119,24 @@ max_sessions = 128
 ttl_secs = 900
 max_bytes = 67108864
 
-[permission]
+[agents.plan]
+description = "Read-only planning agent"
+prompt = "You are a planning agent."
+allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
+mode = "all"
+
+[agents.plan.permission]
 default_read = "allow"
 default_write = "deny"
-default_external_directory = "deny"
-mode = "auto"
+default_external_directory = "ask"
+execution_mode = "ask"
 
-[[permission.bash]]
-pattern = "git *"
-mode = "allow"
-
-[[permission.bash_deny]]
-pattern = "rm -rf /*"
+# Legacy compatibility only. Prefer `[agents.<name>.permission]` for new configs.
+# [permission]
+# default_read = "allow"
+# default_write = "deny"
+# default_external_directory = "deny"
+# mode = "auto"
 
 [memory.project_instructions]
 enabled = true
@@ -369,10 +379,12 @@ filter = "info"
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `filter` | `string` | `"info"` | tracing 过滤表达式 |
+| `database_level` | `string` | `"error"` | 单独控制数据库/SQL 相关日志级别，覆盖 `sqlx`、`sea_orm`、`sea_orm_migration`；默认 `error` 不会打印每条 SQL 语句 |
 
 对应环境变量：
 
 - `AGENA_LOG`
+- `AGENA_DATABASE_LOG`
 
 ## 4.2 `[telemetry]`
 
@@ -476,14 +488,14 @@ CLI `-c` 支持：
 
 ```toml
 [runtime.request_retry]
-max_retries = 1
+max_retries = 5
 base_delay_ms = 250
 max_delay_ms = 2000
 ```
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 |---|---|---:|---|---|
-| `max_retries` | `u32` | `1` | `>= 0` | provider 请求最大重试次数 |
+| `max_retries` | `u32` | `5` | `>= 0` | provider 请求最大重试次数 |
 | `base_delay_ms` | `u64` | `250` | `>= 0` | 初始退避时间 |
 | `max_delay_ms` | `u64` | `2000` | `>= base_delay_ms` | 最大退避时间 |
 
@@ -503,13 +515,13 @@ CLI `-c` 支持：
 
 ```toml
 [runtime.stream_replay]
-max_retries_after_output = 1
+max_retries_after_output = 5
 max_tracked_events = 2048
 ```
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
-| `max_retries_after_output` | `u32` | `1` | 流式输出开始后允许的恢复重试次数 |
+| `max_retries_after_output` | `u32` | `5` | 流式输出开始后允许的恢复重试次数 |
 | `max_tracked_events` | `usize` | `2048` | 最多跟踪多少个流事件用于 replay |
 
 对应环境变量：
@@ -563,7 +575,16 @@ max_bytes = 67108864
 | `ttl_secs` | `u64` | `900` | `> 0` | session cache TTL |
 | `max_bytes` | `usize` | `67108864` | `> 0` | session cache 最大总字节数 |
 
-## 4.6 `[permission]`
+## 4.6 Legacy `[permission]`
+
+这一节描述的是旧配置的 **shared fallback policy**。新配置应优先使用
+`[agents.<name>.permission]`，把权限和 prompt / model / run defaults 一起绑定到
+具体 agent 上。
+
+- `runtime.default_agent` 会决定新的 root session 默认使用哪个 agent
+- `[agents.<name>]` 可以为单个 agent 配置 prompt / model / permission / run defaults
+- 顶层 `[permission]` 只为旧配置兼容保留；未显式配置时不会注入 agent fallback
+- 如果旧配置显式写了 `[permission]`，agent 自己的 `permission` 配置会覆盖这层 fallback
 
 ```toml
 [permission]
@@ -630,6 +651,33 @@ CLI `-c` 支持的 permission 字段只有：
 - `permission.default_external_directory`
 
 不支持通过 CLI `-c` 直接设置 `permission.mode` / bash rule 列表。
+
+## 4.6.4 Agent-first 推荐方式
+
+更推荐优先写：
+
+```toml
+[runtime]
+default_agent = "build"
+
+[agents.plan]
+description = "Read-only planning agent"
+prompt = "You are a planning agent."
+allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
+mode = "all"
+
+[agents.plan.permission]
+default_read = "allow"
+default_write = "deny"
+default_external_directory = "ask"
+execution_mode = "ask"
+```
+
+也就是：
+
+- 新配置不要再把顶层 `[permission]` 当主要入口
+- 每个 agent 的行为、提示词、工具许可与默认运行参数放进 `[agents.<name>]`
+- 用 `runtime.default_agent` 控制新 root session 的默认 agent
 
 ## 4.7 `[memory.project_instructions]`
 
@@ -1574,6 +1622,7 @@ key 的回退规则：
 | `AGENA_CONFIG` | 配置文件路径 |
 | `AGENA_AUTH_FILE` | `auth.store_path` |
 | `AGENA_LOG` | `tracing.filter` |
+| `AGENA_DATABASE_LOG` | `tracing.database_level` |
 | `AGENA_TELEMETRY_ENABLED` | `telemetry.enabled` |
 | `AGENA_OTEL_SERVICE_NAME` | `telemetry.service_name` |
 | `AGENA_OTEL_ENDPOINT` | `telemetry.otlp_endpoint` |
@@ -1653,6 +1702,7 @@ export AGENA_PROVIDER__GOOGLE_VERTEX__BASE_URL=https://us-central1-aiplatform.go
 - `auth.store_path=<path>`
 - `auth.store_backend=auto|file|keyring`
 - `tracing.filter=<value>`
+- `tracing.database_level=<value>`
 - `ui.locale=<value>`
 - `permission.default_read=allow|ask|deny`
 - `permission.default_write=allow|ask|deny`
@@ -1726,11 +1776,20 @@ base_url = "https://api.anthropic.com/v1"
 default_model = "claude-sonnet-4-6"
 api_key_env = "ANTHROPIC_API_KEY"
 
-[permission]
+[runtime]
+default_agent = "build"
+
+[agents.plan]
+description = "Read-only planning agent"
+prompt = "You are a planning agent."
+allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
+mode = "all"
+
+[agents.plan.permission]
 default_read = "allow"
 default_write = "deny"
-default_external_directory = "deny"
-mode = "ask"
+default_external_directory = "ask"
+execution_mode = "ask"
 ```
 
 ## 13. 推荐阅读顺序

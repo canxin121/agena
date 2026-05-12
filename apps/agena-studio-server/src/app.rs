@@ -1,7 +1,9 @@
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
+use agena::config::ConfigLoader;
 use agena::runtime::AgenaRuntime;
 use agena::storage::StorageConfig;
+use agena::tracing as tracing_config;
 use agena_api_server::AppState as ApiV2State;
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -14,7 +16,6 @@ use axum::{
     routing::get,
 };
 use axum_extra::extract::cookie::SameSite;
-use sea_orm::Database;
 use serde::Serialize;
 use tower_http::{
     cors::{AllowOrigin, Any, CorsLayer},
@@ -171,8 +172,12 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         .workspace_root
         .clone()
         .unwrap_or(env::current_dir().context("failed to resolve current working directory")?);
+    let tracing = ConfigLoader::default()
+        .load(&args.load_request())
+        .map(|resolution| resolution.config.tracing)
+        .unwrap_or_default();
     let db = Arc::new(
-        Database::connect(database_url.as_str())
+        tracing_config::connect_database(database_url.as_str(), &tracing)
             .await
             .with_context(|| format!("failed to connect to database {database_url}"))?,
     );

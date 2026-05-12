@@ -12,7 +12,9 @@ const props = defineProps<{
       <h3>Runtime</h3>
       <div v-if="props.runtime" class="stack">
         <div><strong>Config Found:</strong> {{ props.runtime.config_found ? 'yes' : 'no' }}</div>
-        <div><strong>Session Runtime:</strong> {{ props.runtime.session_runtime_available ? 'enabled' : 'disabled' }}</div>
+        <div>
+          <strong>Session Runtime:</strong> {{ props.runtime.session_runtime_available ? 'enabled' : 'disabled' }}
+        </div>
         <div><strong>Watch Paths:</strong> {{ props.runtime.watch_paths.length }}</div>
       </div>
     </section>
@@ -24,8 +26,12 @@ const props = defineProps<{
       </div>
     </section>
     <section class="card">
-      <h3>LSP + Skills</h3>
+      <h3>Agents + Skills</h3>
       <div v-if="props.runtime" class="stack">
+        <div><strong>Default Agent:</strong> {{ props.runtime.operator.agents.default_agent }}</div>
+        <div><strong>Agents:</strong> {{ props.runtime.operator.agents.total_count }}</div>
+        <div><strong>Primary Agents:</strong> {{ props.runtime.operator.agents.primary_count }}</div>
+        <div><strong>Subagents:</strong> {{ props.runtime.operator.agents.subagent_count }}</div>
         <div><strong>LSP Servers:</strong> {{ props.runtime.operator.lsp.server_count }}</div>
         <div><strong>Diagnostics:</strong> {{ props.runtime.operator.lsp.diagnostics_count }}</div>
         <div><strong>Skills:</strong> {{ props.runtime.operator.skills.skill_count }}</div>

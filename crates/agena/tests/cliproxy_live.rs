@@ -111,7 +111,10 @@ fn env_u64_or(key: &str, default: u64) -> u64 {
 }
 
 fn live_cache_probe_attempts() -> usize {
-    env_usize_or("AGENA_CLIPROXY_LIVE_CACHE_PROBE_ATTEMPTS", CACHE_PROBE_ATTEMPTS)
+    env_usize_or(
+        "AGENA_CLIPROXY_LIVE_CACHE_PROBE_ATTEMPTS",
+        CACHE_PROBE_ATTEMPTS,
+    )
 }
 
 fn live_cache_probe_retry_delay() -> Duration {
@@ -258,10 +261,10 @@ fn load_live_registry() -> ProviderRegistry {
 
 async fn open_live_database(path: &Path) -> DatabaseConnection {
     let url = format!("sqlite://{}?mode=rwc", path.display());
-    let db = Database::connect(url).await.expect("connect live sqlite db");
-    db::init_schema(&db)
+    let db = Database::connect(url)
         .await
-        .expect("init live sqlite schema");
+        .expect("connect live sqlite db");
+    db::init_schema(&db).await.expect("init live sqlite schema");
     db
 }
 
@@ -518,6 +521,8 @@ fn run_options(case: LiveProviderCase, system: &str, max_output_tokens: u32) -> 
         system: Some(system.to_owned()),
         temperature: None,
         max_output_tokens: Some(max_output_tokens),
+        agent_profile: None,
+        max_turn_loops: None,
     }
 }
 
@@ -567,13 +572,17 @@ async fn session_cache_probe_with_retries(
     for attempt in 1..=attempts {
         let session = manager
             .create_session(SessionCreateRequest {
-                title: format!("cliproxy cache probe {} attempt {}", case.provider_id, attempt),
+                title: format!(
+                    "cliproxy cache probe {} attempt {}",
+                    case.provider_id, attempt
+                ),
                 parent_session_id: None,
             })
             .await
             .map_err(|err| format!("create live cache probe session failed: {err}"))?;
         let nonce = unique_nonce(format!("{}-{attempt}", case.provider_id).as_str());
-        let cache_filler = cache_probe_prefix(format!("SESSION-{}-{nonce}", case.provider_id).as_str());
+        let cache_filler =
+            cache_probe_prefix(format!("SESSION-{}-{nonce}", case.provider_id).as_str());
         let first_prompt = format!("{cache_filler} Reply with exactly OK.");
         let second_prompt = "Reply with exactly OK again.";
         let first = manager
@@ -628,7 +637,12 @@ async fn assert_registry_single_hi(case: LiveProviderCase) {
     let response = registry
         .complete(&case.model_ref(), hi_request())
         .await
-        .unwrap_or_else(|err| panic!("single hi completion failed for {}: {err}", case.provider_id));
+        .unwrap_or_else(|err| {
+            panic!(
+                "single hi completion failed for {}: {err}",
+                case.provider_id
+            )
+        });
     assert_eq!(response.provider_id.as_str(), case.provider_id);
     assert_eq!(response.model.as_str(), LIVE_MODEL);
     assert_message_has_reply_text(
@@ -638,7 +652,11 @@ async fn assert_registry_single_hi(case: LiveProviderCase) {
     let usage = response
         .usage
         .unwrap_or_else(|| panic!("{} single hi should carry usage", case.provider_id));
-    assert!(usage.input_tokens > 0, "{} input tokens should be > 0", case.provider_id);
+    assert!(
+        usage.input_tokens > 0,
+        "{} input tokens should be > 0",
+        case.provider_id
+    );
     assert!(
         usage.output_tokens > 0,
         "{} output tokens should be > 0",
@@ -653,7 +671,11 @@ async fn assert_registry_stream_hi(case: LiveProviderCase) {
         .await
         .unwrap_or_else(|err| panic!("stream hi failed for {}: {err}", case.provider_id));
     let (text, completed) = collect_stream_text(stream).await;
-    assert!(completed, "{} stream should emit Completed", case.provider_id);
+    assert!(
+        completed,
+        "{} stream should emit Completed",
+        case.provider_id
+    );
     assert_message_has_reply_text(
         format!("{} stream hi", case.provider_id).as_str(),
         text.as_str(),
@@ -679,9 +701,10 @@ async fn assert_registry_tool_call(case: LiveProviderCase) {
             ..
         } => {
             assert_eq!(name, "echo", "{} tool name mismatch", case.provider_id);
-            let args: serde_json::Value = serde_json::from_str(arguments_json).unwrap_or_else(|err| {
-                panic!("{} tool args should be valid JSON: {err}", case.provider_id)
-            });
+            let args: serde_json::Value =
+                serde_json::from_str(arguments_json).unwrap_or_else(|err| {
+                    panic!("{} tool args should be valid JSON: {err}", case.provider_id)
+                });
             let echoed = args
                 .get("value")
                 .and_then(|value| value.as_str())
@@ -716,7 +739,12 @@ async fn assert_session_single_hi(case: LiveProviderCase) {
             parts: vec![PartContent::text("hi")],
         })
         .await
-        .unwrap_or_else(|err| panic!("submit single hi session turn failed for {}: {err}", case.provider_id));
+        .unwrap_or_else(|err| {
+            panic!(
+                "submit single hi session turn failed for {}: {err}",
+                case.provider_id
+            )
+        });
 
     assert_session_has_nonempty_assistant_reply(
         format!("{} single hi session", case.provider_id).as_str(),
@@ -726,7 +754,9 @@ async fn assert_session_single_hi(case: LiveProviderCase) {
 
 async fn assert_session_multi_turn(case: LiveProviderCase) {
     let workspace = tempfile::tempdir().expect("create workspace tempdir");
-    let db_path = workspace.path().join(format!("{}-multi-turn.db", case.slug));
+    let db_path = workspace
+        .path()
+        .join(format!("{}-multi-turn.db", case.slug));
     let db = open_live_database(&db_path).await;
     let manager = build_live_session_manager(workspace.path(), db).await;
 
@@ -811,7 +841,9 @@ async fn assert_registry_cache_hit(case: LiveProviderCase) {
 
 async fn assert_session_cache_hit(case: LiveProviderCase) {
     let workspace = tempfile::tempdir().expect("create workspace tempdir");
-    let db_path = workspace.path().join(format!("{}-session-cache.db", case.slug));
+    let db_path = workspace
+        .path()
+        .join(format!("{}-session-cache.db", case.slug));
     let db = open_live_database(&db_path).await;
     let manager = build_live_session_manager(workspace.path(), db).await;
 
@@ -871,7 +903,12 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
             parts: vec![PartContent::text("hi from lifecycle turn one")],
         })
         .await
-        .unwrap_or_else(|err| panic!("first lifecycle turn failed for {}: {err}", case.provider_id));
+        .unwrap_or_else(|err| {
+            panic!(
+                "first lifecycle turn failed for {}: {err}",
+                case.provider_id
+            )
+        });
     assert_session_has_nonempty_assistant_reply(
         format!("{} lifecycle first turn", case.provider_id).as_str(),
         &first_turn,
@@ -889,7 +926,12 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
             parts: vec![PartContent::text("this is lifecycle turn two")],
         })
         .await
-        .unwrap_or_else(|err| panic!("second lifecycle turn failed for {}: {err}", case.provider_id));
+        .unwrap_or_else(|err| {
+            panic!(
+                "second lifecycle turn failed for {}: {err}",
+                case.provider_id
+            )
+        });
     assert_session_has_nonempty_assistant_reply(
         format!("{} lifecycle second turn", case.provider_id).as_str(),
         &second_turn,
@@ -917,7 +959,12 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
             expected_version: None,
         })
         .await
-        .unwrap_or_else(|err| panic!("fork lifecycle session failed for {}: {err}", case.provider_id));
+        .unwrap_or_else(|err| {
+            panic!(
+                "fork lifecycle session failed for {}: {err}",
+                case.provider_id
+            )
+        });
     assert_eq!(forked.parent_id, Some(source.id));
     assert_eq!(forked.root_id, source.root_id);
     assert!(
@@ -976,7 +1023,12 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
             expected_version: None,
         })
         .await
-        .unwrap_or_else(|err| panic!("rewind lifecycle session failed for {}: {err}", case.provider_id));
+        .unwrap_or_else(|err| {
+            panic!(
+                "rewind lifecycle session failed for {}: {err}",
+                case.provider_id
+            )
+        });
     assert!(
         !rewound
             .messages
@@ -1011,7 +1063,12 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
             expected_version: None,
         })
         .await
-        .unwrap_or_else(|err| panic!("unrewind lifecycle session failed for {}: {err}", case.provider_id));
+        .unwrap_or_else(|err| {
+            panic!(
+                "unrewind lifecycle session failed for {}: {err}",
+                case.provider_id
+            )
+        });
     assert!(
         unrewound
             .messages
@@ -1032,10 +1089,12 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
         .await
         .expect("resume live event publisher from store");
 
-    let reloaded = second
-        .get_session(source.id)
-        .await
-        .unwrap_or_else(|err| panic!("reload lifecycle session after resume failed for {}: {err}", case.provider_id));
+    let reloaded = second.get_session(source.id).await.unwrap_or_else(|err| {
+        panic!(
+            "reload lifecycle session after resume failed for {}: {err}",
+            case.provider_id
+        )
+    });
     assert!(
         reloaded
             .messages
@@ -1052,7 +1111,12 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
             options: run_options(case, "Reply briefly and clearly.", 64),
         })
         .await
-        .unwrap_or_else(|err| panic!("continue lifecycle session failed for {}: {err}", case.provider_id));
+        .unwrap_or_else(|err| {
+            panic!(
+                "continue lifecycle session failed for {}: {err}",
+                case.provider_id
+            )
+        });
     assert_session_has_nonempty_assistant_reply(
         format!("{} lifecycle continue after resume", case.provider_id).as_str(),
         &continued,

@@ -29,7 +29,7 @@ use crate::{
     agent::Agent,
     config::{
         ConfigEnvironment, ConfigLoader, ConfigOutputFormat, ConfigOverride, LoadConfigRequest,
-        ProcessEnvironment,
+        ProcessEnvironment, TracingConfig,
     },
     db::{
         crud::{permission_rule as permission_rule_crud, workspace as workspace_crud},
@@ -60,6 +60,7 @@ use crate::{
     },
     storage::StorageConfig,
     tool::{ApplyPatchExecution, ToolExecutor},
+    tracing as tracing_config,
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -104,6 +105,7 @@ pub struct AgenaCli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgenaCommand {
     AppServer(AppServerArgs),
+    Agents(AgentsCommand),
     Apply(ApplyArgs),
     Auth(AuthCommand),
     Completion(CompletionArgs),
@@ -304,6 +306,12 @@ pub struct ProviderCommand {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct AgentsCommand {
+    #[command(subcommand)]
+    pub command: Option<AgentsSubcommand>,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct MemoryCommand {
     #[command(subcommand)]
     pub command: Option<MemorySubcommand>,
@@ -487,6 +495,11 @@ pub enum ProviderSubcommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+pub enum AgentsSubcommand {
+    List(AgentsListArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
 pub enum MemorySubcommand {
     List(MemoryListArgs),
     Forget(MemoryForgetArgs),
@@ -631,6 +644,8 @@ pub struct ResumeArgs {
     pub session_id: Option<i64>,
     #[arg(long)]
     pub last: bool,
+    #[arg(long)]
+    pub agent: Option<String>,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
     pub format: ConfigOutputFormat,
 }
@@ -646,6 +661,8 @@ pub struct ContinueArgs {
     pub session_id: Option<i64>,
     #[arg(long)]
     pub last: bool,
+    #[arg(long)]
+    pub agent: Option<String>,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -677,6 +694,8 @@ pub struct ExecArgs {
     #[arg(long = "workspace", alias = "cwd")]
     pub workspace: Option<PathBuf>,
     #[arg(long)]
+    pub agent: Option<String>,
+    #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
     pub temperature: Option<f32>,
@@ -693,6 +712,8 @@ pub struct ReviewArgs {
     pub workspace: Option<PathBuf>,
     #[arg(long, default_value = "main")]
     pub base: String,
+    #[arg(long)]
+    pub agent: Option<String>,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -740,6 +761,12 @@ pub struct ProviderCapabilitiesArgs {
     pub target: String,
     #[arg(long)]
     pub model: Option<String>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AgentsListArgs {
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
     pub format: ConfigOutputFormat,
 }
@@ -1022,6 +1049,16 @@ struct ProviderCapabilitiesOutput {
 }
 
 #[derive(Debug, Serialize)]
+struct AgentsListOutput {
+    default_agent: String,
+    total_count: usize,
+    primary_count: usize,
+    subagent_count: usize,
+    hidden_count: usize,
+    agents: Vec<crate::agents::AgentDescriptor>,
+}
+
+#[derive(Debug, Serialize)]
 struct PluginStatusOutput {
     entries: Vec<crate::plugin::status::PluginStatus>,
 }
@@ -1038,6 +1075,13 @@ struct PluginLogsOutput {
 }
 
 impl AgenaCli {
+    pub fn resolved_tracing_config(&self) -> TracingConfig {
+        ConfigLoader::default()
+            .load(&self.load_request())
+            .map(|resolution| resolution.config.tracing)
+            .unwrap_or_default()
+    }
+
     pub async fn run(
         self,
         tracing_reload_handle: Option<TracingFilterReloadHandle>,
@@ -1048,6 +1092,7 @@ impl AgenaCli {
             Some(AgenaCommand::AppServer(_)) => Err(AppError::Config(
                 "app-server command must be handled by the agena-cli binary".to_owned(),
             )),
+            Some(AgenaCommand::Agents(command)) => self.run_agents(command).await,
             Some(AgenaCommand::Apply(args)) => self.run_apply(args),
             Some(AgenaCommand::Auth(command)) => self.run_auth(loader, command).await,
             Some(AgenaCommand::Completion(args)) => self.run_completion(args),
@@ -1537,6 +1582,12 @@ impl AgenaCli {
         Ok(())
     }
 
+    async fn run_agents(self, command: AgentsCommand) -> Result<(), AppError> {
+        let output = self.render_agents_command(command).await?;
+        println!("{output}");
+        Ok(())
+    }
+
     fn run_memory(self, command: MemoryCommand) -> Result<(), AppError> {
         let output = self.render_memory_command(command)?;
         println!("{output}");
@@ -1659,7 +1710,10 @@ impl AgenaCli {
             }
             ConfigSubcommand::Validate => {
                 let resolution = loader.load(&self.load_request())?;
-                println!("config valid: path={}", resolution.meta.config_path.display());
+                println!(
+                    "config valid: path={}",
+                    resolution.meta.config_path.display()
+                );
             }
         }
 
@@ -1878,7 +1932,28 @@ impl AgenaCli {
             .session_manager()
             .ok_or_else(session_storage_error)?;
         let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
-        let session = manager.get_session(session_id).await?;
+        let session = if args.agent.is_some() {
+            manager
+                .continue_session(SessionContinueRequest {
+                    session_id,
+                    options: SessionRunOptions {
+                        model: default_model(&runtime)?,
+                        system: None,
+                        temperature: None,
+                        max_output_tokens: None,
+                        agent_profile: args
+                            .agent
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned),
+                        max_turn_loops: None,
+                    },
+                })
+                .await?
+        } else {
+            manager.get_session(session_id).await?
+        };
         let latest_event_seq = latest_event_seq(&manager, session.id).await?;
         render_serialized(
             args.format,
@@ -1934,7 +2009,11 @@ impl AgenaCli {
         };
         let database_url = storage.resolve_url()?;
         StorageConfig::ensure_parent(database_url.as_str())?;
-        let db = sea_orm::Database::connect(database_url.as_str()).await?;
+        let db = tracing_config::connect_database(
+            database_url.as_str(),
+            &self.resolved_tracing_config(),
+        )
+        .await?;
         init_schema(&db).await?;
 
         let mut query = entities::permission_rule::Entity::find()
@@ -1973,7 +2052,11 @@ impl AgenaCli {
         };
         let database_url = storage.resolve_url()?;
         StorageConfig::ensure_parent(database_url.as_str())?;
-        let db = sea_orm::Database::connect(database_url.as_str()).await?;
+        let db = tracing_config::connect_database(
+            database_url.as_str(),
+            &self.resolved_tracing_config(),
+        )
+        .await?;
         init_schema(&db).await?;
         let workspace_root = self.resolve_workspace_root(None)?;
         let created =
@@ -1991,7 +2074,11 @@ impl AgenaCli {
         };
         let database_url = storage.resolve_url()?;
         StorageConfig::ensure_parent(database_url.as_str())?;
-        let db = sea_orm::Database::connect(database_url.as_str()).await?;
+        let db = tracing_config::connect_database(
+            database_url.as_str(),
+            &self.resolved_tracing_config(),
+        )
+        .await?;
         init_schema(&db).await?;
         let workspace_root = self.resolve_workspace_root(None)?;
         let updated = replace_permission_rule_from_args(
@@ -2014,7 +2101,11 @@ impl AgenaCli {
         };
         let database_url = storage.resolve_url()?;
         StorageConfig::ensure_parent(database_url.as_str())?;
-        let db = sea_orm::Database::connect(database_url.as_str()).await?;
+        let db = tracing_config::connect_database(
+            database_url.as_str(),
+            &self.resolved_tracing_config(),
+        )
+        .await?;
         init_schema(&db).await?;
         let updated = permission_rule_crud::revoke_rule(
             &db,
@@ -2044,7 +2135,7 @@ impl AgenaCli {
         let session = manager
             .reply_permission(crate::session::SessionPermissionReplyRequest {
                 session_id,
-                options: resolve_run_options(&runtime, None, None, None)?,
+                options: resolve_run_options(&runtime, None, None, None, None)?,
                 reply: PermissionReply {
                     request_id: args.request_id,
                     kind: permission_reply_kind_from_arg(args.kind),
@@ -2356,6 +2447,7 @@ impl AgenaCli {
             args.prompt.as_str(),
             title_from_prompt(args.prompt.as_str()),
             args.model.as_deref(),
+            args.agent.as_deref(),
             args.temperature,
             args.max_output_tokens,
             args.json,
@@ -2370,6 +2462,7 @@ impl AgenaCli {
             prompt.as_str(),
             format!("Review changes against {}", args.base),
             args.model.as_deref(),
+            args.agent.as_deref(),
             args.temperature,
             args.max_output_tokens,
             args.json,
@@ -2384,6 +2477,7 @@ impl AgenaCli {
         prompt: &str,
         title: String,
         model: Option<&str>,
+        agent_profile: Option<&str>,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
         json: bool,
@@ -2392,7 +2486,13 @@ impl AgenaCli {
         let manager = runtime
             .session_manager()
             .ok_or_else(session_storage_error)?;
-        let options = resolve_run_options(&runtime, model, temperature, max_output_tokens)?;
+        let options = resolve_run_options(
+            &runtime,
+            model,
+            agent_profile,
+            temperature,
+            max_output_tokens,
+        )?;
         let created = manager
             .create_session(SessionCreateRequest {
                 title,
@@ -2564,6 +2664,55 @@ impl AgenaCli {
                     },
                 )
             }
+        }
+    }
+
+    async fn render_agents_command(&self, command: AgentsCommand) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let snapshot = runtime.current_snapshot();
+        let resolution = snapshot.config_resolution();
+        let mut agents = snapshot.agents().list_descriptors();
+        agents.sort_by(|left, right| left.name.cmp(&right.name));
+        let default_agent = resolution
+            .config
+            .runtime
+            .default_agent
+            .clone()
+            .filter(|name| agents.iter().any(|entry| entry.name == *name))
+            .or_else(|| {
+                agents
+                    .iter()
+                    .find(|entry| entry.mode.allows_root() && !entry.hidden)
+                    .map(|entry| entry.name.clone())
+            })
+            .unwrap_or_else(|| "none".to_string());
+        let total_count = agents.len();
+        let primary_count = agents
+            .iter()
+            .filter(|entry| entry.mode.allows_root())
+            .count();
+        let subagent_count = agents
+            .iter()
+            .filter(|entry| entry.mode.allows_subagent())
+            .count();
+        let hidden_count = agents.iter().filter(|entry| entry.hidden).count();
+
+        match command
+            .command
+            .unwrap_or(AgentsSubcommand::List(AgentsListArgs {
+                format: ConfigOutputFormat::Toml,
+            })) {
+            AgentsSubcommand::List(args) => render_serialized(
+                args.format,
+                &AgentsListOutput {
+                    default_agent,
+                    total_count,
+                    primary_count,
+                    subagent_count,
+                    hidden_count,
+                    agents,
+                },
+            ),
         }
     }
 
@@ -3420,12 +3569,20 @@ fn resolve_continue_options(
         system: None,
         temperature: args.temperature,
         max_output_tokens: args.max_output_tokens,
+        agent_profile: args
+            .agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        max_turn_loops: None,
     })
 }
 
 fn resolve_run_options(
     runtime: &AgenaRuntime,
     model: Option<&str>,
+    agent_profile: Option<&str>,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
 ) -> Result<SessionRunOptions, AppError> {
@@ -3442,6 +3599,11 @@ fn resolve_run_options(
         system: None,
         temperature,
         max_output_tokens,
+        agent_profile: agent_profile
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        max_turn_loops: None,
     })
 }
 
@@ -3864,6 +4026,7 @@ store_path = "{}"
             .render_resume_command(ResumeArgs {
                 session_id: None,
                 last: true,
+                agent: None,
                 format: ConfigOutputFormat::Json,
             })
             .await
@@ -4306,9 +4469,10 @@ store_path = "{}"
         };
         let database_url = storage.resolve_url().expect("db url should resolve");
         StorageConfig::ensure_parent(database_url.as_str()).expect("parent should exist");
-        let db = sea_orm::Database::connect(database_url.as_str())
-            .await
-            .expect("db should connect");
+        let db =
+            tracing_config::connect_database(database_url.as_str(), &cli.resolved_tracing_config())
+                .await
+                .expect("db should connect");
         init_schema(&db).await.expect("schema should init");
         crate::db::crud::permission_rule::upsert_rule(
             &db,
@@ -4695,6 +4859,53 @@ api_key_env = "OPENAI_API_KEY"
                 && item["default_model"] == "gpt-5"
                 && item["default_model_ref"] == "openai/gpt-5"
         }));
+    }
+
+    #[tokio::test]
+    async fn agents_list_renders_runtime_inventory() {
+        let path = write_temp_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-5.4"
+api_key = "dummy"
+"#,
+        );
+        let cli = AgenaCli {
+            config: Some(path),
+            overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
+            command: None,
+        };
+
+        let output = cli
+            .render_agents_command(AgentsCommand {
+                command: Some(AgentsSubcommand::List(AgentsListArgs {
+                    format: ConfigOutputFormat::Json,
+                })),
+            })
+            .await
+            .expect("agents list should render");
+        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
+
+        assert_eq!(value["default_agent"], "build");
+        assert!(value["total_count"].as_u64().unwrap_or(0) >= 1);
+        assert!(
+            value["agents"]
+                .as_array()
+                .expect("agents should be array")
+                .iter()
+                .any(|agent| agent["name"] == "build")
+        );
+        assert!(
+            value["agents"]
+                .as_array()
+                .expect("agents should be array")
+                .iter()
+                .any(|agent| agent["name"] == "scout")
+        );
     }
 
     #[test]

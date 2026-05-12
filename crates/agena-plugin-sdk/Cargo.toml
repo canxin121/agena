@@ -8,6 +8,7 @@ description = "Agena plugin SDK: write plugins as async traits, ship them as in-
 [dependencies]
 async-trait = { workspace = true }
 bitflags = { workspace = true }
+indexmap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

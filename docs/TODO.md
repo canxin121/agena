@@ -151,9 +151,10 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
 
 ### P1：Agent 协作（4 周）
 
-- [ ] **#6 Subagent 调度协议完善（注册表已完成 ✅）**
+- [ ] **#6 Subagent 调度协议完善（基础调度已接通 ✅）**
   - [x] **自定义 subagent profiles 注册表**（`crates/agena/src/agents/`）：扫 `.agena/agents/*.md`（向上 walk）+ `~/.agena/agents/*.md`，frontmatter 支持 `description / allowed_tools / model / aliases`，body 即 system prompt；Project > User > Builtin 优先级，aliases 解析为同一 profile，malformed 文件 warn 不阻断；8 单测覆盖
-  - 待办：`subtask.rs` 接入 `SubagentRegistry`（`Task` 工具按 `subagent_type` 名字解析为 profile）；parent → child 上下文裁剪、子代理结果回流摘要、超时/中断；内置 explorer / planner / reviewer / refactorer 模板（bundled）
+  - [x] `Task` / `spawn_subtask` 已接入 `SubagentRegistry`：支持内置 profile、`.agena/agents/*.md`、`~/.agena/agents/*.md` 与 plugin `host/agent.*` 运行时注册；profile 的 `prompt / allowed_tools / model / aliases` 会注入子 session 执行上下文
+  - 待办：parent → child 上下文裁剪、子代理结果回流摘要、超时/中断；更多内置模板与 UI 入口
 
 - [ ] **#7 后台任务 + 推送通知通道**
   - `monitor_tool.rs` 加桌面通知后端（notify-rust）+ 手机推送（webhook 可配）

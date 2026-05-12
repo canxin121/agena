@@ -13,8 +13,7 @@ use crate::message::FirstPartyToolInput;
 
 pub use request::{
     DecisionTrace, DecisionTraceStep, PendingPermission, PermissionAction, PermissionReply,
-    PermissionReplyKind, PermissionRequest, PermissionRiskLevel, PermissionScope,
-    PolicySourceKind,
+    PermissionReplyKind, PermissionRequest, PermissionRiskLevel, PermissionScope, PolicySourceKind,
 };
 pub use resolver::{
     PermissionResolution, PermissionResolutionSource, resolve_permission_with_persisted_rule,
@@ -71,12 +70,13 @@ pub struct ToolPermissionPolicy {
     tool_modes: HashMap<String, PermissionMode>,
     bash_rules: Vec<BashPatternRule>,
     bash_deny_rules: Vec<BashPatternRule>,
+    bash_overlay_rules: Vec<BashPatternRule>,
     execution_mode: ExecutionMode,
 }
 
 #[derive(Debug, Clone)]
 pub struct BashPatternRule {
-    matcher: GlobMatcher,
+    matcher: CommandPatternMatcher,
     pattern: String,
     mode: PermissionMode,
 }
@@ -92,10 +92,19 @@ impl BashPatternRule {
             source,
         })?;
         Ok(Self {
-            matcher: glob.compile_matcher(),
+            matcher: CommandPatternMatcher::Glob(glob.compile_matcher()),
             pattern,
             mode,
         })
+    }
+
+    pub fn new_wildcard(pattern: impl Into<String>, mode: PermissionMode) -> Self {
+        let pattern = pattern.into();
+        Self {
+            matcher: CommandPatternMatcher::Wildcard(WildcardPattern::new(&pattern)),
+            pattern,
+            mode,
+        }
     }
 
     pub fn pattern(&self) -> &str {
@@ -105,6 +114,97 @@ impl BashPatternRule {
     pub fn mode(&self) -> PermissionMode {
         self.mode
     }
+
+    fn matches(&self, input: &str) -> bool {
+        self.matcher.matches(input)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum CommandPatternMatcher {
+    Glob(GlobMatcher),
+    Wildcard(WildcardPattern),
+}
+
+impl CommandPatternMatcher {
+    fn matches(&self, input: &str) -> bool {
+        match self {
+            Self::Glob(glob) => glob.is_match(input),
+            Self::Wildcard(pattern) => pattern.matches(input),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WildcardPattern {
+    pattern: String,
+    optional_prefix: Option<String>,
+}
+
+impl WildcardPattern {
+    fn new(pattern: impl Into<String>) -> Self {
+        let mut pattern = pattern.into().replace('\\', "/");
+        if cfg!(windows) {
+            pattern.make_ascii_lowercase();
+        }
+        let optional_prefix = pattern.strip_suffix(" *").map(ToOwned::to_owned);
+        Self {
+            pattern,
+            optional_prefix,
+        }
+    }
+
+    fn matches(&self, input: &str) -> bool {
+        let mut normalized = input.replace('\\', "/");
+        if cfg!(windows) {
+            normalized.make_ascii_lowercase();
+        }
+        self.optional_prefix
+            .as_ref()
+            .is_some_and(|prefix| wildcard_match(prefix, &normalized))
+            || wildcard_match(&self.pattern, &normalized)
+    }
+}
+
+fn wildcard_match(pattern: &str, input: &str) -> bool {
+    let pattern = pattern.chars().collect::<Vec<_>>();
+    let input = input.chars().collect::<Vec<_>>();
+    let mut pattern_index = 0usize;
+    let mut input_index = 0usize;
+    let mut star_index = None;
+    let mut star_input_index = 0usize;
+
+    while input_index < input.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == '?' || pattern[pattern_index] == input[input_index])
+        {
+            pattern_index += 1;
+            input_index += 1;
+            continue;
+        }
+
+        if pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            star_input_index = input_index;
+            continue;
+        }
+
+        if let Some(saved_star_index) = star_index {
+            pattern_index = saved_star_index + 1;
+            star_input_index += 1;
+            input_index = star_input_index;
+            continue;
+        }
+
+        return false;
+    }
+
+    while pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+        pattern_index += 1;
+    }
+
+    pattern_index == pattern.len()
 }
 
 pub fn bash_rule_qualifier(command: &str, rules: &[BashPatternRule]) -> Option<String> {
@@ -114,7 +214,7 @@ pub fn bash_rule_qualifier(command: &str, rules: &[BashPatternRule]) -> Option<S
     }
     rules
         .iter()
-        .find(|rule| rule.matcher.is_match(normalized))
+        .find(|rule| rule.matches(normalized))
         .map(|rule| rule.pattern.clone())
 }
 
@@ -129,9 +229,22 @@ pub fn bash_permission_qualifier(
     policy
         .and_then(|policy| {
             bash_rule_qualifier(normalized, policy.bash_deny_rules())
+                .or_else(|| bash_rule_qualifier_reverse(normalized, policy.bash_overlay_rules()))
                 .or_else(|| bash_rule_qualifier(normalized, policy.bash_rules()))
         })
         .or_else(|| Some(normalized.to_string()))
+}
+
+fn bash_rule_qualifier_reverse(command: &str, rules: &[BashPatternRule]) -> Option<String> {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    rules
+        .iter()
+        .rev()
+        .find(|rule| rule.matches(normalized))
+        .map(|rule| rule.pattern.clone())
 }
 
 pub fn builtin_tool_action(
@@ -156,6 +269,7 @@ impl ToolPermissionPolicy {
             tool_modes: HashMap::new(),
             bash_rules: Vec::new(),
             bash_deny_rules: Vec::new(),
+            bash_overlay_rules: Vec::new(),
             execution_mode: ExecutionMode::Auto,
         }
     }
@@ -216,12 +330,30 @@ impl ToolPermissionPolicy {
         Ok(self)
     }
 
+    /// Append an overlay bash command pattern rule using opencode-style
+    /// wildcard semantics. These rules are evaluated after unconditional deny
+    /// patterns but before the base `bash_rules`, and the last matching overlay
+    /// rule wins.
+    pub fn with_bash_overlay_rule(
+        mut self,
+        pattern: impl Into<String>,
+        mode: PermissionMode,
+    ) -> Self {
+        self.bash_overlay_rules
+            .push(BashPatternRule::new_wildcard(pattern, mode));
+        self
+    }
+
     pub fn bash_rules(&self) -> &[BashPatternRule] {
         &self.bash_rules
     }
 
     pub fn bash_deny_rules(&self) -> &[BashPatternRule] {
         &self.bash_deny_rules
+    }
+
+    pub fn bash_overlay_rules(&self) -> &[BashPatternRule] {
+        &self.bash_overlay_rules
     }
 
     pub fn check_first_party(&self, input: &FirstPartyToolInput) -> PermissionDecision {
@@ -256,6 +388,9 @@ impl ToolPermissionPolicy {
             if let Some(decision) = self.evaluate_bash_deny(command) {
                 return decision;
             }
+            if let Some(decision) = self.evaluate_bash_overlay_pattern(command) {
+                return self.apply_execution_mode(name, sensitive, decision);
+            }
             if let Some(decision) = self.evaluate_bash_pattern(command) {
                 return self.apply_execution_mode(name, sensitive, decision);
             }
@@ -287,7 +422,35 @@ impl ToolPermissionPolicy {
             return None;
         }
         for rule in &self.bash_rules {
-            if rule.matcher.is_match(normalized) {
+            if rule.matches(normalized) {
+                let decision = match rule.mode {
+                    PermissionMode::Allow => PermissionDecision::Allow,
+                    PermissionMode::Ask => PermissionDecision::Ask {
+                        reason: format!(
+                            "bash command matches `{}` and requires confirmation",
+                            rule.pattern
+                        ),
+                    },
+                    PermissionMode::Deny => PermissionDecision::Deny {
+                        reason: format!(
+                            "bash command matches `{}` and is denied by policy",
+                            rule.pattern
+                        ),
+                    },
+                };
+                return Some(decision);
+            }
+        }
+        None
+    }
+
+    fn evaluate_bash_overlay_pattern(&self, command: &str) -> Option<PermissionDecision> {
+        let normalized = command.trim();
+        if normalized.is_empty() {
+            return None;
+        }
+        for rule in self.bash_overlay_rules.iter().rev() {
+            if rule.matches(normalized) {
                 let decision = match rule.mode {
                     PermissionMode::Allow => PermissionDecision::Allow,
                     PermissionMode::Ask => PermissionDecision::Ask {
@@ -315,7 +478,7 @@ impl ToolPermissionPolicy {
             return None;
         }
         for rule in &self.bash_deny_rules {
-            if rule.matcher.is_match(normalized) {
+            if rule.matches(normalized) {
                 return Some(PermissionDecision::Deny {
                     reason: format!(
                         "bash command matches deny pattern `{}` and is unconditionally blocked",
@@ -405,6 +568,16 @@ impl PermissionPolicy {
             default_external_directory: PermissionMode::Allow,
             rules: Vec::new(),
         }
+    }
+
+    pub fn with_default_read(mut self, mode: PermissionMode) -> Self {
+        self.default_read = mode;
+        self
+    }
+
+    pub fn with_default_write(mut self, mode: PermissionMode) -> Self {
+        self.default_write = mode;
+        self
     }
 
     pub fn with_external_directory_default(mut self, mode: PermissionMode) -> Self {
@@ -601,6 +774,20 @@ impl PermissionRule {
         })
     }
 
+    pub fn path_wildcard(
+        selector: AccessSelector,
+        mode: PermissionMode,
+        pattern: impl Into<String>,
+    ) -> Self {
+        let pattern = pattern.into();
+        Self {
+            selector,
+            mode,
+            matcher: RuleMatcher::PathWildcard(WildcardPattern::new(&pattern)),
+            description: format!("matched path wildcard: {pattern}"),
+        }
+    }
+
     fn matches_selector(&self, access: AccessKind) -> bool {
         matches!(
             (self.selector, access),
@@ -622,6 +809,7 @@ enum RuleMatcher {
     AbsoluteGlob(GlobMatcher),
     WorkspaceGlob(GlobMatcher),
     ExternalAbsoluteGlob(GlobMatcher),
+    PathWildcard(WildcardPattern),
 }
 
 impl RuleMatcher {
@@ -637,6 +825,11 @@ impl RuleMatcher {
             Self::ExternalAbsoluteGlob(glob) => {
                 !ctx.in_workspace && glob.is_match(&ctx.absolute_norm)
             }
+            Self::PathWildcard(pattern) => pattern.matches(
+                ctx.workspace_relative_norm
+                    .as_deref()
+                    .unwrap_or(ctx.absolute_norm.as_str()),
+            ),
         }
     }
 }

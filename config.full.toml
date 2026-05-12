@@ -1,5 +1,6 @@
 [tracing]
 filter = "info"
+database_level = "error"
 
 [telemetry]
 enabled = false
@@ -11,17 +12,22 @@ service_name = "agena"
 store_backend = "auto"
 # store_path = "~/.agena/auth.json"
 
+[runtime]
+# Primary agent for new root sessions. If omitted, Agena now defaults to the
+# built-in `build` agent.
+default_agent = "build"
+
 [runtime.provider_http]
 timeout_secs = 120
 connect_timeout_secs = 15
 
 [runtime.request_retry]
-max_retries = 1
+max_retries = 5
 base_delay_ms = 250
 max_delay_ms = 2000
 
 [runtime.stream_replay]
-max_retries_after_output = 1
+max_retries_after_output = 5
 max_tracked_events = 2048
 
 [runtime.reload]
@@ -37,22 +43,37 @@ max_sessions = 128
 ttl_secs = 900
 max_bytes = 67108864
 
-[permission]
-# Path permissions apply to first-party tools.
+[agents.plan]
+description = "Read-only planning agent"
+prompt = "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable."
+allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
+mode = "all"
+
+[agents.plan.permission]
 default_read = "allow"
 default_write = "deny"
-default_external_directory = "deny"
+default_external_directory = "ask"
+execution_mode = "ask"
 
-# `auto` preserves static allow/deny defaults; `ask` upgrades mutable tool
-# decisions like bash/apply_patch into interactive approval.
-mode = "auto"
+[agents.plan.permission.tools]
+enter_plan_mode = "allow"
+exit_plan_mode = "allow"
+todo_write = "allow"
 
-# First matching bash rule wins before the execution mode fallback.
+# Legacy compatibility only: old top-level `[permission]` configs still load
+# as a shared fallback, but new configs should put permissions on agents:
+# `[agents.<name>.permission]`.
+#
+# [permission]
+# default_read = "allow"
+# default_write = "deny"
+# default_external_directory = "deny"
+# mode = "auto"
+#
 # [[permission.bash]]
 # pattern = "git status*"
 # mode = "allow"
-
-# Hard deny patterns always win.
+#
 # [[permission.bash_deny]]
 # pattern = "rm -rf /*"
 

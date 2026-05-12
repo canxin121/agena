@@ -33,6 +33,7 @@ impl<S: AuthStore> AuthManager<S> {
     }
 
     pub fn set_auth_data(&self, provider_id: &str, auth: AuthData) -> Result<(), AppError> {
+        validate_auth_data(provider_id, &auth)?;
         self.store.set(provider_id, auth)
     }
 
@@ -83,13 +84,14 @@ impl<S: AuthStore> AuthManager<S> {
             redirect_uri.as_str(),
         )
         .await?;
-        let auth = AuthData::OAuth {
-            refresh: token.refresh,
-            access: token.access,
-            expires_at_ms: token.expires_at_ms,
-            account_id: token.account_id,
-            enterprise_url: None,
-        };
+        let auth = oauth_auth_data(
+            "openai",
+            token.refresh,
+            token.access,
+            token.expires_at_ms,
+            token.account_id,
+            None,
+        )?;
         self.store.set("openai", auth.clone())?;
         Ok(auth)
     }
@@ -125,13 +127,14 @@ impl<S: AuthStore> AuthManager<S> {
             return Ok(None);
         };
 
-        let auth = AuthData::OAuth {
-            refresh: token.refresh,
-            access: token.access,
-            expires_at_ms: token.expires_at_ms,
-            account_id: token.account_id,
-            enterprise_url: None,
-        };
+        let auth = oauth_auth_data(
+            "openai",
+            token.refresh,
+            token.access,
+            token.expires_at_ms,
+            token.account_id,
+            None,
+        )?;
         self.store.set("openai", auth.clone())?;
         Ok(Some(auth))
     }
@@ -149,13 +152,14 @@ impl<S: AuthStore> AuthManager<S> {
         };
 
         let token = refresh_openai_token(refresh.as_str()).await?;
-        let auth = AuthData::OAuth {
-            refresh: token.refresh,
-            access: token.access,
-            expires_at_ms: token.expires_at_ms,
-            account_id: token.account_id,
+        let auth = oauth_auth_data(
+            "openai",
+            token.refresh,
+            token.access,
+            token.expires_at_ms,
+            token.account_id,
             enterprise_url,
-        };
+        )?;
         self.store.set("openai", auth.clone())?;
         Ok(auth)
     }
@@ -196,13 +200,14 @@ impl<S: AuthStore> AuthManager<S> {
             return Ok(None);
         };
 
-        let auth = AuthData::OAuth {
-            refresh: token.refresh,
-            access: token.access,
-            expires_at_ms: token.expires_at_ms,
-            account_id: None,
+        let auth = oauth_auth_data(
+            provider_id.as_str(),
+            token.refresh,
+            token.access,
+            token.expires_at_ms,
+            None,
             enterprise_url,
-        };
+        )?;
         self.store.set(provider_id.as_str(), auth.clone())?;
         Ok(Some(auth))
     }
@@ -234,13 +239,14 @@ impl<S: AuthStore> AuthManager<S> {
         )
         .await?;
 
-        let auth = AuthData::OAuth {
-            refresh: token.refresh,
-            access: token.access,
-            expires_at_ms: token.expires_at_ms,
-            account_id: None,
-            enterprise_url: None,
-        };
+        let auth = oauth_auth_data(
+            "gitlab",
+            token.refresh,
+            token.access,
+            token.expires_at_ms,
+            None,
+            None,
+        )?;
         self.store.set("gitlab", auth.clone())?;
         self.store.set(
             "gitlab-instance",
@@ -272,13 +278,14 @@ impl<S: AuthStore> AuthManager<S> {
             .unwrap_or_else(|| "https://gitlab.com".to_owned());
 
         let token = refresh_gitlab_token(instance_url.as_str(), refresh.as_str()).await?;
-        let auth = AuthData::OAuth {
-            refresh: token.refresh,
-            access: token.access,
-            expires_at_ms: token.expires_at_ms,
+        let auth = oauth_auth_data(
+            "gitlab",
+            token.refresh,
+            token.access,
+            token.expires_at_ms,
             account_id,
-            enterprise_url: None,
-        };
+            None,
+        )?;
         self.store.set("gitlab", auth.clone())?;
         Ok(auth)
     }
@@ -303,6 +310,60 @@ impl<S: AuthStore> AuthManager<S> {
             .await?;
         Ok((start.authorize_url, auth))
     }
+}
+
+fn oauth_auth_data(
+    provider_id: &str,
+    refresh: String,
+    access: String,
+    expires_at_ms: i64,
+    account_id: Option<String>,
+    enterprise_url: Option<String>,
+) -> Result<AuthData, AppError> {
+    let auth = AuthData::OAuth {
+        refresh,
+        access,
+        expires_at_ms,
+        account_id,
+        enterprise_url,
+    };
+    validate_auth_data(provider_id, &auth)?;
+    Ok(auth)
+}
+
+fn validate_auth_data(provider_id: &str, auth: &AuthData) -> Result<(), AppError> {
+    match auth {
+        AuthData::Api { key } => {
+            if key.trim().is_empty() {
+                return Err(AppError::Config(format!(
+                    "{provider_id} api key cannot be empty"
+                )));
+            }
+        }
+        AuthData::OAuth {
+            refresh, access, ..
+        } => {
+            if refresh.trim().is_empty() {
+                return Err(AppError::Config(format!(
+                    "{provider_id} oauth refresh token cannot be empty"
+                )));
+            }
+            if access.trim().is_empty() {
+                return Err(AppError::Config(format!(
+                    "{provider_id} oauth access token cannot be empty"
+                )));
+            }
+        }
+        AuthData::WellKnown { key, token } => {
+            let _ = token;
+            if key.trim().is_empty() {
+                return Err(AppError::Config(format!(
+                    "{provider_id} well-known key cannot be empty"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn normalize_domain(url_or_domain: &str) -> String {
@@ -394,6 +455,42 @@ mod tests {
             "github.example.com"
         );
         assert_eq!(normalize_domain("http://gitlab.local"), "gitlab.local");
+    }
+
+    #[test]
+    fn set_auth_data_rejects_empty_oauth_refresh() {
+        let manager = AuthManager::new(MemoryStore::default());
+        let err = manager
+            .set_auth_data(
+                "openai",
+                AuthData::OAuth {
+                    refresh: "   ".to_owned(),
+                    access: "access".to_owned(),
+                    expires_at_ms: 1,
+                    account_id: None,
+                    enterprise_url: None,
+                },
+            )
+            .expect_err("empty oauth refresh token should be rejected");
+        assert!(matches!(err, AppError::Config(_)));
+    }
+
+    #[test]
+    fn set_auth_data_rejects_empty_oauth_access() {
+        let manager = AuthManager::new(MemoryStore::default());
+        let err = manager
+            .set_auth_data(
+                "openai",
+                AuthData::OAuth {
+                    refresh: "refresh".to_owned(),
+                    access: "   ".to_owned(),
+                    expires_at_ms: 1,
+                    account_id: None,
+                    enterprise_url: None,
+                },
+            )
+            .expect_err("empty oauth access token should be rejected");
+        assert!(matches!(err, AppError::Config(_)));
     }
 
     #[tokio::test]

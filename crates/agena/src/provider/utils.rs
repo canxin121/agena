@@ -119,9 +119,34 @@ pub async fn parse_json_response<T: DeserializeOwned>(
     response: reqwest::Response,
 ) -> Result<T, AppError> {
     if response.status().is_success() {
+        ensure_response_content_type(provider_id, &response, "application/json")?;
         return Ok(response.json::<T>().await?);
     }
     Err(http_status_error_from_response(provider_id, response).await)
+}
+
+pub fn ensure_response_content_type(
+    provider_id: &str,
+    response: &reqwest::Response,
+    expected_prefix: &str,
+) -> Result<(), AppError> {
+    let actual = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<missing>");
+    if actual
+        .split(';')
+        .next()
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case(expected_prefix))
+    {
+        return Ok(());
+    }
+
+    Err(AppError::Provider(format!(
+        "{provider_id} returned unexpected content-type `{actual}` (expected {expected_prefix})"
+    )))
 }
 
 pub fn parse_json_value<T: DeserializeOwned>(
@@ -141,12 +166,13 @@ pub async fn http_status_error_from_response(
     response: reqwest::Response,
 ) -> AppError {
     let status = response.status();
+    let headers = response.headers().clone();
     let body = response
         .text()
         .await
         .unwrap_or_else(|_| "<empty>".to_owned());
 
-    let body = serde_json::from_str::<ProviderErrorEnvelope>(&body)
+    let mut body = serde_json::from_str::<ProviderErrorEnvelope>(&body)
         .map(|parsed| {
             let mut message = parsed.error.message;
             if let Some(kind) = parsed.error.kind {
@@ -159,6 +185,20 @@ pub async fn http_status_error_from_response(
         })
         .unwrap_or(body);
 
+    let upstream_refs = [
+        response_header_value(&headers, "x-request-id")
+            .map(|value| format!("x-request-id={value}")),
+        response_header_value(&headers, "cf-ray").map(|value| format!("cf-ray={value}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if !upstream_refs.is_empty() {
+        body.push_str(" [");
+        body.push_str(upstream_refs.join(", ").as_str());
+        body.push(']');
+    }
+
     let classified = classify_http_error(provider_id, status, body.as_str());
     AppError::HttpStatus {
         provider: provider_id.to_owned(),
@@ -167,6 +207,15 @@ pub async fn http_status_error_from_response(
         kind: classified.kind,
         retryable: classified.retryable,
     }
+}
+
+fn response_header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub async fn send_with_credential_refresh<F>(

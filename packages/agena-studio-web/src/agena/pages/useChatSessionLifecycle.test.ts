@@ -14,7 +14,11 @@ import type {
   WorkspaceResource,
 } from '@/agena/lib/agenaApi'
 
-import { useChatSessionLifecycle, type ChatSessionLifecycleDeps, type ChatSessionLifecycleInput } from './useChatSessionLifecycle'
+import {
+  useChatSessionLifecycle,
+  type ChatSessionLifecycleDeps,
+  type ChatSessionLifecycleInput,
+} from './useChatSessionLifecycle'
 
 function session(id: number, overrides?: Partial<SessionResource>): SessionResource {
   return {
@@ -65,6 +69,14 @@ function runtimeStatus(): RuntimeStatus {
     operator: {
       mcp: { server_count: 0, tool_count: 0, servers: [] },
       lsp: { server_count: 0, diagnostics_count: 0, files_with_diagnostics: 0, servers: [] },
+      agents: {
+        default_agent: 'build',
+        total_count: 8,
+        primary_count: 7,
+        subagent_count: 6,
+        hidden_count: 0,
+        agents: [],
+      },
       skills: { skill_count: 0, command_count: 0, skills: [], commands: [] },
     },
   }
@@ -110,7 +122,9 @@ function createDeps() {
     },
     getSessionState: async (sessionId) => {
       calls.push(`getSessionState:${sessionId}`)
-      return sessionState({ session: session(sessionId, { workspace_id: sessionId === 8 ? 2 : 1, parent_id: sessionId === 8 ? null : 1 }) })
+      return sessionState({
+        session: session(sessionId, { workspace_id: sessionId === 8 ? 2 : 1, parent_id: sessionId === 8 ? null : 1 }),
+      })
     },
     getSessionTree: async (rootId) => {
       calls.push(`getSessionTree:${rootId}`)
@@ -140,7 +154,9 @@ function createDeps() {
     },
     listProviders: async () => {
       calls.push('listProviders')
-      return [{ provider_id: 'anthropic', default_model: 'claude-opus-4-7', default_model_ref: 'anthropic/claude-opus-4-7' }]
+      return [
+        { provider_id: 'anthropic', default_model: 'claude-opus-4-7', default_model_ref: 'anthropic/claude-opus-4-7' },
+      ]
     },
     listRewindCheckpoints: async (sessionId) => {
       calls.push(`listRewindCheckpoints:${sessionId}`)
@@ -236,7 +252,9 @@ describe('useChatSessionLifecycle', () => {
         parts: [],
       },
     ]
-    input.timelineEvents.value = [{ session_id: 99, seq_global: 1, kind: 'run_started', created_at: '2026-05-10T00:00:00Z', payload: {} }]
+    input.timelineEvents.value = [
+      { session_id: 99, seq_global: 1, kind: 'run_started', created_at: '2026-05-10T00:00:00Z', payload: {} },
+    ]
     input.sessionState.value = sessionState({ session: session(99) })
     const { deps, calls } = createDeps()
 

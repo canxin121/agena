@@ -10,18 +10,21 @@ use toml::Value;
 
 use crate::{
     permission::PermissionMode,
-    provider::{ConfiguredModelDefinition, ThinkingRequest, auth::FileAuthStore},
+    provider::{
+        ConfiguredModelDefinition, ProviderRequestRetryConfig, ProviderStreamReplayConfig,
+        ThinkingRequest, auth::FileAuthStore,
+    },
 };
 
 use super::{
-    AuthConfig, AuthStoreBackend, ConfigEnvironment, ConfigError, McpConfig, MemoryConfig,
-    OpenAiApiModeConfig, PermissionConfig, PluginConfig, ProjectInstructionsConfig,
+    AgentConfig, AuthConfig, AuthStoreBackend, ConfigEnvironment, ConfigError, McpConfig,
+    MemoryConfig, OpenAiApiModeConfig, PermissionConfig, PluginConfig, ProjectInstructionsConfig,
     ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, StreamTransportMode,
-    TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
-    provider_presets,
+    TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig, provider_presets,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
+const DEFAULT_DATABASE_LOG_LEVEL: &str = "error";
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawConfigFile {
@@ -58,11 +61,10 @@ impl RawConfigFile {
 }
 
 fn reject_legacy_mode_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
-    let value = toml::from_str::<Value>(text)
-        .map_err(|source| ConfigError::ParseFile {
-            path: path.to_path_buf(),
-            source,
-        })?;
+    let value = toml::from_str::<Value>(text).map_err(|source| ConfigError::ParseFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
     let Some(table) = value.as_table() else {
         return Ok(());
     };
@@ -83,6 +85,7 @@ pub(crate) struct RawConfig {
     pub(crate) auth: Option<RawAuthConfig>,
     pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
+    pub(crate) agents: BTreeMap<String, AgentConfig>,
     pub(crate) permission: Option<RawPermissionConfig>,
     pub(crate) plugins: Option<PluginConfig>,
     pub(crate) memory: Option<MemoryConfig>,
@@ -101,6 +104,7 @@ impl RawConfig {
         merge_option_struct(&mut self.auth, overlay.auth);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
+        merge_map(&mut self.agents, overlay.agents);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_option_struct(&mut self.memory, overlay.memory);
@@ -119,6 +123,7 @@ impl RawConfig {
             && self.auth.is_none()
             && self.ui.is_none()
             && self.runtime.is_none()
+            && self.agents.is_empty()
             && self.permission.is_none()
             && self.plugins.is_none()
             && self.memory.is_none()
@@ -147,6 +152,12 @@ impl RawConfig {
                 .tracing
                 .get_or_insert_with(RawTracingConfig::default)
                 .filter = Some(filter);
+        }
+        if let Some(level) = env.var("AGENA_DATABASE_LOG") {
+            config
+                .tracing
+                .get_or_insert_with(RawTracingConfig::default)
+                .database_level = Some(level);
         }
         if let Some(enabled) = env.var("AGENA_TELEMETRY_ENABLED") {
             config
@@ -295,11 +306,16 @@ impl RawConfig {
         self,
         env: &dyn ConfigEnvironment,
     ) -> Result<ResolvedConfig, ConfigError> {
+        let raw_tracing = self.tracing.unwrap_or_default();
+        let database_level = raw_tracing
+            .database_level
+            .unwrap_or_else(|| DEFAULT_DATABASE_LOG_LEVEL.to_owned());
+        validate_database_log_level(database_level.as_str())?;
         let tracing = TracingConfig {
-            filter: self
-                .tracing
-                .and_then(|value| value.filter)
+            filter: raw_tracing
+                .filter
                 .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_owned()),
+            database_level,
         };
         let raw_telemetry = self.telemetry.unwrap_or_default();
         let telemetry = TelemetryConfig {
@@ -332,6 +348,7 @@ impl RawConfig {
         };
 
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
+        let permission_explicit = self.permission.is_some();
         let permission = PermissionConfig::from_raw(self.permission.unwrap_or_default());
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
         let memory: MemoryConfig = self.memory.unwrap_or_default();
@@ -345,13 +362,19 @@ impl RawConfig {
             .map(|(provider_id, raw)| raw.resolve(provider_id, env))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
 
+        for (agent_name, agent) in &self.agents {
+            validate_agent_permission_config(agent_name.as_str(), &agent.permission)?;
+        }
+
         Ok(ResolvedConfig {
             tracing,
             telemetry,
             auth,
             ui,
             runtime,
+            agents: self.agents,
             permission,
+            permission_explicit,
             plugins,
             plugin_storage: crate::config::types::PluginStorageConfig::default(),
             memory,
@@ -428,11 +451,22 @@ impl Merge for ProjectInstructionsConfig {
 #[serde(default)]
 pub(crate) struct RawTracingConfig {
     pub(crate) filter: Option<String>,
+    pub(crate) database_level: Option<String>,
 }
 
 impl Merge for RawTracingConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.filter, overlay.filter);
+        merge_option(&mut self.database_level, overlay.database_level);
+    }
+}
+
+fn validate_database_log_level(value: &str) -> Result<(), ConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "off" | "error" | "warn" | "info" | "debug" | "trace" => Ok(()),
+        _ => Err(ConfigError::Validation(format!(
+            "tracing.database_level expects one of off,error,warn,info,debug,trace, got `{value}`"
+        ))),
     }
 }
 
@@ -481,6 +515,77 @@ impl Merge for RawUiConfig {
     }
 }
 
+impl Merge for crate::config::types::AgentConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        if !overlay.description.is_empty() {
+            self.description = overlay.description;
+        }
+        if !overlay.prompt.is_empty() {
+            self.prompt = overlay.prompt;
+        }
+        self.mode = overlay.mode;
+        if overlay.hidden {
+            self.hidden = true;
+        }
+        merge_option(&mut self.color, overlay.color);
+        merge_option(&mut self.temperature, overlay.temperature);
+        merge_option(&mut self.max_output_tokens, overlay.max_output_tokens);
+        merge_option(&mut self.steps, overlay.steps);
+        if !overlay.allowed_tools.is_empty() {
+            self.allowed_tools = overlay.allowed_tools;
+        }
+        self.permission.merge_from(overlay.permission);
+        merge_option(&mut self.model, overlay.model);
+        if !overlay.aliases.is_empty() {
+            self.aliases = overlay.aliases;
+        }
+        if overlay.disabled {
+            self.disabled = true;
+        }
+    }
+}
+
+impl Merge for crate::agent::AgentPermissionConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.default_read, overlay.default_read);
+        merge_option(&mut self.default_write, overlay.default_write);
+        merge_option(
+            &mut self.default_external_directory,
+            overlay.default_external_directory,
+        );
+        merge_option(&mut self.execution_mode, overlay.execution_mode);
+        merge_map(&mut self.tools, overlay.tools);
+        merge_option(&mut self.read, overlay.read);
+        merge_option(&mut self.write, overlay.write);
+        merge_option(&mut self.external_directory, overlay.external_directory);
+        merge_map(&mut self.tool_rules, overlay.tool_rules);
+        if !overlay.bash_rules.is_empty() {
+            self.bash_rules = overlay.bash_rules;
+        }
+        if !overlay.bash_deny_patterns.is_empty() {
+            self.bash_deny_patterns = overlay.bash_deny_patterns;
+        }
+    }
+}
+
+impl Merge for crate::permission::PermissionMode {
+    fn merge_from(&mut self, overlay: Self) {
+        *self = overlay;
+    }
+}
+
+impl Merge for crate::agent::AgentTemperature {
+    fn merge_from(&mut self, overlay: Self) {
+        *self = overlay;
+    }
+}
+
+impl Merge for crate::agent::AgentPermissionRules {
+    fn merge_from(&mut self, overlay: Self) {
+        *self = overlay;
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct RawRuntimeConfig {
@@ -490,6 +595,7 @@ pub(crate) struct RawRuntimeConfig {
     pub(crate) reload: Option<RawRuntimeReloadConfig>,
     pub(crate) janitor: Option<RawRuntimeJanitorConfig>,
     pub(crate) session_cache: Option<RawSessionCacheConfig>,
+    pub(crate) default_agent: Option<String>,
 }
 
 impl Merge for RawRuntimeConfig {
@@ -500,6 +606,7 @@ impl Merge for RawRuntimeConfig {
         merge_option_struct(&mut self.reload, overlay.reload);
         merge_option_struct(&mut self.janitor, overlay.janitor);
         merge_option_struct(&mut self.session_cache, overlay.session_cache);
+        merge_option(&mut self.default_agent, overlay.default_agent);
     }
 }
 
@@ -563,12 +670,16 @@ impl RuntimeConfig {
                 connect_timeout_secs,
             },
             request_retry: super::RequestRetryConfig {
-                max_retries: request_retry.max_retries.unwrap_or(1),
+                max_retries: request_retry
+                    .max_retries
+                    .unwrap_or(ProviderRequestRetryConfig::default().max_retries),
                 base_delay_ms,
                 max_delay_ms,
             },
             stream_replay: super::StreamReplayConfig {
-                max_retries_after_output: stream_replay.max_retries_after_output.unwrap_or(1),
+                max_retries_after_output: stream_replay
+                    .max_retries_after_output
+                    .unwrap_or(ProviderStreamReplayConfig::default().max_retries_after_output),
                 max_tracked_events: stream_replay.max_tracked_events.unwrap_or(2_048),
             },
             reload: super::RuntimeReloadConfig {
@@ -584,6 +695,11 @@ impl RuntimeConfig {
                 ttl_secs: session_cache_ttl_secs,
                 max_bytes: session_cache_max_bytes,
             },
+            default_agent: raw
+                .default_agent
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .or_else(|| Some("build".to_string())),
         })
     }
 }
@@ -1161,6 +1277,21 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
+}
+
+fn validate_agent_permission_config(
+    agent_name: &str,
+    permission: &crate::agent::AgentPermissionConfig,
+) -> Result<(), ConfigError> {
+    crate::agent::Agent::new(
+        "__validate__",
+        crate::permission::PermissionPolicy::allow_all(),
+    )
+    .try_with_permission_config(permission)
+    .map(|_| ())
+    .map_err(|err| {
+        ConfigError::Validation(format!("agents.{agent_name}.permission is invalid: {err}"))
     })
 }
 

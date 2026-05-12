@@ -1,9 +1,9 @@
 use base64::Engine as _;
 use std::path::PathBuf;
 
-use agena::config::{ConfigOverride, LoadConfigRequest};
+use agena::config::{ConfigLoader, ConfigOverride, LoadConfigRequest, TracingConfig};
 use clap::{Parser, ValueEnum};
-use tracing::Level;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod app;
 mod ui_auth;
@@ -118,16 +118,54 @@ pub(crate) fn issue_token() -> String {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=info".into()),
-        )
-        .with_target(false)
-        .with_max_level(Level::INFO)
-        .init();
-
     let args = Args::parse();
+    let resolution = ConfigLoader::default().load(&args.load_request()).ok();
+    let tracing = resolution
+        .as_ref()
+        .map(|resolution| resolution.config.tracing.clone())
+        .unwrap_or_else(TracingConfig::default);
+    let telemetry = resolution
+        .as_ref()
+        .map(|resolution| resolution.config.telemetry.clone())
+        .unwrap_or_default();
+    let filter = agena::tracing::env_filter(&tracing)
+        .unwrap_or_else(|_| {
+            agena::tracing::env_filter(&TracingConfig::default())
+                .expect("default tracing filter should parse")
+        })
+        .add_directive(
+            "tower_http=info"
+                .parse()
+                .expect("tower_http filter should parse"),
+        );
+
+    if let Some(telemetry) = agena_otel::build_layer(&telemetry)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .ok()
+        .flatten()
+    {
+        let telemetry_layer = telemetry.layer();
+        let _telemetry_guard = telemetry.guard;
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(telemetry_layer)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(false)
+                    .compact(),
+            )
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(false)
+                    .compact(),
+            )
+            .init();
+    }
+
     if let Err(err) = app::run(args).await {
         eprintln!("{err}");
         std::process::exit(1);

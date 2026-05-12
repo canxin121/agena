@@ -21,19 +21,17 @@ use std::{
 
 use agena::{
     AppError,
-    config::{ConfigLoader, ConfigOverride, LoadConfigRequest},
+    config::{ConfigLoader, ConfigOverride, LoadConfigRequest, TracingConfig},
     runtime::AgenaRuntime,
     storage::StorageConfig,
+    tracing as tracing_config,
 };
 use anyhow::Context;
 use app::{App, LaunchOptions};
 use backend::Backend;
 use clap::{Args, Parser, Subcommand};
 use i18n::I18n;
-use sea_orm::Database;
-use tracing_subscriber::{
-    EnvFilter, fmt::writer::MakeWriter, layer::SubscriberExt, util::SubscriberInitExt,
-};
+use tracing_subscriber::{fmt::writer::MakeWriter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "agena-tui", version, about = "Agena terminal chat application")]
@@ -95,6 +93,13 @@ impl AgenaTuiCli {
         }
     }
 
+    fn resolved_tracing_config(&self) -> TracingConfig {
+        ConfigLoader::default()
+            .load(&self.load_request())
+            .map(|resolution| resolution.config.tracing)
+            .unwrap_or_default()
+    }
+
     async fn run(self, config_locale: Option<String>) -> Result<(), AppError> {
         match self.resolved_command() {
             TuiCommand::Run(command) => self.run_tui(command, config_locale).await,
@@ -113,7 +118,13 @@ impl AgenaTuiCli {
         let database_url = storage.resolve_url()?;
         StorageConfig::ensure_parent(database_url.as_str())?;
 
-        let db = Arc::new(Database::connect(database_url.as_str()).await?);
+        let db = Arc::new(
+            tracing_config::connect_database(
+                database_url.as_str(),
+                &self.resolved_tracing_config(),
+            )
+            .await?,
+        );
         let workspace_root = command.workspace_root.unwrap_or(env::current_dir()?);
         let runtime = AgenaRuntime::builder()
             .with_load_request(self.load_request())
@@ -254,10 +265,10 @@ fn default_agena_dir() -> PathBuf {
 async fn main() -> Result<(), AppError> {
     let cli = AgenaTuiCli::parse();
     let resolution = ConfigLoader::default().load(&cli.load_request()).ok();
-    let filter = resolution
+    let tracing = resolution
         .as_ref()
-        .map(|resolution| resolution.config.tracing.filter.clone())
-        .unwrap_or_else(|| "info".to_owned());
+        .map(|resolution| resolution.config.tracing.clone())
+        .unwrap_or_else(TracingConfig::default);
     let telemetry = resolution
         .as_ref()
         .map(|resolution| resolution.config.telemetry.clone())
@@ -265,7 +276,10 @@ async fn main() -> Result<(), AppError> {
     let config_locale = resolution.and_then(|resolution| resolution.config.ui.locale);
     let log_writer = resolve_tui_log_writer(&cli)?;
 
-    let initial_filter = EnvFilter::try_new(filter).unwrap_or_else(|_| EnvFilter::new("info"));
+    let initial_filter = tracing_config::env_filter(&tracing).unwrap_or_else(|_| {
+        tracing_config::env_filter(&TracingConfig::default())
+            .expect("default tracing filter should parse")
+    });
     if let Some(telemetry) = agena_otel::build_layer(&telemetry)
         .map_err(|error| agena::AppError::Config(error.to_string()))?
     {

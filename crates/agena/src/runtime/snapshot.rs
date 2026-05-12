@@ -80,6 +80,7 @@ pub struct RuntimeSnapshot {
 struct RuntimeServices {
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginHost>,
+    agents: crate::agents::SubagentRegistry,
     auth_store: RuntimeAuthStore,
     session_manager: Option<Arc<SessionManager>>,
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
@@ -126,6 +127,7 @@ impl RuntimeServices {
     fn new(
         providers: Arc<ProviderRegistry>,
         plugins: Arc<PluginHost>,
+        agents: crate::agents::SubagentRegistry,
         auth_store: RuntimeAuthStore,
         session_manager: Option<Arc<SessionManager>>,
         mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
@@ -136,6 +138,7 @@ impl RuntimeServices {
         Self {
             providers,
             plugins,
+            agents,
             auth_store,
             session_manager,
             mcp_manager,
@@ -269,6 +272,12 @@ impl RuntimeSnapshot {
                 .await;
         }
         let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
+        let agents = crate::agents::SubagentRegistry::discover(
+            workspace_root,
+            crate::agents::default_user_agents_dir().as_deref(),
+        );
+        register_config_agents(&agents, &resolution, &resolution.config.agents);
+        apply_legacy_permission_fallback(&agents, &resolution.config);
         let reusing_session_manager = existing_session_manager.is_some();
         let lsp_registry = if resolution.config.lsp.servers.is_empty() {
             None
@@ -281,6 +290,7 @@ impl RuntimeSnapshot {
                 db,
                 Arc::clone(&providers),
                 Arc::clone(&plugins),
+                agents.clone(),
                 lsp_registry.clone(),
                 workspace_root,
                 &resolution,
@@ -311,6 +321,7 @@ impl RuntimeSnapshot {
         let services = RuntimeServices::new(
             providers,
             plugins,
+            agents,
             auth_store,
             session_manager,
             mcp_manager,
@@ -402,6 +413,10 @@ impl RuntimeSnapshot {
         Arc::clone(&self.services.plugins)
     }
 
+    pub fn agents(&self) -> crate::agents::SubagentRegistry {
+        self.services.agents.clone()
+    }
+
     pub fn auth_store(&self) -> RuntimeAuthStore {
         self.services.auth_store.clone()
     }
@@ -452,6 +467,7 @@ fn build_or_reconfigure_session_manager(
     db: &Arc<DatabaseConnection>,
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginHost>,
+    agents: crate::agents::SubagentRegistry,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
@@ -462,6 +478,7 @@ fn build_or_reconfigure_session_manager(
     if let Some(manager) = existing {
         let executor = build_tool_executor(
             plugins,
+            agents.clone(),
             lsp_registry,
             workspace_root,
             resolution,
@@ -473,6 +490,7 @@ fn build_or_reconfigure_session_manager(
 
     let bootstrap_executor = build_tool_executor(
         Arc::clone(&plugins),
+        agents.clone(),
         lsp_registry.clone(),
         workspace_root,
         resolution,
@@ -484,6 +502,7 @@ fn build_or_reconfigure_session_manager(
     );
     let executor = build_tool_executor(
         plugins,
+        agents,
         lsp_registry,
         workspace_root,
         resolution,
@@ -503,23 +522,17 @@ fn build_session_processor(
 
 fn build_tool_executor(
     plugins: Arc<PluginHost>,
+    agents: crate::agents::SubagentRegistry,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     workspace_root: &Path,
     resolution: &ConfigResolution,
     session_manager: Option<Arc<SessionManager>>,
 ) -> ToolExecutor {
-    let tool_policy = match resolution.config.tool_permission_policy() {
-        Ok(policy) => policy,
-        Err(err) => {
-            tracing::warn!(
-                target: "agena::config::permission",
-                "ignoring invalid bash permission rule: {err}; falling back to allow_all"
-            );
-            crate::permission::ToolPermissionPolicy::allow_all()
-        }
-    };
-    let agent =
-        Agent::new("build", resolution.config.permission_policy()).with_tool_policy(tool_policy);
+    let agent = build_profile_agent(
+        "build",
+        crate::agent::AgentPermissionConfig::default(),
+        resolution,
+    );
     let worktree_registry = crate::tool::worktree_registry_for_executor();
 
     // Drop any orphan worktrees left over from a previously-crashed
@@ -537,6 +550,7 @@ fn build_tool_executor(
 
     let mut executor = ToolExecutor::new(workspace_root.to_path_buf(), agent)
         .with_plugin_manager(plugins)
+        .with_subagent_registry(agents)
         .with_web_search_backend(resolution.config.web.search.resolve())
         .with_plan_registry(crate::tool::plan_registry_for_executor())
         .with_worktree_registry(worktree_registry);
@@ -709,6 +723,78 @@ fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig
         cache_max_bytes: resolution.config.runtime.session_cache.max_bytes,
         max_turn_loops: defaults.max_turn_loops,
         doom_loop: defaults.doom_loop,
+        default_agent: resolution.config.runtime.default_agent.clone(),
+    }
+}
+
+fn register_config_agents(
+    registry: &crate::agents::SubagentRegistry,
+    _resolution: &ConfigResolution,
+    agents: &std::collections::BTreeMap<String, crate::config::AgentConfig>,
+) {
+    for (name, config) in agents {
+        if config.disabled || name.trim().is_empty() {
+            continue;
+        }
+        registry.register_runtime(crate::agents::AgentProfile {
+            name: name.trim().to_string(),
+            frontmatter: crate::agents::AgentFrontmatter {
+                description: config.description.clone(),
+                mode: config.mode,
+                hidden: config.hidden,
+                color: config.color.clone(),
+                temperature: config.temperature,
+                max_output_tokens: config.max_output_tokens,
+                steps: config.steps,
+                allowed_tools: config.allowed_tools.clone(),
+                permission: config.permission.clone(),
+                model: config.model.clone(),
+                aliases: config.aliases.clone(),
+            },
+            prompt: config.prompt.trim().to_string(),
+            source_path: None,
+            scope: crate::agents::AgentScope::Project,
+        });
+    }
+}
+
+fn apply_legacy_permission_fallback(
+    registry: &crate::agents::SubagentRegistry,
+    config: &crate::config::ResolvedConfig,
+) {
+    if !config.permission_explicit {
+        return;
+    }
+
+    for mut profile in registry.list() {
+        profile.frontmatter.permission =
+            config.agent_permission_with_legacy_fallback(&profile.frontmatter.permission);
+        registry.register_runtime(profile);
+    }
+}
+
+fn build_profile_agent(
+    name: impl Into<String>,
+    permission: crate::agent::AgentPermissionConfig,
+    resolution: &ConfigResolution,
+) -> Agent {
+    let permission = if resolution.config.permission_explicit {
+        resolution
+            .config
+            .agent_permission_with_legacy_fallback(&permission)
+    } else {
+        permission
+    };
+    let agent = Agent::new(name, crate::permission::PermissionPolicy::allow_all());
+    match agent.try_with_permission_config(&permission) {
+        Ok(agent) => agent,
+        Err(err) => {
+            tracing::warn!(
+                target: "agena::config::permission",
+                "ignoring invalid agent permission config: {err}; falling back to allow_all"
+            );
+            Agent::new("build", crate::permission::PermissionPolicy::allow_all())
+        }
     }
 }
 
@@ -869,4 +955,77 @@ fn build_scheduler(session_manager: Arc<SessionManager>) -> Arc<agena_scheduler:
     );
     sched.start();
     sched
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_profile_agent;
+    use crate::config::{ConfigLoader, LoadConfigRequest, ProcessEnvironment};
+    use crate::permission::{AccessKind, PermissionDecision};
+    use std::path::Path;
+
+    #[test]
+    fn build_profile_agent_ignores_default_legacy_permission_when_not_explicit() {
+        let config_path = std::env::temp_dir().join(format!(
+            "agena-runtime-snapshot-empty-test-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&config_path, "").expect("test config should be written");
+
+        let resolution = ConfigLoader::<ProcessEnvironment>::new(ProcessEnvironment)
+            .load(&LoadConfigRequest {
+                config_path: Some(config_path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .expect("default config should load");
+
+        let agent = build_profile_agent(
+            "build",
+            crate::agent::AgentPermissionConfig::default(),
+            &resolution,
+        );
+
+        assert_eq!(
+            agent.authorize_path_access(
+                AccessKind::Write,
+                Path::new("/workspace"),
+                Path::new("/workspace/file.txt"),
+            ),
+            PermissionDecision::Allow
+        );
+    }
+
+    #[test]
+    fn build_profile_agent_applies_explicit_legacy_permission_as_fallback() {
+        let config_path = std::env::temp_dir().join(format!(
+            "agena-runtime-snapshot-test-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&config_path, "[permission]\ndefault_write = \"deny\"\n")
+            .expect("test config should be written");
+
+        let resolution = ConfigLoader::<ProcessEnvironment>::new(ProcessEnvironment)
+            .load(&LoadConfigRequest {
+                config_path: Some(config_path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .expect("config should load");
+
+        let agent = build_profile_agent(
+            "build",
+            crate::agent::AgentPermissionConfig::default(),
+            &resolution,
+        );
+
+        match agent.authorize_path_access(
+            AccessKind::Write,
+            Path::new("/workspace"),
+            Path::new("/workspace/file.txt"),
+        ) {
+            PermissionDecision::Deny { .. } => {}
+            other => panic!("expected deny from explicit legacy fallback, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_file(config_path);
+    }
 }

@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use agena::{
+    agent::{AgentMode, AgentPermissionConfig, AgentRunConfig},
+    agents::AgentScope,
     message::{
         MessageMetadata, MessagePart, MessageStatus, MessageUsage, PartContent, UserInputReply,
         UserInputRequest,
@@ -112,6 +114,7 @@ pub struct RuntimeStatusResponse {
 pub struct RuntimeOperatorResource {
     pub mcp: RuntimeMcpResource,
     pub lsp: RuntimeLspResource,
+    pub agents: RuntimeAgentsResource,
     pub skills: RuntimeSkillsResource,
 }
 
@@ -157,6 +160,41 @@ pub struct RuntimeSkillResource {
     pub name: String,
     pub description: String,
     pub aliases: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeAgentsResource {
+    pub default_agent: String,
+    pub total_count: usize,
+    pub primary_count: usize,
+    pub subagent_count: usize,
+    pub hidden_count: usize,
+    pub agents: Vec<RuntimeAgentResource>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeAgentResource {
+    pub name: String,
+    pub description: String,
+    pub mode: AgentMode,
+    pub hidden: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steps: Option<usize>,
+    pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "AgentPermissionConfig::is_empty")]
+    pub permission: AgentPermissionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub aliases: Vec<String>,
+    pub scope: AgentScope,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
 }
@@ -632,11 +670,15 @@ pub struct SessionRunOptionsRequest {
     #[serde(default)]
     pub model: Option<ModelRef>,
     #[serde(default)]
+    pub agent_profile: Option<String>,
+    #[serde(default)]
     pub system: Option<String>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+    #[serde(default)]
+    pub max_turn_loops: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -677,14 +719,24 @@ pub struct SessionExecutionContextResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_mode: Option<AgentMode>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_hidden: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub active_skill_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt_override: Option<String>,
     pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "AgentPermissionConfig::is_empty")]
+    pub agent_permission: AgentPermissionConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "AgentRunConfig::is_empty")]
+    pub agent_run: AgentRunConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_workspace_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -40,6 +40,7 @@ export function buildOperatorCards(runtime: RuntimeStatus | null): OperatorCard[
     { label: 'Generation', value: String(runtime.generation) },
     { label: 'Providers', value: String(runtime.provider_ids.length) },
     { label: 'Plugins', value: String(runtime.plugin_count) },
+    { label: 'Agents', value: String(runtime.operator.agents.total_count) },
     { label: 'MCP Servers', value: String(runtime.operator.mcp.server_count) },
     { label: 'LSP Servers', value: String(runtime.operator.lsp.server_count) },
     { label: 'Skills', value: String(runtime.operator.skills.skill_count) },
@@ -97,7 +98,7 @@ export function mergePluginLogs(current: PluginLogEntry[], incoming: PluginLogEn
 }
 
 export function pluginLogCursor(entries: PluginLogEntry[]): number | null {
-  return entries.length ? entries[entries.length - 1]?.seq ?? null : null
+  return entries.length ? (entries[entries.length - 1]?.seq ?? null) : null
 }
 
 export function formatProviderModel(model: ProviderModel): string {
@@ -115,7 +116,10 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
     { label: 'Agent Profile', value: context.agent_profile || 'default' },
     { label: 'Active Skill', value: context.active_skill_name || 'none' },
     { label: 'Task', value: context.task_id || 'n/a' },
-    { label: 'Model', value: context.model_provider_id && context.model_id ? `${context.model_provider_id}/${context.model_id}` : 'n/a' },
+    {
+      label: 'Model',
+      value: context.model_provider_id && context.model_id ? `${context.model_provider_id}/${context.model_id}` : 'n/a',
+    },
     {
       label: 'Workspace Root',
       value: context.effective_workspace_root || 'n/a',

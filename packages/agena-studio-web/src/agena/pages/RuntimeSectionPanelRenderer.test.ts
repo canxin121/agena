@@ -7,7 +7,27 @@ const sharedPanels = {
     runtime: {
       operator: {
         mcp: { server_count: 1, tool_count: 2, servers: [{ name: 'alpha', tool_count: 2 }] },
-        lsp: { server_count: 1, diagnostics_count: 3, files_with_diagnostics: 1, servers: [{ name: 'ts', command: 'typescript-language-server', file_extensions: ['ts'], root_markers: ['tsconfig.json'] }] },
+        lsp: {
+          server_count: 1,
+          diagnostics_count: 3,
+          files_with_diagnostics: 1,
+          servers: [
+            {
+              name: 'ts',
+              command: 'typescript-language-server',
+              file_extensions: ['ts'],
+              root_markers: ['tsconfig.json'],
+            },
+          ],
+        },
+        agents: {
+          default_agent: 'build',
+          total_count: 8,
+          primary_count: 7,
+          subagent_count: 6,
+          hidden_count: 0,
+          agents: [],
+        },
         skills: { skill_count: 4, command_count: 2 },
       },
       config_found: true,
@@ -15,7 +35,9 @@ const sharedPanels = {
       watch_paths: ['src'],
     },
     filteredMcpServers: [{ name: 'alpha', tool_count: 2 }],
-    filteredLspServers: [{ name: 'ts', command: 'typescript-language-server', file_extensions: ['ts'], root_markers: ['tsconfig.json'] }],
+    filteredLspServers: [
+      { name: 'ts', command: 'typescript-language-server', file_extensions: ['ts'], root_markers: ['tsconfig.json'] },
+    ],
     mcpQuery: '',
     lspQuery: '',
     openRuntimeConfigRoot: () => {},
@@ -26,7 +48,27 @@ const sharedPanels = {
     runtime: {
       operator: {
         mcp: { server_count: 1, tool_count: 2, servers: [{ name: 'alpha', tool_count: 2 }] },
-        lsp: { server_count: 1, diagnostics_count: 3, files_with_diagnostics: 1, servers: [{ name: 'ts', command: 'typescript-language-server', file_extensions: ['ts'], root_markers: ['tsconfig.json'] }] },
+        lsp: {
+          server_count: 1,
+          diagnostics_count: 3,
+          files_with_diagnostics: 1,
+          servers: [
+            {
+              name: 'ts',
+              command: 'typescript-language-server',
+              file_extensions: ['ts'],
+              root_markers: ['tsconfig.json'],
+            },
+          ],
+        },
+        agents: {
+          default_agent: 'build',
+          total_count: 8,
+          primary_count: 7,
+          subagent_count: 6,
+          hidden_count: 0,
+          agents: [],
+        },
         skills: { skill_count: 4, command_count: 2 },
       },
       config_found: true,
@@ -34,7 +76,9 @@ const sharedPanels = {
       watch_paths: ['src'],
     },
     filteredMcpServers: [{ name: 'alpha', tool_count: 2 }],
-    filteredLspServers: [{ name: 'ts', command: 'typescript-language-server', file_extensions: ['ts'], root_markers: ['tsconfig.json'] }],
+    filteredLspServers: [
+      { name: 'ts', command: 'typescript-language-server', file_extensions: ['ts'], root_markers: ['tsconfig.json'] },
+    ],
     mcpQuery: '',
     lspQuery: '',
     openRuntimeConfigRoot: () => {},
@@ -49,6 +93,14 @@ const sharedPanels = {
       operator: {
         mcp: { server_count: 1, tool_count: 2 },
         lsp: { server_count: 1, diagnostics_count: 3 },
+        agents: {
+          default_agent: 'build',
+          total_count: 8,
+          primary_count: 7,
+          subagent_count: 6,
+          hidden_count: 0,
+          agents: [],
+        },
         skills: { skill_count: 4, command_count: 2 },
       },
     },
@@ -104,7 +156,9 @@ const sharedPanels = {
     executionFacts: [{ label: 'Run State', value: 'idle' }],
     workflowLoading: false,
     sessionExecution: { pending_permission_requests: [] },
-    timelineSummaries: [{ key: '1', kind: 'assistant', summary: 'Completed', sessionId: 'session 12', timestamp: 'now' }],
+    timelineSummaries: [
+      { key: '1', kind: 'assistant', summary: 'Completed', sessionId: 'session 12', timestamp: 'now' },
+    ],
     globalEventSummaries: [{ key: '2', kind: 'runtime', summary: 'Reloaded', sessionId: 'global', timestamp: 'now' }],
     openSelectedSessionInChat: () => {},
     selectWorkspace: () => {},
@@ -170,7 +224,8 @@ describe('RuntimeSectionPanelRenderer', () => {
 
     expect(skillsHtml.includes('Search Skills &amp; Commands')).toBe(true)
     expect(skillsHtml.includes('Use in Chat')).toBe(true)
-    expect(operatorHtml.includes('LSP + Skills')).toBe(true)
+    expect(operatorHtml.includes('Agents + Skills')).toBe(true)
+    expect(operatorHtml.includes('Default Agent')).toBe(true)
     expect(operatorHtml.includes('Config Found')).toBe(true)
   })
 })

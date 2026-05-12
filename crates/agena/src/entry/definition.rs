@@ -193,10 +193,24 @@ fn sanitize_schema_json(value: serde_json::Value) -> serde_json::Value {
         serde_json::Value::Object(mut object) => {
             object.remove("$schema");
             object.remove("title");
-            let cleaned = object
+            let mut cleaned = object
                 .into_iter()
                 .map(|(key, value)| (key, sanitize_schema_json(value)))
-                .collect();
+                .collect::<serde_json::Map<String, serde_json::Value>>();
+            // Some OpenAI-compatible gateways incorrectly reject tool schemas
+            // whose parameters are just {"type":"object"} with no explicit
+            // properties. Normalize those to an empty-properties object shape.
+            if cleaned
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind == "object")
+                && !cleaned.contains_key("properties")
+            {
+                cleaned.insert(
+                    "properties".to_string(),
+                    serde_json::Value::Object(serde_json::Map::new()),
+                );
+            }
             serde_json::Value::Object(cleaned)
         }
         serde_json::Value::Array(items) => {
@@ -295,5 +309,18 @@ mod tests {
         assert!(definition.read_only);
         assert!(definition.concurrency_safe);
         assert_eq!(definition.load_priority, EntryLoadPriority::Always);
+    }
+
+    #[test]
+    fn json_schema_for_empty_object_includes_properties() {
+        let schema = json_schema_for::<crate::message::EnterPlanModeToolInput>();
+
+        assert_eq!(schema["type"], "object");
+        assert!(
+            schema
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|properties| properties.is_empty())
+        );
     }
 }

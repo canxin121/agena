@@ -46,14 +46,12 @@ pub(super) fn prepare_command(
         .dispatch_command_before_blocking(hook_input)
     {
         Ok(CommandBeforeOutcome::Continue(updated)) => {
-            let command = if updated.args.len() >= 2
-                && updated.args[0] == "-c"
-                && updated.command == "sh"
-            {
-                updated.args[1].clone()
-            } else {
-                input.command.clone()
-            };
+            let command =
+                if updated.args.len() >= 2 && updated.args[0] == "-c" && updated.command == "sh" {
+                    updated.args[1].clone()
+                } else {
+                    input.command.clone()
+                };
             Ok(Some(PreparedShellCommand {
                 command,
                 cwd: updated.cwd,

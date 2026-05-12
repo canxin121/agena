@@ -29,8 +29,8 @@ use crate::permission::{
 };
 use crate::role::Role;
 use crate::tool::{
-    PreparedShellCommand, StreamingToolExecution, ToolError, ToolExecutor,
-    ToolInvocationExecution, ToolPermissionCheck,
+    PreparedShellCommand, StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution,
+    ToolPermissionCheck,
 };
 use std::path::PathBuf;
 
@@ -59,6 +59,7 @@ pub struct SessionManagerConfig {
     pub cache_max_bytes: usize,
     pub max_turn_loops: usize,
     pub doom_loop: crate::session::DoomLoopPolicy,
+    pub default_agent: Option<String>,
 }
 
 impl Default for SessionManagerConfig {
@@ -69,6 +70,7 @@ impl Default for SessionManagerConfig {
             cache_max_bytes: 64 * 1024 * 1024,
             max_turn_loops: 16,
             doom_loop: crate::session::DoomLoopPolicy::default(),
+            default_agent: None,
         }
     }
 }
@@ -95,6 +97,8 @@ pub struct SessionRunOptions {
     pub system: Option<String>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
+    pub agent_profile: Option<String>,
+    pub max_turn_loops: Option<usize>,
 }
 
 impl SessionRunOptions {
@@ -192,6 +196,7 @@ pub struct SessionSubtaskRequest {
     pub description: String,
     pub prompt: String,
     pub subagent_type: TaskSubagentType,
+    pub profile_name: Option<String>,
     pub task_id: Option<String>,
     pub command: Option<String>,
     pub requested_model: Option<String>,
@@ -200,6 +205,7 @@ pub struct SessionSubtaskRequest {
 #[derive(Debug, Clone)]
 pub struct SessionSubtaskResponse {
     pub session: Session,
+    pub profile_name: Option<String>,
     pub model_provider_id: Option<String>,
     pub model_id: Option<String>,
 }
@@ -511,6 +517,8 @@ impl SessionManager {
                     system: None,
                     temperature: None,
                     max_output_tokens: None,
+                    agent_profile: None,
+                    max_turn_loops: None,
                 },
             );
         }
@@ -538,6 +546,8 @@ impl SessionManager {
                 system: None,
                 temperature: None,
                 max_output_tokens: None,
+                agent_profile: None,
+                max_turn_loops: None,
             },
         )
     }
@@ -688,6 +698,9 @@ impl SessionManager {
             .store
             .load_session(request.session_id, state.cache_policy())
             .await?;
+        session = self
+            .apply_requested_agent_profile(session, &mut request.options, state.clone())
+            .await?;
         let ids = self.store.reserve_message_ids(request.parts.len()).await?;
         let user_message = build_message(
             ids,
@@ -753,7 +766,7 @@ impl SessionManager {
 
     pub async fn continue_session(
         &self,
-        request: SessionContinueRequest,
+        mut request: SessionContinueRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         let (control, steer_rx) = self.turn_registry.register(session_id).await;
@@ -761,6 +774,9 @@ impl SessionManager {
         let session = self
             .store
             .load_session(request.session_id, state.cache_policy())
+            .await?;
+        let session = self
+            .apply_requested_agent_profile(session, &mut request.options, state.clone())
             .await?;
         let options = self.apply_execution_context_to_run_options(&session, request.options)?;
         let result = self
@@ -781,20 +797,102 @@ impl SessionManager {
             .store
             .load_session(request.parent_session_id, state.cache_policy())
             .await?;
+        let requested_profile_name = request
+            .profile_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| request.subagent_type.to_string());
+        let resolved_profile = state
+            .tool_executor
+            .subagent_registry()
+            .get(requested_profile_name.as_str());
+        let effective_profile_name = resolved_profile
+            .as_ref()
+            .map(|profile| profile.name.clone())
+            .unwrap_or_else(|| requested_profile_name.clone());
+        if let Some(profile) = resolved_profile.as_ref()
+            && !profile.frontmatter.mode.allows_subagent()
+        {
+            return Err(AppError::Config(format!(
+                "agent profile '{}' is not available for subtask sessions",
+                profile.name
+            )));
+        }
+        let prompt = resolved_profile
+            .as_ref()
+            .map(|profile| {
+                if request.prompt.trim().is_empty() {
+                    profile.prompt.clone()
+                } else {
+                    format!(
+                        "{}\n\nDelegated task:\n{}",
+                        profile.prompt.trim(),
+                        request.prompt.trim()
+                    )
+                }
+            })
+            .unwrap_or_else(|| request.subagent_type.apply_prompt_guidance(&request.prompt));
+        let profile_allowed_tools = resolved_profile
+            .as_ref()
+            .map(|profile| profile.frontmatter.allowed_tools.clone())
+            .unwrap_or_default();
+        let profile_permission = resolved_profile
+            .as_ref()
+            .map(|profile| profile.frontmatter.permission.clone())
+            .unwrap_or_default();
+        let profile_mode = resolved_profile
+            .as_ref()
+            .map(|profile| profile.frontmatter.mode);
+        let profile_hidden = resolved_profile
+            .as_ref()
+            .map(|profile| profile.frontmatter.hidden)
+            .unwrap_or(false);
+        let profile_color = resolved_profile
+            .as_ref()
+            .and_then(|profile| profile.frontmatter.color.clone());
+        let profile_run = resolved_profile
+            .as_ref()
+            .map(|profile| crate::agent::AgentRunConfig {
+                temperature: profile.frontmatter.temperature,
+                max_output_tokens: profile.frontmatter.max_output_tokens,
+                steps: profile.frontmatter.steps,
+            })
+            .unwrap_or_default();
+        let profile_model = resolved_profile
+            .as_ref()
+            .and_then(|profile| profile.frontmatter.model.clone());
+        let requested_model = request.requested_model.clone().or(profile_model);
 
         if let Some(existing) = self
             .find_child_session_for_task(request.parent_session_id, request.task_id.as_deref())
             .await?
         {
-            let options =
-                self.subtask_run_options(&existing, &parent, request.requested_model.as_deref())?;
-            let session = self
-                .continue_session(SessionContinueRequest {
-                    session_id: existing.id,
-                    options: options.clone(),
-                })
+            let mut existing = existing;
+            existing.runtime.execution.agent_profile = Some(effective_profile_name.clone());
+            existing.runtime.execution.agent_mode = profile_mode;
+            existing.runtime.execution.agent_hidden = profile_hidden;
+            existing.runtime.execution.agent_color = profile_color.clone();
+            existing.runtime.execution.system_prompt_override = Some(prompt.clone());
+            existing
+                .runtime
+                .set_allowed_tools(profile_allowed_tools.clone());
+            existing.runtime.execution.agent_permission = profile_permission.clone();
+            existing.runtime.execution.agent_run = profile_run.clone();
+            existing.runtime.execution.task_id = request.task_id.clone();
+            existing = self
+                .persist_session_changes(existing, Vec::new(), Vec::new(), None, state.clone())
                 .await?;
+            let options =
+                self.subtask_run_options(&existing, &parent, requested_model.as_deref())?;
+            let session = Box::pin(self.continue_session(SessionContinueRequest {
+                session_id: existing.id,
+                options: options.clone(),
+            }))
+            .await?;
             return Ok(SessionSubtaskResponse {
+                profile_name: Some(effective_profile_name),
                 model_provider_id: Some(options.model.provider_id.to_string()),
                 model_id: Some(options.model.model_id.to_string()),
                 session,
@@ -809,24 +907,29 @@ impl SessionManager {
                 state.cache_policy(),
             )
             .await?;
-        child.runtime.execution.agent_profile = Some(request.subagent_type.to_string());
-        child.runtime.execution.system_prompt_override = Some(request.prompt.clone());
+        child.runtime.execution.agent_profile = Some(effective_profile_name.clone());
+        child.runtime.execution.agent_mode = profile_mode;
+        child.runtime.execution.agent_hidden = profile_hidden;
+        child.runtime.execution.agent_color = profile_color;
+        child.runtime.execution.system_prompt_override = Some(prompt.clone());
+        child.runtime.set_allowed_tools(profile_allowed_tools);
+        child.runtime.execution.agent_permission = profile_permission;
+        child.runtime.execution.agent_run = profile_run;
         child.runtime.execution.task_id = request.task_id.clone();
         child = self
             .persist_session_changes(child, Vec::new(), Vec::new(), None, state.clone())
             .await?;
 
-        let options =
-            self.subtask_run_options(&child, &parent, request.requested_model.as_deref())?;
-        let session = self
-            .submit_user_turn(SessionUserTurnRequest {
-                session_id: child.id,
-                options: options.clone(),
-                parts: vec![PartContent::text(request.prompt)],
-            })
-            .await?;
+        let options = self.subtask_run_options(&child, &parent, requested_model.as_deref())?;
+        let session = Box::pin(self.submit_user_turn(SessionUserTurnRequest {
+            session_id: child.id,
+            options: options.clone(),
+            parts: vec![PartContent::text(request.prompt)],
+        }))
+        .await?;
 
         Ok(SessionSubtaskResponse {
+            profile_name: Some(effective_profile_name),
             model_provider_id: Some(options.model.provider_id.to_string()),
             model_id: Some(options.model.model_id.to_string()),
             session,
@@ -973,12 +1076,15 @@ impl SessionManager {
 
     pub async fn reply_permission(
         &self,
-        request: SessionPermissionReplyRequest,
+        mut request: SessionPermissionReplyRequest,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self
             .store
             .load_session(request.session_id, state.cache_policy())
+            .await?;
+        session = self
+            .apply_requested_agent_profile(session, &mut request.options, state.clone())
             .await?;
         let pending = session
             .find_pending_permission_by_request_id(request.reply.request_id.as_str())
@@ -1076,12 +1182,15 @@ impl SessionManager {
 
     pub async fn reply_user_input(
         &self,
-        request: SessionUserInputReplyRequest,
+        mut request: SessionUserInputReplyRequest,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self
             .store
             .load_session(request.session_id, state.cache_policy())
+            .await?;
+        session = self
+            .apply_requested_agent_profile(session, &mut request.options, state.clone())
             .await?;
         let pending = session
             .find_pending_user_input_by_request_id(request.reply.request_id.as_str())
@@ -1204,7 +1313,10 @@ impl SessionManager {
         control: Arc<TurnControl>,
         mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
-        for _ in 0..state.config.max_turn_loops {
+        let max_turn_loops = options
+            .max_turn_loops
+            .unwrap_or(state.config.max_turn_loops);
+        for _ in 0..max_turn_loops {
             // External cancel — surface as the same TurnAborted shape we
             // use elsewhere so the projection sees a clean boundary.
             if control.cancel.is_cancelled() {
@@ -2287,7 +2399,11 @@ impl SessionManager {
             resolve_permission_with_persisted_rule(check.decision.clone(), persisted_rule.as_ref());
 
         if persisted_rule.is_none() {
-            let plugins = self.execution_state().tool_executor.plugin_manager().clone();
+            let plugins = self
+                .execution_state()
+                .tool_executor
+                .plugin_manager()
+                .clone();
             if !plugins.is_empty() {
                 let default_decision = match resolution.decision {
                     PermissionDecision::Allow => crate::plugin::PermissionDecision::Allow,
@@ -2892,7 +3008,180 @@ impl SessionManager {
         if let Some(system) = session.runtime.execution.system_prompt_override.as_ref() {
             options.system = Some(system.clone());
         }
+        if options.temperature.is_none() {
+            options.temperature = session
+                .runtime
+                .execution
+                .agent_run
+                .temperature
+                .map(|value| value.0);
+        }
+        if options.max_output_tokens.is_none() {
+            options.max_output_tokens = session.runtime.execution.agent_run.max_output_tokens;
+        }
+        if options.max_turn_loops.is_none() {
+            options.max_turn_loops = session.runtime.execution.agent_run.steps;
+        }
+        if options.agent_profile.is_none() {
+            options.agent_profile = session.runtime.execution.agent_profile.clone();
+        }
         Ok(options)
+    }
+
+    async fn apply_requested_agent_profile(
+        &self,
+        session: Session,
+        options: &mut SessionRunOptions,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let requested = options
+            .agent_profile
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let persisted = session
+            .runtime
+            .execution
+            .agent_profile
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let effective = requested
+            .or(persisted)
+            .or_else(|| state.config.default_agent.clone());
+        let Some(agent_name) = effective else {
+            return Ok(session);
+        };
+        let profile = state
+            .tool_executor
+            .subagent_registry()
+            .require(agent_name.as_str())
+            .map_err(|err| AppError::Config(err.to_string()))?;
+        if session.is_subagent && !profile.frontmatter.mode.allows_subagent() {
+            return Err(AppError::Config(format!(
+                "agent profile '{}' is not available for subtask sessions",
+                profile.name
+            )));
+        }
+        if !session.is_subagent && !profile.frontmatter.mode.allows_root() {
+            return Err(AppError::Config(format!(
+                "agent profile '{}' is not available for root sessions",
+                profile.name
+            )));
+        }
+        options.agent_profile = Some(profile.name.clone());
+        if session.runtime.execution.agent_profile.as_deref() == Some(profile.name.as_str())
+            && session.runtime.execution.system_prompt_override.is_some()
+        {
+            *options = self.apply_execution_context_to_run_options(&session, options.clone())?;
+            return Ok(session);
+        }
+        self.apply_agent_profile_to_session(session, options, profile, state)
+            .await
+    }
+
+    async fn apply_agent_profile_to_session(
+        &self,
+        mut session: Session,
+        options: &mut SessionRunOptions,
+        profile: crate::agents::AgentProfile,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let next_allowed_tools = profile.frontmatter.allowed_tools.clone();
+        let next_permission = profile.frontmatter.permission.clone();
+        let next_system = profile.prompt.trim().to_string();
+        let next_model =
+            self.resolve_root_agent_model(&session, options, profile.frontmatter.model.as_deref())?;
+        let next_model_provider_id = next_model.provider_id.to_string();
+        let next_model_id = next_model.model_id.to_string();
+        let next_run = crate::agent::AgentRunConfig {
+            temperature: profile.frontmatter.temperature,
+            max_output_tokens: profile.frontmatter.max_output_tokens,
+            steps: profile.frontmatter.steps,
+        };
+        let changed = session.runtime.execution.agent_profile.as_deref()
+            != Some(profile.name.as_str())
+            || session.runtime.execution.agent_mode != Some(profile.frontmatter.mode)
+            || session.runtime.execution.agent_hidden != profile.frontmatter.hidden
+            || session.runtime.execution.agent_color != profile.frontmatter.color
+            || session.runtime.execution.system_prompt_override.as_deref()
+                != Some(next_system.as_str())
+            || session.runtime.allowed_tools() != next_allowed_tools.as_slice()
+            || session.runtime.execution.agent_permission != next_permission
+            || session.runtime.execution.model_provider_id.as_deref()
+                != Some(next_model_provider_id.as_str())
+            || session.runtime.execution.model_id.as_deref() != Some(next_model_id.as_str())
+            || session.runtime.execution.agent_run != next_run;
+        session.runtime.execution.agent_profile = Some(profile.name.clone());
+        session.runtime.execution.agent_mode = Some(profile.frontmatter.mode);
+        session.runtime.execution.agent_hidden = profile.frontmatter.hidden;
+        session.runtime.execution.agent_color = profile.frontmatter.color.clone();
+        session.runtime.execution.system_prompt_override = Some(next_system);
+        session.runtime.set_allowed_tools(next_allowed_tools);
+        session.runtime.execution.agent_permission = next_permission;
+        session.runtime.execution.agent_run = next_run.clone();
+        session.runtime.set_model_override(
+            Some(next_model_provider_id.clone()),
+            Some(next_model_id.clone()),
+        );
+        options.model = next_model;
+        options.system = session.runtime.execution.system_prompt_override.clone();
+        if options.temperature.is_none() {
+            options.temperature = next_run.temperature.map(|value| value.0);
+        }
+        if options.max_output_tokens.is_none() {
+            options.max_output_tokens = next_run.max_output_tokens;
+        }
+        if options.max_turn_loops.is_none() {
+            options.max_turn_loops = next_run.steps;
+        }
+        if !changed {
+            return Ok(session);
+        }
+        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+            .await
+    }
+
+    fn resolve_root_agent_model(
+        &self,
+        session: &Session,
+        options: &SessionRunOptions,
+        requested_model: Option<&str>,
+    ) -> Result<ModelRef, AppError> {
+        let requested_model = requested_model
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(target) = requested_model
+            && target.contains('/')
+        {
+            return self
+                .execution_state()
+                .processor
+                .provider_registry()
+                .resolve_model_target(target, None);
+        }
+        let base_model = session
+            .runtime
+            .model_override()
+            .map(|(provider_id, model_id)| {
+                ModelRef::try_new(provider_id, model_id).map_err(|error| {
+                    AppError::Internal(format!(
+                        "session {} contains invalid execution model override: {error}",
+                        session.id
+                    ))
+                })
+            })
+            .transpose()?
+            .or_else(|| infer_session_model(session).ok().flatten())
+            .unwrap_or_else(|| options.model.clone());
+        Ok(match requested_model {
+            Some(model_id) => {
+                ModelRef::new(base_model.provider_id.to_string(), model_id.to_string())
+            }
+            None => base_model,
+        })
     }
 
     fn apply_tool_success_execution_context(
@@ -2981,8 +3270,42 @@ impl SessionManager {
         let requested_model = requested_model
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        let inherited =
-            infer_session_model(child)?.or_else(|| infer_session_model(parent).ok().flatten());
+        if let Some(target) = requested_model
+            && target.contains('/')
+        {
+            let model = self
+                .execution_state()
+                .processor
+                .provider_registry()
+                .resolve_model_target(target, None)?;
+            return Ok(SessionRunOptions {
+                model,
+                system: child.runtime.execution.system_prompt_override.clone(),
+                temperature: child
+                    .runtime
+                    .execution
+                    .agent_run
+                    .temperature
+                    .map(|value| value.0),
+                max_output_tokens: child.runtime.execution.agent_run.max_output_tokens,
+                agent_profile: child.runtime.execution.agent_profile.clone(),
+                max_turn_loops: child.runtime.execution.agent_run.steps,
+            });
+        }
+        let inherited = child
+            .runtime
+            .model_override()
+            .map(|(provider_id, model_id)| {
+                ModelRef::try_new(provider_id, model_id).map_err(|error| {
+                    AppError::Internal(format!(
+                        "child session {} contains invalid model override: {error}",
+                        child.id
+                    ))
+                })
+            })
+            .transpose()?
+            .or_else(|| infer_session_model(child).ok().flatten())
+            .or_else(|| infer_session_model(parent).ok().flatten());
         let base_model = inherited.ok_or_else(|| {
             AppError::Internal(
                 "subtask requires a parent or child session model before it can run".to_string(),
@@ -2997,8 +3320,15 @@ impl SessionManager {
         Ok(SessionRunOptions {
             model,
             system: child.runtime.execution.system_prompt_override.clone(),
-            temperature: None,
-            max_output_tokens: None,
+            temperature: child
+                .runtime
+                .execution
+                .agent_run
+                .temperature
+                .map(|value| value.0),
+            max_output_tokens: child.runtime.execution.agent_run.max_output_tokens,
+            agent_profile: child.runtime.execution.agent_profile.clone(),
+            max_turn_loops: child.runtime.execution.agent_run.steps,
         })
     }
 
@@ -4557,10 +4887,12 @@ mod tests {
     where
         P: ModelProvider + 'static,
     {
+        let agents = crate::agents::SubagentRegistry::discover(root, None);
         let executor = ToolExecutor::new(
             root,
             Agent::new("build", permission_policy.clone()).with_tool_policy(tool_policy.clone()),
-        );
+        )
+        .with_subagent_registry(agents.clone());
         let plugins = crate::tool::first_party_plugin_host(root).expect("first-party plugin host");
         plugins
             .host_handle()
@@ -4592,6 +4924,7 @@ mod tests {
     where
         P: ModelProvider + 'static,
     {
+        let agents = crate::agents::SubagentRegistry::discover(root, None);
         let mut registry = ProviderRegistry::new();
         registry.register(provider);
         let processor =
@@ -4601,6 +4934,7 @@ mod tests {
             root,
             Agent::new("build", permission_policy).with_tool_policy(tool_policy),
         )
+        .with_subagent_registry(agents)
         .with_plugin_manager(plugins);
 
         SessionManager::new(db, processor, executor).with_config(config)
@@ -4634,6 +4968,8 @@ mod tests {
             system: None,
             temperature: None,
             max_output_tokens: Some(128),
+            agent_profile: None,
+            max_turn_loops: None,
         }
     }
 
@@ -4643,6 +4979,8 @@ mod tests {
             system: Some("system".to_string()),
             temperature: Some(0.2),
             max_output_tokens: Some(256),
+            agent_profile: None,
+            max_turn_loops: None,
         }
     }
 
@@ -4658,6 +4996,8 @@ mod tests {
             system: None,
             temperature: None,
             max_output_tokens: Some(128),
+            agent_profile: None,
+            max_turn_loops: None,
         }
     }
 
@@ -5093,6 +5433,7 @@ mod tests {
                 cache_max_bytes: usize::MAX,
                 max_turn_loops: 16,
                 doom_loop: crate::session::DoomLoopPolicy::default(),
+                default_agent: None,
             },
         )
         .await;
@@ -5263,6 +5604,7 @@ mod tests {
                 description: "inspect".to_string(),
                 prompt: TaskSubagentType::Explore.apply_prompt_guidance("look around"),
                 subagent_type: TaskSubagentType::Explore,
+                profile_name: None,
                 task_id: Some("task-1".to_string()),
                 command: None,
                 requested_model: None,
@@ -5276,6 +5618,7 @@ mod tests {
                 description: "inspect again".to_string(),
                 prompt: TaskSubagentType::Explore.apply_prompt_guidance("look around again"),
                 subagent_type: TaskSubagentType::Explore,
+                profile_name: None,
                 task_id: Some("task-1".to_string()),
                 command: None,
                 requested_model: None,
@@ -5302,6 +5645,403 @@ mod tests {
             .filter(|summary| summary.parent_id == Some(parent.id))
             .count();
         assert_eq!(child_count, 1);
+    }
+
+    #[tokio::test]
+    async fn spawn_subtask_applies_registered_profile_context() {
+        let workspace = TempWorkspace::new();
+        let agents_dir = workspace.root.join(".agena").join("agents");
+        fs::create_dir_all(&agents_dir).expect("create agents dir");
+        fs::write(
+            agents_dir.join("reviewer.md"),
+            "---\ndescription: reviewer\nmode: all\nallowed_tools:\n  - read\n  - grep\npermission:\n  read:\n    \"*.env\": ask\n    \"*\": allow\nmodel: scripted/scripted-model\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
+        )
+        .expect("write reviewer profile");
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let parent = service
+            .create_session(SessionCreateRequest {
+                title: "parent".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create parent session");
+        let _ = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: parent.id,
+                options: run_options(),
+                parts: vec![PartContent::text("parent context")],
+            })
+            .await
+            .expect("seed parent turn");
+
+        let spawned = service
+            .spawn_subtask(SessionSubtaskRequest {
+                parent_session_id: parent.id,
+                description: "review changes".to_string(),
+                prompt: "Inspect the implementation and call out risks.".to_string(),
+                subagent_type: TaskSubagentType::Verify,
+                profile_name: Some("audit".to_string()),
+                task_id: Some("review-1".to_string()),
+                command: None,
+                requested_model: None,
+            })
+            .await
+            .expect("spawn subtask");
+
+        assert_eq!(spawned.profile_name.as_deref(), Some("reviewer"));
+        assert_eq!(
+            spawned.model_provider_id.as_deref(),
+            Some(scripted_provider_id().as_str())
+        );
+        assert_eq!(
+            spawned.model_id.as_deref(),
+            Some(scripted_model_id().as_str())
+        );
+
+        let child = service
+            .get_session(spawned.session.id)
+            .await
+            .expect("load child session");
+        assert_eq!(
+            child.runtime.execution.agent_profile.as_deref(),
+            Some("reviewer")
+        );
+        assert_eq!(child.runtime.allowed_tools(), ["grep", "read"]);
+        let system = child
+            .runtime
+            .execution
+            .system_prompt_override
+            .as_deref()
+            .expect("system prompt override");
+        assert!(system.contains("You are a strict reviewer."));
+        assert!(system.contains("Delegated task:"));
+        assert!(system.contains("Inspect the implementation"));
+        match child.runtime.execution.agent_permission.read.as_ref() {
+            Some(crate::agent::AgentPermissionRules::Ordered(entries)) => {
+                let collected = entries
+                    .iter()
+                    .map(|(pattern, mode)| (pattern.as_str(), *mode))
+                    .collect::<Vec<_>>();
+                assert_eq!(collected.len(), 2);
+                assert!(collected.contains(&("*.env", crate::permission::PermissionMode::Ask)));
+                assert!(collected.contains(&("*", crate::permission::PermissionMode::Allow)));
+            }
+            other => panic!("expected ordered read rules, got {other:?}"),
+        }
+        assert_eq!(
+            child.runtime.execution.agent_mode,
+            Some(crate::agent::AgentMode::All)
+        );
+        assert!(!child.runtime.execution.agent_hidden);
+        assert_eq!(child.runtime.execution.agent_color, None);
+        assert!(child.runtime.execution.agent_run.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_user_turn_applies_requested_root_agent_profile() {
+        let workspace = TempWorkspace::new();
+        let agents_dir = workspace.root.join(".agena").join("agents");
+        fs::create_dir_all(&agents_dir).expect("create agents dir");
+        fs::write(
+            agents_dir.join("planner.md"),
+            "---\ndescription: planner\nallowed_tools:\n  - read\n  - grep\npermission:\n  default_read: allow\n  default_write: deny\n  execution_mode: ask\n  tools:\n    bash: ask\n  tool_rules:\n    bash:\n      \"git push *\": deny\n      \"git *\": allow\n      \"*\": ask\nmodel: scripted/scripted-model\naliases: [\"plan\"]\n---\nYou are a precise planner.",
+        )
+        .expect("write planner profile");
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "root agent".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let session = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: SessionRunOptions {
+                    agent_profile: Some("plan".to_string()),
+                    ..run_options()
+                },
+                parts: vec![PartContent::text("Draft a plan.")],
+            })
+            .await
+            .expect("submit turn");
+
+        assert_eq!(
+            session.runtime.execution.agent_profile.as_deref(),
+            Some("planner")
+        );
+        assert_eq!(session.runtime.allowed_tools(), ["grep", "read"]);
+        assert_eq!(
+            session.runtime.execution.system_prompt_override.as_deref(),
+            Some("You are a precise planner.")
+        );
+        assert_eq!(
+            session.runtime.execution.agent_permission.default_write,
+            Some(crate::permission::PermissionMode::Deny)
+        );
+        match session
+            .runtime
+            .execution
+            .agent_permission
+            .tool_rules
+            .get("bash")
+        {
+            Some(crate::agent::AgentPermissionRules::Ordered(entries)) => {
+                let collected = entries
+                    .iter()
+                    .map(|(pattern, mode)| (pattern.as_str(), *mode))
+                    .collect::<Vec<_>>();
+                assert_eq!(collected.len(), 3);
+                assert!(
+                    collected.contains(&("git push *", crate::permission::PermissionMode::Deny))
+                );
+                assert!(collected.contains(&("git *", crate::permission::PermissionMode::Allow)));
+                assert!(collected.contains(&("*", crate::permission::PermissionMode::Ask)));
+            }
+            other => panic!("expected ordered bash tool rules, got {other:?}"),
+        }
+        assert_eq!(
+            session.runtime.execution.model_provider_id.as_deref(),
+            Some(scripted_provider_id().as_str())
+        );
+        assert_eq!(
+            session.runtime.execution.model_id.as_deref(),
+            Some(scripted_model_id().as_str())
+        );
+        let user_message = session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::User)
+            .expect("user message");
+        assert_eq!(
+            user_message.metadata.model_provider_id,
+            scripted_provider_id().as_str()
+        );
+        assert_eq!(user_message.metadata.model_id, scripted_model_id().as_str());
+    }
+
+    #[tokio::test]
+    async fn submit_user_turn_rejects_subagent_only_root_profile() {
+        let workspace = TempWorkspace::new();
+        let agents_dir = workspace.root.join(".agena").join("agents");
+        fs::create_dir_all(&agents_dir).expect("create agents dir");
+        fs::write(
+            agents_dir.join("delegate.md"),
+            "---\ndescription: delegate\nmode: subagent\n---\nYou only run as a delegated subagent.",
+        )
+        .expect("write delegate profile");
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "root agent".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let error = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: SessionRunOptions {
+                    agent_profile: Some("delegate".to_string()),
+                    ..run_options()
+                },
+                parts: vec![PartContent::text("Handle this at the root.")],
+            })
+            .await
+            .expect_err("subagent-only profile should be rejected for root sessions");
+
+        match error {
+            AppError::Config(message) => {
+                assert!(message.contains("delegate"));
+                assert!(message.contains("root sessions"));
+            }
+            other => panic!("expected config error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_subtask_rejects_primary_only_profile() {
+        let workspace = TempWorkspace::new();
+        let agents_dir = workspace.root.join(".agena").join("agents");
+        fs::create_dir_all(&agents_dir).expect("create agents dir");
+        fs::write(
+            agents_dir.join("lead.md"),
+            "---\ndescription: lead\nmode: primary\n---\nYou only run as a root agent.",
+        )
+        .expect("write primary-only profile");
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let parent = service
+            .create_session(SessionCreateRequest {
+                title: "parent".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create parent session");
+        let _ = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: parent.id,
+                options: run_options(),
+                parts: vec![PartContent::text("parent context")],
+            })
+            .await
+            .expect("seed parent turn");
+
+        let error = service
+            .spawn_subtask(SessionSubtaskRequest {
+                parent_session_id: parent.id,
+                description: "delegate".to_string(),
+                prompt: "Handle this as a subtask.".to_string(),
+                subagent_type: TaskSubagentType::Explore,
+                profile_name: Some("lead".to_string()),
+                task_id: Some("lead-1".to_string()),
+                command: None,
+                requested_model: None,
+            })
+            .await
+            .expect_err("primary-only profile should be rejected for subtask sessions");
+
+        match error {
+            AppError::Config(message) => {
+                assert!(message.contains("lead"));
+                assert!(message.contains("subtask sessions"));
+            }
+            other => panic!("expected config error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_user_turn_applies_agent_run_defaults() {
+        let workspace = TempWorkspace::new();
+        let agents_dir = workspace.root.join(".agena").join("agents");
+        fs::create_dir_all(&agents_dir).expect("create agents dir");
+        fs::write(
+            agents_dir.join("focused.md"),
+            "---\ndescription: focused\ntemperature: 0.33\nmax_output_tokens: 77\nsteps: 2\n---\nYou are focused.",
+        )
+        .expect("write focused profile");
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let service = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(requests.clone()),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "focused root".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let session = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: SessionRunOptions {
+                    model: recording_model_ref(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                    agent_profile: Some("focused".to_string()),
+                    max_turn_loops: None,
+                },
+                parts: vec![PartContent::text("Answer briefly.")],
+            })
+            .await
+            .expect("submit turn");
+
+        assert_eq!(
+            session.runtime.execution.agent_run,
+            crate::agent::AgentRunConfig {
+                temperature: Some(crate::agent::AgentTemperature(0.33)),
+                max_output_tokens: Some(77),
+                steps: Some(2),
+            }
+        );
+
+        let recorded = requests
+            .lock()
+            .expect("recording provider request lock should succeed")
+            .clone();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].temperature, Some(0.33));
+        assert_eq!(recorded[0].max_output_tokens, Some(77));
+    }
+
+    #[tokio::test]
+    async fn submit_user_turn_uses_agent_step_budget_for_turn_loop() {
+        let workspace = TempWorkspace::new();
+        let agents_dir = workspace.root.join(".agena").join("agents");
+        fs::create_dir_all(&agents_dir).expect("create agents dir");
+        fs::write(
+            agents_dir.join("single_step.md"),
+            "---\ndescription: single step\nsteps: 1\n---\nYou only get one loop.",
+        )
+        .expect("write single-step profile");
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "single step".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let error = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: SessionRunOptions {
+                    agent_profile: Some("single_step".to_string()),
+                    ..run_options()
+                },
+                parts: vec![PartContent::text("patch")],
+            })
+            .await
+            .expect_err("single-step profile should exhaust the loop budget on tool call turns");
+
+        match error {
+            AppError::Internal(message) => {
+                assert!(message.contains("max turn loop budget"));
+            }
+            other => panic!("expected loop-budget error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -5655,6 +6395,7 @@ mod tests {
                 cache_max_bytes: usize::MAX,
                 max_turn_loops: 16,
                 doom_loop: crate::session::DoomLoopPolicy::default(),
+                default_agent: None,
             },
             ContextPolicy::default(),
             RecordingProvider::new(requests.clone()),
@@ -6053,6 +6794,8 @@ mod tests {
                 system: None,
                 temperature: None,
                 max_output_tokens: Some(128),
+                agent_profile: None,
+                max_turn_loops: None,
             }
         }
 
@@ -6373,6 +7116,8 @@ mod tests {
                 system: None,
                 temperature: None,
                 max_output_tokens: Some(64),
+                agent_profile: None,
+                max_turn_loops: None,
             }
         }
 

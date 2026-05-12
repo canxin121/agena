@@ -10,16 +10,16 @@ use crate::local_api::{
     SessionCreateRequest as HttpSessionCreateRequest,
     SessionExecutionContextResource as HttpSessionExecutionContextResource,
     SessionExecutionResource as HttpSessionExecutionResource, SessionListQuery,
-    SessionReplaceRequest, SessionResource as HttpSessionResource, WorkspaceListQuery,
-    WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource, WorkspaceWriteRequest,
+    SessionReplaceRequest, SessionResource as HttpSessionResource, SessionRunOptionsRequest,
+    WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource,
+    WorkspaceWriteRequest,
 };
 use agena::event::{EventStore, StoreRange};
 use agena::{
     event::EventKind,
-    model::ModelRef,
     session::{
-        SessionContinueRequest, SessionPermissionReplyRequest, SessionRunOptions,
-        SessionUserInputReplyRequest, SessionUserTurnRequest,
+        SessionContinueRequest, SessionPermissionReplyRequest, SessionUserInputReplyRequest,
+        SessionUserTurnRequest,
     },
 };
 use agena_api::{
@@ -39,8 +39,9 @@ use agena_api::{
         ListSessionsParams, ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        ProviderModelsResponse, ProviderSummaryResource, RunOptions, RuntimeAutomationResource,
-        RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
+        ProviderModelsResponse, ProviderSummaryResource, RunOptions, RuntimeAgentResource,
+        RuntimeAgentsResource, RuntimeAutomationResource, RuntimeLspResource,
+        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
         RuntimeOperatorResource, RuntimeSessionCacheResource, RuntimeSkillResource,
         RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
         SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
@@ -50,19 +51,30 @@ use agena_api::{
 
 use crate::{error::ServerError, state::AppState};
 
-const DEFAULT_MODEL_REF: &str = "openai/gpt-4o-mini";
-
-fn run_options_to_core(options: &RunOptions) -> SessionRunOptions {
-    let model = options.model.clone().unwrap_or_else(|| {
-        let parts: Vec<&str> = DEFAULT_MODEL_REF.split('/').collect();
-        ModelRef::new(parts[0], parts.get(1).copied().unwrap_or("gpt-4o-mini"))
-    });
-    SessionRunOptions {
-        model,
-        system: options.system.clone(),
-        temperature: options.temperature,
-        max_output_tokens: options.max_output_tokens,
-    }
+async fn run_options_to_core(
+    state: &AppState,
+    session_id: i64,
+    options: &RunOptions,
+) -> Result<agena::session::SessionRunOptions, ServerError> {
+    let snapshot = state.runtime().current_snapshot();
+    let manager = state.session_manager()?;
+    state
+        .service()
+        .resolve_run_options(
+            snapshot.provider_registry().as_ref(),
+            manager.as_ref(),
+            session_id,
+            SessionRunOptionsRequest {
+                model: options.model.clone(),
+                agent_profile: options.agent_profile.clone(),
+                system: options.system.clone(),
+                temperature: options.temperature,
+                max_output_tokens: options.max_output_tokens,
+                max_turn_loops: options.max_turn_loops,
+            },
+        )
+        .await
+        .map_err(server_error_from_http)
 }
 
 fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
@@ -145,11 +157,16 @@ fn execution_context_from_http(
 ) -> SessionExecutionContextResource {
     SessionExecutionContextResource {
         agent_profile: value.agent_profile,
+        agent_mode: value.agent_mode,
+        agent_hidden: value.agent_hidden,
+        agent_color: value.agent_color,
         active_skill_name: value.active_skill_name,
         system_prompt_override: value.system_prompt_override,
         allowed_tools: value.allowed_tools,
+        agent_permission: value.agent_permission,
         model_provider_id: value.model_provider_id,
         model_id: value.model_id,
+        agent_run: value.agent_run,
         effective_workspace_root: value.effective_workspace_root,
         task_id: value.task_id,
     }
@@ -324,6 +341,60 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         }
     };
 
+    let agents = {
+        let mut entries = snapshot.agents().list_descriptors();
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        let default_agent = resolution
+            .config
+            .runtime
+            .default_agent
+            .clone()
+            .filter(|name| entries.iter().any(|entry| entry.name == *name))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find(|entry| entry.mode.allows_root() && !entry.hidden)
+                    .map(|entry| entry.name.clone())
+            })
+            .unwrap_or_else(|| "none".to_string());
+        let total_count = entries.len();
+        let primary_count = entries
+            .iter()
+            .filter(|entry| entry.mode.allows_root())
+            .count();
+        let subagent_count = entries
+            .iter()
+            .filter(|entry| entry.mode.allows_subagent())
+            .count();
+        let hidden_count = entries.iter().filter(|entry| entry.hidden).count();
+        RuntimeAgentsResource {
+            default_agent,
+            total_count,
+            primary_count,
+            subagent_count,
+            hidden_count,
+            agents: entries
+                .into_iter()
+                .map(|entry| RuntimeAgentResource {
+                    name: entry.name,
+                    description: entry.description,
+                    mode: entry.mode,
+                    hidden: entry.hidden,
+                    color: entry.color,
+                    temperature: entry.temperature.map(|value| value.0),
+                    max_output_tokens: entry.max_output_tokens,
+                    steps: entry.steps,
+                    allowed_tools: entry.allowed_tools,
+                    permission: entry.permission,
+                    model: entry.model,
+                    aliases: entry.aliases,
+                    scope: entry.scope,
+                    source_path: entry.source_path.map(|path| path.display().to_string()),
+                })
+                .collect(),
+        }
+    };
+
     let automation = if let Some(manager) = snapshot.session_manager() {
         let mut jobs = crate::local_api::list_scheduled_jobs(&manager).await;
         crate::local_api::sort_jobs_for_display(&mut jobs);
@@ -370,7 +441,12 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         },
         session_cache,
         automation,
-        operator: RuntimeOperatorResource { mcp, lsp, skills },
+        operator: RuntimeOperatorResource {
+            mcp,
+            lsp,
+            agents,
+            skills,
+        },
     }
 }
 
@@ -465,7 +541,7 @@ pub async fn dispatch_command(
         }) => {
             let request = SessionUserTurnRequest {
                 session_id,
-                options: run_options_to_core(&options),
+                options: run_options_to_core(state, session_id, &options).await?,
                 parts,
             };
             let session = manager.submit_user_turn(request).await?;
@@ -484,7 +560,7 @@ pub async fn dispatch_command(
         }) => {
             let request = SessionContinueRequest {
                 session_id,
-                options: run_options_to_core(&options),
+                options: run_options_to_core(state, session_id, &options).await?,
             };
             let session = manager.continue_session(request).await?;
             let resource = state
@@ -603,7 +679,7 @@ pub async fn dispatch_command(
         }) => {
             let request = SessionPermissionReplyRequest {
                 session_id,
-                options: run_options_to_core(&options),
+                options: run_options_to_core(state, session_id, &options).await?,
                 reply,
                 operator: Some("jsonrpc".to_string()),
             };
@@ -624,7 +700,7 @@ pub async fn dispatch_command(
         }) => {
             let request = SessionUserInputReplyRequest {
                 session_id,
-                options: run_options_to_core(&options),
+                options: run_options_to_core(state, session_id, &options).await?,
                 reply,
             };
             let session = manager.reply_user_input(request).await?;
@@ -986,36 +1062,226 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::local_api::SessionCreateRequest;
+    use agena::config::LoadConfigRequest;
     use agena::model::ModelRef;
+    use agena::runtime::AgenaRuntime;
     use agena_api::resource::RunOptions;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
-    #[test]
-    fn run_options_to_core_uses_default_when_model_absent() {
+    fn unique_test_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("agena-api-server-{label}-{nanos}"))
+    }
+
+    async fn create_session(state: &AppState, workspace_root: &Path, title: &str) -> i64 {
+        let workspace = state
+            .service()
+            .resolve_workspace(crate::local_api::WorkspaceResolveRequest {
+                path: workspace_root.display().to_string(),
+                create_if_missing: true,
+            })
+            .await
+            .expect("workspace should resolve");
+        let session = state
+            .service()
+            .create_session(SessionCreateRequest {
+                workspace_id: workspace.id,
+                title: title.to_string(),
+                parent_id: None,
+            })
+            .await
+            .expect("session should be created");
+        session.id
+    }
+
+    async fn test_state_with_config(config: &str, label: &str) -> (AppState, PathBuf) {
+        let root = unique_test_dir(label);
+        let workspace_root = root.join("workspace");
+        fs::create_dir_all(&workspace_root).expect("create workspace root");
+        let config_path = root.join("config.toml");
+        fs::write(&config_path, config).expect("write config");
+
+        let db = Arc::new(
+            sea_orm::Database::connect("sqlite::memory:")
+                .await
+                .expect("in-memory sqlite should connect"),
+        );
+        agena::db::init_schema(db.as_ref())
+            .await
+            .expect("schema init should succeed");
+
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(config_path),
+                overrides: Vec::new(),
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime build should succeed");
+
+        (AppState::new(runtime, db), workspace_root)
+    }
+
+    #[tokio::test]
+    async fn run_options_to_core_uses_single_provider_default_when_model_absent() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-5.4"
+api_key = "dummy"
+"#,
+            "single-provider-default",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "single provider").await;
         let options = RunOptions {
             model: None,
+            agent_profile: None,
             system: None,
             temperature: None,
             max_output_tokens: None,
+            max_turn_loops: None,
         };
-        let core = run_options_to_core(&options);
-        assert!(!core.model.provider_id.as_str().is_empty());
-        assert!(!core.model.model_id.as_str().is_empty());
+        let core = run_options_to_core(&state, session_id, &options)
+            .await
+            .expect("single provider should resolve default model");
+        assert_eq!(core.model.provider_id.as_str(), "openai");
+        assert_eq!(core.model.model_id.as_str(), "gpt-5.4");
     }
 
-    #[test]
-    fn run_options_to_core_round_trips_explicit_model() {
+    #[tokio::test]
+    async fn run_options_to_core_errors_when_model_absent_and_multiple_providers_exist() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-5.4"
+api_key = "dummy"
+
+[providers.ollama]
+kind = "ollama"
+base_url = "http://localhost:11434"
+default_model = "qwen3:14b"
+"#,
+            "multiple-provider-default",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "multiple providers").await;
         let options = RunOptions {
-            model: Some(ModelRef::new("anthropic", "claude-sonnet-4-6")),
+            model: None,
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+        let error = run_options_to_core(&state, session_id, &options)
+            .await
+            .expect_err("multiple providers should require an explicit or inferred model");
+        assert!(
+            matches!(error, ServerError::BadRequest(message) if message.contains("model is required"))
+        );
+    }
+
+    #[tokio::test]
+    async fn run_options_to_core_round_trips_explicit_model() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-5.4"
+api_key = "dummy"
+
+[providers.ollama]
+kind = "ollama"
+base_url = "http://localhost:11434"
+default_model = "qwen3:14b"
+"#,
+            "explicit-model",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "explicit model").await;
+        let options = RunOptions {
+            model: Some(ModelRef::new("openai", "gpt-5.4")),
+            agent_profile: None,
             system: Some("be concise".into()),
             temperature: Some(0.7),
             max_output_tokens: Some(256),
+            max_turn_loops: None,
         };
-        let core = run_options_to_core(&options);
-        assert_eq!(core.model.provider_id.as_str(), "anthropic");
-        assert_eq!(core.model.model_id.as_str(), "claude-sonnet-4-6");
+        let core = run_options_to_core(&state, session_id, &options)
+            .await
+            .expect("explicit model should bypass default inference");
+        assert_eq!(core.model.provider_id.as_str(), "openai");
+        assert_eq!(core.model.model_id.as_str(), "gpt-5.4");
         assert_eq!(core.system.as_deref(), Some("be concise"));
         assert_eq!(core.temperature, Some(0.7));
         assert_eq!(core.max_output_tokens, Some(256));
+    }
+
+    #[tokio::test]
+    async fn runtime_query_includes_agent_inventory() {
+        let (state, _) = test_state_with_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-5.4"
+api_key = "dummy"
+"#,
+            "runtime-agent-inventory",
+        )
+        .await;
+
+        let result = dispatch_query(&state, Query::Runtime)
+            .await
+            .expect("runtime query should succeed");
+        let QueryResult::Runtime(runtime) = result else {
+            panic!("expected runtime query result");
+        };
+
+        assert_eq!(runtime.operator.agents.default_agent, "build");
+        assert!(runtime.operator.agents.total_count >= 1);
+        assert!(runtime.operator.agents.primary_count >= 1);
+        assert!(
+            runtime
+                .operator
+                .agents
+                .agents
+                .iter()
+                .any(|agent| agent.name == "build" && agent.mode.allows_root())
+        );
+        assert!(
+            runtime
+                .operator
+                .agents
+                .agents
+                .iter()
+                .any(|agent| agent.name == "planner")
+        );
+        assert!(
+            runtime
+                .operator
+                .agents
+                .agents
+                .iter()
+                .any(|agent| agent.name == "scout")
+        );
     }
 
     #[test]

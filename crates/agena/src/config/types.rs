@@ -2,15 +2,13 @@ use std::{collections::BTreeMap, fmt, path::PathBuf, str::FromStr, time::Duratio
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use tracing_subscriber::EnvFilter;
 
 use crate::{
-    permission::{
-        BashPatternRule, ExecutionMode, PermissionConfigError, PermissionMode, PermissionPolicy,
-        ToolPermissionPolicy,
-    },
+    agent::{AgentBashRule, AgentPermissionConfig},
+    permission::{BashPatternRule, ExecutionMode, PermissionConfigError, PermissionMode},
     provider::{
-        ConfiguredModelDefinition,
-        OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
+        ConfiguredModelDefinition, OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
         ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
         ProviderStreamReplayConfig, ThinkingRequest,
         auth::{ConfiguredAuthStore, FileAuthStore, KeyringAuthStore},
@@ -63,7 +61,11 @@ pub struct ResolvedConfig {
     pub auth: AuthConfig,
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, AgentConfig>,
     pub permission: PermissionConfig,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub permission_explicit: bool,
     pub plugins: PluginConfig,
     pub plugin_storage: PluginStorageConfig,
     pub memory: MemoryConfig,
@@ -97,21 +99,18 @@ impl ResolvedConfig {
         }
     }
 
-    pub fn permission_policy(&self) -> PermissionPolicy {
-        PermissionPolicy::new(self.permission.default_read, self.permission.default_write)
-            .with_external_directory_default(self.permission.default_external_directory)
+    pub fn legacy_permission_as_agent(&self) -> AgentPermissionConfig {
+        if !self.permission_explicit {
+            return AgentPermissionConfig::default();
+        }
+        self.permission.clone().into_agent_permission()
     }
 
-    pub fn tool_permission_policy(&self) -> Result<ToolPermissionPolicy, PermissionConfigError> {
-        let mut policy =
-            ToolPermissionPolicy::allow_all().with_execution_mode(self.permission.execution_mode);
-        for rule in &self.permission.bash_rules {
-            policy = policy.with_bash_pattern_rule(rule.pattern.clone(), rule.mode)?;
-        }
-        for pattern in &self.permission.bash_deny_patterns {
-            policy = policy.with_bash_deny_pattern(pattern.clone())?;
-        }
-        Ok(policy)
+    pub fn agent_permission_with_legacy_fallback(
+        &self,
+        permission: &AgentPermissionConfig,
+    ) -> AgentPermissionConfig {
+        self.legacy_permission_as_agent().merged_with(permission)
     }
 
     pub fn auth_store(&self) -> ConfiguredAuthStore {
@@ -157,6 +156,26 @@ impl ResolvedConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TracingConfig {
     pub filter: String,
+    pub database_level: String,
+}
+
+impl Default for TracingConfig {
+    fn default() -> Self {
+        Self {
+            filter: "info".to_string(),
+            database_level: "error".to_string(),
+        }
+    }
+}
+
+impl TracingConfig {
+    pub fn env_filter(&self) -> Result<EnvFilter, tracing_subscriber::filter::ParseError> {
+        let mut filter = EnvFilter::try_new(self.filter.as_str())?;
+        for target in ["sqlx", "sea_orm", "sea_orm_migration"] {
+            filter = filter.add_directive(format!("{target}={}", self.database_level).parse()?);
+        }
+        Ok(filter)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -214,6 +233,8 @@ pub struct RuntimeConfig {
     pub reload: RuntimeReloadConfig,
     pub janitor: RuntimeJanitorConfig,
     pub session_cache: SessionCacheConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -254,6 +275,40 @@ pub struct SessionCacheConfig {
     pub max_bytes: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AgentConfig {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "crate::agent::AgentMode::is_primary")]
+    pub mode: crate::agent::AgentMode,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<crate::agent::AgentTemperature>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
+    )]
+    pub permission: crate::agent::AgentPermissionConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PermissionConfig {
     pub default_read: PermissionMode,
@@ -276,6 +331,27 @@ pub struct BashRuleConfig {
 impl BashRuleConfig {
     pub fn compile(&self) -> Result<BashPatternRule, PermissionConfigError> {
         BashPatternRule::new(self.pattern.clone(), self.mode)
+    }
+}
+
+impl PermissionConfig {
+    pub fn into_agent_permission(self) -> AgentPermissionConfig {
+        AgentPermissionConfig {
+            default_read: Some(self.default_read),
+            default_write: Some(self.default_write),
+            default_external_directory: Some(self.default_external_directory),
+            execution_mode: Some(self.execution_mode),
+            bash_rules: self
+                .bash_rules
+                .into_iter()
+                .map(|rule| AgentBashRule {
+                    pattern: rule.pattern,
+                    mode: rule.mode,
+                })
+                .collect(),
+            bash_deny_patterns: self.bash_deny_patterns,
+            ..Default::default()
+        }
     }
 }
 

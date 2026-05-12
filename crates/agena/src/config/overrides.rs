@@ -11,6 +11,7 @@ pub enum ConfigOverride {
     AuthStorePath(PathBuf),
     AuthStoreBackend(AuthStoreBackend),
     TracingFilter(String),
+    TracingDatabaseLevel(String),
     UiLocale(String),
     PermissionDefaultRead(crate::permission::PermissionMode),
     PermissionDefaultWrite(crate::permission::PermissionMode),
@@ -46,6 +47,7 @@ impl FromStr for ConfigOverride {
                 Ok(Self::AuthStoreBackend(parse_auth_store_backend(raw_value)?))
             }
             "tracing.filter" => Ok(Self::TracingFilter(raw_value.to_owned())),
+            "tracing.database_level" => Ok(Self::TracingDatabaseLevel(raw_value.to_owned())),
             "ui.locale" => Ok(Self::UiLocale(raw_value.to_owned())),
             "permission.default_read" => Ok(Self::PermissionDefaultRead(parse_permission_mode(
                 raw_value,
@@ -102,6 +104,12 @@ impl ConfigOverride {
                     .tracing
                     .get_or_insert_with(RawTracingConfig::default)
                     .filter = Some(filter.clone());
+            }
+            Self::TracingDatabaseLevel(level) => {
+                config
+                    .tracing
+                    .get_or_insert_with(RawTracingConfig::default)
+                    .database_level = Some(level.clone());
             }
             Self::UiLocale(locale) => {
                 config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale.clone());

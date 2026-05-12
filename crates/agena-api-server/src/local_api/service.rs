@@ -1066,6 +1066,8 @@ impl ApiService {
             system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),
             temperature: request.temperature,
             max_output_tokens: request.max_output_tokens,
+            agent_profile: non_empty(request.agent_profile.as_deref()).map(ToOwned::to_owned),
+            max_turn_loops: request.max_turn_loops,
         })
     }
 
@@ -1088,11 +1090,16 @@ impl ApiService {
             automation: session_automation_resource(&scheduler_jobs, session.id),
             execution: SessionExecutionContextResource {
                 agent_profile: session.runtime().execution.agent_profile.clone(),
+                agent_mode: session.runtime().execution.agent_mode,
+                agent_hidden: session.runtime().execution.agent_hidden,
+                agent_color: session.runtime().execution.agent_color.clone(),
                 active_skill_name: session.runtime().execution.active_skill_name.clone(),
                 system_prompt_override: session.runtime().execution.system_prompt_override.clone(),
                 allowed_tools: session.runtime().execution.allowed_tools.clone(),
+                agent_permission: session.runtime().execution.agent_permission.clone(),
                 model_provider_id: session.runtime().execution.model_provider_id.clone(),
                 model_id: session.runtime().execution.model_id.clone(),
+                agent_run: session.runtime().execution.agent_run.clone(),
                 effective_workspace_root: session
                     .runtime()
                     .effective_workspace_root()

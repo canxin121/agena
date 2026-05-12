@@ -18,6 +18,7 @@ pub mod role;
 pub mod runtime;
 pub mod session;
 pub mod storage;
+pub mod tracing;
 pub use entry as tool;
 pub mod plugins;
 

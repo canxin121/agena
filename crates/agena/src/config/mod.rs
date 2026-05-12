@@ -14,7 +14,7 @@ pub use error::ConfigError;
 pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvironment};
 pub use overrides::ConfigOverride;
 pub use types::{
-    AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, AuthConfig,
+    AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, AuthConfig,
     AuthStoreBackend, BedrockAuthConfig, CloudflareAiGatewayProviderOptions, CodexProviderOptions,
     ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource,
     CopilotProviderOptions, GitlabProviderOptions, GoogleVertexAuthConfig,

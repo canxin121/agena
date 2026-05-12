@@ -183,7 +183,7 @@ fn build_provider(
     resolved: &ResolvedProviderConfig,
     client: reqwest::Client,
     auth_store: Arc<dyn AuthStore>,
-    auth_snapshot: &HashMap<String, AuthData>,
+    _auth_snapshot: &HashMap<String, AuthData>,
     env: &dyn ConfigEnvironment,
 ) -> Result<Arc<dyn ModelProvider>, ConfigError> {
     let provider = match &resolved.definition {
@@ -200,11 +200,14 @@ fn build_provider(
             provider_id,
             OpenAiProvider::new_managed(
                 client,
-                required_managed_secret(
+                resolved_or_deferred_managed_secret(
                     provider_id,
                     "api_key",
                     config.api_key.as_ref(),
                     config.api_key_env.as_ref(),
+                    auth_store.clone(),
+                    AuthSecretSelector::AccessOrApiKey,
+                    AuthRefreshStrategy::OpenAiOAuth,
                     env,
                 )?,
                 config.base_url.clone(),
@@ -217,11 +220,14 @@ fn build_provider(
             .with_default_thinking(config.default_thinking.clone()),
         ),
         ProviderDefinition::OpenAiCompatible(config) => {
-            let credential = required_managed_secret(
+            let credential = resolved_or_deferred_managed_secret(
                 provider_id,
                 "api_key",
                 config.api_key.as_ref(),
                 config.api_key_env.as_ref(),
+                auth_store.clone(),
+                AuthSecretSelector::AccessOrApiKey,
+                AuthRefreshStrategy::ReloadFromStore,
                 env,
             )?;
             let extra_headers = to_hash_map(&config.extra_headers);
@@ -264,17 +270,20 @@ fn build_provider(
         }
         ProviderDefinition::SapAiCore(config) => register_provider(
             provider_id,
-            build_sap_ai_core_provider(provider_id, client, config, env)?,
+            build_sap_ai_core_provider(provider_id, client, config, auth_store.clone(), env)?,
         ),
         ProviderDefinition::Anthropic(config) => register_provider(
             provider_id,
             AnthropicProvider::new_managed(
                 client,
-                required_managed_secret(
+                resolved_or_deferred_managed_secret(
                     provider_id,
                     "api_key",
                     config.api_key.as_ref(),
                     config.api_key_env.as_ref(),
+                    auth_store.clone(),
+                    AuthSecretSelector::AccessOrApiKey,
+                    AuthRefreshStrategy::ReloadFromStore,
                     env,
                 )?,
                 config.base_url.clone(),
@@ -291,11 +300,14 @@ fn build_provider(
             provider_id,
             GeminiProvider::new_managed(
                 client,
-                required_managed_secret(
+                resolved_or_deferred_managed_secret(
                     provider_id,
                     "api_key",
                     config.api_key.as_ref(),
                     config.api_key_env.as_ref(),
+                    auth_store.clone(),
+                    AuthSecretSelector::AccessOrApiKey,
+                    AuthRefreshStrategy::ReloadFromStore,
                     env,
                 )?,
                 config.base_url.clone(),
@@ -304,19 +316,15 @@ fn build_provider(
             .with_extra_headers(to_hash_map(&config.extra_headers))
             .with_default_thinking(config.default_thinking.clone()),
         ),
-        ProviderDefinition::Codex(config) => {
-            let auth = required_auth(auth_snapshot, config.auth_provider_id.as_str(), provider_id)?;
-            register_provider(
-                provider_id,
-                CodexProvider::from_auth_with_options(
-                    client,
-                    auth_store,
-                    auth,
-                    config.default_model.clone(),
-                    config.auth_provider_id.clone(),
-                )?,
-            )
-        }
+        ProviderDefinition::Codex(config) => register_provider(
+            provider_id,
+            CodexProvider::from_auth_store_with_options(
+                client,
+                auth_store,
+                config.default_model.clone(),
+                config.auth_provider_id.clone(),
+            )?,
+        ),
         ProviderDefinition::Gitlab(config) => {
             let runtime_config = GitlabProviderConfig {
                 instance_url: config.instance_url.clone(),
@@ -326,13 +334,7 @@ fn build_provider(
                 feature_flags: to_hash_map(&config.feature_flags),
             };
 
-            if has_resolved_secret(
-                provider_id,
-                "api_key",
-                config.api_key.as_ref(),
-                config.api_key_env.as_ref(),
-                env,
-            )? {
+            if has_configured_secret(config.api_key.as_ref(), config.api_key_env.as_ref(), env) {
                 register_provider(
                     provider_id,
                     GitlabProvider::from_managed_token_with_config(
@@ -354,7 +356,6 @@ fn build_provider(
                         provider_id,
                         client,
                         auth_store,
-                        auth_snapshot,
                         config,
                         runtime_config,
                     )?,
@@ -362,7 +363,6 @@ fn build_provider(
             }
         }
         ProviderDefinition::Copilot(config) => {
-            let auth = required_auth(auth_snapshot, config.auth_provider_id.as_str(), provider_id)?;
             let options = RuntimeCopilotProviderOptions {
                 base_url: copilot_base_url(config),
                 default_model: Some(ModelId::new(config.default_model.clone())),
@@ -370,17 +370,11 @@ fn build_provider(
             };
             register_provider(
                 provider_id,
-                CopilotProvider::with_bearer_credential(
+                CopilotProvider::with_managed_auth(
                     provider_id,
                     client,
-                    ManagedCredential::auth_store(
-                        format!("{provider_id} bearer token"),
-                        auth_store,
-                        config.auth_provider_id.clone(),
-                        AuthSecretSelector::RefreshOrAccess,
-                        AuthRefreshStrategy::ReloadFromStore,
-                    ),
-                    auth.enterprise_url().map(ToOwned::to_owned),
+                    auth_store,
+                    config.auth_provider_id.clone(),
                     options,
                 )?,
             )
@@ -392,11 +386,14 @@ fn build_provider(
                     api_key_env,
                 } => AmazonBedrockProvider::new_managed_bearer(
                     client,
-                    required_managed_secret(
+                    resolved_or_deferred_managed_secret(
                         provider_id,
                         "api_key",
                         api_key.as_ref(),
                         api_key_env.as_ref(),
+                        auth_store.clone(),
+                        AuthSecretSelector::AccessOrApiKey,
+                        AuthRefreshStrategy::ReloadFromStore,
                         env,
                     )?,
                     config.base_url.clone(),
@@ -434,11 +431,14 @@ fn build_provider(
                     client,
                     config.base_url.clone(),
                     config.default_model.clone(),
-                    required_managed_secret(
+                    resolved_or_deferred_managed_secret(
                         provider_id,
                         "access_token",
                         access_token.as_ref(),
                         access_token_env.as_ref(),
+                        auth_store.clone(),
+                        AuthSecretSelector::AccessOrApiKey,
+                        AuthRefreshStrategy::ReloadFromStore,
                         env,
                     )?,
                 ),
@@ -453,30 +453,31 @@ fn build_provider(
         }
         ProviderDefinition::CloudflareAiGateway(config) => register_provider(
             provider_id,
-            build_cloudflare_provider(provider_id, client, config, env)?,
+            build_cloudflare_provider(provider_id, client, config, auth_store.clone(), env)?,
         ),
     };
 
-    Ok(apply_configured_models(
-        provider,
-        resolved.models.clone(),
-    ))
+    Ok(apply_configured_models(provider, resolved.models.clone()))
 }
 
 fn build_cloudflare_provider(
     provider_id: &str,
     client: reqwest::Client,
     config: &CloudflareAiGatewayProviderOptions,
+    auth_store: Arc<dyn AuthStore>,
     env: &dyn ConfigEnvironment,
 ) -> Result<CloudflareAiGatewayProvider, ConfigError> {
     let inner = OpenAiCompatibleProvider::new_managed(
         provider_id,
         client,
-        required_managed_secret(
+        resolved_or_deferred_managed_secret(
             provider_id,
             "api_key",
             config.api_key.as_ref(),
             config.api_key_env.as_ref(),
+            auth_store,
+            AuthSecretSelector::AccessOrApiKey,
+            AuthRefreshStrategy::ReloadFromStore,
             env,
         )?,
         config.base_url.clone(),
@@ -489,45 +490,45 @@ fn build_sap_ai_core_provider(
     provider_id: &str,
     client: reqwest::Client,
     config: &HttpProviderConfig<super::OpenAiCompatibleProviderOptions>,
+    auth_store: Arc<dyn AuthStore>,
     env: &dyn ConfigEnvironment,
 ) -> Result<OpenAiCompatibleProvider, ConfigError> {
-    let credential = if has_resolved_secret(
+    let credential = match resolved_managed_secret(
         provider_id,
         "api_key",
         config.api_key.as_ref(),
         config.api_key_env.as_ref(),
+        auth_store,
+        AuthSecretSelector::AccessOrApiKey,
+        AuthRefreshStrategy::ReloadFromStore,
         env,
-    )? {
-        required_managed_secret(
-            provider_id,
-            "api_key",
-            config.api_key.as_ref(),
-            config.api_key_env.as_ref(),
-            env,
-        )?
-    } else {
-        let service_key_raw = env
-            .var("AICORE_SERVICE_KEY")
-            .and_then(|value| normalize_text(&value))
-            .ok_or_else(|| ConfigError::InvalidProviderConfig {
-                provider_id: provider_id.to_owned(),
-                message:
-                    "sap-ai-core requires `AICORE_SERVICE_KEY` when `api_key` is not configured"
-                        .to_owned(),
-            })?;
-        let service_key =
-            parse_sap_ai_core_service_key(service_key_raw.as_str()).map_err(|err| {
-                ConfigError::InvalidProviderConfig {
+    ) {
+        Ok(credential) => credential,
+        Err(ConfigError::MissingProviderField { .. }) => {
+            let service_key_raw = env
+                .var("AICORE_SERVICE_KEY")
+                .and_then(|value| normalize_text(&value))
+                .ok_or_else(|| ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message: format!("failed to parse `AICORE_SERVICE_KEY`: {err}"),
-                }
-            })?;
-        ManagedCredential::sap_ai_core(
-            format!("{provider_id} sap ai core token"),
-            client.clone(),
-            provider_id.to_owned(),
-            service_key,
-        )
+                    message:
+                        "sap-ai-core requires `AICORE_SERVICE_KEY` when `api_key` is not configured"
+                            .to_owned(),
+                })?;
+            let service_key =
+                parse_sap_ai_core_service_key(service_key_raw.as_str()).map_err(|err| {
+                    ConfigError::InvalidProviderConfig {
+                        provider_id: provider_id.to_owned(),
+                        message: format!("failed to parse `AICORE_SERVICE_KEY`: {err}"),
+                    }
+                })?;
+            ManagedCredential::sap_ai_core(
+                format!("{provider_id} sap ai core token"),
+                client.clone(),
+                provider_id.to_owned(),
+                service_key,
+            )
+        }
+        Err(err) => return Err(err),
     };
 
     Ok(OpenAiCompatibleProvider::new_managed(
@@ -550,11 +551,9 @@ fn build_gitlab_auth_provider(
     provider_id: &str,
     client: reqwest::Client,
     auth_store: Arc<dyn AuthStore>,
-    auth_snapshot: &HashMap<String, AuthData>,
     config: &super::GitlabProviderOptions,
     runtime_config: GitlabProviderConfig,
 ) -> Result<GitlabProvider, ConfigError> {
-    let _ = required_auth(auth_snapshot, config.auth_provider_id.as_str(), provider_id)?;
     GitlabProvider::from_managed_token_with_config(
         client,
         ManagedCredential::auth_store(
@@ -571,34 +570,21 @@ fn build_gitlab_auth_provider(
     .map_err(ConfigError::from)
 }
 
-fn has_resolved_secret(
-    provider_id: &str,
-    field: &'static str,
+fn has_configured_secret(
     direct: Option<&String>,
     env_key: Option<&String>,
     env: &dyn ConfigEnvironment,
-) -> Result<bool, ConfigError> {
+) -> bool {
     match (
         direct.and_then(|value| normalize_text(value)),
         env_key.and_then(|value| normalize_text(value)),
     ) {
-        (Some(_), _) => Ok(true),
-        (None, Some(env_key)) => {
-            if env
-                .var(env_key.as_str())
-                .and_then(|value| normalize_text(&value))
-                .is_some()
-            {
-                Ok(true)
-            } else {
-                Err(ConfigError::MissingEnvironmentVariable {
-                    provider_id: provider_id.to_owned(),
-                    field,
-                    env_key,
-                })
-            }
-        }
-        (None, None) => Ok(false),
+        (Some(_), _) => true,
+        (None, Some(env_key)) => env
+            .var(env_key.as_str())
+            .and_then(|value| normalize_text(&value))
+            .is_some(),
+        (None, None) => false,
     }
 }
 
@@ -643,15 +629,118 @@ fn required_managed_secret(
     ))
 }
 
-fn required_auth<'a>(
-    auth_snapshot: &'a HashMap<String, AuthData>,
-    auth_provider_id: &str,
+fn resolved_managed_secret(
     provider_id: &str,
-) -> Result<&'a AuthData, ConfigError> {
-    auth_snapshot.get(auth_provider_id).ok_or_else(|| {
-        ConfigError::Validation(format!(
-            "provider `{provider_id}` requires auth credential `{auth_provider_id}`"
-        ))
+    field: &'static str,
+    direct: Option<&String>,
+    env_key: Option<&String>,
+    auth_store: Arc<dyn AuthStore>,
+    selector: AuthSecretSelector,
+    refresh: AuthRefreshStrategy,
+    env: &dyn ConfigEnvironment,
+) -> Result<ManagedCredential, ConfigError> {
+    if let Some(value) = direct.and_then(|value| normalize_text(value)) {
+        return Ok(ManagedCredential::static_value(
+            format!("{provider_id} {field}"),
+            value,
+        ));
+    }
+
+    if let Some(env_key) = env_key.and_then(|value| normalize_text(value)) {
+        if env
+            .var(env_key.as_str())
+            .and_then(|value| normalize_text(&value))
+            .is_some()
+        {
+            return Ok(ManagedCredential::environment(
+                format!("{provider_id} {field}"),
+                provider_id.to_owned(),
+                field,
+                env_key,
+            ));
+        }
+    }
+
+    let auth = auth_store.get(provider_id).map_err(ConfigError::from)?;
+    if auth
+        .as_ref()
+        .is_some_and(|auth| auth_supports_selector(auth, selector))
+    {
+        return Ok(ManagedCredential::auth_store(
+            format!("{provider_id} {field}"),
+            auth_store,
+            provider_id.to_owned(),
+            selector,
+            refresh,
+        ));
+    }
+
+    Err(ConfigError::MissingProviderField {
+        provider_id: provider_id.to_owned(),
+        field,
+    })
+}
+
+fn resolved_or_deferred_managed_secret(
+    provider_id: &str,
+    field: &'static str,
+    direct: Option<&String>,
+    env_key: Option<&String>,
+    auth_store: Arc<dyn AuthStore>,
+    selector: AuthSecretSelector,
+    refresh: AuthRefreshStrategy,
+    env: &dyn ConfigEnvironment,
+) -> Result<ManagedCredential, ConfigError> {
+    if let Some(value) = direct.and_then(|value| normalize_text(value)) {
+        return Ok(ManagedCredential::static_value(
+            format!("{provider_id} {field}"),
+            value,
+        ));
+    }
+
+    let env_key = env_key.and_then(|value| normalize_text(value));
+
+    if let Some(env_key) = env_key.as_ref() {
+        if env
+            .var(env_key.as_str())
+            .and_then(|value| normalize_text(&value))
+            .is_some()
+        {
+            return Ok(ManagedCredential::environment(
+                format!("{provider_id} {field}"),
+                provider_id.to_owned(),
+                field,
+                env_key.clone(),
+            ));
+        }
+    }
+
+    let auth = auth_store.get(provider_id).map_err(ConfigError::from)?;
+    if auth
+        .as_ref()
+        .is_some_and(|auth| auth_supports_selector(auth, selector))
+    {
+        return Ok(ManagedCredential::auth_store(
+            format!("{provider_id} {field}"),
+            auth_store,
+            provider_id.to_owned(),
+            selector,
+            refresh,
+        ));
+    }
+
+    if let Some(env_key) = env_key {
+        return Ok(ManagedCredential::environment(
+            format!("{provider_id} {field}"),
+            provider_id.to_owned(),
+            field,
+            env_key,
+        ));
+    }
+
+    Err(ConfigError::MissingProviderField {
+        provider_id: provider_id.to_owned(),
+        field,
     })
 }
 
@@ -715,6 +804,21 @@ fn normalize_text(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
+fn auth_supports_selector(auth: &AuthData, selector: AuthSecretSelector) -> bool {
+    match selector {
+        AuthSecretSelector::AccessOrApiKey => match auth {
+            AuthData::Api { key } | AuthData::WellKnown { key, .. } => !key.trim().is_empty(),
+            AuthData::OAuth { access, .. } => !access.trim().is_empty(),
+        },
+        AuthSecretSelector::RefreshOrAccess => match auth {
+            AuthData::Api { key } | AuthData::WellKnown { key, .. } => !key.trim().is_empty(),
+            AuthData::OAuth {
+                refresh, access, ..
+            } => !refresh.trim().is_empty() || !access.trim().is_empty(),
+        },
+    }
+}
+
 fn to_hash_map<K, V>(map: &std::collections::BTreeMap<K, V>) -> HashMap<K, V>
 where
     K: Clone + Eq + std::hash::Hash,
@@ -734,7 +838,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use crate::config::{ConfigEnvironment, ConfigLoader, LoadConfigRequest};
+    use crate::config::{ConfigEnvironment, ConfigLoader, ConfigOverride, LoadConfigRequest};
     use crate::provider::CapabilitySupport;
 
     #[derive(Clone, Default)]
@@ -759,6 +863,9 @@ mod tests {
     fn registry_builder_resolves_env_secret_for_concrete_provider() {
         let path = write_temp_file(
             r#"
+[auth]
+store_backend = "file"
+
 [providers.openai]
 kind = "openai"
 base_url = "https://api.openai.com/v1"
@@ -821,6 +928,364 @@ input = { unsupported = ["image"] }
             .expect("provider capabilities should resolve");
         assert_eq!(capabilities.image_input, CapabilitySupport::Unsupported);
         assert_eq!(capabilities.document_input, CapabilitySupport::Supported);
+    }
+
+    #[test]
+    fn registry_builder_accepts_auth_store_api_key_for_openai_without_config_secret() {
+        let path = write_temp_file(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+"#,
+        );
+
+        let auth_path = write_temp_file(
+            r#"
+{"providers":{"openai":{"type":"api","key":"sk-from-auth-store"}}}
+"#,
+        );
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build from auth store api key");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "openai"));
+    }
+
+    #[test]
+    fn registry_builder_accepts_auth_store_oauth_for_openai_without_config_secret() {
+        let path = write_temp_file(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+"#,
+        );
+
+        let auth_path = write_temp_file(
+            r#"
+{"providers":{"openai":{"type":"oauth","refresh":"refresh-token","access":"access-token","expires_at_ms":4102444800000}}}
+"#,
+        );
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build from auth store oauth");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "openai"));
+    }
+
+    #[test]
+    fn registry_builder_prefers_auth_store_when_api_key_env_is_configured_but_missing() {
+        let path = write_temp_file(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key_env = "OPENAI_API_KEY"
+"#,
+        );
+
+        let auth_path = write_temp_file(
+            r#"
+{"providers":{"openai":{"type":"api","key":"sk-from-auth-store"}}}
+"#,
+        );
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build from auth store fallback");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "openai"));
+    }
+
+    #[test]
+    fn registry_builder_prefers_gitlab_oauth_when_api_key_env_is_configured_but_missing() {
+        let path = write_temp_file(
+            r#"
+[auth]
+store_backend = "file"
+
+[providers.gitlab]
+kind = "gitlab"
+instance_url = "https://gitlab.com"
+ai_gateway_url = "https://cloud.gitlab.com"
+default_model = "claude-sonnet-4-5"
+auth_provider_id = "gitlab"
+api_key_env = "GITLAB_TOKEN"
+"#,
+        );
+
+        let auth_path = write_temp_file(
+            r#"
+{
+  "providers":{
+    "gitlab":{"type":"oauth","refresh":"refresh-token","access":"access-token","expires_at_ms":4102444800000},
+    "gitlab-instance":{"type":"well_known","key":"https://gitlab.com","token":""}
+  }
+}
+"#,
+        );
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build from gitlab oauth fallback");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "gitlab"));
+    }
+
+    #[test]
+    fn registry_builder_registers_codex_without_existing_auth() {
+        let path = write_temp_file(
+            r#"
+[auth]
+store_backend = "file"
+
+[providers.codex]
+kind = "codex"
+default_model = "gpt-5.3-codex"
+auth_provider_id = "openai"
+"#,
+        );
+
+        let auth_path = write_temp_file(r#"{"providers":{}}"#);
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build without codex auth");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "codex"));
+    }
+
+    #[test]
+    fn registry_builder_registers_github_copilot_without_existing_auth() {
+        let path = write_temp_file(
+            r#"
+[auth]
+store_backend = "file"
+
+[providers."github-copilot"]
+kind = "copilot"
+default_model = "gpt-4o-mini"
+auth_provider_id = "github-copilot"
+"#,
+        );
+
+        let auth_path = write_temp_file(r#"{"providers":{}}"#);
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build without copilot auth");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "github-copilot"));
+    }
+
+    #[test]
+    fn registry_builder_registers_gitlab_without_existing_auth() {
+        let path = write_temp_file(
+            r#"
+[auth]
+store_backend = "file"
+
+[providers.gitlab]
+kind = "gitlab"
+instance_url = "https://gitlab.com"
+ai_gateway_url = "https://cloud.gitlab.com"
+default_model = "claude-sonnet-4-5"
+auth_provider_id = "gitlab"
+"#,
+        );
+
+        let auth_path = write_temp_file(r#"{"providers":{}}"#);
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build without gitlab auth");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "gitlab"));
+    }
+
+    #[test]
+    fn registry_builder_registers_google_vertex_with_missing_env_until_request_time() {
+        let path = write_temp_file(
+            r#"
+[auth]
+store_backend = "file"
+
+[providers."google-vertex"]
+kind = "google_vertex"
+base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
+default_model = "google/gemini-2.5-flash"
+access_token_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
+"#,
+        );
+
+        let auth_path = write_temp_file(r#"{"providers":{}}"#);
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build without google vertex env");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "google-vertex"));
+    }
+
+    #[test]
+    fn registry_builder_accepts_config_full_without_credentials_for_first_run_login() {
+        let path = write_temp_file(include_str!("../../../../config.full.toml"));
+        let auth_path = write_temp_file(r#"{"providers":{}}"#);
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config.full.toml should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("config.full.toml should build provider registry without credentials");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "openai"));
+        assert!(ids.iter().any(|id| id == "codex"));
+        assert!(ids.iter().any(|id| id == "github-copilot"));
+        assert!(ids.iter().any(|id| id == "gitlab"));
+        assert!(ids.iter().any(|id| id == "google-vertex"));
+    }
+
+    #[test]
+    fn registry_builder_accepts_auth_store_api_key_for_sap_ai_core_without_config_secret() {
+        let path = write_temp_file(
+            r#"
+[auth]
+store_backend = "file"
+
+[providers.sap]
+kind = "sap_ai_core"
+base_url = "https://api.example.com/v2"
+default_model = "anthropic/claude-sonnet-4"
+auth_header = "authorization"
+auth_scheme = "Bearer"
+"#,
+        );
+
+        let auth_path = write_temp_file(
+            r#"
+{"providers":{"sap":{"type":"api","key":"sap-api-token"}}}
+"#,
+        );
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                overrides: vec![ConfigOverride::AuthStorePath(auth_path)],
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build from sap auth store api key");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "sap"));
     }
 
     fn write_temp_file(content: &str) -> PathBuf {

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::{
     error::AppError,
@@ -10,12 +11,14 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, StreamResumePolicy,
-        auth::AuthData, prompt_cache, should_retry_credential, sse, utils, wire_message,
+        auth::{AuthData, AuthStore},
+        prompt_cache, should_retry_credential, sse, utils, wire_message,
     },
     role::Role,
 };
 
 const PROVIDER_ID_ENTERPRISE: &str = "github-copilot-enterprise";
+const DEFAULT_PUBLIC_BASE_URL: &str = "https://api.githubcopilot.com";
 
 #[derive(Clone)]
 pub struct CopilotProvider {
@@ -23,6 +26,8 @@ pub struct CopilotProvider {
     client: reqwest::Client,
     bearer_token: ManagedCredential,
     base_url: String,
+    auth_store: Option<Arc<dyn AuthStore>>,
+    auth_provider_id: Option<String>,
     default_model: ModelId,
     models_url: Option<String>,
 }
@@ -73,6 +78,35 @@ impl CopilotProvider {
         )
     }
 
+    pub fn with_managed_auth(
+        id: &str,
+        client: reqwest::Client,
+        auth_store: Arc<dyn AuthStore>,
+        auth_provider_id: impl Into<String>,
+        options: CopilotProviderOptions,
+    ) -> Result<Self, AppError> {
+        let auth_provider_id = auth_provider_id.into();
+        let enterprise_url = auth_store
+            .get(auth_provider_id.as_str())?
+            .and_then(|auth| auth.enterprise_url().map(ToOwned::to_owned));
+        let mut provider = Self::with_bearer_credential(
+            id,
+            client,
+            ManagedCredential::auth_store(
+                format!("{id} bearer token"),
+                auth_store.clone(),
+                auth_provider_id.clone(),
+                crate::provider::AuthSecretSelector::RefreshOrAccess,
+                crate::provider::AuthRefreshStrategy::ReloadFromStore,
+            ),
+            enterprise_url,
+            options,
+        )?;
+        provider.auth_store = Some(auth_store);
+        provider.auth_provider_id = Some(auth_provider_id);
+        Ok(provider)
+    }
+
     pub fn with_bearer_credential(
         id: &str,
         client: reqwest::Client,
@@ -81,12 +115,12 @@ impl CopilotProvider {
         options: CopilotProviderOptions,
     ) -> Result<Self, AppError> {
         let default_base = if id == PROVIDER_ID_ENTERPRISE {
-            let domain = enterprise_url.as_ref().ok_or_else(|| {
-                AppError::Config("enterprise_url missing for github-copilot-enterprise".into())
-            })?;
-            format!("https://copilot-api.{}", normalize_domain(domain))
+            enterprise_url
+                .as_ref()
+                .map(|domain| format!("https://copilot-api.{}", normalize_domain(domain)))
+                .unwrap_or_else(|| DEFAULT_PUBLIC_BASE_URL.to_owned())
         } else {
-            "https://api.githubcopilot.com".to_owned()
+            DEFAULT_PUBLIC_BASE_URL.to_owned()
         };
 
         let base_url = options.base_url.unwrap_or(default_base);
@@ -99,23 +133,69 @@ impl CopilotProvider {
             client,
             bearer_token,
             base_url,
+            auth_store: None,
+            auth_provider_id: None,
             default_model,
             models_url: options.models_url,
         })
     }
 
-    fn models_endpoint(&self) -> String {
-        self.models_url
-            .clone()
-            .unwrap_or_else(|| format!("{}/models", self.base_url.trim_end_matches('/')))
+    fn configured_public_base_url(&self) -> bool {
+        self.base_url.trim_end_matches('/') == DEFAULT_PUBLIC_BASE_URL
     }
 
-    fn chat_endpoint(&self) -> String {
-        format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
+    fn resolved_base_url(&self) -> Result<String, AppError> {
+        if self.id != PROVIDER_ID_ENTERPRISE {
+            return Ok(self.base_url.clone());
+        }
+
+        if !self.configured_public_base_url() {
+            return Ok(self.base_url.clone());
+        }
+
+        let Some(auth_store) = self.auth_store.as_ref() else {
+            return Ok(self.base_url.clone());
+        };
+        let Some(auth_provider_id) = self.auth_provider_id.as_ref() else {
+            return Ok(self.base_url.clone());
+        };
+
+        let domain = auth_store
+            .get(auth_provider_id.as_str())?
+            .and_then(|auth| auth.enterprise_url().map(ToOwned::to_owned))
+            .ok_or_else(|| {
+                AppError::Config("enterprise_url missing for github-copilot-enterprise".to_owned())
+            })?;
+
+        Ok(format!("https://copilot-api.{}", normalize_domain(&domain)))
     }
 
-    fn responses_endpoint(&self) -> String {
-        format!("{}/responses", self.base_url.trim_end_matches('/'))
+    fn prompt_cache_base_url(&self) -> String {
+        self.resolved_base_url()
+            .unwrap_or_else(|_| self.base_url.clone())
+    }
+
+    fn models_endpoint(&self) -> Result<String, AppError> {
+        Ok(self.models_url.clone().unwrap_or_else(|| {
+            format!(
+                "{}/models",
+                self.prompt_cache_base_url().trim_end_matches('/')
+            )
+        }))
+    }
+
+    fn chat_endpoint(&self) -> Result<String, AppError> {
+        Ok(format!(
+            "{}/chat/completions",
+            self.resolved_base_url()?.trim_end_matches('/')
+        ))
+    }
+
+    fn responses_endpoint(&self) -> Result<String, AppError> {
+        Ok(format!(
+            "{}/responses",
+            self.resolved_base_url()?.trim_end_matches('/')
+        ))
     }
 
     fn should_use_responses(model_id: &str) -> bool {
@@ -276,7 +356,7 @@ impl ModelProvider for CopilotProvider {
         Some(
             crate::provider::PromptCacheShape::new(self.id.as_str())
                 .with_string("auth_scope", self.bearer_token.prompt_cache_scope())
-                .with_string("base_url", self.base_url.as_str())
+                .with_string("base_url", self.prompt_cache_base_url().as_str())
                 .with_optional_string("models_url", self.models_url.as_deref())
                 .with_bool("uses_responses", Self::should_use_responses(model.as_str())),
         )
@@ -295,7 +375,7 @@ impl ModelProvider for CopilotProvider {
                 Ok(utils::apply_request_headers(
                     self.id.as_str(),
                     self.client
-                        .get(self.models_endpoint())
+                        .get(self.models_endpoint()?)
                         .header(reqwest::header::AUTHORIZATION, authorization),
                     &Default::default(),
                 ))
@@ -331,7 +411,7 @@ impl ModelProvider for CopilotProvider {
                     Ok(utils::apply_request_headers(
                         self.id.as_str(),
                         self.client
-                            .post(self.responses_endpoint())
+                            .post(self.responses_endpoint()?)
                             .headers(self.base_headers(bearer_token, &request)?)
                             .header(reqwest::header::CONTENT_TYPE, "application/json")
                             .json(&body),
@@ -391,7 +471,7 @@ impl ModelProvider for CopilotProvider {
                 Ok(utils::apply_request_headers(
                     self.id.as_str(),
                     self.client
-                        .post(self.chat_endpoint())
+                        .post(self.chat_endpoint()?)
                         .headers(self.base_headers(bearer_token, &request)?)
                         .header(reqwest::header::CONTENT_TYPE, "application/json")
                         .json(&body),
@@ -474,7 +554,7 @@ impl ModelProvider for CopilotProvider {
                     Ok(utils::apply_request_headers(
                         self.id.as_str(),
                         self.client
-                            .post(self.responses_endpoint())
+                            .post(self.responses_endpoint()?)
                             .headers(self.base_headers(bearer_token, &request)?)
                             .header(reqwest::header::CONTENT_TYPE, "application/json")
                             .json(&body),
@@ -691,7 +771,7 @@ impl ModelProvider for CopilotProvider {
                 Ok(utils::apply_request_headers(
                     self.id.as_str(),
                     self.client
-                        .post(self.chat_endpoint())
+                        .post(self.chat_endpoint()?)
                         .headers(self.base_headers(bearer_token, &request)?)
                         .header(reqwest::header::CONTENT_TYPE, "application/json")
                         .json(&body),
@@ -1845,6 +1925,8 @@ mod tests {
                 "test-token",
             ),
             base_url,
+            auth_store: None,
+            auth_provider_id: None,
             default_model: ModelId::new("gpt-4o-mini"),
             models_url: None,
         }

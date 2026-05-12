@@ -11,7 +11,12 @@ import type {
   SessionExecutionResource,
   TimelineEventRecord,
 } from '../lib/agenaApi'
-import type { DesktopBackendStatus, DesktopConfig, DesktopRuntimeInfo, DesktopUpdateProgress } from '../../lib/desktopConfig'
+import type {
+  DesktopBackendStatus,
+  DesktopConfig,
+  DesktopRuntimeInfo,
+  DesktopUpdateProgress,
+} from '../../lib/desktopConfig'
 import { useRuntimeDerivedState } from './useRuntimeDerivedState'
 
 function runtime(): RuntimeStatus {
@@ -62,6 +67,14 @@ function runtime(): RuntimeStatus {
             root_markers: ['package.json'],
           },
         ],
+      },
+      agents: {
+        default_agent: 'build',
+        total_count: 8,
+        primary_count: 7,
+        subagent_count: 6,
+        hidden_count: 0,
+        agents: [],
       },
       skills: {
         skill_count: 2,
@@ -222,7 +235,9 @@ describe('useRuntimeDerivedState', () => {
 
     expect(derived.routeSection.value).toBe('settings')
     expect(derived.pageTitle.value).toBe('Settings')
-    expect(derived.pageDescription.value).toBe('Manage providers, credentials, permission rules, and desktop configuration.')
+    expect(derived.pageDescription.value).toBe(
+      'Manage providers, credentials, permission rules, and desktop configuration.',
+    )
     expect(derived.visibleTabs.value).toEqual([])
     expect(derived.desktopBackendUrl.value).toBe('http://127.0.0.1:3210')
     expect(derived.desktopBackendErrorFacts.value).toEqual([
@@ -234,7 +249,7 @@ describe('useRuntimeDerivedState', () => {
       { label: 'Signal', value: 'n/a', mono: true },
     ])
     expect(derived.desktopUpdateProgressPercent.value).toBe('50%')
-    expect(derived.operatorCards.value.length).toBe(6)
+    expect(derived.operatorCards.value.length).toBe(7)
     expect(derived.runtimeSnapshotFacts.value.length > 0).toBe(true)
     expect(derived.sessionCacheFacts.value.length > 0).toBe(true)
     expect(derived.executionFacts.value.length > 0).toBe(true)

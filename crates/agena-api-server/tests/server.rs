@@ -80,6 +80,8 @@ fn test_run_options() -> SessionRunOptions {
         system: None,
         temperature: None,
         max_output_tokens: Some(128),
+        agent_profile: None,
+        max_turn_loops: None,
     }
 }
 

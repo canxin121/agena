@@ -25,6 +25,7 @@ pub enum AuthSecretSelector {
 pub enum AuthRefreshStrategy {
     None,
     ReloadFromStore,
+    OpenAiOAuth,
     GitlabOAuth { instance_url: String },
 }
 
@@ -515,6 +516,7 @@ fn auth_refresh_strategy_key(strategy: &AuthRefreshStrategy) -> String {
     match strategy {
         AuthRefreshStrategy::None => "none".to_owned(),
         AuthRefreshStrategy::ReloadFromStore => "reload_from_store".to_owned(),
+        AuthRefreshStrategy::OpenAiOAuth => "openai_oauth".to_owned(),
         AuthRefreshStrategy::GitlabOAuth { instance_url } => {
             format!("gitlab_oauth:{}", instance_url.trim_end_matches('/'))
         }
@@ -570,15 +572,47 @@ async fn resolve_auth_store_credential(
         ))
     })?;
 
-    let selected = select_auth_secret(&auth, selector, provider_id)?;
-    let should_refresh = matches!(refresh, AuthRefreshStrategy::GitlabOAuth { .. })
-        && (force_refresh || !selected.is_fresh(chrono::Utc::now().timestamp_millis()));
+    let selected = select_auth_secret(&auth, selector, provider_id);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let should_refresh = match refresh {
+        AuthRefreshStrategy::GitlabOAuth { .. } | AuthRefreshStrategy::OpenAiOAuth => {
+            oauth_refresh_token(&auth).is_some()
+                && match selected.as_ref() {
+                    Ok(selected) => force_refresh || !selected.is_fresh(now_ms),
+                    Err(_) => true,
+                }
+        }
+        AuthRefreshStrategy::None | AuthRefreshStrategy::ReloadFromStore => false,
+    };
 
     if !should_refresh {
-        return Ok(selected);
+        return selected;
     }
 
     match refresh {
+        AuthRefreshStrategy::OpenAiOAuth => {
+            let AuthData::OAuth {
+                refresh: refresh_token,
+                account_id,
+                enterprise_url,
+                ..
+            } = auth
+            else {
+                return selected;
+            };
+
+            let refreshed =
+                crate::provider::auth::refresh_openai_token(refresh_token.as_str()).await?;
+            let updated = AuthData::OAuth {
+                refresh: refreshed.refresh,
+                access: refreshed.access,
+                expires_at_ms: refreshed.expires_at_ms,
+                account_id: refreshed.account_id.or(account_id),
+                enterprise_url,
+            };
+            auth_store.set(provider_id, updated.clone())?;
+            select_auth_secret(&updated, selector, provider_id)
+        }
         AuthRefreshStrategy::GitlabOAuth { instance_url } => {
             let AuthData::OAuth {
                 refresh: refresh_token,
@@ -587,7 +621,7 @@ async fn resolve_auth_store_credential(
                 ..
             } = auth
             else {
-                return Ok(selected);
+                return selected;
             };
 
             let refreshed =
@@ -602,7 +636,17 @@ async fn resolve_auth_store_credential(
             auth_store.set(provider_id, updated.clone())?;
             select_auth_secret(&updated, selector, provider_id)
         }
-        AuthRefreshStrategy::None | AuthRefreshStrategy::ReloadFromStore => Ok(selected),
+        AuthRefreshStrategy::None | AuthRefreshStrategy::ReloadFromStore => selected,
+    }
+}
+
+fn oauth_refresh_token(auth: &AuthData) -> Option<&str> {
+    match auth {
+        AuthData::OAuth { refresh, .. } => {
+            let refresh = refresh.trim();
+            (!refresh.is_empty()).then_some(refresh)
+        }
+        AuthData::Api { .. } | AuthData::WellKnown { .. } => None,
     }
 }
 

@@ -55,29 +55,28 @@ impl CodexProvider {
         default_model: impl Into<String>,
         auth_provider_id: impl Into<String>,
     ) -> Result<Self, AppError> {
-        let AuthData::OAuth {
-            refresh,
-            access,
-            expires_at_ms,
-            account_id,
-            ..
-        } = auth
-        else {
-            return Err(AppError::Config(
-                "openai codex provider requires oauth credential".to_owned(),
-            ));
-        };
+        let state = Self::auth_state_from_auth(auth)?;
 
         Ok(Self {
             client,
             auth_store,
             auth_provider_id: auth_provider_id.into(),
-            state: Mutex::new(CodexAuthState {
-                refresh: refresh.clone(),
-                access: access.clone(),
-                expires_at_ms: *expires_at_ms,
-                account_id: account_id.clone(),
-            }),
+            state: Mutex::new(state),
+            default_model: ModelId::new(default_model),
+        })
+    }
+
+    pub fn from_auth_store_with_options(
+        client: reqwest::Client,
+        auth_store: Arc<dyn AuthStore>,
+        default_model: impl Into<String>,
+        auth_provider_id: impl Into<String>,
+    ) -> Result<Self, AppError> {
+        Ok(Self {
+            client,
+            auth_store,
+            auth_provider_id: auth_provider_id.into(),
+            state: Mutex::new(CodexAuthState::default()),
             default_model: ModelId::new(default_model),
         })
     }
@@ -88,8 +87,82 @@ impl CodexProvider {
             access: state.access.clone(),
             expires_at_ms: state.expires_at_ms,
             account_id: state.account_id.clone(),
-            enterprise_url: None,
+            enterprise_url: state.enterprise_url.clone(),
         }
+    }
+
+    fn auth_state_from_auth(auth: &AuthData) -> Result<CodexAuthState, AppError> {
+        let AuthData::OAuth {
+            refresh,
+            access,
+            expires_at_ms,
+            account_id,
+            enterprise_url,
+        } = auth
+        else {
+            return Err(AppError::Config(
+                "openai codex provider requires oauth credential".to_owned(),
+            ));
+        };
+
+        Ok(CodexAuthState {
+            refresh: refresh.clone(),
+            access: access.clone(),
+            expires_at_ms: *expires_at_ms,
+            account_id: account_id.clone(),
+            enterprise_url: enterprise_url.clone(),
+        })
+    }
+
+    fn state_needs_load(state: &CodexAuthState) -> bool {
+        state.refresh.trim().is_empty() && state.access.trim().is_empty()
+    }
+
+    fn account_id_from_auth_store(&self) -> Option<String> {
+        self.auth_store
+            .get(self.auth_provider_id.as_str())
+            .ok()
+            .flatten()
+            .and_then(|auth| match auth {
+                AuthData::OAuth { account_id, .. } => account_id,
+                AuthData::Api { .. } | AuthData::WellKnown { .. } => None,
+            })
+            .and_then(|value| utils::normalize_optional_text(Some(value)))
+    }
+
+    fn load_state_from_auth_store(&self) -> Result<CodexAuthState, AppError> {
+        let auth = self
+            .auth_store
+            .get(self.auth_provider_id.as_str())?
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "auth credential `{}` was not found in the auth store",
+                    self.auth_provider_id
+                ))
+            })?;
+        Self::auth_state_from_auth(&auth)
+    }
+
+    fn current_state(&self) -> Result<CodexAuthState, AppError> {
+        let snapshot = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Internal("codex state lock poisoned".to_owned()))?
+            .clone();
+
+        if !Self::state_needs_load(&snapshot) {
+            return Ok(snapshot);
+        }
+
+        let loaded = self.load_state_from_auth_store()?;
+        {
+            let mut guard = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Internal("codex state lock poisoned".to_owned()))?;
+            *guard = loaded.clone();
+        }
+        Ok(loaded)
     }
 
     async fn refresh_and_persist(
@@ -102,6 +175,7 @@ impl CodexProvider {
             access: refreshed.access,
             expires_at_ms: refreshed.expires_at_ms,
             account_id: refreshed.account_id.or(snapshot.account_id),
+            enterprise_url: snapshot.enterprise_url,
         };
 
         {
@@ -121,20 +195,12 @@ impl CodexProvider {
     }
 
     async fn force_refresh_access_token(&self) -> Result<CodexAuthState, AppError> {
-        let snapshot = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Internal("codex state lock poisoned".to_owned()))?
-            .clone();
+        let snapshot = self.current_state()?;
         self.refresh_and_persist(snapshot).await
     }
 
     async fn ensure_access_token(&self) -> Result<CodexAuthState, AppError> {
-        let snapshot = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Internal("codex state lock poisoned".to_owned()))?
-            .clone();
+        let snapshot = self.current_state()?;
 
         let now_ms = chrono::Utc::now().timestamp_millis();
         let needs_refresh = snapshot.access.trim().is_empty()
@@ -609,7 +675,8 @@ impl ModelProvider for CodexProvider {
             .state
             .lock()
             .ok()
-            .and_then(|state| utils::normalize_optional_text(state.account_id.clone()));
+            .and_then(|state| utils::normalize_optional_text(state.account_id.clone()))
+            .or_else(|| self.account_id_from_auth_store());
         Some(
             crate::provider::PromptCacheShape::new(PROVIDER_ID)
                 .with_string("auth_provider_id", self.auth_provider_id.as_str())
@@ -902,12 +969,13 @@ impl ModelProvider for CodexProvider {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct CodexAuthState {
     refresh: String,
     access: String,
     expires_at_ms: i64,
     account_id: Option<String>,
+    enterprise_url: Option<String>,
 }
 
 #[derive(Debug, Default)]

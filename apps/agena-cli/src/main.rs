@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use agena::{
     AppError,
     cli::{AgenaCli, AgenaCommand, AppServerArgs, AppServerTransport},
-    config::ConfigLoader,
+    config::{ConfigLoader, TracingConfig},
     message::PartContent,
     model::ModelRef,
     permission::{PermissionReply, PermissionReplyKind, PermissionScope},
@@ -25,22 +25,25 @@ use agena_api_server::jsonrpc::protocol::{
 use agena_api_server::jsonrpc::{self, AppServerError};
 use async_trait::async_trait;
 use clap::Parser;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<(), agena::AppError> {
     let cli = AgenaCli::parse();
     let resolution = ConfigLoader::default().load(&cli.load_request()).ok();
-    let filter = resolution
+    let tracing = resolution
         .as_ref()
-        .map(|resolution| resolution.config.tracing.filter.clone())
-        .unwrap_or_else(|| "info".to_owned());
+        .map(|resolution| resolution.config.tracing.clone())
+        .unwrap_or_else(TracingConfig::default);
     let telemetry = resolution
         .as_ref()
         .map(|resolution| resolution.config.telemetry.clone())
         .unwrap_or_default();
 
-    let initial_filter = EnvFilter::try_new(filter).unwrap_or_else(|_| EnvFilter::new("info"));
+    let initial_filter = agena::tracing::env_filter(&tracing).unwrap_or_else(|_| {
+        agena::tracing::env_filter(&TracingConfig::default())
+            .expect("default tracing filter should parse")
+    });
     let (filter_layer, filter_handle) = tracing_subscriber::reload::Layer::new(initial_filter);
     if let Some(telemetry) = agena_otel::build_layer(&telemetry)
         .map_err(|error| agena::AppError::Config(error.to_string()))?
@@ -278,9 +281,11 @@ fn resolve_permission_continue_options(
 
     Ok(SessionRunOptions {
         model,
+        agent_profile: None,
         system: None,
         temperature: None,
         max_output_tokens: None,
+        max_turn_loops: None,
     })
 }
 
@@ -300,9 +305,11 @@ fn resolve_run_options(
 
     Ok(SessionRunOptions {
         model,
+        agent_profile: None,
         system: None,
         temperature,
         max_output_tokens,
+        max_turn_loops: None,
     })
 }
 

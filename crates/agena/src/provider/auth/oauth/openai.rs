@@ -78,6 +78,13 @@ pub async fn exchange_openai_oauth_code(
 }
 
 pub async fn refresh_openai_token(refresh_token: &str) -> Result<OAuthTokenResponse, AppError> {
+    let refresh_token = refresh_token.trim();
+    if refresh_token.is_empty() {
+        return Err(AppError::Config(
+            "openai oauth refresh token is empty".to_owned(),
+        ));
+    }
+
     let client = openai_oauth_client(None)?;
 
     let token = client

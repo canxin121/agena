@@ -202,6 +202,7 @@ function createChatPageContentState() {
     copySessionUsageSummary: () => {},
     selectedProviderId: ref('openai'),
     selectedModelId: ref('gpt-5'),
+    selectedVariant: ref('high'),
     providers: ref([
       {
         provider_id: 'openai',
@@ -218,6 +219,7 @@ function createChatPageContentState() {
       },
     ],
     providerModelLabel: (model: { display_name?: string; id: string }) => model.display_name || model.id,
+    modelVariantOptions: () => [{ id: 'high', label: 'High', description: 'More reasoning' }],
     sessionImportJsonl: ref('{"schema":1}'),
     importSessionFromJsonl: () => {},
     messages: ref([message]),

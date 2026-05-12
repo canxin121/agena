@@ -41,6 +41,8 @@ pub struct MessageMetadata {
     pub model_provider_id: String,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_metadata: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
@@ -54,6 +56,7 @@ impl Default for MessageMetadata {
             generated_by_call_id: None,
             model_provider_id: String::new(),
             model_id: String::new(),
+            model_variant: None,
             provider_metadata: None,
             tags: Vec::new(),
         }

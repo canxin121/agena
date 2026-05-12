@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
     sync::Arc,
     time::{Duration, Instant},
@@ -12,7 +12,9 @@ use futures_util::stream::BoxStream;
 use tracing::Instrument;
 
 use crate::error::{AppError, ProviderErrorKind};
-use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ProviderId};
+use crate::model::{
+    Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ModelVariant, ProviderId,
+};
 use crate::plugin::ProviderDescriptor;
 
 use super::{
@@ -134,6 +136,10 @@ impl ModelProvider for NamedProvider {
         self.target.model_metadata(model)
     }
 
+    fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
+        self.target.model_variants(model)
+    }
+
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         self.target.stream_resume_policy()
     }
@@ -157,6 +163,9 @@ impl ModelProvider for NamedProvider {
                 .metadata
                 .clone()
                 .with_fallbacks_from(&metadata_fallback);
+            if model.variants.is_empty() {
+                model.variants = self.target.model_variants(&model.id);
+            }
         }
         Ok(models)
     }
@@ -515,6 +524,9 @@ impl ProviderRegistry {
                             .metadata
                             .clone()
                             .with_fallbacks_from(&metadata_fallback);
+                        if model.variants.is_empty() {
+                            model.variants = provider.model_variants(&model.id);
+                        }
                     }
                     Ok(models)
                 }
@@ -537,6 +549,16 @@ impl ProviderRegistry {
         Ok(provider.model_metadata(&model.model_id))
     }
 
+    pub fn model_variants(
+        &self,
+        model: &ModelRef,
+    ) -> Result<BTreeMap<String, ModelVariant>, AppError> {
+        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
+            AppError::Config(format!("provider not found: {}", model.provider_id))
+        })?;
+        Ok(provider.model_variants(&model.model_id))
+    }
+
     pub async fn resolve_model(&self, model: &ModelRef) -> Result<Model, AppError> {
         let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
             AppError::Config(format!("provider not found: {}", model.provider_id))
@@ -546,15 +568,21 @@ impl ProviderRegistry {
         if let Some(entry) = listed.into_iter().find(|entry| entry.id == model.model_id) {
             let fallback = provider.model_capabilities(&entry.id);
             let metadata_fallback = provider.model_metadata(&entry.id);
-            return Ok(entry
+            let variants = provider.model_variants(&entry.id);
+            let mut resolved = entry
                 .with_capability_fallbacks(&fallback)
-                .with_metadata_fallbacks(&metadata_fallback));
+                .with_metadata_fallbacks(&metadata_fallback);
+            if !variants.is_empty() {
+                resolved.variants = variants;
+            }
+            return Ok(resolved);
         }
 
         Ok(
             Model::new(model.provider_id.as_str(), model.model_id.as_str())
                 .with_capabilities(provider.model_capabilities(&model.model_id))
-                .with_metadata(provider.model_metadata(&model.model_id)),
+                .with_metadata(provider.model_metadata(&model.model_id))
+                .with_variants(provider.model_variants(&model.model_id)),
         )
     }
 

@@ -37,6 +37,7 @@ export function useChatPageState() {
   const composer = ref('')
   const selectedProviderId = ref('')
   const selectedModelId = ref('')
+  const selectedVariant = ref('')
   const loading = ref(false)
   const sending = ref(false)
   const continuing = ref(false)
@@ -63,6 +64,7 @@ export function useChatPageState() {
     runtime,
     selectedModelId,
     selectedProviderId,
+    selectedVariant,
     selectedSessionId,
     selectedWorkspaceId,
     sending,

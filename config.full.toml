@@ -190,24 +190,24 @@ stream_mode = "sse"
 # context_window_tokens = 200000
 # max_output_tokens = 16384
 
-# Per-provider thinking-depth presets (name → budget_tokens).
-# Set default_thinking to one of the preset names to apply it to every request
-# that doesn't already specify request.thinking.
-# Use "disabled" as the default_thinking value to explicitly suppress thinking.
+# Per-model variants. Runtime can select these by name via run options; without
+# a selected variant, Agena does not inject explicit thinking settings.
 #
-# Example — OpenAI o-series with named reasoning levels:
+# Example — OpenAI o-series / GPT-5 with named reasoning levels:
 #
 # [providers.openai-reasoning]
 # kind = "openai"
 # base_url = "https://api.openai.com/v1"
 # default_model = "o3-mini"
 # api_key_env = "OPENAI_API_KEY"
-# default_thinking = "standard"
 #
-# [providers.openai-reasoning.thinking_depths]
-# light    = 3000
-# standard = 10000
-# deep     = 30000
+# [providers.openai-reasoning.models."o3-mini".variants.light]
+# display_name = "Light"
+# thinking = { type = "effort", effort = "low" }
+#
+# [providers.openai-reasoning.models."o3-mini".variants.deep]
+# display_name = "Deep"
+# thinking = { type = "effort", effort = "high" }
 #
 # Example — Anthropic with named thinking levels:
 #
@@ -216,12 +216,14 @@ stream_mode = "sse"
 # base_url = "https://api.anthropic.com/v1"
 # default_model = "claude-sonnet-4-5"
 # api_key_env = "ANTHROPIC_API_KEY"
-# default_thinking = "standard"
 #
-# [providers.anthropic.thinking_depths]
-# light    = 3000
-# standard = 10000
-# deep     = 30000
+# [providers.anthropic.models."claude-sonnet-4-5".variants.light]
+# display_name = "Light"
+# thinking = { type = "enabled", budget_tokens = 3000 }
+#
+# [providers.anthropic.models."claude-sonnet-4-5".variants.deep]
+# display_name = "Deep"
+# thinking = { type = "enabled", budget_tokens = 30000 }
 
 # Built-in / models.dev preset examples:
 #

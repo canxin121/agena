@@ -1060,9 +1060,23 @@ impl ApiService {
                 "max_output_tokens must be greater than zero",
             ));
         }
+        let variant = non_empty(request.variant.as_deref()).map(ToOwned::to_owned);
+        let thinking = if let Some(variant_name) = variant.as_deref() {
+            let variants = provider_registry
+                .model_variants(&model)
+                .map_err(api_error_from_app)?;
+            let variant = variants.get(variant_name).ok_or_else(|| {
+                ApiError::bad_request(format!("model `{}` has no variant `{variant_name}`", model))
+            })?;
+            variant.thinking.clone()
+        } else {
+            None
+        };
 
         Ok(agena::session::SessionRunOptions {
             model,
+            variant,
+            thinking,
             system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),
             temperature: request.temperature,
             max_output_tokens: request.max_output_tokens,
@@ -1099,6 +1113,7 @@ impl ApiService {
                 agent_permission: session.runtime().execution.agent_permission.clone(),
                 model_provider_id: session.runtime().execution.model_provider_id.clone(),
                 model_id: session.runtime().execution.model_id.clone(),
+                model_variant: session.runtime().execution.model_variant.clone(),
                 agent_run: session.runtime().execution.agent_run.clone(),
                 effective_workspace_root: session
                     .runtime()

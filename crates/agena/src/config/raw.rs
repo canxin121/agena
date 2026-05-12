@@ -11,8 +11,8 @@ use toml::Value;
 use crate::{
     permission::PermissionMode,
     provider::{
-        ConfiguredModelDefinition, ProviderRequestRetryConfig, ProviderStreamReplayConfig,
-        ThinkingRequest, auth::FileAuthStore,
+        ConfiguredModelDefinition, ConfiguredModelVariant, ProviderRequestRetryConfig,
+        ProviderStreamReplayConfig, auth::FileAuthStore,
     },
 };
 
@@ -36,7 +36,7 @@ impl RawConfigFile {
     pub(crate) fn read(path: &Path) -> Result<Self, ConfigError> {
         match fs::read_to_string(path) {
             Ok(text) => {
-                reject_legacy_mode_fields(path, &text)?;
+                reject_unsupported_fields(path, &text)?;
                 let config = toml::from_str::<RawConfig>(&text).map_err(|source| {
                     ConfigError::ParseFile {
                         path: path.to_path_buf(),
@@ -60,7 +60,7 @@ impl RawConfigFile {
     }
 }
 
-fn reject_legacy_mode_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
+fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
     let value = toml::from_str::<Value>(text).map_err(|source| ConfigError::ParseFile {
         path: path.to_path_buf(),
         source,
@@ -73,6 +73,18 @@ fn reject_legacy_mode_fields(path: &Path, text: &str) -> Result<(), ConfigError>
     }
     if table.contains_key("modes") {
         return Err(ConfigError::UnsupportedModeConfig { field: "modes" });
+    }
+    if let Some(providers) = table.get("providers").and_then(Value::as_table) {
+        for (provider_id, provider) in providers {
+            let Some(provider) = provider.as_table() else {
+                continue;
+            };
+            if provider.contains_key("variants") {
+                return Err(ConfigError::Validation(format!(
+                    "provider `{provider_id}` variants must be configured under `providers.{provider_id}.models.\"<model-id>\".variants`; provider-level variants are not supported"
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -278,7 +290,6 @@ impl RawConfig {
                     provider.api_mode = Some(OpenAiApiModeConfig::from_str(value.as_str())?)
                 }
                 "REALTIME_WS_URL" => provider.realtime_ws_url = Some(value),
-                "DEFAULT_THINKING" => provider.default_thinking = Some(value),
                 "AUTH_PROVIDER_ID" => provider.auth_provider_id = Some(value),
                 "INSTANCE_URL" => provider.instance_url = Some(value),
                 "AI_GATEWAY_URL" => provider.ai_gateway_url = Some(value),
@@ -934,12 +945,6 @@ pub(crate) struct RawProviderConfig {
     pub(crate) api_mode: Option<OpenAiApiModeConfig>,
     pub(crate) stream_mode: Option<StreamTransportMode>,
     pub(crate) realtime_ws_url: Option<String>,
-    /// Named thinking-depth presets for this provider: name → budget_tokens.
-    /// Example: `thinking_depths = { light = 3000, deep = 30000 }`
-    pub(crate) thinking_depths: BTreeMap<String, u32>,
-    /// Default thinking depth to apply when the caller doesn't specify one.
-    /// Must match a key in `thinking_depths`, or be the literal "disabled".
-    pub(crate) default_thinking: Option<String>,
     pub(crate) instance_url: Option<String>,
     pub(crate) ai_gateway_url: Option<String>,
     pub(crate) ai_gateway_headers: BTreeMap<String, String>,
@@ -970,8 +975,6 @@ impl Merge for RawProviderConfig {
         merge_option(&mut self.api_mode, overlay.api_mode);
         merge_option(&mut self.stream_mode, overlay.stream_mode);
         merge_option(&mut self.realtime_ws_url, overlay.realtime_ws_url);
-        self.thinking_depths.extend(overlay.thinking_depths);
-        merge_option(&mut self.default_thinking, overlay.default_thinking);
         merge_option(&mut self.instance_url, overlay.instance_url);
         merge_option(&mut self.ai_gateway_url, overlay.ai_gateway_url);
         self.ai_gateway_headers.extend(overlay.ai_gateway_headers);
@@ -1007,11 +1010,6 @@ impl RawProviderConfig {
         }
         validate_configured_models(provider_id.as_str(), &self.models)?;
         let models = self.models.clone();
-        let default_thinking = resolve_default_thinking(
-            provider_id.as_str(),
-            &self.thinking_depths,
-            self.default_thinking.clone(),
-        )?;
 
         let definition = match kind {
             ProviderKind::Preset => {
@@ -1041,7 +1039,6 @@ impl RawProviderConfig {
                 api_key: normalize_optional(self.api_key),
                 api_key_env: normalize_optional(self.api_key_env),
                 extra_headers: self.extra_headers,
-                default_thinking: default_thinking.clone(),
                 options: super::OpenAiProviderOptions {
                     api_mode: self.api_mode.unwrap_or(OpenAiApiModeConfig::Responses),
                     stream_mode: self.stream_mode.unwrap_or(StreamTransportMode::Sse),
@@ -1059,7 +1056,6 @@ impl RawProviderConfig {
                     api_key: normalize_optional(self.api_key),
                     api_key_env: normalize_optional(self.api_key_env),
                     extra_headers: self.extra_headers,
-                    default_thinking: default_thinking.clone(),
                     options: super::OpenAiCompatibleProviderOptions {
                         auth_header: self
                             .auth_header
@@ -1081,7 +1077,6 @@ impl RawProviderConfig {
                 api_key: normalize_optional(self.api_key),
                 api_key_env: normalize_optional(self.api_key_env),
                 extra_headers: self.extra_headers,
-                default_thinking: default_thinking.clone(),
                 options: super::OpenAiCompatibleProviderOptions {
                     auth_header: self
                         .auth_header
@@ -1102,7 +1097,6 @@ impl RawProviderConfig {
                 api_key: normalize_optional(self.api_key),
                 api_key_env: normalize_optional(self.api_key_env),
                 extra_headers: self.extra_headers,
-                default_thinking: default_thinking.clone(),
                 options: super::AnthropicProviderOptions {
                     auth_header: self.auth_header.unwrap_or_else(|| "x-api-key".to_owned()),
                     auth_scheme: normalize_optional(self.auth_scheme),
@@ -1118,7 +1112,6 @@ impl RawProviderConfig {
                 api_key: normalize_optional(self.api_key),
                 api_key_env: normalize_optional(self.api_key_env),
                 extra_headers: self.extra_headers,
-                default_thinking: default_thinking.clone(),
                 options: super::SimpleHttpProviderOptions,
             }),
             ProviderKind::Codex => ProviderDefinition::Codex(super::CodexProviderOptions {
@@ -1295,25 +1288,6 @@ fn validate_agent_permission_config(
     })
 }
 
-fn resolve_default_thinking(
-    provider_id: &str,
-    thinking_depths: &BTreeMap<String, u32>,
-    default_thinking: Option<String>,
-) -> Result<Option<ThinkingRequest>, ConfigError> {
-    let Some(name) = default_thinking.and_then(|v| normalize_optional(Some(v))) else {
-        return Ok(None);
-    };
-    if name.eq_ignore_ascii_case("disabled") {
-        return Ok(Some(ThinkingRequest::Disabled));
-    }
-    let budget_tokens = thinking_depths.get(name.as_str()).copied().ok_or_else(|| {
-        ConfigError::Validation(format!(
-            "provider `{provider_id}` default_thinking `{name}` not found in thinking_depths"
-        ))
-    })?;
-    Ok(Some(ThinkingRequest::Enabled { budget_tokens }))
-}
-
 fn validate_configured_models(
     provider_id: &str,
     models: &BTreeMap<String, ConfiguredModelDefinition>,
@@ -1332,6 +1306,31 @@ fn validate_configured_models(
         if let Err(message) = configured.capabilities.validate() {
             return Err(ConfigError::Validation(format!(
                 "provider `{provider_id}` model `{model_id}` has invalid capability patch: {message}"
+            )));
+        }
+        validate_configured_variants(
+            provider_id,
+            format!("model `{model_id}` variants").as_str(),
+            &configured.variants,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_configured_variants(
+    provider_id: &str,
+    scope: &str,
+    variants: &BTreeMap<String, ConfiguredModelVariant>,
+) -> Result<(), ConfigError> {
+    for (variant_name, variant) in variants {
+        if variant_name.trim().is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "provider `{provider_id}` {scope} variant name cannot be empty"
+            )));
+        }
+        if variant.is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "provider `{provider_id}` {scope} variant `{variant_name}` must set at least one field or disabled = true"
             )));
         }
     }

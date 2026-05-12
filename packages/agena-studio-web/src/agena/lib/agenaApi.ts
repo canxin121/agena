@@ -244,6 +244,13 @@ export type ProviderModel = {
   display_name?: string | null
   capabilities?: Record<string, unknown>
   metadata?: Record<string, unknown>
+  variants?: Record<string, ProviderModelVariant>
+}
+
+export type ProviderModelVariant = {
+  display_name?: string | null
+  description?: string | null
+  thinking?: Record<string, unknown> | null
 }
 
 export type AuthProvider = {
@@ -459,6 +466,7 @@ export type SessionExecutionContextResource = {
   }
   model_provider_id?: string | null
   model_id?: string | null
+  model_variant?: string | null
   agent_run?: {
     temperature?: number | null
     max_output_tokens?: number | null
@@ -1367,6 +1375,7 @@ export async function continueSession(input: {
   sessionId: number
   providerId?: string
   modelId?: string
+  variant?: string
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const body: Record<string, unknown> = {}
@@ -1379,6 +1388,9 @@ export async function continueSession(input: {
   }
   if (input.agentProfile?.trim()) {
     body.agent_profile = input.agentProfile.trim()
+  }
+  if (input.providerId && input.modelId && input.variant?.trim()) {
+    body.variant = input.variant.trim()
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/continue`, {
@@ -1407,6 +1419,7 @@ export async function submitTurn(input: {
   text: string
   providerId?: string
   modelId?: string
+  variant?: string
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const body: Record<string, unknown> = {
@@ -1426,6 +1439,9 @@ export async function submitTurn(input: {
   }
   if (input.agentProfile?.trim()) {
     body.agent_profile = input.agentProfile.trim()
+  }
+  if (input.providerId && input.modelId && input.variant?.trim()) {
+    body.variant = input.variant.trim()
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/turns`, {

@@ -1,9 +1,12 @@
-use std::{borrow::Borrow, fmt, str::FromStr};
+use std::{borrow::Borrow, collections::BTreeMap, fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::message::{AttachmentItem, AttachmentKind};
+use crate::{
+    message::{AttachmentItem, AttachmentKind},
+    provider::ThinkingRequest,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{field} cannot be empty")]
@@ -536,6 +539,46 @@ impl ModelCapabilities {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelVariant {
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingRequest>,
+}
+
+impl ModelVariant {
+    pub fn new() -> Self {
+        Self {
+            display_name: None,
+            description: None,
+            thinking: None,
+        }
+    }
+
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        self.display_name = Some(display_name.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_thinking(mut self, thinking: ThinkingRequest) -> Self {
+        self.thinking = Some(thinking);
+        self
+    }
+}
+
+impl Default for ModelVariant {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Model {
     pub provider_id: ProviderId,
     pub id: ModelId,
@@ -544,6 +587,8 @@ pub struct Model {
     pub capabilities: ModelCapabilities,
     #[serde(default, skip_serializing_if = "ModelMetadata::is_empty")]
     pub metadata: ModelMetadata,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub variants: BTreeMap<String, ModelVariant>,
 }
 
 impl Model {
@@ -554,6 +599,7 @@ impl Model {
             display_name: None,
             capabilities: ModelCapabilities::default(),
             metadata: ModelMetadata::default(),
+            variants: BTreeMap::new(),
         }
     }
 
@@ -581,6 +627,16 @@ impl Model {
 
     pub fn with_metadata(mut self, metadata: ModelMetadata) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    pub fn with_variants(mut self, variants: BTreeMap<String, ModelVariant>) -> Self {
+        self.variants = variants;
+        self
+    }
+
+    pub fn with_variant(mut self, name: impl Into<String>, variant: ModelVariant) -> Self {
+        self.variants.insert(name.into(), variant);
         self
     }
 

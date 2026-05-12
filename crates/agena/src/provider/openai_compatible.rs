@@ -13,7 +13,6 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, StreamResumePolicy,
-        ThinkingRequest,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
@@ -36,7 +35,6 @@ pub struct OpenAiCompatibleProvider {
     stream_mode: OpenAiCompatibleStreamMode,
     realtime_ws_url: Option<String>,
     top_level_prompt_cache_override: Option<bool>,
-    default_thinking: Option<ThinkingRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +79,6 @@ impl OpenAiCompatibleProvider {
             stream_mode: OpenAiCompatibleStreamMode::Sse,
             realtime_ws_url: None,
             top_level_prompt_cache_override: None,
-            default_thinking: None,
         }
     }
 
@@ -112,11 +109,6 @@ impl OpenAiCompatibleProvider {
 
     pub fn with_top_level_prompt_cache(mut self, enabled: bool) -> Self {
         self.top_level_prompt_cache_override = Some(enabled);
-        self
-    }
-
-    pub fn with_default_thinking(mut self, thinking: Option<ThinkingRequest>) -> Self {
-        self.default_thinking = thinking;
         self
     }
 
@@ -724,7 +716,10 @@ impl ModelProvider for OpenAiCompatibleProvider {
             top_p: request.top_p,
             seed: request.seed,
             response_format: chat_wire::map_response_format(request.response_format.as_ref()),
-            reasoning_effort: None,
+            reasoning_effort: chat_wire::reasoning_effort(
+                request.thinking.as_ref(),
+                model.as_str(),
+            ),
         };
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
@@ -831,7 +826,10 @@ impl ModelProvider for OpenAiCompatibleProvider {
             top_p: request.top_p,
             seed: request.seed,
             response_format: chat_wire::map_response_format(request.response_format.as_ref()),
-            reasoning_effort: None,
+            reasoning_effort: chat_wire::reasoning_effort(
+                request.thinking.as_ref(),
+                model.as_str(),
+            ),
         };
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {

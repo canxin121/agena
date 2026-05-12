@@ -216,8 +216,7 @@ fn build_provider(
             .with_extra_headers(to_hash_map(&config.extra_headers))
             .with_api_mode(config.options.api_mode.into())
             .with_stream_mode(config.options.stream_mode.into())
-            .with_realtime_ws_url(config.options.realtime_ws_url.clone())
-            .with_default_thinking(config.default_thinking.clone()),
+            .with_realtime_ws_url(config.options.realtime_ws_url.clone()),
         ),
         ProviderDefinition::OpenAiCompatible(config) => {
             let credential = resolved_or_deferred_managed_secret(
@@ -263,8 +262,7 @@ fn build_provider(
                     )
                     .with_extra_headers(extra_headers)
                     .with_stream_mode(config.options.stream_mode.into())
-                    .with_realtime_ws_url(config.options.realtime_ws_url.clone())
-                    .with_default_thinking(config.default_thinking.clone()),
+                    .with_realtime_ws_url(config.options.realtime_ws_url.clone()),
                 )
             }
         }
@@ -293,8 +291,7 @@ fn build_provider(
                 config.options.auth_header.clone(),
                 config.options.auth_scheme.clone(),
             )
-            .with_extra_headers(to_hash_map(&config.extra_headers))
-            .with_default_thinking(config.default_thinking.clone()),
+            .with_extra_headers(to_hash_map(&config.extra_headers)),
         ),
         ProviderDefinition::Gemini(config) => register_provider(
             provider_id,
@@ -313,8 +310,7 @@ fn build_provider(
                 config.base_url.clone(),
                 config.default_model.clone(),
             )
-            .with_extra_headers(to_hash_map(&config.extra_headers))
-            .with_default_thinking(config.default_thinking.clone()),
+            .with_extra_headers(to_hash_map(&config.extra_headers)),
         ),
         ProviderDefinition::Codex(config) => register_provider(
             provider_id,

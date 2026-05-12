@@ -43,6 +43,7 @@ pub enum CommandId {
     Provider,
     Models,
     Model,
+    Variant,
     Temperature,
     MaxOutput,
     System,
@@ -383,6 +384,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-model-summary",
     },
     CommandSpec {
+        id: CommandId::Variant,
+        name: "variant",
+        aliases: &["reasoning"],
+        arguments: "<name|clear>",
+        summary_key: "command-variant-summary",
+    },
+    CommandSpec {
         id: CommandId::Temperature,
         name: "temperature",
         aliases: &["temp"],
@@ -537,6 +545,10 @@ mod tests {
         let parsed = parse_command("/temp 0.2").expect("command should parse");
         assert_eq!(parsed.spec.id, CommandId::Temperature);
         assert_eq!(parsed.args, "0.2");
+
+        let parsed = parse_command("/reasoning high").expect("command should parse");
+        assert_eq!(parsed.spec.id, CommandId::Variant);
+        assert_eq!(parsed.args, "high");
     }
 
     #[test]

@@ -273,7 +273,10 @@ impl ModelCapabilityPatch {
     }
 }
 
-fn apply_legacy_capability_patch(patch: &ModelCapabilityPatch, capabilities: &mut ModelCapabilities) {
+fn apply_legacy_capability_patch(
+    patch: &ModelCapabilityPatch,
+    capabilities: &mut ModelCapabilities,
+) {
     if let Some(value) = patch.text_input {
         capabilities.text_input = value;
     }
@@ -368,38 +371,38 @@ fn set_feature_capability(
     }
 }
 
-fn validate_modality_patch(
-    patch: Option<&InputCapabilityPatch>,
-) -> Result<(), String> {
+fn validate_modality_patch(patch: Option<&InputCapabilityPatch>) -> Result<(), String> {
     let Some(patch) = patch else {
         return Ok(());
     };
     validate_named_patch(
         "input",
-        patch.supported_values()
+        patch
+            .supported_values()
             .into_iter()
             .map(ModelInputModality::as_str)
             .collect(),
-        patch.unsupported_values()
+        patch
+            .unsupported_values()
             .into_iter()
             .map(ModelInputModality::as_str)
             .collect(),
     )
 }
 
-fn validate_feature_patch(
-    patch: Option<&FeatureCapabilityPatch>,
-) -> Result<(), String> {
+fn validate_feature_patch(patch: Option<&FeatureCapabilityPatch>) -> Result<(), String> {
     let Some(patch) = patch else {
         return Ok(());
     };
     validate_named_patch(
         "features",
-        patch.supported_values()
+        patch
+            .supported_values()
             .into_iter()
             .map(ModelCapabilityFeature::as_str)
             .collect(),
-        patch.unsupported_values()
+        patch
+            .unsupported_values()
             .into_iter()
             .map(ModelCapabilityFeature::as_str)
             .collect(),
@@ -414,14 +417,18 @@ fn validate_named_patch(
     let mut supported_set = std::collections::BTreeSet::new();
     for value in supported {
         if !supported_set.insert(value) {
-            return Err(format!("{group} capability `{value}` listed more than once"));
+            return Err(format!(
+                "{group} capability `{value}` listed more than once"
+            ));
         }
     }
 
     let mut unsupported_set = std::collections::BTreeSet::new();
     for value in unsupported {
         if !unsupported_set.insert(value) {
-            return Err(format!("{group} capability `{value}` listed more than once"));
+            return Err(format!(
+                "{group} capability `{value}` listed more than once"
+            ));
         }
     }
 
@@ -492,9 +499,15 @@ impl ConfiguredModelDefinition {
         if let Some(display_name) = self.display_name.clone() {
             model.display_name = Some(display_name);
         }
-        let base_capabilities = model.capabilities.clone().with_fallbacks_from(capability_fallback);
+        let base_capabilities = model
+            .capabilities
+            .clone()
+            .with_fallbacks_from(capability_fallback);
         model.capabilities = self.capabilities.apply_to(base_capabilities);
-        let base_metadata = model.metadata.clone().with_fallbacks_from(metadata_fallback);
+        let base_metadata = model
+            .metadata
+            .clone()
+            .with_fallbacks_from(metadata_fallback);
         model.metadata = self.metadata().with_fallbacks_from(&base_metadata);
         model
     }
@@ -580,8 +593,11 @@ impl ModelProvider for ConfiguredModelsProvider {
             if let Some(configured) = self.models.get(model.id.as_str()) {
                 let capability_fallback = self.target.model_capabilities(&model.id);
                 let metadata_fallback = self.target.model_metadata(&model.id);
-                *model =
-                    configured.apply_to_model(model.clone(), &capability_fallback, &metadata_fallback);
+                *model = configured.apply_to_model(
+                    model.clone(),
+                    &capability_fallback,
+                    &metadata_fallback,
+                );
             }
         }
 
@@ -657,7 +673,9 @@ mod tests {
             &self,
             _request: CompletionRequest,
         ) -> Result<CompletionResponse, AppError> {
-            Err(AppError::Internal("unused in configured-model tests".to_owned()))
+            Err(AppError::Internal(
+                "unused in configured-model tests".to_owned(),
+            ))
         }
     }
 
@@ -686,23 +704,27 @@ mod tests {
     #[test]
     fn configured_model_definition_reports_empty_state() {
         assert!(ConfiguredModelDefinition::default().is_empty());
-        assert!(!ConfiguredModelDefinition {
-            display_name: Some("GPT-5".to_owned()),
-            ..ConfiguredModelDefinition::default()
-        }
-        .is_empty());
+        assert!(
+            !ConfiguredModelDefinition {
+                display_name: Some("GPT-5".to_owned()),
+                ..ConfiguredModelDefinition::default()
+            }
+            .is_empty()
+        );
     }
 
     #[tokio::test]
     async fn configured_provider_lists_models_defined_only_in_config() {
         let target = std::sync::Arc::new(StaticProvider {
             default_model: ModelId::new("base-model"),
-            listed_models: vec![Model::new("test-provider", "base-model")
-                .with_display_name("Base Model")
-                .with_capabilities(
-                    ModelCapabilities::default().with_streaming(CapabilitySupport::Supported),
-                )
-                .with_metadata(ModelMetadata::default().with_family(ModelFamily::Gpt))],
+            listed_models: vec![
+                Model::new("test-provider", "base-model")
+                    .with_display_name("Base Model")
+                    .with_capabilities(
+                        ModelCapabilities::default().with_streaming(CapabilitySupport::Supported),
+                    )
+                    .with_metadata(ModelMetadata::default().with_family(ModelFamily::Gpt)),
+            ],
             fallback_capabilities: ModelCapabilities::default()
                 .with_streaming(CapabilitySupport::Supported),
             fallback_metadata: ModelMetadata::default().with_family(ModelFamily::Gpt),
@@ -742,7 +764,10 @@ mod tests {
             configured.capabilities.image_input,
             CapabilitySupport::Unsupported
         );
-        assert_eq!(configured.capabilities.streaming, CapabilitySupport::Supported);
+        assert_eq!(
+            configured.capabilities.streaming,
+            CapabilitySupport::Supported
+        );
         assert_eq!(configured.metadata.family, Some(ModelFamily::Gpt));
         assert_eq!(configured.metadata.lifecycle, Some(ModelLifecycle::Preview));
     }
@@ -757,7 +782,9 @@ mod tests {
             ..ModelCapabilityPatch::default()
         };
 
-        let err = patch.validate().expect_err("overlapping input patch should fail");
+        let err = patch
+            .validate()
+            .expect_err("overlapping input patch should fail");
         assert!(err.contains("input capability `image` cannot be both supported and unsupported"));
     }
 

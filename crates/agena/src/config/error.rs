@@ -18,7 +18,9 @@ pub enum ConfigError {
     },
     #[error("config modes are no longer supported; remove `{field}` and use a single config file")]
     UnsupportedModeConfig { field: &'static str },
-    #[error("AGENA_MODE is no longer supported; use a single config file or explicit --set overrides")]
+    #[error(
+        "AGENA_MODE is no longer supported; use a single config file or explicit --set overrides"
+    )]
     UnsupportedModeEnvironment,
     #[error("invalid override `{0}`")]
     InvalidOverride(String),

@@ -272,7 +272,9 @@ fn plugin_trust_level(
 ) -> String {
     match entry {
         PluginEntry::Static { .. } => "builtin".to_string(),
-        PluginEntry::Cdylib { signature, sha256, .. } => {
+        PluginEntry::Cdylib {
+            signature, sha256, ..
+        } => {
             if has_trusted_signature(signature.as_ref(), trusted_keys) {
                 "verified".to_string()
             } else if sha256.is_some() {
@@ -289,7 +291,9 @@ fn plugin_trust_level(
             }
         }
         PluginEntry::Http { .. } => "remote".to_string(),
-        PluginEntry::Wasm { sha256, sandbox, .. } => {
+        PluginEntry::Wasm {
+            sha256, sandbox, ..
+        } => {
             if sha256.is_some() {
                 "sandboxed".to_string()
             } else if !sandbox.is_default() {

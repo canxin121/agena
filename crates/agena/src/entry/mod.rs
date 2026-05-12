@@ -1257,10 +1257,7 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<ToolInvocationExecution, ToolError> {
         self.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
-            invocation,
-            session_id,
-            call_id,
-            None,
+            invocation, session_id, call_id, None,
         )
     }
 

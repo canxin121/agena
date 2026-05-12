@@ -13,22 +13,20 @@ use crate::local_api::{
     AuthCopilotDevicePollRequest, AuthCopilotDeviceStartRequest, AuthCredentialType,
     AuthDeviceStartResource, AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest,
     AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
-    AuthProviderResource, HealthResponse,
-    MarketplaceInstallOutcomeResource, MarketplaceInstallRequestBody,
-    MarketplaceInstalledListResponse, MarketplaceInstalledPluginResource,
-    MarketplaceOutdatedListResponse, MarketplaceOutdatedPluginResource,
-    MarketplacePluginResource, MarketplaceRegistryRequestBody, MarketplaceSearchRequestBody,
-    MarketplaceSearchResponse, MarketplaceSyncResponse, MarketplaceUninstallOutcomeResource,
-    MarketplaceUninstallRequestBody, MarketplaceUninstallResponse,
-    MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
+    AuthProviderResource, HealthResponse, MarketplaceInstallOutcomeResource,
+    MarketplaceInstallRequestBody, MarketplaceInstalledListResponse,
+    MarketplaceInstalledPluginResource, MarketplaceOutdatedListResponse,
+    MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequestBody,
+    MarketplaceSearchRequestBody, MarketplaceSearchResponse, MarketplaceSyncResponse,
+    MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
+    MarketplaceUninstallResponse, MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
     MarketplaceUpgradeResponse, MessageListQuery, PartLoadMode, PermissionRuleListQuery,
     PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
-    PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
-    RuntimeReloadResponse, SessionContinueRequestBody, SessionCreateRequest,
-    SessionEventStreamQuery, SessionListQuery, SessionPermissionReplyRequestBody,
-    SessionReplaceRequest, SessionRewindRequestBody, SessionRunOptionsRequest,
-    SessionTurnRequest, SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery,
-    WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
+    PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse, RuntimeReloadResponse,
+    SessionContinueRequestBody, SessionCreateRequest, SessionEventStreamQuery, SessionListQuery,
+    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
+    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
+    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::event::{EventStore, StoreRange};
 use agena_api::queries::{ListEventsParams, Query, QueryResult};
@@ -624,16 +622,18 @@ pub async fn upgrade_marketplace_plugins(
         cache,
         std::collections::BTreeMap::new(),
     );
-    let override_spec = request.registry_url.as_ref().map(|registry_url| {
-        agena_plugin_marketplace::RegistrySpec {
-            id: request
-                .registry_id
-                .clone()
-                .unwrap_or_else(|| "default".to_string()),
-            url: registry_url.trim().to_string(),
-            require_signature: false,
-        }
-    });
+    let override_spec =
+        request
+            .registry_url
+            .as_ref()
+            .map(|registry_url| agena_plugin_marketplace::RegistrySpec {
+                id: request
+                    .registry_id
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string()),
+                url: registry_url.trim().to_string(),
+                require_signature: false,
+            });
 
     let targets = if request.all {
         client
@@ -643,7 +643,14 @@ pub async fn upgrade_marketplace_plugins(
             .map(|record| record.plugin_id)
             .collect::<Vec<_>>()
     } else {
-        vec![request.plugin_id.clone().unwrap_or_default().trim().to_string()]
+        vec![
+            request
+                .plugin_id
+                .clone()
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+        ]
     };
 
     let mut entries = Vec::new();
@@ -656,14 +663,16 @@ pub async fn upgrade_marketplace_plugins(
             previous_version: outcome.previous_version,
             installed_version: outcome.installed_version,
             upgraded: outcome.upgraded,
-            outcome: outcome.outcome.map(|inner| MarketplaceInstallOutcomeResource {
-                plugin_id: inner.plugin_id,
-                version: inner.version,
-                kind: inner.kind.as_str().to_string(),
-                artifact_path: inner.artifact_path.display().to_string(),
-                config_path: inner.config_path.display().to_string(),
-                dry_run: inner.dry_run,
-            }),
+            outcome: outcome
+                .outcome
+                .map(|inner| MarketplaceInstallOutcomeResource {
+                    plugin_id: inner.plugin_id,
+                    version: inner.version,
+                    kind: inner.kind.as_str().to_string(),
+                    artifact_path: inner.artifact_path.display().to_string(),
+                    config_path: inner.config_path.display().to_string(),
+                    dry_run: inner.dry_run,
+                }),
         });
     }
 

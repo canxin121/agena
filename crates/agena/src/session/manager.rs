@@ -29,8 +29,8 @@ use crate::permission::{
 };
 use crate::role::Role;
 use crate::tool::{
-    PreparedShellCommand, StreamingToolExecution, ToolError, ToolExecutor,
-    ToolInvocationExecution, ToolPermissionCheck,
+    PreparedShellCommand, StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution,
+    ToolPermissionCheck,
 };
 use std::path::PathBuf;
 
@@ -770,6 +770,42 @@ impl SessionManager {
             .unregister_if_matches(session_id, &control)
             .await;
         result
+    }
+
+    pub async fn compact_session(
+        &self,
+        session_id: i64,
+        options: SessionRunOptions,
+    ) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        let session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let options = self.apply_execution_context_to_run_options(&session, options)?;
+        let active_messages = prompt_window::active_prompt_messages(&session);
+        let scoped_executor = state
+            .tool_executor
+            .for_session_context(&session.runtime.execution);
+        let tools = scoped_executor.available_tools_for_messages_and_loaded(
+            active_messages.as_slice(),
+            session.runtime.loaded_deferred_tools(),
+        );
+        let prompt_budget =
+            self.prompt_budget_for_turn(&session, &options, tools.as_slice(), state.as_ref());
+
+        if !prompt_window::can_compact(
+            active_messages.as_slice(),
+            state.processor.keep_tail_messages(),
+            prompt_budget.max_prompt_chars,
+        ) {
+            return Err(AppError::Internal(
+                "prompt window cannot be compacted further".to_string(),
+            ));
+        }
+
+        self.compact_prompt_window(session, &options, active_messages.as_slice(), state)
+            .await
     }
 
     pub async fn spawn_subtask(
@@ -2287,7 +2323,11 @@ impl SessionManager {
             resolve_permission_with_persisted_rule(check.decision.clone(), persisted_rule.as_ref());
 
         if persisted_rule.is_none() {
-            let plugins = self.execution_state().tool_executor.plugin_manager().clone();
+            let plugins = self
+                .execution_state()
+                .tool_executor
+                .plugin_manager()
+                .clone();
             if !plugins.is_empty() {
                 let default_decision = match resolution.decision {
                     PermissionDecision::Allow => crate::plugin::PermissionDecision::Allow,

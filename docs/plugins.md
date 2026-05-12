@@ -81,7 +81,7 @@ options = { greeting = "hi" }
 | `cdylib` | Rust-only, want zero-IPC | abi_stable FFI | No |
 | `stdio` | Any language; long-running subprocess | one tokio task per child | Yes |
 | `http` | Remote service; share across many agena instances | network round-trip | Yes |
-| `wasm` | Untrusted code; sandbox guarantees from wasmtime | wasm linear memory copy | Yes (any wasm-targeting language) |
+| `wasm` | WASM ABI plugins | wasm linear memory copy | Yes (any wasm-targeting language) |
 
 The same `Plugin` trait impl works on the first four — you only change the
 export macro / config kind. Use `export_cdylib!` for cdylib, `export_stdio!`
@@ -132,6 +132,11 @@ should be allowed, denied, or escalated to the user. Agena folds that advice
 into the same resolution path as static policy and persisted rules, and records
 it in the permission trace.
 
+Only plugins that declare `HostCapability::PermissionDecision` may return an
+authoritative `PermissionAskDecision::Decide(...)`. Other plugins can still
+return advice, but an attempted `Decide(...)` is treated as advisory input and
+cannot loosen the base policy.
+
 The trace now includes:
 
 - the policy source kind (`static_policy`, `persisted_rule`, `plugin_advice`,
@@ -176,10 +181,9 @@ the callback before dispatching it.
 At runtime the host also derives an operator-facing authority summary for each
 plugin:
 
-- `trust_level` — `builtin`, `verified`, `checksummed`, `sandboxed`, `remote`,
+- `trust_level` — `builtin`, `verified`, `checksummed`, `remote`,
   or `unverified`
-- `provenance` — transport, path / command / URL, signature key, sha256, sandbox
-  markers
+- `provenance` — transport, path / command / URL, signature key, sha256 markers
 - `plugin_capabilities` — the effective union of host capabilities available to
   the plugin
 - `entry_capabilities` — per-entry capability declarations from the manifest
@@ -231,6 +235,7 @@ Available callbacks include:
 | `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` / `host/monitor.*` | `MonitorRegistry` |
 | `entry_register`, `entry_update`, `entry_remove`, `entry_list` / `host/entry.*` | `EntryRegistry` |
 | `storage_get`, `storage_set`, `storage_delete`, `storage_list` / `host/storage.*` | `PluginStorage` |
+| authoritative `permission_ask` decisions | `PermissionDecision` |
 | `secret_get`, `secret_set`, `secret_delete`, `secret_list` / `host/secret.*` | `PluginSecrets` |
 | `plugin_status_list`, `plugin_status_get` / `host/plugin.status.*` | `PluginStatus` |
 | `lsp_list_servers`, `lsp_list_diagnostics` / `host/lsp.list_*` | `LspRegistry` |
@@ -502,12 +507,12 @@ Plugin host callbacks can be rate-limited and capped per plugin through the
 host quota configuration. The default is permissive; explicit quotas are only
 needed for plugins that should be throttled.
 
-## WASM sandbox
+## WASM host policy
 
-WASM plugins run with an explicit sandbox configuration. By default, they get
-no filesystem preopens, no environment variables, and no network access.
-Each entry may opt into read-only paths, writable paths, selected env vars,
-and network access through the wasm sandbox config.
+Agena does not expose per-plugin hard isolation config. Plugins are trusted
+extension code; when they call back into host APIs to invoke tools, touch
+paths, or reach network resources, those calls go through the same permission
+policy used by normal tool execution.
 
 ## WASM ABI (advanced)
 

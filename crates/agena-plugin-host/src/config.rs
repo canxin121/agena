@@ -59,7 +59,7 @@ fn default_enabled() -> bool {
 /// One entry under `[plugins.list.<id>]`. The `kind` discriminator selects
 /// the transport.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PluginEntry {
     Static {
         #[serde(default)]
@@ -121,46 +121,7 @@ pub enum PluginEntry {
         /// Optional sha256 of the wasm bytes for supply-chain verification.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
-        /// Optional sandbox policy governing what the wasm guest is allowed
-        /// to access through wasi imports. Defaults to all-deny.
-        #[serde(default, skip_serializing_if = "WasmSandboxConfig::is_default_ref")]
-        sandbox: WasmSandboxConfig,
     },
-}
-
-/// Capability policy applied to a wasm plugin's wasi imports.
-///
-/// Each list is empty by default — the wasm guest gets no fs/net/env
-/// access at all. Operators opt in per-path / per-var. The current
-/// transport implementation does not yet honor every field; see
-/// `transport/wasm.rs` for what is wired through.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WasmSandboxConfig {
-    /// Host paths that should be preopened read-only inside the guest.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allow_fs_read: Vec<PathBuf>,
-    /// Host paths that should be preopened read+write inside the guest.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allow_fs_write: Vec<PathBuf>,
-    /// Whether the guest may open outbound network sockets (wasi-sockets
-    /// when available). Defaults to false.
-    #[serde(default)]
-    pub allow_net: bool,
-    /// Names of host environment variables to forward into the guest.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allow_env: Vec<String>,
-}
-
-impl WasmSandboxConfig {
-    pub fn is_default(&self) -> bool {
-        self.allow_fs_read.is_empty()
-            && self.allow_fs_write.is_empty()
-            && !self.allow_net
-            && self.allow_env.is_empty()
-    }
-    pub fn is_default_ref(value: &WasmSandboxConfig) -> bool {
-        value.is_default()
-    }
 }
 
 impl PluginEntry {

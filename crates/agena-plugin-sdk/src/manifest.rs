@@ -164,6 +164,7 @@ pub enum HostCapability {
     Statusline,
     Theme,
     PermissionUi,
+    PermissionDecision,
 }
 
 /// Single declarative path extraction rule. `jsonpath` is a subset:

@@ -905,6 +905,26 @@ impl PluginHost {
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             match decision {
                 Some(PermissionAskDecision::Decide(d)) => {
+                    if !plugin_has_capability(plugin, HostCapability::PermissionDecision) {
+                        tracing::warn!(
+                            target: "agena_plugin_host::permission",
+                            plugin = %plugin.id,
+                            "permission.ask returned Decide without PermissionDecision capability; treating as advice"
+                        );
+                        return Ok(Some(PermissionAskOutcome::Advice {
+                            plugin_id: plugin.id.clone(),
+                            advice: PermissionAdvice {
+                                decision: d,
+                                reason: format!(
+                                    "plugin {} requested a permission decision without PermissionDecision capability",
+                                    plugin.id
+                                ),
+                                risk: crate::sdk::PermissionRiskLevel::Medium,
+                                requested_scope: None,
+                            },
+                            authority: plugin.authority_summary(),
+                        }));
+                    }
                     return Ok(Some(PermissionAskOutcome::Decision {
                         plugin_id: plugin.id.clone(),
                         decision: d,
@@ -1507,6 +1527,14 @@ fn tool_hook_context(
                 .unwrap_or_else(|| tool_name.to_string()),
         ),
     }
+}
+
+fn plugin_has_capability(plugin: &LoadedPlugin, capability: HostCapability) -> bool {
+    effective_host_capabilities_for_manifest(
+        &plugin.manifest.entries,
+        &plugin.manifest.plugin_capabilities,
+    )
+    .contains(&capability)
 }
 
 fn transport_to_plugin_error(e: TransportError) -> PluginError {
@@ -4111,8 +4139,50 @@ pub struct HostHandleClient;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sdk::{
+        PermissionAskDecision, PermissionAskInput, Plugin, PluginManifest, Result as SdkResult,
+    };
     use crate::status::{PluginRunState, PluginStatus};
     use serde_json::json;
+
+    struct PermissionDecisionPlugin {
+        grant_capability: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for PermissionDecisionPlugin {
+        fn manifest(&self) -> PluginManifest {
+            let builder = PluginManifest::builder("permission-decision-fixture", "0.1.0")
+                .hooks(HookSubscription::PERMISSION_ASK);
+            if self.grant_capability {
+                builder
+                    .plugin_capability(HostCapability::PermissionDecision)
+                    .build()
+            } else {
+                builder.build()
+            }
+        }
+
+        async fn permission_ask(
+            &self,
+            _input: PermissionAskInput,
+        ) -> SdkResult<Option<PermissionAskDecision>> {
+            Ok(Some(PermissionAskDecision::Decide(
+                PermissionDecision::Allow,
+            )))
+        }
+    }
+
+    async fn build_permission_decision_host(grant_capability: bool) -> Arc<PluginHost> {
+        PluginHostBuilder::new(std::env::temp_dir(), "test")
+            .register_static(
+                "permission-decision-fixture",
+                PermissionDecisionPlugin { grant_capability },
+            )
+            .build()
+            .await
+            .expect("plugin host should build")
+    }
 
     #[test]
     fn plugin_inspect_surfaces_status_without_loaded_manifest() {
@@ -4169,5 +4239,45 @@ mod tests {
         assert_eq!(listed[0].seq, second.seq);
         assert_eq!(listed[0].source, "stderr");
         assert_eq!(listed[0].message, "permission denied");
+    }
+
+    #[tokio::test]
+    async fn permission_ask_decide_requires_permission_decision_capability() {
+        let host = build_permission_decision_host(false).await;
+        let outcome = host
+            .dispatch_permission_ask(PermissionAskInput {
+                session_id: 1,
+                action: "tool".to_string(),
+                subject: serde_json::json!({"kind": "tool"}),
+                default_decision: PermissionDecision::Prompt,
+            })
+            .await
+            .expect("permission hook should dispatch")
+            .expect("plugin should return an outcome");
+
+        assert!(matches!(outcome, PermissionAskOutcome::Advice { .. }));
+    }
+
+    #[tokio::test]
+    async fn permission_ask_decide_is_honored_with_permission_decision_capability() {
+        let host = build_permission_decision_host(true).await;
+        let outcome = host
+            .dispatch_permission_ask(PermissionAskInput {
+                session_id: 1,
+                action: "tool".to_string(),
+                subject: serde_json::json!({"kind": "tool"}),
+                default_decision: PermissionDecision::Prompt,
+            })
+            .await
+            .expect("permission hook should dispatch")
+            .expect("plugin should return an outcome");
+
+        assert!(matches!(
+            outcome,
+            PermissionAskOutcome::Decision {
+                decision: PermissionDecision::Allow,
+                ..
+            }
+        ));
     }
 }

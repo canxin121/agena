@@ -11,8 +11,9 @@ use async_trait::async_trait;
 
 use crate::message::{
     AskUserToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
-    ExitWorktreeToolInput, FirstPartyToolInput, MonitorStatus, MonitorStream, TaskSubagentType,
-    TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, UserInputOption, UserInputQuestion,
+    ExitWorktreeToolInput, FirstPartyToolInput, MonitorStatus, MonitorStream, StructuredObject,
+    TaskSubagentType, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation,
+    ToolOutput, UserInputOption, UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentListResponse,
@@ -158,6 +159,23 @@ fn host_unavailable(message: impl Into<String>) -> PluginError {
         hook: None,
         plugin: None,
         data: None,
+    }
+}
+
+fn tool_execution_to_invoke_output(
+    execution: crate::tool::ToolInvocationExecution,
+) -> ToolInvokeOutput {
+    let payload = match execution.output {
+        ToolOutput::Custom { output } => Some(serde_json::Value::from(output.payload)),
+        ToolOutput::Mcp { output } => serde_json::to_value(output).ok(),
+        ToolOutput::None => None,
+    };
+    ToolInvokeOutput {
+        title: execution.view.title,
+        output_text: execution.view.output_text,
+        payload,
+        metadata: execution.view.metadata.into_iter().collect(),
+        attachments: execution.view.attachments,
     }
 }
 
@@ -515,11 +533,11 @@ impl HostClient for RuntimeHostClient {
             .lookup_entry(&tool)
             .ok_or_else(|| PluginError::new(format!("entry `{tool}` not found")))?;
 
-        let caller = current_host_callback_context();
+        let caller = self.callback_context()?;
         let plugin_id = resolution.handle.plugin_id.clone();
         if caller
+            .plugin_id
             .as_ref()
-            .and_then(|context| context.plugin_id.as_ref())
             .is_some_and(|current| current == &plugin_id)
             || active_invocations::contains(&plugin_id)
         {
@@ -529,38 +547,20 @@ impl HostClient for RuntimeHostClient {
         }
         let _guard = active_invocations::enter(plugin_id.clone());
 
-        let host_arc = host.clone();
-        let handle_clone = resolution.handle.clone();
-        let original = resolution.handle.original_name.clone();
         let session_id = caller
-            .as_ref()
-            .and_then(|context| context.session_id)
-            .unwrap_or(-1);
-        let call_id = caller
-            .as_ref()
-            .and_then(|context| context.call_id)
-            .unwrap_or(-1);
-        let workspace_root = caller
-            .and_then(|context| context.workspace_root)
-            .unwrap_or_else(|| ".".to_string());
-        // Run in a blocking thread so the sync invoke_tool API on PluginHost
-        // (which itself uses block_on) doesn't hijack our async runtime.
-        let result = tokio::task::spawn_blocking(move || {
-            host_arc.invoke_tool(
-                &handle_clone,
-                crate::plugin::ToolInvokeInput {
-                    tool_name: original,
-                    session_id,
-                    call_id,
-                    workspace_root,
-                    input,
-                },
-            )
-        })
-        .await
-        .map_err(|_| PluginError::new("invoke_tool task panicked"))??;
+            .session_id
+            .ok_or_else(|| host_unavailable("host/tool.invoke requires session_id"))?;
+        let call_id = caller.call_id.unwrap_or(-1);
+        let structured = StructuredObject::try_from(input)
+            .map_err(|err| PluginError::invalid_params(format!("invoke_tool input: {err}")))?;
+        let invocation = ToolInvocation::new(tool, structured);
+        let execution = self
+            .session_manager()?
+            .execute_host_invoked_tool(session_id, call_id, invocation)
+            .await
+            .map_err(|err| PluginError::new(format!("host/tool.invoke failed: {err}")))?;
 
-        Ok(result)
+        Ok(tool_execution_to_invoke_output(execution))
     }
 
     async fn ask_user(&self, req: AskUserRequest) -> Result<AskUserResponse, PluginError> {

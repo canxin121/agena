@@ -20,16 +20,16 @@ pub use types::{
     CopilotProviderOptions, GitlabProviderOptions, GoogleVertexAuthConfig,
     GoogleVertexProviderOptions, HttpProviderConfig, LspConfig, LspServerConfig, McpConfig,
     McpHttpAuthConfig, McpHttpMode, McpServerConfig, MemoryConfig, OllamaProviderOptions,
-    OpenAiApiModeConfig, OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PermissionConfig,
-    PluginConfig, ProjectInstructionsConfig, ProviderDefinition, ProviderHttpConfig,
-    RequestRetryConfig, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig,
-    RuntimeJanitorConfig, RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions,
-    StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend,
-    WebSearchBackendKind, WebSearchConfig, WebToolsConfig,
+    OpenAiApiModeConfig, OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PluginConfig,
+    ProjectInstructionsConfig, ProviderDefinition, ProviderHttpConfig, RequestRetryConfig,
+    ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeJanitorConfig,
+    RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions, StreamReplayConfig,
+    StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend, WebSearchBackendKind,
+    WebSearchConfig, WebToolsConfig,
 };
 
-pub(crate) use error::{parse_numeric, parse_permission_mode};
+pub(crate) use error::parse_numeric;
 pub(crate) use raw::{
-    RawAuthConfig, RawConfig, RawConfigFile, RawPermissionConfig, RawProviderHttpConfig,
-    RawRequestRetryConfig, RawRuntimeConfig, RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
+    RawAuthConfig, RawConfig, RawConfigFile, RawProviderHttpConfig, RawRequestRetryConfig,
+    RawRuntimeConfig, RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
 };

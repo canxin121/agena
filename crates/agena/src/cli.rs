@@ -249,6 +249,12 @@ pub struct PermissionsWriteArgs {
     pub workspace_root: Option<String>,
     #[arg(long)]
     pub target_path: Option<String>,
+    #[arg(long)]
+    pub network_target: Option<String>,
+    #[arg(long)]
+    pub network_host: Option<String>,
+    #[arg(long)]
+    pub network_port: Option<u16>,
     #[arg(long, value_enum)]
     pub scope: PermissionScopeArg,
     #[arg(long)]
@@ -3119,6 +3125,25 @@ fn permission_action_from_args(
                 .map(ToOwned::to_owned),
         });
     }
+    if let Some(target) = args
+        .network_target
+        .as_deref()
+        .or(args.network_host.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let parse_target = args
+            .network_port
+            .map(|port| format!("{target}:{port}"))
+            .unwrap_or_else(|| target.to_string());
+        let parsed = crate::permission::NetworkTarget::parse(&parse_target)
+            .map_err(|err| AppError::Config(format!("invalid network target: {err}")))?;
+        return Ok(PermissionAction::NetworkAccess {
+            target: target.to_string(),
+            host: parsed.host().to_string(),
+            port: parsed.port(),
+        });
+    }
     let path_access_kind = args
         .path_access_kind
         .as_deref()
@@ -4018,8 +4043,9 @@ store_path = "{}"
             .expect("time should move forward")
             .as_nanos();
         let db_path = std::env::temp_dir().join(format!("agena-cli-session-{suffix}.db"));
+        let config_path = write_temp_config("");
         let cli = AgenaCli {
-            config: None,
+            config: Some(config_path),
             overrides: Vec::new(),
             database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
             database_path: None,
@@ -4074,8 +4100,9 @@ store_path = "{}"
             .expect("time should move forward")
             .as_nanos();
         let db_path = std::env::temp_dir().join(format!("agena-cli-session-view-{suffix}.db"));
+        let config_path = write_temp_config("");
         let cli = AgenaCli {
-            config: None,
+            config: Some(config_path),
             overrides: Vec::new(),
             database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
             database_path: None,
@@ -4445,8 +4472,9 @@ store_path = "{}"
             .expect("time should move forward")
             .as_nanos();
         let db_path = std::env::temp_dir().join(format!("agena-cli-cost-{suffix}.db"));
+        let config_path = write_temp_config("");
         let cli = AgenaCli {
-            config: None,
+            config: Some(config_path),
             overrides: Vec::new(),
             database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
             database_path: None,
@@ -4562,6 +4590,9 @@ store_path = "{}"
                     path_access_kind: None,
                     workspace_root: None,
                     target_path: None,
+                    network_target: None,
+                    network_host: None,
+                    network_port: None,
                     scope: PermissionScopeArg::Workspace,
                     session_id: None,
                     rule_mode: PermissionModeArg::Allow,

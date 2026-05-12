@@ -92,8 +92,8 @@
 | `view_file` | Read-only | 把本地文件重新作为多模态输入附加回对话 |
 | `glob` | Read-only | 按 glob 模式搜索文件 |
 | `grep` | Read-only | 按正则搜索文件内容 |
-| `apply_patch` | Write-sandboxed | 应用结构化文件补丁 |
-| `notebook_edit` | Write-sandboxed | 编辑 Jupyter notebook 的 cell |
+| `apply_patch` | Mutating | 应用结构化文件补丁 |
+| `notebook_edit` | Mutating | 编辑 Jupyter notebook 的 cell |
 
 ### 2.2 Shell entries（`agena.shell`）
 
@@ -101,9 +101,9 @@
 
 | Entry | 行为类型 | 作用 |
 |---|---|---|
-| `bash` | Write-sandboxed | 在工作区中执行 shell 命令 |
-| `powershell` | Write-sandboxed | 执行 PowerShell 命令 |
-| `monitor` | Write-sandboxed | 启动、列出、读取、停止长时间运行的受监控进程 |
+| `bash` | Mutating | 在工作区中执行 shell 命令 |
+| `powershell` | Mutating | 执行 PowerShell 命令 |
+| `monitor` | Mutating | 启动、列出、读取、停止长时间运行的受监控进程 |
 
 ### 2.3 Web entries（`agena.web`）
 
@@ -129,8 +129,8 @@
 | `ask_user` | Read-only | 向用户发起简短提问并等待回答 |
 | `enter_plan_mode` | Read-only | 进入 plan mode |
 | `exit_plan_mode` | Read-only | 退出 plan mode |
-| `enter_worktree` | Write-sandboxed | 创建或附着到一个 worktree |
-| `exit_worktree` | Write-sandboxed | 离开当前 worktree |
+| `enter_worktree` | Mutating | 创建或附着到一个 worktree |
+| `exit_worktree` | Mutating | 离开当前 worktree |
 
 ### 2.5 LSP entries（`agena.lsp`）
 

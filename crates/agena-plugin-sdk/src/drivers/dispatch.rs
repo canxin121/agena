@@ -132,6 +132,20 @@ impl<P: Plugin> PluginDispatcher<P> {
                     .await?,
                 )
             }
+            method::HOOK_TOOL_PERMISSION_NETWORKS => {
+                let i: ToolPermissionNetworksInput = serde_json::from_value(params)?;
+                let ctx = crate::host_api::HostCallbackContext {
+                    entry_name: Some(i.tool_name.clone()),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                ok_json(
+                    &crate::host_api::with_host_callback_context(
+                        ctx,
+                        plugin.permission_networks(&i.tool_name, &i.input),
+                    )
+                    .await?,
+                )
+            }
             method::HOOK_TOOL_INVOKE_STREAM => Err(PluginError::new(
                 "tool.invoke.stream cannot be dispatched without a stream sink; \
                      transports should call PluginDispatcher::dispatch_stream",

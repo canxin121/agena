@@ -40,6 +40,6 @@ pub use sdk::{
     SessionCompactingInput, SessionCompactingPatch, SessionEndInput, SessionEndReason,
     SessionStartInput, SessionStartPatch, SessionStartSource, ShellEnvInput, ShellEnvPatch,
     ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolFailureInput,
-    ToolInvokeInput, ToolInvokeOutput, ToolPermissionPathsInput, UserPromptSubmitInput,
-    UserPromptSubmitPatch,
+    ToolInvokeInput, ToolInvokeOutput, ToolPermissionNetworksInput, ToolPermissionPathsInput,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };

@@ -387,6 +387,9 @@ struct PermissionRuleDraft {
     path_access_kind: String,
     workspace_root: String,
     target_path: String,
+    network_target: String,
+    network_host: String,
+    network_port: String,
     scope: String,
     session_id: String,
     mode: PermissionMode,
@@ -396,6 +399,7 @@ struct PermissionRuleDraft {
 enum PermissionRuleSubjectKind {
     BuiltinTool,
     PathAccess,
+    NetworkAccess,
 }
 
 #[derive(Debug, Clone)]
@@ -7833,6 +7837,10 @@ fn permission_action_label(i18n: &I18n, action: &PermissionAction) -> String {
                 "path" => target_path.clone(),
             ),
         ),
+        PermissionAction::NetworkAccess { host, port, .. } => match port {
+            Some(port) => format!("network {host}:{port}"),
+            None => format!("network {host}"),
+        },
     }
 }
 
@@ -9369,6 +9377,9 @@ impl Default for PermissionRuleDraft {
             path_access_kind: "read".to_string(),
             workspace_root: String::new(),
             target_path: String::new(),
+            network_target: String::new(),
+            network_host: String::new(),
+            network_port: String::new(),
             scope: "workspace".to_string(),
             session_id: String::new(),
             mode: PermissionMode::Ask,
@@ -9378,10 +9389,10 @@ impl Default for PermissionRuleDraft {
 
 fn permission_rule_draft_from_resource(rule: &PermissionRuleResource) -> PermissionRuleDraft {
     PermissionRuleDraft {
-        subject_kind: if rule.subject_kind == "path_access" {
-            PermissionRuleSubjectKind::PathAccess
-        } else {
-            PermissionRuleSubjectKind::BuiltinTool
+        subject_kind: match rule.subject_kind.as_str() {
+            "path_access" => PermissionRuleSubjectKind::PathAccess,
+            "network_access" => PermissionRuleSubjectKind::NetworkAccess,
+            _ => PermissionRuleSubjectKind::BuiltinTool,
         },
         tool_name: rule.tool_name.clone().unwrap_or_default(),
         qualifier: rule.qualifier.clone().unwrap_or_default(),
@@ -9391,6 +9402,16 @@ fn permission_rule_draft_from_resource(rule: &PermissionRuleResource) -> Permiss
             .unwrap_or_else(|| "read".to_string()),
         workspace_root: rule.workspace_root.clone().unwrap_or_default(),
         target_path: rule.target_path.clone().unwrap_or_default(),
+        network_target: rule
+            .network_target
+            .clone()
+            .or_else(|| rule.network_host.clone())
+            .unwrap_or_default(),
+        network_host: rule.network_host.clone().unwrap_or_default(),
+        network_port: rule
+            .network_port
+            .map(|port| port.to_string())
+            .unwrap_or_default(),
         scope: rule.scope.clone(),
         session_id: rule.session_id.map(|id| id.to_string()).unwrap_or_default(),
         mode: rule.mode,
@@ -9413,6 +9434,17 @@ fn permission_rule_label(rule: &PermissionRuleResource) -> String {
                 .as_deref()
                 .unwrap_or(rule.action_key.as_str())
         ),
+        "network_access" => {
+            let host = rule
+                .network_host
+                .as_deref()
+                .or(rule.network_target.as_deref())
+                .unwrap_or(rule.action_key.as_str());
+            match rule.network_port {
+                Some(port) => format!("network · {host}:{port}"),
+                None => format!("network · {host}"),
+            }
+        }
         _ => rule.action_key.clone(),
     }
 }
@@ -9473,6 +9505,14 @@ fn permission_rule_draft_label(draft: &PermissionRuleDraft) -> String {
                 draft.target_path.trim()
             )
         }
+        PermissionRuleSubjectKind::NetworkAccess => {
+            let target = draft.network_target.trim();
+            if target.is_empty() {
+                "network".to_string()
+            } else {
+                format!("network · {target}")
+            }
+        }
     }
 }
 
@@ -9515,6 +9555,18 @@ fn render_permission_rule_draft(draft: &PermissionRuleDraft) -> String {
             }
             parts.join(" ")
         }
+        PermissionRuleSubjectKind::NetworkAccess => {
+            let mut parts = vec![
+                "network".to_string(),
+                shell_quote_or_dash(draft.network_target.trim()),
+                permission_mode_name(draft.mode).to_string(),
+                format!("scope={}", draft.scope.trim()),
+            ];
+            if draft.scope.trim() == "session" && !draft.session_id.trim().is_empty() {
+                parts.push(format!("session={}", draft.session_id.trim()));
+            }
+            parts.join(" ")
+        }
     }
 }
 
@@ -9544,6 +9596,10 @@ fn render_permission_rule_preview(input: &str) -> String {
                         lines.push(format!("workspace_root: {}", draft.workspace_root.trim()));
                     }
                 }
+                PermissionRuleSubjectKind::NetworkAccess => {
+                    lines.push("subject: network_access".to_string());
+                    lines.push(format!("target: {}", draft.network_target.trim()));
+                }
             }
             if draft.scope == "session" && !draft.session_id.trim().is_empty() {
                 lines.push(format!("session_id: {}", draft.session_id.trim()));
@@ -9558,6 +9614,7 @@ fn permission_rule_edit_help() -> String {
     [
         "tool <tool_name> <allow|ask|deny> [qualifier=<text>] [scope=session|workspace|global] [session=<id>]",
         "path <read|write|read_write> <target_path> <allow|ask|deny> [scope=session|workspace|global] [session=<id>] [workspace_root=<path>]",
+        "network <target|host:port|url> <allow|ask|deny> [scope=session|workspace|global] [session=<id>]",
     ]
     .join("\n")
 }
@@ -9572,6 +9629,9 @@ fn permission_rule_params_from_draft(draft: &PermissionRuleDraft) -> UpsertPermi
             path_access_kind: None,
             workspace_root: None,
             target_path: None,
+            network_target: None,
+            network_host: None,
+            network_port: None,
             scope: Some(draft.scope.trim().to_string()),
             session_id: if draft.scope.trim() == "session" {
                 draft.session_id.trim().parse::<i64>().ok()
@@ -9588,6 +9648,28 @@ fn permission_rule_params_from_draft(draft: &PermissionRuleDraft) -> UpsertPermi
             path_access_kind: Some(draft.path_access_kind.trim().to_string()),
             workspace_root: non_empty_owned(draft.workspace_root.clone()),
             target_path: Some(draft.target_path.trim().to_string()),
+            network_target: None,
+            network_host: None,
+            network_port: None,
+            scope: Some(draft.scope.trim().to_string()),
+            session_id: if draft.scope.trim() == "session" {
+                draft.session_id.trim().parse::<i64>().ok()
+            } else {
+                None
+            },
+            mode: draft.mode,
+        },
+        PermissionRuleSubjectKind::NetworkAccess => UpsertPermissionRuleParams {
+            action_key: None,
+            subject_kind: Some("network_access".to_string()),
+            tool_name: None,
+            qualifier: None,
+            path_access_kind: None,
+            workspace_root: None,
+            target_path: None,
+            network_target: Some(draft.network_target.trim().to_string()),
+            network_host: None,
+            network_port: None,
             scope: Some(draft.scope.trim().to_string()),
             session_id: if draft.scope.trim() == "session" {
                 draft.session_id.trim().parse::<i64>().ok()
@@ -9648,8 +9730,24 @@ fn parse_permission_rule_input(input: &str) -> std::result::Result<PermissionRul
                 return Err("target_path is required".to_string());
             }
         }
+        "network" => {
+            draft.subject_kind = PermissionRuleSubjectKind::NetworkAccess;
+            draft.network_target = tokens[1].clone();
+            draft.mode = parse_permission_mode_token(tokens[2].as_str())?;
+            for token in &tokens[3..] {
+                let (key, value) = split_permission_rule_option(token)?;
+                match key {
+                    "scope" => draft.scope = parse_permission_scope_token(value)?.to_string(),
+                    "session" => draft.session_id = value.to_string(),
+                    _ => return Err(format!("unknown permission rule option: {key}")),
+                }
+            }
+            if draft.network_target.trim().is_empty() {
+                return Err("network target is required".to_string());
+            }
+        }
         _ => {
-            return Err("rule subject must start with `tool` or `path`".to_string());
+            return Err("rule subject must start with `tool`, `path`, or `network`".to_string());
         }
     }
     if draft.scope == "session" && draft.session_id.trim().is_empty() {
@@ -9942,6 +10040,23 @@ mod tests {
         assert_eq!(draft.target_path, "src");
         assert_eq!(draft.workspace_root, "/tmp/ws");
         assert_eq!(draft.mode, PermissionMode::Allow);
+    }
+
+    #[test]
+    fn parse_permission_rule_input_supports_network_rules() {
+        let draft = parse_permission_rule_input("network api.example.com:443 ask scope=global")
+            .expect("network permission rule input should parse");
+        assert_eq!(draft.subject_kind, PermissionRuleSubjectKind::NetworkAccess);
+        assert_eq!(draft.network_target, "api.example.com:443");
+        assert_eq!(draft.scope, "global");
+        assert_eq!(draft.mode, PermissionMode::Ask);
+
+        let params = permission_rule_params_from_draft(&draft);
+        assert_eq!(params.subject_kind.as_deref(), Some("network_access"));
+        assert_eq!(
+            params.network_target.as_deref(),
+            Some("api.example.com:443")
+        );
     }
 
     #[test]

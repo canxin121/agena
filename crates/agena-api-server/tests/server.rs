@@ -9,6 +9,7 @@ use std::sync::Arc;
 use agena::model::{ModelId, ModelRef, ProviderId};
 use agena::{
     agent::Agent,
+    config::LoadConfigRequest,
     event::{EventKind, PublishContext},
     message::PartContent,
     permission::PermissionPolicy,
@@ -109,8 +110,17 @@ async fn build_state() -> (AppState, Arc<SessionManager>, String) {
         processor,
         executor,
     ));
+    let config_path = std::env::temp_dir().join(format!(
+        "agena-api-server-test-{}.toml",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(&config_path, "").expect("test config should be written");
 
     let runtime = agena::runtime::AgenaRuntime::builder()
+        .with_load_request(LoadConfigRequest {
+            config_path: Some(config_path),
+            ..LoadConfigRequest::default()
+        })
         .with_workspace_root(std::path::PathBuf::from(&workspace_root))
         .with_database_connection(db.as_ref().clone())
         .build()

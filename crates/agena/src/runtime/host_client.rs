@@ -1101,21 +1101,16 @@ impl HostClient for RuntimeHostClient {
             return Err(PluginError::invalid_params("agent.name must not be empty"));
         }
         let scope = agent_scope_from_str(req.agent.scope.as_str());
-        let snapshot = self.runtime.current_snapshot();
-        let mut permission = core_agent_permission_from_sdk(req.agent.permission);
-        if snapshot.config_resolution().config.permission_explicit {
-            permission = snapshot
-                .config_resolution()
-                .config
-                .agent_permission_with_legacy_fallback(&permission);
-        }
+        let permission = core_agent_permission_from_sdk(req.agent.permission);
         let mode = core_agent_mode_from_sdk(req.agent.mode.as_str());
         let temperature = req.agent.temperature.map(crate::agent::AgentTemperature);
+        let effective_permission =
+            permission.effective_with_defaults(&crate::agent::PermissionConfig::default());
         crate::agent::Agent::new(
             req.agent.name.clone(),
             crate::permission::PermissionPolicy::allow_all(),
         )
-        .try_with_permission_config(&permission)
+        .try_with_permission_config(&effective_permission)
         .map_err(|err| {
             PluginError::invalid_params(format!(
                 "agent.permission is invalid for '{}': {err}",
@@ -1282,37 +1277,10 @@ fn core_agent_permission_from_sdk(
     permission: crate::plugin::sdk::host_api::AgentPermissionConfig,
 ) -> crate::agent::AgentPermissionConfig {
     crate::agent::AgentPermissionConfig {
-        default_read: permission.default_read.map(core_permission_mode_from_sdk),
-        default_write: permission.default_write.map(core_permission_mode_from_sdk),
-        default_external_directory: permission
-            .default_external_directory
-            .map(core_permission_mode_from_sdk),
-        execution_mode: permission.execution_mode.map(core_execution_mode_from_sdk),
-        tools: permission
-            .tools
-            .into_iter()
-            .map(|(tool, mode)| (tool, core_permission_mode_from_sdk(mode)))
-            .collect(),
-        read: permission.read.map(core_agent_permission_rules_from_sdk),
-        write: permission.write.map(core_agent_permission_rules_from_sdk),
-        external_directory: permission
-            .external_directory
-            .map(core_agent_permission_rules_from_sdk),
-        tool_rules: permission
-            .tool_rules
-            .into_iter()
-            .map(|(tool, rules)| (tool, core_agent_permission_rules_from_sdk(rules)))
-            .collect(),
-        bash_rules: permission
-            .bash_rules
-            .into_iter()
-            .map(|rule| crate::agent::AgentBashRule {
-                pattern: rule.pattern,
-                mode: core_permission_mode_from_sdk(rule.mode),
-            })
-            .collect(),
-        bash_deny_patterns: permission.bash_deny_patterns,
-        ..Default::default()
+        inherit: core_permission_inheritance_from_sdk(permission.inherit),
+        path: permission.path.map(core_path_permission_from_sdk),
+        network: permission.network.map(core_network_permission_from_sdk),
+        tools: permission.tools.map(core_tool_permission_from_sdk),
     }
 }
 
@@ -1320,48 +1288,220 @@ fn sdk_agent_permission_from_core(
     permission: crate::agent::AgentPermissionConfig,
 ) -> crate::plugin::sdk::host_api::AgentPermissionConfig {
     crate::plugin::sdk::host_api::AgentPermissionConfig {
-        default_read: permission.default_read.map(sdk_permission_mode_from_core),
-        default_write: permission.default_write.map(sdk_permission_mode_from_core),
-        default_external_directory: permission
-            .default_external_directory
-            .map(sdk_permission_mode_from_core),
-        execution_mode: permission.execution_mode.map(sdk_execution_mode_from_core),
-        tools: permission
-            .tools
-            .into_iter()
-            .map(|(tool, mode)| (tool, sdk_permission_mode_from_core(mode)))
-            .collect(),
-        read: permission.read.map(sdk_agent_permission_rules_from_core),
-        write: permission.write.map(sdk_agent_permission_rules_from_core),
-        external_directory: permission
-            .external_directory
-            .map(sdk_agent_permission_rules_from_core),
-        tool_rules: permission
-            .tool_rules
-            .into_iter()
-            .map(|(tool, rules)| (tool, sdk_agent_permission_rules_from_core(rules)))
-            .collect(),
-        bash_rules: permission
-            .bash_rules
-            .into_iter()
-            .map(|rule| crate::plugin::sdk::host_api::AgentBashRule {
-                pattern: rule.pattern,
-                mode: sdk_permission_mode_from_core(rule.mode),
-            })
-            .collect(),
-        bash_deny_patterns: permission.bash_deny_patterns,
+        inherit: sdk_permission_inheritance_from_core(permission.inherit),
+        path: permission.path.map(sdk_path_permission_from_core),
+        network: permission.network.map(sdk_network_permission_from_core),
+        tools: permission.tools.map(sdk_tool_permission_from_core),
     }
 }
 
-fn core_agent_permission_rules_from_sdk(
-    rules: crate::plugin::sdk::host_api::AgentPermissionRules,
-) -> crate::agent::AgentPermissionRules {
-    match rules {
-        crate::plugin::sdk::host_api::AgentPermissionRules::Mode(mode) => {
-            crate::agent::AgentPermissionRules::Mode(core_permission_mode_from_sdk(mode))
+fn core_permission_inheritance_from_sdk(
+    inherit: crate::plugin::sdk::host_api::AgentPermissionInheritance,
+) -> crate::agent::PermissionInheritanceConfig {
+    match inherit {
+        crate::plugin::sdk::host_api::AgentPermissionInheritance::All(value) => {
+            crate::agent::PermissionInheritanceConfig::All(value)
         }
-        crate::plugin::sdk::host_api::AgentPermissionRules::Ordered(entries) => {
-            crate::agent::AgentPermissionRules::Ordered(
+        crate::plugin::sdk::host_api::AgentPermissionInheritance::Sections(sections) => {
+            crate::agent::PermissionInheritanceConfig::Sections(
+                crate::agent::PermissionInheritanceSections {
+                    path: sections.path,
+                    network: sections.network,
+                    tools: sections.tools,
+                    plugin_tools: sections.plugin_tools,
+                },
+            )
+        }
+    }
+}
+
+fn sdk_permission_inheritance_from_core(
+    inherit: crate::agent::PermissionInheritanceConfig,
+) -> crate::plugin::sdk::host_api::AgentPermissionInheritance {
+    match inherit {
+        crate::agent::PermissionInheritanceConfig::All(value) => {
+            crate::plugin::sdk::host_api::AgentPermissionInheritance::All(value)
+        }
+        crate::agent::PermissionInheritanceConfig::Sections(sections) => {
+            crate::plugin::sdk::host_api::AgentPermissionInheritance::Sections(
+                crate::plugin::sdk::host_api::AgentPermissionInheritanceSections {
+                    path: sections.path,
+                    network: sections.network,
+                    tools: sections.tools,
+                    plugin_tools: sections.plugin_tools,
+                },
+            )
+        }
+    }
+}
+
+fn core_path_permission_from_sdk(
+    path: crate::plugin::sdk::host_api::AgentPathPermissionConfig,
+) -> crate::agent::PathPermissionConfig {
+    crate::agent::PathPermissionConfig {
+        workspace: path.workspace.map(core_path_access_modes_from_sdk),
+        external: path.external.map(core_path_access_modes_from_sdk),
+        rules: path
+            .rules
+            .into_iter()
+            .map(|(pattern, rule)| (pattern, core_path_access_rule_from_sdk(rule)))
+            .collect(),
+    }
+}
+
+fn sdk_path_permission_from_core(
+    path: crate::agent::PathPermissionConfig,
+) -> crate::plugin::sdk::host_api::AgentPathPermissionConfig {
+    crate::plugin::sdk::host_api::AgentPathPermissionConfig {
+        workspace: path.workspace.map(sdk_path_access_modes_from_core),
+        external: path.external.map(sdk_path_access_modes_from_core),
+        rules: path
+            .rules
+            .into_iter()
+            .map(|(pattern, rule)| (pattern, sdk_path_access_rule_from_core(rule)))
+            .collect(),
+    }
+}
+
+fn core_path_access_modes_from_sdk(
+    modes: crate::plugin::sdk::host_api::AgentPathAccessModes,
+) -> crate::agent::PathAccessModes {
+    crate::agent::PathAccessModes {
+        read: modes.read.map(core_permission_mode_from_sdk),
+        write: modes.write.map(core_permission_mode_from_sdk),
+    }
+}
+
+fn sdk_path_access_modes_from_core(
+    modes: crate::agent::PathAccessModes,
+) -> crate::plugin::sdk::host_api::AgentPathAccessModes {
+    crate::plugin::sdk::host_api::AgentPathAccessModes {
+        read: modes.read.map(sdk_permission_mode_from_core),
+        write: modes.write.map(sdk_permission_mode_from_core),
+    }
+}
+
+fn core_path_access_rule_from_sdk(
+    rule: crate::plugin::sdk::host_api::AgentPathAccessRule,
+) -> crate::agent::PathAccessRuleConfig {
+    match rule {
+        crate::plugin::sdk::host_api::AgentPathAccessRule::Modes(modes) => {
+            crate::agent::PathAccessRuleConfig::Modes(core_path_access_modes_from_sdk(modes))
+        }
+        crate::plugin::sdk::host_api::AgentPathAccessRule::Shorthand(value) => {
+            crate::agent::PathAccessRuleConfig::Shorthand(value)
+        }
+    }
+}
+
+fn sdk_path_access_rule_from_core(
+    rule: crate::agent::PathAccessRuleConfig,
+) -> crate::plugin::sdk::host_api::AgentPathAccessRule {
+    match rule {
+        crate::agent::PathAccessRuleConfig::Modes(modes) => {
+            crate::plugin::sdk::host_api::AgentPathAccessRule::Modes(
+                sdk_path_access_modes_from_core(modes),
+            )
+        }
+        crate::agent::PathAccessRuleConfig::Shorthand(value) => {
+            crate::plugin::sdk::host_api::AgentPathAccessRule::Shorthand(value)
+        }
+    }
+}
+
+fn core_network_permission_from_sdk(
+    network: crate::plugin::sdk::host_api::AgentNetworkPermissionConfig,
+) -> crate::agent::NetworkPermissionConfig {
+    crate::agent::NetworkPermissionConfig {
+        internet: network.internet.map(core_permission_mode_from_sdk),
+        private: network.private.map(core_permission_mode_from_sdk),
+        loopback: network.loopback.map(core_permission_mode_from_sdk),
+        rules: network
+            .rules
+            .into_iter()
+            .map(|(pattern, mode)| (pattern, core_permission_mode_from_sdk(mode)))
+            .collect(),
+    }
+}
+
+fn sdk_network_permission_from_core(
+    network: crate::agent::NetworkPermissionConfig,
+) -> crate::plugin::sdk::host_api::AgentNetworkPermissionConfig {
+    crate::plugin::sdk::host_api::AgentNetworkPermissionConfig {
+        internet: network.internet.map(sdk_permission_mode_from_core),
+        private: network.private.map(sdk_permission_mode_from_core),
+        loopback: network.loopback.map(sdk_permission_mode_from_core),
+        rules: network
+            .rules
+            .into_iter()
+            .map(|(pattern, mode)| (pattern, sdk_permission_mode_from_core(mode)))
+            .collect(),
+    }
+}
+
+fn core_tool_permission_from_sdk(
+    tools: crate::plugin::sdk::host_api::AgentToolPermissionConfig,
+) -> crate::agent::ToolPermissionConfig {
+    crate::agent::ToolPermissionConfig {
+        tags: tools
+            .tags
+            .into_iter()
+            .map(|(tag, mode)| (tag, core_permission_mode_from_sdk(mode)))
+            .collect(),
+        first_party: tools
+            .first_party
+            .into_iter()
+            .map(|(tool, mode)| (tool, core_permission_mode_from_sdk(mode)))
+            .collect(),
+        plugin: tools
+            .plugin
+            .into_iter()
+            .map(|(tool, mode)| (tool, core_permission_mode_from_sdk(mode)))
+            .collect(),
+        rules: tools
+            .rules
+            .into_iter()
+            .map(|(tool, rules)| (tool, core_tool_permission_rules_from_sdk(rules)))
+            .collect(),
+    }
+}
+
+fn sdk_tool_permission_from_core(
+    tools: crate::agent::ToolPermissionConfig,
+) -> crate::plugin::sdk::host_api::AgentToolPermissionConfig {
+    crate::plugin::sdk::host_api::AgentToolPermissionConfig {
+        tags: tools
+            .tags
+            .into_iter()
+            .map(|(tag, mode)| (tag, sdk_permission_mode_from_core(mode)))
+            .collect(),
+        first_party: tools
+            .first_party
+            .into_iter()
+            .map(|(tool, mode)| (tool, sdk_permission_mode_from_core(mode)))
+            .collect(),
+        plugin: tools
+            .plugin
+            .into_iter()
+            .map(|(tool, mode)| (tool, sdk_permission_mode_from_core(mode)))
+            .collect(),
+        rules: tools
+            .rules
+            .into_iter()
+            .map(|(tool, rules)| (tool, sdk_tool_permission_rules_from_core(rules)))
+            .collect(),
+    }
+}
+
+fn core_tool_permission_rules_from_sdk(
+    rules: crate::plugin::sdk::host_api::AgentToolPermissionRules,
+) -> crate::agent::ToolPermissionRules {
+    match rules {
+        crate::plugin::sdk::host_api::AgentToolPermissionRules::Mode(mode) => {
+            crate::agent::ToolPermissionRules::Mode(core_permission_mode_from_sdk(mode))
+        }
+        crate::plugin::sdk::host_api::AgentToolPermissionRules::Ordered(entries) => {
+            crate::agent::ToolPermissionRules::Ordered(
                 entries
                     .into_iter()
                     .map(|(pattern, mode)| (pattern, core_permission_mode_from_sdk(mode)))
@@ -1371,17 +1511,17 @@ fn core_agent_permission_rules_from_sdk(
     }
 }
 
-fn sdk_agent_permission_rules_from_core(
-    rules: crate::agent::AgentPermissionRules,
-) -> crate::plugin::sdk::host_api::AgentPermissionRules {
+fn sdk_tool_permission_rules_from_core(
+    rules: crate::agent::ToolPermissionRules,
+) -> crate::plugin::sdk::host_api::AgentToolPermissionRules {
     match rules {
-        crate::agent::AgentPermissionRules::Mode(mode) => {
-            crate::plugin::sdk::host_api::AgentPermissionRules::Mode(sdk_permission_mode_from_core(
-                mode,
-            ))
+        crate::agent::ToolPermissionRules::Mode(mode) => {
+            crate::plugin::sdk::host_api::AgentToolPermissionRules::Mode(
+                sdk_permission_mode_from_core(mode),
+            )
         }
-        crate::agent::AgentPermissionRules::Ordered(entries) => {
-            crate::plugin::sdk::host_api::AgentPermissionRules::Ordered(
+        crate::agent::ToolPermissionRules::Ordered(entries) => {
+            crate::plugin::sdk::host_api::AgentToolPermissionRules::Ordered(
                 entries
                     .into_iter()
                     .map(|(pattern, mode)| (pattern, sdk_permission_mode_from_core(mode)))
@@ -1419,32 +1559,6 @@ fn sdk_permission_mode_from_core(
         }
         crate::permission::PermissionMode::Deny => {
             crate::plugin::sdk::host_api::AgentPermissionMode::Deny
-        }
-    }
-}
-
-fn core_execution_mode_from_sdk(
-    mode: crate::plugin::sdk::host_api::AgentExecutionMode,
-) -> crate::permission::ExecutionMode {
-    match mode {
-        crate::plugin::sdk::host_api::AgentExecutionMode::Auto => {
-            crate::permission::ExecutionMode::Auto
-        }
-        crate::plugin::sdk::host_api::AgentExecutionMode::Ask => {
-            crate::permission::ExecutionMode::Ask
-        }
-    }
-}
-
-fn sdk_execution_mode_from_core(
-    mode: crate::permission::ExecutionMode,
-) -> crate::plugin::sdk::host_api::AgentExecutionMode {
-    match mode {
-        crate::permission::ExecutionMode::Auto => {
-            crate::plugin::sdk::host_api::AgentExecutionMode::Auto
-        }
-        crate::permission::ExecutionMode::Ask => {
-            crate::plugin::sdk::host_api::AgentExecutionMode::Ask
         }
     }
 }

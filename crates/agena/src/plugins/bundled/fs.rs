@@ -63,7 +63,7 @@ fn entries() -> Vec<PluginEntryDecl> {
             crate::entry::definition::json_schema_for::<ApplyPatchToolInput>(),
         )
         .description("Apply a structured patch that can add, update, move, or delete files.")
-        .behavior(SdkEntryBehavior::WriteSandboxed)
+        .behavior(SdkEntryBehavior::Mutating)
         .search_terms(["patch", "diff", "multi-file edit"])
         .deferred_load(),
         PluginEntryDecl::new(
@@ -71,7 +71,7 @@ fn entries() -> Vec<PluginEntryDecl> {
             crate::entry::definition::json_schema_for::<NotebookEditToolInput>(),
         )
         .description("Edit a Jupyter .ipynb cell by replacing, inserting, or deleting a cell.")
-        .behavior(SdkEntryBehavior::WriteSandboxed)
+        .behavior(SdkEntryBehavior::Mutating)
         .input_path(required_path("$.notebook_path", PathKind::Write))
         .search_terms(["notebook", "jupyter", "ipynb", "cell edit"])
         .deferred_load(),

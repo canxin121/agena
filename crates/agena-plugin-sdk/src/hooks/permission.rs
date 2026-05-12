@@ -36,6 +36,22 @@ impl PathRequest {
     }
 }
 
+/// One outbound network target that a tool intends to connect to. Returned by
+/// [`crate::Plugin::permission_networks`] for targets that cannot be expressed
+/// as declarative `InputNetworkSpec` JSONPath rules.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkRequest {
+    pub target: String,
+}
+
+impl NetworkRequest {
+    pub fn connect(target: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionAskInput {
     pub session_id: i64,

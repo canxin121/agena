@@ -456,7 +456,7 @@ fn entries() -> Vec<PluginEntryDecl> {
         .description(
             "Create or attach to a git worktree under .agena/worktrees and switch the session into it.",
         )
-        .behavior(SdkEntryBehavior::WriteSandboxed)
+        .behavior(SdkEntryBehavior::Mutating)
         .search_terms(["git", "worktree", "branch", "isolate"])
         .deferred_load()
         .host_capability(HostCapability::WorktreeRegistry),
@@ -467,7 +467,7 @@ fn entries() -> Vec<PluginEntryDecl> {
         .description(
             "Leave the current worktree. action=keep preserves the worktree, action=remove deletes it (refuses unless discard_changes=true when there are uncommitted changes).",
         )
-        .behavior(SdkEntryBehavior::WriteSandboxed)
+        .behavior(SdkEntryBehavior::Mutating)
         .search_terms(["git", "worktree", "exit", "cleanup"])
         .deferred_load()
         .host_capability(HostCapability::WorktreeRegistry),

@@ -24,8 +24,8 @@ fn entries() -> Vec<PluginEntryDecl> {
             "bash",
             crate::entry::definition::json_schema_for::<BashToolInput>(),
         )
-        .description("Execute a shell command inside the sandboxed workspace.")
-        .behavior(SdkEntryBehavior::WriteSandboxed)
+        .description("Execute a shell command. The input must declare filesystem_effects for paths the command may read or write.")
+        .behavior(SdkEntryBehavior::Mutating)
         .input_path(optional_path("$.workdir", PathKind::Read))
         .search_terms(["shell", "terminal", "command", "script"])
         .deferred_load()
@@ -34,8 +34,8 @@ fn entries() -> Vec<PluginEntryDecl> {
             "powershell",
             crate::entry::definition::json_schema_for::<PowerShellToolInput>(),
         )
-        .description("Execute a Windows PowerShell command inside the configured workspace.")
-        .behavior(SdkEntryBehavior::WriteSandboxed)
+        .description("Execute a Windows PowerShell command. The input must declare filesystem_effects for paths the command may read or write.")
+        .behavior(SdkEntryBehavior::Mutating)
         .input_path(optional_path("$.workdir", PathKind::Read))
         .search_terms(["windows", "powershell", "pwsh", "command"])
         .deferred_load()
@@ -45,9 +45,9 @@ fn entries() -> Vec<PluginEntryDecl> {
             crate::entry::definition::json_schema_for::<MonitorToolInput>(),
         )
         .description(
-            "Run a long-lived shell command in the background and stream its stdout/stderr as numbered events. Actions: start (spawn), list (enumerate), read (pull events with optional blocking wait), stop (kill).",
+            "Run a long-lived shell command in the background and stream its stdout/stderr as numbered events. start inputs must declare filesystem_effects for paths the command may read or write. Actions: start (spawn), list (enumerate), read (pull events with optional blocking wait), stop (kill).",
         )
-        .behavior(SdkEntryBehavior::WriteSandboxed)
+        .behavior(SdkEntryBehavior::Mutating)
         .input_path(optional_path("$.workdir", PathKind::Read))
         .search_terms([
             "monitor",

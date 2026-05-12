@@ -315,9 +315,9 @@ pub struct SessionExecutionContext {
     pub allowed_tools: Vec<String>,
     #[serde(
         default,
-        skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
+        skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
     )]
-    pub agent_permission: crate::agent::AgentPermissionConfig,
+    pub agent_permission: crate::agent::PermissionConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

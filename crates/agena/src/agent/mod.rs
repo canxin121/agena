@@ -6,8 +6,8 @@ use thiserror::Error;
 
 use crate::message::FirstPartyToolInput;
 use crate::permission::{
-    AccessKind, AccessSelector, ExecutionMode, PermissionConfigError, PermissionDecision,
-    PermissionMode, PermissionPolicy, PermissionRule, ToolPermissionPolicy,
+    AccessKind, AccessSelector, NetworkPermissionPolicy, NetworkTarget, PermissionConfigError,
+    PermissionDecision, PermissionMode, PermissionPolicy, ToolPermissionPolicy,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,207 +59,457 @@ impl AgentRunConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionConfig {
+    #[serde(default, skip_serializing_if = "PathPermissionConfig::is_empty")]
+    pub path: PathPermissionConfig,
+    #[serde(default, skip_serializing_if = "NetworkPermissionConfig::is_empty")]
+    pub network: NetworkPermissionConfig,
+    #[serde(default, skip_serializing_if = "ToolPermissionConfig::is_empty")]
+    pub tools: ToolPermissionConfig,
+}
+
+impl PermissionConfig {
+    pub fn is_empty(&self) -> bool {
+        self.path.is_empty() && self.network.is_empty() && self.tools.is_empty()
+    }
+
+    pub fn merge_from(&mut self, overlay: Self) {
+        self.path.merge_from(overlay.path);
+        self.network.merge_from(overlay.network);
+        self.tools.merge_from(overlay.tools);
+    }
+
+    pub fn apply_to_permission_policy(
+        &self,
+        base: PermissionPolicy,
+    ) -> Result<PermissionPolicy, PermissionConfigError> {
+        self.path.apply_to_permission_policy(base)
+    }
+
+    pub fn apply_to_tool_permission_policy(
+        &self,
+        base: ToolPermissionPolicy,
+    ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
+        self.tools.apply_to_tool_permission_policy(base)
+    }
+
+    pub fn apply_to_network_permission_policy(
+        &self,
+        base: NetworkPermissionPolicy,
+    ) -> Result<NetworkPermissionPolicy, PermissionConfigError> {
+        self.network.apply_to_network_permission_policy(base)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct AgentPermissionConfig {
+    #[serde(default, skip_serializing_if = "PermissionInheritanceConfig::is_empty")]
+    pub inherit: PermissionInheritanceConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_read: Option<PermissionMode>,
+    pub path: Option<PathPermissionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_write: Option<PermissionMode>,
+    pub network: Option<NetworkPermissionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_external_directory: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_mode: Option<ExecutionMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<String, PermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<AgentPermissionRules>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub write: Option<AgentPermissionRules>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_directory: Option<AgentPermissionRules>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tool_rules: BTreeMap<String, AgentPermissionRules>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bash_rules: Vec<AgentBashRule>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bash_deny_patterns: Vec<String>,
+    pub tools: Option<ToolPermissionConfig>,
 }
 
 impl AgentPermissionConfig {
     pub fn is_empty(&self) -> bool {
-        self.default_read.is_none()
-            && self.default_write.is_none()
-            && self.default_external_directory.is_none()
-            && self.execution_mode.is_none()
-            && self.tools.is_empty()
-            && self.read.is_none()
-            && self.write.is_none()
-            && self.external_directory.is_none()
-            && self.tool_rules.is_empty()
-            && self.bash_rules.is_empty()
-            && self.bash_deny_patterns.is_empty()
+        self.inherit.is_empty()
+            && self.path.is_none()
+            && self.network.is_none()
+            && self.tools.is_none()
     }
 
-    pub fn merged_with(&self, overlay: &Self) -> Self {
-        let mut merged = self.clone();
-        if let Some(mode) = overlay.default_read {
-            merged.default_read = Some(mode);
+    pub fn merge_from(&mut self, overlay: Self) {
+        if !overlay.inherit.is_empty() {
+            self.inherit = overlay.inherit;
         }
-        if let Some(mode) = overlay.default_write {
-            merged.default_write = Some(mode);
+        if let Some(path) = overlay.path {
+            match self.path.as_mut() {
+                Some(current) => current.merge_from(path),
+                None => self.path = Some(path),
+            }
         }
-        if let Some(mode) = overlay.default_external_directory {
-            merged.default_external_directory = Some(mode);
+        if let Some(network) = overlay.network {
+            match self.network.as_mut() {
+                Some(current) => current.merge_from(network),
+                None => self.network = Some(network),
+            }
         }
-        if let Some(mode) = overlay.execution_mode {
-            merged.execution_mode = Some(mode);
+        if let Some(tools) = overlay.tools {
+            match self.tools.as_mut() {
+                Some(current) => current.merge_from(tools),
+                None => self.tools = Some(tools),
+            }
         }
-        merged.tools.extend(overlay.tools.clone());
-        if let Some(rules) = overlay.read.as_ref() {
-            merged.read = Some(rules.clone());
+    }
+
+    pub fn effective_with_defaults(&self, defaults: &PermissionConfig) -> PermissionConfig {
+        let mut effective = PermissionConfig::default();
+        if self.inherit.path() {
+            effective.path = defaults.path.clone();
         }
-        if let Some(rules) = overlay.write.as_ref() {
-            merged.write = Some(rules.clone());
+        if self.inherit.network() {
+            effective.network = defaults.network.clone();
         }
-        if let Some(rules) = overlay.external_directory.as_ref() {
-            merged.external_directory = Some(rules.clone());
+        if self.inherit.tools() {
+            effective.tools.tags = defaults.tools.tags.clone();
+            effective.tools.first_party = defaults.tools.first_party.clone();
+            effective.tools.rules = defaults.tools.rules.clone();
         }
-        merged.tool_rules.extend(overlay.tool_rules.clone());
-        if !overlay.bash_rules.is_empty() {
-            merged.bash_rules = overlay.bash_rules.clone();
+        if self.inherit.plugin_tools() {
+            effective.tools.plugin = defaults.tools.plugin.clone();
         }
-        if !overlay.bash_deny_patterns.is_empty() {
-            merged.bash_deny_patterns = overlay.bash_deny_patterns.clone();
+        if let Some(path) = self.path.as_ref() {
+            effective.path.merge_from(path.clone());
         }
-        merged
+        if let Some(network) = self.network.as_ref() {
+            effective.network.merge_from(network.clone());
+        }
+        if let Some(tools) = self.tools.as_ref() {
+            effective.tools.merge_from(tools.clone());
+        }
+        effective
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PermissionInheritanceConfig {
+    All(bool),
+    Sections(PermissionInheritanceSections),
+}
+
+impl Default for PermissionInheritanceConfig {
+    fn default() -> Self {
+        Self::Sections(PermissionInheritanceSections::default())
+    }
+}
+
+impl PermissionInheritanceConfig {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::All(_) => false,
+            Self::Sections(sections) => sections.is_empty(),
+        }
+    }
+
+    pub fn path(&self) -> bool {
+        match self {
+            Self::All(value) => *value,
+            Self::Sections(sections) => sections.path.unwrap_or(true),
+        }
+    }
+
+    pub fn tools(&self) -> bool {
+        match self {
+            Self::All(value) => *value,
+            Self::Sections(sections) => sections.tools.unwrap_or(true),
+        }
+    }
+
+    pub fn network(&self) -> bool {
+        match self {
+            Self::All(value) => *value,
+            Self::Sections(sections) => sections.network.unwrap_or(true),
+        }
+    }
+
+    pub fn plugin_tools(&self) -> bool {
+        match self {
+            Self::All(value) => *value,
+            Self::Sections(sections) => sections.plugin_tools.unwrap_or(true),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionInheritanceSections {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_tools: Option<bool>,
+}
+
+impl PermissionInheritanceSections {
+    pub fn is_empty(&self) -> bool {
+        self.path.is_none()
+            && self.network.is_none()
+            && self.tools.is_none()
+            && self.plugin_tools.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct PathPermissionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<PathAccessModes>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<PathAccessModes>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub rules: IndexMap<String, PathAccessRuleConfig>,
+}
+
+impl PathPermissionConfig {
+    pub fn is_empty(&self) -> bool {
+        self.workspace.is_none() && self.external.is_none() && self.rules.is_empty()
+    }
+
+    pub fn merge_from(&mut self, overlay: Self) {
+        if let Some(workspace) = overlay.workspace {
+            match self.workspace.as_mut() {
+                Some(current) => current.merge_from(workspace),
+                None => self.workspace = Some(workspace),
+            }
+        }
+        if let Some(external) = overlay.external {
+            match self.external.as_mut() {
+                Some(current) => current.merge_from(external),
+                None => self.external = Some(external),
+            }
+        }
+        self.rules.extend(overlay.rules);
     }
 
     pub fn apply_to_permission_policy(
         &self,
         mut base: PermissionPolicy,
     ) -> Result<PermissionPolicy, PermissionConfigError> {
-        if let Some(mode) = self.default_read {
-            base = base.with_default_read(mode);
+        if let Some(workspace) = self.workspace.as_ref() {
+            if let Some(mode) = workspace.read {
+                base = base.with_workspace_read_default(mode);
+            }
+            if let Some(mode) = workspace.write {
+                base = base.with_workspace_write_default(mode);
+            }
         }
-        if let Some(mode) = self.default_write {
-            base = base.with_default_write(mode);
+        if let Some(external) = self.external.as_ref() {
+            if let Some(mode) = external.read {
+                base = base.with_external_read_default(mode);
+            }
+            if let Some(mode) = external.write {
+                base = base.with_external_write_default(mode);
+            }
         }
-        if let Some(mode) = self.default_external_directory {
-            base = base.with_external_directory_default(mode);
-        }
-        if let Some(rules) = self.read.as_ref() {
-            base = apply_path_rules(base, AccessSelector::Read, rules)?;
-        }
-        if let Some(rules) = self.write.as_ref() {
-            base = apply_path_rules(base, AccessSelector::Write, rules)?;
-        }
-        if let Some(rules) = self.external_directory.as_ref() {
-            base = apply_path_rules(base, AccessSelector::ExternalDirectory, rules)?;
+        for (pattern, access) in &self.rules {
+            let modes = access.to_modes()?;
+            let trimmed = pattern.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(mode) = modes.read {
+                base = base.with_path_pattern_rule(AccessSelector::Read, mode, trimmed)?;
+            }
+            if let Some(mode) = modes.write {
+                base = base.with_path_pattern_rule(AccessSelector::Write, mode, trimmed)?;
+            }
         }
         Ok(base)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct PathAccessModes {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<PermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write: Option<PermissionMode>,
+}
+
+impl PathAccessModes {
+    pub fn merge_from(&mut self, overlay: Self) {
+        if overlay.read.is_some() {
+            self.read = overlay.read;
+        }
+        if overlay.write.is_some() {
+            self.write = overlay.write;
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PathAccessRuleConfig {
+    Modes(PathAccessModes),
+    Shorthand(String),
+}
+
+impl PathAccessRuleConfig {
+    fn to_modes(&self) -> Result<PathAccessModes, PermissionConfigError> {
+        match self {
+            Self::Modes(modes) => Ok(modes.clone()),
+            Self::Shorthand(value) => path_access_shorthand(value),
+        }
+    }
+}
+
+fn path_access_shorthand(value: &str) -> Result<PathAccessModes, PermissionConfigError> {
+    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+    let both = |mode| PathAccessModes {
+        read: Some(mode),
+        write: Some(mode),
+    };
+    match normalized.as_str() {
+        "allow" => Ok(both(PermissionMode::Allow)),
+        "ask" => Ok(both(PermissionMode::Ask)),
+        "deny" | "none" => Ok(both(PermissionMode::Deny)),
+        "read" | "read_only" | "ro" => Ok(PathAccessModes {
+            read: Some(PermissionMode::Allow),
+            write: Some(PermissionMode::Deny),
+        }),
+        "write" | "write_only" | "wo" => Ok(PathAccessModes {
+            read: Some(PermissionMode::Deny),
+            write: Some(PermissionMode::Allow),
+        }),
+        "read_write" | "rw" => Ok(both(PermissionMode::Allow)),
+        _ => Err(PermissionConfigError::InvalidPathAccessShorthand {
+            value: value.to_string(),
+        }),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkPermissionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internet: Option<PermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private: Option<PermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loopback: Option<PermissionMode>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub rules: IndexMap<String, PermissionMode>,
+}
+
+impl NetworkPermissionConfig {
+    pub fn is_empty(&self) -> bool {
+        self.internet.is_none()
+            && self.private.is_none()
+            && self.loopback.is_none()
+            && self.rules.is_empty()
+    }
+
+    pub fn merge_from(&mut self, overlay: Self) {
+        if overlay.internet.is_some() {
+            self.internet = overlay.internet;
+        }
+        if overlay.private.is_some() {
+            self.private = overlay.private;
+        }
+        if overlay.loopback.is_some() {
+            self.loopback = overlay.loopback;
+        }
+        self.rules.extend(overlay.rules);
+    }
+
+    pub fn apply_to_network_permission_policy(
+        &self,
+        mut base: NetworkPermissionPolicy,
+    ) -> Result<NetworkPermissionPolicy, PermissionConfigError> {
+        if let Some(mode) = self.internet {
+            base = base.with_internet_default(mode);
+        }
+        if let Some(mode) = self.private {
+            base = base.with_private_default(mode);
+        }
+        if let Some(mode) = self.loopback {
+            base = base.with_loopback_default(mode);
+        }
+        for (pattern, mode) in &self.rules {
+            let trimmed = pattern.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            base = base.with_rule(trimmed, *mode)?;
+        }
+        Ok(base)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ToolPermissionConfig {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tags: BTreeMap<String, PermissionMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub first_party: BTreeMap<String, PermissionMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin: BTreeMap<String, PermissionMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rules: BTreeMap<String, ToolPermissionRules>,
+}
+
+impl ToolPermissionConfig {
+    pub fn is_empty(&self) -> bool {
+        self.tags.is_empty()
+            && self.first_party.is_empty()
+            && self.plugin.is_empty()
+            && self.rules.is_empty()
+    }
+
+    pub fn merge_from(&mut self, overlay: Self) {
+        self.tags.extend(overlay.tags);
+        self.first_party.extend(overlay.first_party);
+        self.plugin.extend(overlay.plugin);
+        self.rules.extend(overlay.rules);
     }
 
     pub fn apply_to_tool_permission_policy(
         &self,
         mut base: ToolPermissionPolicy,
     ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
-        if let Some(mode) = self.execution_mode {
-            base = base.with_execution_mode(mode);
+        for (tag, mode) in &self.tags {
+            base = base.with_tag_mode(tag, *mode);
         }
-        for (tool_name, mode) in &self.tools {
+        for (tool_name, mode) in self.first_party.iter().chain(self.plugin.iter()) {
             let name = tool_name.trim();
             if name.is_empty() {
                 continue;
             }
             base = base.with_tool_mode(name.to_string(), *mode);
         }
-        for (tool_name, rules) in &self.tool_rules {
+        for (tool_name, rules) in &self.rules {
             let name = tool_name.trim();
             if name.is_empty() {
                 continue;
             }
-            base = apply_tool_rules(base, name, rules)?;
-        }
-        for rule in &self.bash_rules {
-            base = base.with_bash_pattern_rule(rule.pattern.clone(), rule.mode)?;
-        }
-        for pattern in &self.bash_deny_patterns {
-            base = base.with_bash_deny_pattern(pattern.clone())?;
+            base = apply_tool_permission_rules(base, name, rules)?;
         }
         Ok(base)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentBashRule {
-    pub pattern: String,
-    pub mode: PermissionMode,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum AgentPermissionRules {
+pub enum ToolPermissionRules {
     Mode(PermissionMode),
     Ordered(IndexMap<String, PermissionMode>),
 }
 
-impl AgentPermissionRules {
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Mode(_) => false,
-            Self::Ordered(map) => map.is_empty(),
-        }
-    }
-}
-
-fn apply_path_rules(
-    mut base: PermissionPolicy,
-    selector: AccessSelector,
-    rules: &AgentPermissionRules,
-) -> Result<PermissionPolicy, PermissionConfigError> {
-    match rules {
-        AgentPermissionRules::Mode(mode) => {
-            let rule = match selector {
-                AccessSelector::Read | AccessSelector::Write => {
-                    PermissionRule::path_wildcard(selector, *mode, "*")
-                }
-                AccessSelector::ExternalDirectory => PermissionRule::external_only(selector, *mode),
-                AccessSelector::Any => PermissionRule::path_wildcard(selector, *mode, "*"),
-            };
-            Ok(base.with_rule(rule))
-        }
-        AgentPermissionRules::Ordered(entries) => {
-            for (pattern, mode) in sorted_rule_entries(entries) {
-                let trimmed = pattern.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let rule = match selector {
-                    AccessSelector::ExternalDirectory if trimmed == "*" => {
-                        PermissionRule::external_only(selector, mode)
-                    }
-                    _ => PermissionRule::path_wildcard(selector, mode, trimmed),
-                };
-                base = base.with_rule(rule);
-            }
-            Ok(base)
-        }
-    }
-}
-
-fn apply_tool_rules(
+fn apply_tool_permission_rules(
     mut base: ToolPermissionPolicy,
     tool_name: &str,
-    rules: &AgentPermissionRules,
+    rules: &ToolPermissionRules,
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
     match rules {
-        AgentPermissionRules::Mode(mode) => {
-            if tool_name == "bash" {
-                Ok(base.with_tool_mode(tool_name.to_string(), *mode))
-            } else {
-                Ok(base.with_tool_mode(tool_name.to_string(), *mode))
-            }
-        }
-        AgentPermissionRules::Ordered(entries) => {
+        ToolPermissionRules::Mode(mode) => Ok(base.with_tool_mode(tool_name.to_string(), *mode)),
+        ToolPermissionRules::Ordered(entries) => {
             if tool_name == "bash" {
                 for (pattern, mode) in sorted_rule_entries(entries) {
                     let trimmed = pattern.trim();
@@ -315,6 +565,7 @@ pub struct Agent {
     pub prompt: Option<String>,
     pub disable: bool,
     pub permission_policy: PermissionPolicy,
+    pub network_policy: NetworkPermissionPolicy,
     pub tool_policy: ToolPermissionPolicy,
 }
 
@@ -328,6 +579,7 @@ impl Agent {
             disable: false,
             name,
             permission_policy,
+            network_policy: NetworkPermissionPolicy::allow_all(),
             tool_policy: ToolPermissionPolicy::allow_all(),
         }
     }
@@ -343,8 +595,7 @@ impl Agent {
         S: AsRef<str>,
     {
         let current_policy = self.tool_policy.clone();
-        let mut tool_policy = ToolPermissionPolicy::new(PermissionMode::Deny)
-            .with_execution_mode(current_policy.execution_mode());
+        let mut tool_policy = ToolPermissionPolicy::new(PermissionMode::Deny);
         for tool_name in allowed_tools {
             let name = tool_name.as_ref().trim();
             if name.is_empty() {
@@ -361,7 +612,7 @@ impl Agent {
                 .with_bash_deny_pattern(rule.pattern().to_string())
                 .expect("existing bash deny pattern should remain valid");
         }
-        for rule in current_policy.bash_rules() {
+        for rule in current_policy.bash_pattern_rules() {
             tool_policy = tool_policy
                 .with_bash_pattern_rule(rule.pattern().to_string(), rule.mode())
                 .expect("existing bash rule should remain valid");
@@ -376,18 +627,20 @@ impl Agent {
 
     pub fn try_with_permission_config(
         mut self,
-        config: &AgentPermissionConfig,
+        config: &PermissionConfig,
     ) -> Result<Self, PermissionConfigError> {
         if config.is_empty() {
             return Ok(self);
         }
         self.permission_policy =
             config.apply_to_permission_policy(self.permission_policy.clone())?;
+        self.network_policy =
+            config.apply_to_network_permission_policy(self.network_policy.clone())?;
         self.tool_policy = config.apply_to_tool_permission_policy(self.tool_policy.clone())?;
         Ok(self)
     }
 
-    pub fn with_permission_config(self, config: &AgentPermissionConfig) -> Self {
+    pub fn with_permission_config(self, config: &PermissionConfig) -> Self {
         match self.clone().try_with_permission_config(config) {
             Ok(agent) => agent,
             Err(err) => {
@@ -411,16 +664,25 @@ impl Agent {
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
-        self.authorize_tool_call(tool_name, false)
+        self.authorize_tool_tags(tool_name, &[])
     }
 
-    pub fn authorize_tool_call(&self, tool_name: &str, sensitive: bool) -> PermissionDecision {
+    pub fn authorize_tool_tags(&self, tool_name: &str, tags: &[String]) -> PermissionDecision {
         if self.disable {
             return PermissionDecision::Deny {
                 reason: format!("agent '{}' is disabled", self.name),
             };
         }
-        self.tool_policy.check_tool(tool_name, None, sensitive)
+        self.tool_policy.check_tool(tool_name, None, tags)
+    }
+
+    pub fn authorize_network_connect(&self, target: &NetworkTarget) -> PermissionDecision {
+        if self.disable {
+            return PermissionDecision::Deny {
+                reason: format!("agent '{}' is disabled", self.name),
+            };
+        }
+        self.network_policy.check_connect(target)
     }
 
     pub fn authorize_path_access(
@@ -473,7 +735,10 @@ mod tests {
     use crate::permission::{AccessKind, PermissionDecision, PermissionMode, PermissionPolicy};
     use indexmap::IndexMap;
 
-    use super::{Agent, AgentMode, AgentPermissionConfig, AgentPermissionRules};
+    use super::{
+        Agent, AgentMode, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
+        PermissionConfig, ToolPermissionConfig, ToolPermissionRules,
+    };
 
     #[test]
     fn new_agent_has_reasonable_defaults() {
@@ -538,13 +803,23 @@ mod tests {
     #[test]
     fn agent_permission_config_overrides_tool_and_path_policy() {
         let agent = Agent::new("planner", PermissionPolicy::allow_all())
-            .try_with_permission_config(&AgentPermissionConfig {
-                default_read: Some(PermissionMode::Allow),
-                default_write: Some(PermissionMode::Deny),
-                default_external_directory: Some(PermissionMode::Ask),
-                execution_mode: Some(crate::permission::ExecutionMode::Ask),
-                tools: BTreeMap::from([("bash".to_string(), PermissionMode::Ask)]),
-                ..AgentPermissionConfig::default()
+            .try_with_permission_config(&PermissionConfig {
+                path: PathPermissionConfig {
+                    workspace: Some(PathAccessModes {
+                        read: Some(PermissionMode::Allow),
+                        write: Some(PermissionMode::Deny),
+                    }),
+                    external: Some(PathAccessModes {
+                        read: Some(PermissionMode::Ask),
+                        write: Some(PermissionMode::Ask),
+                    }),
+                    ..Default::default()
+                },
+                tools: ToolPermissionConfig {
+                    first_party: BTreeMap::from([("bash".to_string(), PermissionMode::Ask)]),
+                    ..Default::default()
+                },
+                ..Default::default()
             })
             .expect("permission config compiles");
 
@@ -553,6 +828,7 @@ mod tests {
             description: String::new(),
             timeout_ms: None,
             workdir: None,
+            filesystem_effects: Vec::new(),
         })) {
             PermissionDecision::Ask { .. } => {}
             other => panic!("expected ask for bash, got {other:?}"),
@@ -571,12 +847,27 @@ mod tests {
     #[test]
     fn ordered_path_rules_use_last_match_wins() {
         let agent = Agent::new("explore", PermissionPolicy::allow_all())
-            .try_with_permission_config(&AgentPermissionConfig {
-                read: Some(AgentPermissionRules::Ordered(IndexMap::from([
-                    ("*".to_string(), PermissionMode::Allow),
-                    ("*.env".to_string(), PermissionMode::Ask),
-                ]))),
-                ..AgentPermissionConfig::default()
+            .try_with_permission_config(&PermissionConfig {
+                path: PathPermissionConfig {
+                    rules: IndexMap::from([
+                        (
+                            "*".to_string(),
+                            PathAccessRuleConfig::Modes(PathAccessModes {
+                                read: Some(PermissionMode::Allow),
+                                write: None,
+                            }),
+                        ),
+                        (
+                            "*.env".to_string(),
+                            PathAccessRuleConfig::Modes(PathAccessModes {
+                                read: Some(PermissionMode::Ask),
+                                write: None,
+                            }),
+                        ),
+                    ]),
+                    ..Default::default()
+                },
+                ..Default::default()
             })
             .expect("permission config compiles");
 
@@ -593,15 +884,24 @@ mod tests {
     }
 
     #[test]
-    fn external_directory_rules_can_allow_specific_absolute_path() {
+    fn external_path_rules_can_allow_specific_absolute_path() {
         let agent = Agent::new("plan", PermissionPolicy::allow_all())
-            .try_with_permission_config(&AgentPermissionConfig {
-                default_external_directory: Some(PermissionMode::Deny),
-                external_directory: Some(AgentPermissionRules::Ordered(IndexMap::from([
-                    ("*".to_string(), PermissionMode::Ask),
-                    ("/tmp/allowed/**".to_string(), PermissionMode::Allow),
-                ]))),
-                ..AgentPermissionConfig::default()
+            .try_with_permission_config(&PermissionConfig {
+                path: PathPermissionConfig {
+                    external: Some(PathAccessModes {
+                        read: Some(PermissionMode::Ask),
+                        write: Some(PermissionMode::Ask),
+                    }),
+                    rules: IndexMap::from([(
+                        "/tmp/allowed/**".to_string(),
+                        PathAccessRuleConfig::Modes(PathAccessModes {
+                            read: Some(PermissionMode::Allow),
+                            write: Some(PermissionMode::Allow),
+                        }),
+                    )]),
+                    ..Default::default()
+                },
+                ..Default::default()
             })
             .expect("permission config compiles");
 
@@ -627,16 +927,19 @@ mod tests {
     #[test]
     fn bash_overlay_rules_survive_allowed_tool_filtering() {
         let agent = Agent::new("planner", PermissionPolicy::allow_all())
-            .try_with_permission_config(&AgentPermissionConfig {
-                tool_rules: BTreeMap::from([(
-                    "bash".to_string(),
-                    AgentPermissionRules::Ordered(IndexMap::from([
-                        ("git push *".to_string(), PermissionMode::Deny),
-                        ("git *".to_string(), PermissionMode::Allow),
-                        ("*".to_string(), PermissionMode::Ask),
-                    ])),
-                )]),
-                ..AgentPermissionConfig::default()
+            .try_with_permission_config(&PermissionConfig {
+                tools: ToolPermissionConfig {
+                    rules: BTreeMap::from([(
+                        "bash".to_string(),
+                        ToolPermissionRules::Ordered(IndexMap::from([
+                            ("git push *".to_string(), PermissionMode::Deny),
+                            ("git *".to_string(), PermissionMode::Allow),
+                            ("*".to_string(), PermissionMode::Ask),
+                        ])),
+                    )]),
+                    ..Default::default()
+                },
+                ..Default::default()
             })
             .expect("permission config compiles")
             .with_allowed_tools(["bash"]);
@@ -647,6 +950,7 @@ mod tests {
                 description: String::new(),
                 timeout_ms: None,
                 workdir: None,
+                filesystem_effects: Vec::new(),
             })),
             PermissionDecision::Allow
         );
@@ -656,6 +960,7 @@ mod tests {
             description: String::new(),
             timeout_ms: None,
             workdir: None,
+            filesystem_effects: Vec::new(),
         })) {
             PermissionDecision::Deny { .. } => {}
             other => panic!("expected deny decision, got {other:?}"),

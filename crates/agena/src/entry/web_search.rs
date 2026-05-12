@@ -42,6 +42,9 @@ pub(super) fn execute(
 
     let query = q.to_string();
     let backend_name = backend.name();
+    let target = crate::permission::NetworkTarget::parse(web_search_backend_target(&backend))
+        .map_err(|e| ToolError::Plugin(format!("web_search: invalid network target: {e}")))?;
+    executor.ensure_network_permission(&target)?;
 
     let raw_hits: Vec<WebSearchHit> = super::mcp::block_on(async move {
         match backend {
@@ -96,6 +99,15 @@ fn host_matches(host: &str, pattern: &str) -> bool {
     let h = host.to_ascii_lowercase();
     let p = pattern.to_ascii_lowercase();
     h == p || h.ends_with(&format!(".{p}"))
+}
+
+pub(crate) fn web_search_backend_target(backend: &WebSearchBackend) -> &'static str {
+    match backend {
+        WebSearchBackend::Tavily { .. } => "https://api.tavily.com/search",
+        WebSearchBackend::Exa { .. } => "https://api.exa.ai/search",
+        WebSearchBackend::Brave { .. } => "https://api.search.brave.com/res/v1/web/search",
+        WebSearchBackend::DuckDuckGoHtml => "https://html.duckduckgo.com/html/",
+    }
 }
 
 // ─── Backends ──────────────────────────────────────────────────────────

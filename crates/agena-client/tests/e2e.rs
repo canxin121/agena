@@ -273,8 +273,15 @@ async fn spawn_server() -> (String, String, Arc<SessionManager>) {
         Agent::new("client-e2e", PermissionPolicy::allow_all()),
     );
     let manager = Arc::new(SessionManager::new(db.clone(), processor, executor));
+    let config_path =
+        std::env::temp_dir().join(format!("agena-client-e2e-{}.toml", uuid::Uuid::new_v4()));
+    std::fs::write(&config_path, "").expect("test config should be written");
 
     let runtime = agena::runtime::AgenaRuntime::builder()
+        .with_load_request(agena::config::LoadConfigRequest {
+            config_path: Some(config_path),
+            ..agena::config::LoadConfigRequest::default()
+        })
         .with_workspace_root(std::env::temp_dir())
         .with_database_connection(db.clone())
         .build()
@@ -669,6 +676,9 @@ async fn rest_permission_rule_and_reply_flows_round_trip_via_sdk() {
             path_access_kind: None,
             workspace_root: None,
             target_path: None,
+            network_target: None,
+            network_host: None,
+            network_port: None,
             scope: Some("global".to_string()),
             session_id: None,
             mode: agena_api::resource::PermissionMode::Allow,

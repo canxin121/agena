@@ -60,6 +60,7 @@ pub struct SessionManagerConfig {
     pub max_turn_loops: usize,
     pub doom_loop: crate::session::DoomLoopPolicy,
     pub default_agent: Option<String>,
+    pub permission: crate::agent::PermissionConfig,
 }
 
 impl Default for SessionManagerConfig {
@@ -71,6 +72,7 @@ impl Default for SessionManagerConfig {
             max_turn_loops: 16,
             doom_loop: crate::session::DoomLoopPolicy::default(),
             default_agent: None,
+            permission: crate::agent::PermissionConfig::default(),
         }
     }
 }
@@ -876,8 +878,16 @@ impl SessionManager {
             .unwrap_or_default();
         let profile_permission = resolved_profile
             .as_ref()
-            .map(|profile| profile.frontmatter.permission.clone())
-            .unwrap_or_default();
+            .map(|profile| {
+                profile
+                    .frontmatter
+                    .permission
+                    .effective_with_defaults(&state.config.permission)
+            })
+            .unwrap_or_else(|| {
+                crate::agent::AgentPermissionConfig::default()
+                    .effective_with_defaults(&state.config.permission)
+            });
         let profile_mode = resolved_profile
             .as_ref()
             .map(|profile| profile.frontmatter.mode);
@@ -3088,6 +3098,8 @@ impl SessionManager {
             .or(persisted)
             .or_else(|| state.config.default_agent.clone());
         let Some(agent_name) = effective else {
+            let mut session = session;
+            session.runtime.execution.agent_permission = state.config.permission.clone();
             return Ok(session);
         };
         let profile = state
@@ -3126,7 +3138,10 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let next_allowed_tools = profile.frontmatter.allowed_tools.clone();
-        let next_permission = profile.frontmatter.permission.clone();
+        let next_permission = profile
+            .frontmatter
+            .permission
+            .effective_with_defaults(&state.config.permission);
         let next_system = profile.prompt.trim().to_string();
         let next_model =
             self.resolve_root_agent_model(&session, options, profile.frontmatter.model.as_deref())?;
@@ -3471,6 +3486,12 @@ fn permission_subject(action: &PermissionAction) -> serde_json::Value {
             "access_kind": access_kind,
             "workspace_root": workspace_root,
             "target_path": target_path,
+        }),
+        PermissionAction::NetworkAccess { target, host, port } => serde_json::json!({
+            "kind": "network_access",
+            "target": target,
+            "host": host,
+            "port": port,
         }),
     }
 }
@@ -5470,6 +5491,7 @@ mod tests {
                 max_turn_loops: 16,
                 doom_loop: crate::session::DoomLoopPolicy::default(),
                 default_agent: None,
+                permission: crate::agent::PermissionConfig::default(),
             },
         )
         .await;
@@ -5690,7 +5712,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("reviewer.md"),
-            "---\ndescription: reviewer\nmode: all\nallowed_tools:\n  - read\n  - grep\npermission:\n  read:\n    \"*.env\": ask\n    \"*\": allow\nmodel: scripted/scripted-model\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
+            "---\ndescription: reviewer\nmode: all\nallowed_tools:\n  - read\n  - grep\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted/scripted-model\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
         )
         .expect("write reviewer profile");
         let service = build_manager(
@@ -5758,17 +5780,19 @@ mod tests {
         assert!(system.contains("You are a strict reviewer."));
         assert!(system.contains("Delegated task:"));
         assert!(system.contains("Inspect the implementation"));
-        match child.runtime.execution.agent_permission.read.as_ref() {
-            Some(crate::agent::AgentPermissionRules::Ordered(entries)) => {
-                let collected = entries
-                    .iter()
-                    .map(|(pattern, mode)| (pattern.as_str(), *mode))
-                    .collect::<Vec<_>>();
-                assert_eq!(collected.len(), 2);
-                assert!(collected.contains(&("*.env", crate::permission::PermissionMode::Ask)));
-                assert!(collected.contains(&("*", crate::permission::PermissionMode::Allow)));
+        let rules = &child.runtime.execution.agent_permission.path.rules;
+        assert_eq!(rules.len(), 2);
+        match rules.get("*.env") {
+            Some(crate::agent::PathAccessRuleConfig::Modes(modes)) => {
+                assert_eq!(modes.read, Some(crate::permission::PermissionMode::Ask));
             }
-            other => panic!("expected ordered read rules, got {other:?}"),
+            other => panic!("expected *.env read rule, got {other:?}"),
+        }
+        match rules.get("*") {
+            Some(crate::agent::PathAccessRuleConfig::Modes(modes)) => {
+                assert_eq!(modes.read, Some(crate::permission::PermissionMode::Allow));
+            }
+            other => panic!("expected wildcard read rule, got {other:?}"),
         }
         assert_eq!(
             child.runtime.execution.agent_mode,
@@ -5786,7 +5810,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("planner.md"),
-            "---\ndescription: planner\nallowed_tools:\n  - read\n  - grep\npermission:\n  default_read: allow\n  default_write: deny\n  execution_mode: ask\n  tools:\n    bash: ask\n  tool_rules:\n    bash:\n      \"git push *\": deny\n      \"git *\": allow\n      \"*\": ask\nmodel: scripted/scripted-model\naliases: [\"plan\"]\n---\nYou are a precise planner.",
+            "---\ndescription: planner\nallowed_tools:\n  - read\n  - grep\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  tools:\n    first_party:\n      bash: ask\n    rules:\n      bash:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted/scripted-model\naliases: [\"plan\"]\n---\nYou are a precise planner.",
         )
         .expect("write planner profile");
         let service = build_manager(
@@ -5826,17 +5850,25 @@ mod tests {
             Some("You are a precise planner.")
         );
         assert_eq!(
-            session.runtime.execution.agent_permission.default_write,
+            session
+                .runtime
+                .execution
+                .agent_permission
+                .path
+                .workspace
+                .as_ref()
+                .and_then(|modes| modes.write),
             Some(crate::permission::PermissionMode::Deny)
         );
         match session
             .runtime
             .execution
             .agent_permission
-            .tool_rules
+            .tools
+            .rules
             .get("bash")
         {
-            Some(crate::agent::AgentPermissionRules::Ordered(entries)) => {
+            Some(crate::agent::ToolPermissionRules::Ordered(entries)) => {
                 let collected = entries
                     .iter()
                     .map(|(pattern, mode)| (pattern.as_str(), *mode))
@@ -6432,6 +6464,7 @@ mod tests {
                 max_turn_loops: 16,
                 doom_loop: crate::session::DoomLoopPolicy::default(),
                 default_agent: None,
+                permission: crate::agent::PermissionConfig::default(),
             },
             ContextPolicy::default(),
             RecordingProvider::new(requests.clone()),

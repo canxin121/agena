@@ -39,6 +39,8 @@ pub struct EntryDefinition {
     pub source: EntrySource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search_terms: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(default)]
     pub read_only: bool,
     #[serde(default)]
@@ -65,6 +67,7 @@ impl EntryDefinition {
             behavior,
             source: EntrySource::FirstParty,
             search_terms: Vec::new(),
+            tags: behavior_default_tags(behavior),
             read_only: behavior == EntryBehavior::ReadOnly,
             concurrency_safe: behavior == EntryBehavior::ReadOnly,
             requires_user_interaction: false,
@@ -89,6 +92,7 @@ impl EntryDefinition {
                 plugin_name: plugin_name.into(),
             },
             search_terms: Vec::new(),
+            tags: behavior_default_tags(behavior),
             read_only: behavior == EntryBehavior::ReadOnly,
             concurrency_safe: behavior == EntryBehavior::ReadOnly,
             requires_user_interaction: false,
@@ -104,6 +108,23 @@ impl EntryDefinition {
     ) -> Self {
         let behavior = sdk_tool_behavior(decl.behavior);
         let read_only = behavior == EntryBehavior::ReadOnly;
+        let mut tags = behavior_default_tags(behavior);
+        for spec in &decl.input_paths {
+            match spec.kind {
+                crate::plugin::sdk::PathKind::Read => {
+                    push_normalized_tag(&mut tags, "filesystem_read")
+                }
+                crate::plugin::sdk::PathKind::Write => {
+                    push_normalized_tag(&mut tags, "filesystem_write")
+                }
+            }
+        }
+        if !decl.input_networks.is_empty() || !decl.network_access.is_empty() {
+            push_normalized_tag(&mut tags, "network");
+        }
+        for tag in &decl.tags {
+            push_normalized_tag(&mut tags, tag);
+        }
         Self {
             name: name.into(),
             description: decl.description.clone().unwrap_or_default(),
@@ -117,6 +138,7 @@ impl EntryDefinition {
                 .filter(|term| !term.trim().is_empty())
                 .map(ToOwned::to_owned)
                 .collect(),
+            tags,
             read_only,
             concurrency_safe: decl.concurrency_safe.unwrap_or(read_only),
             requires_user_interaction: decl.requires_user_interaction,
@@ -135,6 +157,18 @@ impl EntryDefinition {
             .map(Into::into)
             .filter(|term| !term.trim().is_empty())
             .collect();
+        self
+    }
+
+    pub fn with_tags<I, S>(mut self, tags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.tags.clear();
+        for tag in tags {
+            push_normalized_tag(&mut self.tags, tag);
+        }
         self
     }
 
@@ -223,10 +257,25 @@ fn sanitize_schema_json(value: serde_json::Value) -> serde_json::Value {
 fn sdk_tool_behavior(b: SdkEntryBehavior) -> EntryBehavior {
     match b {
         SdkEntryBehavior::ReadOnly => EntryBehavior::ReadOnly,
-        SdkEntryBehavior::WriteSandboxed | SdkEntryBehavior::WriteUnsandboxed => {
-            EntryBehavior::Mutating
-        }
+        SdkEntryBehavior::Mutating => EntryBehavior::Mutating,
         SdkEntryBehavior::Task => EntryBehavior::Task,
+    }
+}
+
+fn behavior_default_tags(behavior: EntryBehavior) -> Vec<String> {
+    match behavior {
+        EntryBehavior::ReadOnly => vec!["read_only".to_string()],
+        EntryBehavior::Mutating => vec!["mutating".to_string()],
+        EntryBehavior::Task => vec!["task".to_string()],
+    }
+}
+
+fn push_normalized_tag(tags: &mut Vec<String>, tag: impl AsRef<str>) {
+    let Some(tag) = crate::permission::normalize_tool_tag(tag.as_ref()) else {
+        return;
+    };
+    if !tags.iter().any(|existing| existing == &tag) {
+        tags.push(tag);
     }
 }
 

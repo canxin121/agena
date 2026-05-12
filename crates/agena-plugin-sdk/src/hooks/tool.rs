@@ -127,6 +127,13 @@ pub struct ToolPermissionPathsInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolPermissionNetworksInput {
+    pub tool_name: String,
+    pub workspace_root: String,
+    pub input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvokeOutput {
     pub title: String,
     pub output_text: String,

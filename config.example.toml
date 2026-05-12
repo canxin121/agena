@@ -48,17 +48,33 @@ prompt = "You are a planning agent. Break work into concrete steps, surface assu
 allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
 mode = "all"
 
-[agents.plan.permission]
-default_read = "allow"
-default_write = "deny"
-default_external_directory = "ask"
-execution_mode = "ask"
+[permission.path]
+workspace = { read = "allow", write = "ask" }
+external = { read = "ask", write = "ask" }
 
-[agents.plan.permission.tools]
+[permission.network]
+internet = "ask"
+private = "deny"
+loopback = "deny"
+
+[permission.network.rules]
+"github.com:443" = "allow"
+
+[permission.tools.tags]
+read_only = "allow"
+filesystem_read = "allow"
+filesystem_write = "ask"
+network = "ask"
+internet = "ask"
+mutating = "ask"
+task = "ask"
+shell = "ask"
+
+[agents.plan.permission.path]
+workspace = { read = "allow", write = "deny" }
+external = { read = "ask", write = "ask" }
+
+[agents.plan.permission.tools.first_party]
 enter_plan_mode = "allow"
 exit_plan_mode = "allow"
 todo_write = "allow"
-
-# Legacy compatibility only: old top-level `[permission]` configs still load
-# as a shared fallback, but new configs should put permissions on agents:
-# `[agents.<name>.permission]`.

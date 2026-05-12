@@ -8,19 +8,16 @@ use std::{
 use serde::{Deserialize, Serialize};
 use toml::Value;
 
-use crate::{
-    permission::PermissionMode,
-    provider::{
-        ConfiguredModelDefinition, ProviderRequestRetryConfig, ProviderStreamReplayConfig,
-        ThinkingRequest, auth::FileAuthStore,
-    },
+use crate::provider::{
+    ConfiguredModelDefinition, ProviderRequestRetryConfig, ProviderStreamReplayConfig,
+    ThinkingRequest, auth::FileAuthStore,
 };
 
 use super::{
     AgentConfig, AuthConfig, AuthStoreBackend, ConfigEnvironment, ConfigError, McpConfig,
-    MemoryConfig, OpenAiApiModeConfig, PermissionConfig, PluginConfig, ProjectInstructionsConfig,
-    ProviderDefinition, ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, StreamTransportMode,
-    TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig, provider_presets,
+    MemoryConfig, OpenAiApiModeConfig, PluginConfig, ProjectInstructionsConfig, ProviderDefinition,
+    ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, StreamTransportMode, TelemetryConfig,
+    TracingConfig, UiConfig, WebToolsConfig, provider_presets,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -36,7 +33,7 @@ impl RawConfigFile {
     pub(crate) fn read(path: &Path) -> Result<Self, ConfigError> {
         match fs::read_to_string(path) {
             Ok(text) => {
-                reject_legacy_mode_fields(path, &text)?;
+                reject_removed_top_level_fields(path, &text)?;
                 let config = toml::from_str::<RawConfig>(&text).map_err(|source| {
                     ConfigError::ParseFile {
                         path: path.to_path_buf(),
@@ -60,7 +57,7 @@ impl RawConfigFile {
     }
 }
 
-fn reject_legacy_mode_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
+fn reject_removed_top_level_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
     let value = toml::from_str::<Value>(text).map_err(|source| ConfigError::ParseFile {
         path: path.to_path_buf(),
         source,
@@ -85,8 +82,8 @@ pub(crate) struct RawConfig {
     pub(crate) auth: Option<RawAuthConfig>,
     pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
+    pub(crate) permission: Option<crate::agent::PermissionConfig>,
     pub(crate) agents: BTreeMap<String, AgentConfig>,
-    pub(crate) permission: Option<RawPermissionConfig>,
     pub(crate) plugins: Option<PluginConfig>,
     pub(crate) memory: Option<MemoryConfig>,
     pub(crate) mcp: Option<McpConfig>,
@@ -104,8 +101,8 @@ impl RawConfig {
         merge_option_struct(&mut self.auth, overlay.auth);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
-        merge_map(&mut self.agents, overlay.agents);
         merge_option_struct(&mut self.permission, overlay.permission);
+        merge_map(&mut self.agents, overlay.agents);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_option_struct(&mut self.memory, overlay.memory);
         merge_option_struct(&mut self.mcp, overlay.mcp);
@@ -123,8 +120,8 @@ impl RawConfig {
             && self.auth.is_none()
             && self.ui.is_none()
             && self.runtime.is_none()
-            && self.agents.is_empty()
             && self.permission.is_none()
+            && self.agents.is_empty()
             && self.plugins.is_none()
             && self.memory.is_none()
             && self.mcp.is_none()
@@ -348,8 +345,7 @@ impl RawConfig {
         };
 
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
-        let permission_explicit = self.permission.is_some();
-        let permission = PermissionConfig::from_raw(self.permission.unwrap_or_default());
+        let permission = self.permission.unwrap_or_default();
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
         let memory: MemoryConfig = self.memory.unwrap_or_default();
         let mcp: McpConfig = self.mcp.unwrap_or_default();
@@ -362,8 +358,13 @@ impl RawConfig {
             .map(|(provider_id, raw)| raw.resolve(provider_id, env))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
 
+        validate_permission_config("permission", &permission)?;
         for (agent_name, agent) in &self.agents {
-            validate_agent_permission_config(agent_name.as_str(), &agent.permission)?;
+            let effective = agent.permission.effective_with_defaults(&permission);
+            validate_permission_config(
+                format!("agents.{agent_name}.permission").as_str(),
+                &effective,
+            )?;
         }
 
         Ok(ResolvedConfig {
@@ -372,9 +373,8 @@ impl RawConfig {
             auth,
             ui,
             runtime,
-            agents: self.agents,
             permission,
-            permission_explicit,
+            agents: self.agents,
             plugins,
             plugin_storage: crate::config::types::PluginStorageConfig::default(),
             memory,
@@ -545,26 +545,9 @@ impl Merge for crate::config::types::AgentConfig {
     }
 }
 
-impl Merge for crate::agent::AgentPermissionConfig {
+impl Merge for crate::agent::PermissionConfig {
     fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.default_read, overlay.default_read);
-        merge_option(&mut self.default_write, overlay.default_write);
-        merge_option(
-            &mut self.default_external_directory,
-            overlay.default_external_directory,
-        );
-        merge_option(&mut self.execution_mode, overlay.execution_mode);
-        merge_map(&mut self.tools, overlay.tools);
-        merge_option(&mut self.read, overlay.read);
-        merge_option(&mut self.write, overlay.write);
-        merge_option(&mut self.external_directory, overlay.external_directory);
-        merge_map(&mut self.tool_rules, overlay.tool_rules);
-        if !overlay.bash_rules.is_empty() {
-            self.bash_rules = overlay.bash_rules;
-        }
-        if !overlay.bash_deny_patterns.is_empty() {
-            self.bash_deny_patterns = overlay.bash_deny_patterns;
-        }
+        self.merge_from(overlay);
     }
 }
 
@@ -580,9 +563,9 @@ impl Merge for crate::agent::AgentTemperature {
     }
 }
 
-impl Merge for crate::agent::AgentPermissionRules {
+impl Merge for crate::agent::AgentPermissionConfig {
     fn merge_from(&mut self, overlay: Self) {
-        *self = overlay;
+        self.merge_from(overlay);
     }
 }
 
@@ -792,71 +775,6 @@ impl Merge for RawSessionCacheConfig {
         merge_option(&mut self.max_sessions, overlay.max_sessions);
         merge_option(&mut self.ttl_secs, overlay.ttl_secs);
         merge_option(&mut self.max_bytes, overlay.max_bytes);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub(crate) struct RawPermissionConfig {
-    pub(crate) default_read: Option<PermissionMode>,
-    pub(crate) default_write: Option<PermissionMode>,
-    pub(crate) default_external_directory: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) mode: Option<crate::permission::ExecutionMode>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) bash: Vec<RawBashRuleConfig>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) bash_deny: Vec<RawBashDenyConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RawBashRuleConfig {
-    pub(crate) pattern: String,
-    pub(crate) mode: PermissionMode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RawBashDenyConfig {
-    pub(crate) pattern: String,
-}
-
-impl Merge for RawPermissionConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.default_read, overlay.default_read);
-        merge_option(&mut self.default_write, overlay.default_write);
-        merge_option(
-            &mut self.default_external_directory,
-            overlay.default_external_directory,
-        );
-        merge_option(&mut self.mode, overlay.mode);
-        if !overlay.bash.is_empty() {
-            self.bash = overlay.bash;
-        }
-        if !overlay.bash_deny.is_empty() {
-            self.bash_deny = overlay.bash_deny;
-        }
-    }
-}
-
-impl PermissionConfig {
-    pub(crate) fn from_raw(raw: RawPermissionConfig) -> Self {
-        Self {
-            default_read: raw.default_read.unwrap_or(PermissionMode::Allow),
-            default_write: raw.default_write.unwrap_or(PermissionMode::Deny),
-            default_external_directory: raw
-                .default_external_directory
-                .unwrap_or(PermissionMode::Deny),
-            execution_mode: raw.mode.unwrap_or_default(),
-            bash_rules: raw
-                .bash
-                .into_iter()
-                .map(|r| crate::config::types::BashRuleConfig {
-                    pattern: r.pattern,
-                    mode: r.mode,
-                })
-                .collect(),
-            bash_deny_patterns: raw.bash_deny.into_iter().map(|r| r.pattern).collect(),
-        }
     }
 }
 
@@ -1280,9 +1198,9 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
     })
 }
 
-fn validate_agent_permission_config(
-    agent_name: &str,
-    permission: &crate::agent::AgentPermissionConfig,
+fn validate_permission_config(
+    label: &str,
+    permission: &crate::agent::PermissionConfig,
 ) -> Result<(), ConfigError> {
     crate::agent::Agent::new(
         "__validate__",
@@ -1290,9 +1208,7 @@ fn validate_agent_permission_config(
     )
     .try_with_permission_config(permission)
     .map(|_| ())
-    .map_err(|err| {
-        ConfigError::Validation(format!("agents.{agent_name}.permission is invalid: {err}"))
-    })
+    .map_err(|err| ConfigError::Validation(format!("{label} is invalid: {err}")))
 }
 
 fn resolve_default_thinking(

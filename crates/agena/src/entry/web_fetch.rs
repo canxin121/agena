@@ -35,7 +35,7 @@ static CACHE: LazyLock<Mutex<LruCache<String, CachedFetch>>> = LazyLock::new(|| 
 });
 
 pub(super) fn execute(
-    _executor: &ToolExecutor,
+    executor: &ToolExecutor,
     input: &WebFetchToolInput,
 ) -> Result<FirstPartyExecution, ToolError> {
     let raw_url = input.url.trim();
@@ -60,14 +60,9 @@ pub(super) fn execute(
             url.scheme()
         )));
     }
-    if let Some(host) = url.host_str() {
-        let h = host.to_ascii_lowercase();
-        if h == "localhost" || h.ends_with(".localhost") || h.starts_with("127.") || h == "::1" {
-            return Err(ToolError::Plugin(format!(
-                "web_fetch: refusing to fetch local host '{host}'"
-            )));
-        }
-    }
+    let target = crate::permission::NetworkTarget::parse(url.as_str())
+        .map_err(|e| ToolError::Plugin(format!("web_fetch: invalid network target: {e}")))?;
+    executor.ensure_network_permission(&target)?;
 
     // Cache lookup.
     let cache_key = url.to_string();

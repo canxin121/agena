@@ -1490,6 +1490,7 @@ mod tests {
             behavior: crate::entry::EntryBehavior::ReadOnly,
             source: crate::entry::EntrySource::FirstParty,
             search_terms: Vec::new(),
+            tags: vec!["read_only".to_string()],
             read_only: true,
             concurrency_safe: true,
             requires_user_interaction: false,

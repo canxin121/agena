@@ -73,9 +73,13 @@ fn loader_reads_database_log_level_from_env() {
     let env = TestEnvironment {
         vars: BTreeMap::from([("AGENA_DATABASE_LOG".to_owned(), "error".to_owned())]),
     };
+    let path = write_temp_config("");
     let loader = ConfigLoader::new(env);
     let resolution = loader
-        .load(&LoadConfigRequest::default())
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
         .expect("config should load");
 
     assert_eq!(resolution.config.tracing.database_level, "error");
@@ -237,9 +241,13 @@ fn env_telemetry_config_enables_otlp_exporter() {
             ),
         ]),
     };
+    let path = write_temp_config("");
     let loader = ConfigLoader::new(env);
     let resolution = loader
-        .load(&LoadConfigRequest::default())
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
         .expect("telemetry env config should load");
 
     assert!(resolution.config.telemetry.enabled);
@@ -768,7 +776,7 @@ timeout_ms = 5000
 }
 
 #[test]
-fn legacy_permission_execution_mode_and_deny_patterns_load_from_toml() {
+fn loader_rejects_legacy_permission_shape() {
     let path = write_temp_config(
         r#"
 [permission]
@@ -783,127 +791,61 @@ pattern = "rm -rf /*"
 "#,
     );
 
-    let env = TestEnvironment::default();
-    let loader = ConfigLoader::new(env);
-    let resolution = loader
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
         .load(&LoadConfigRequest {
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect("config should load");
-
-    assert_eq!(
-        resolution.config.permission.execution_mode,
-        crate::permission::ExecutionMode::Ask
-    );
-    assert_eq!(resolution.config.permission.bash_deny_patterns.len(), 1);
-    assert!(resolution.config.permission_explicit);
-
-    let policy =
-        crate::agent::Agent::new("build", crate::permission::PermissionPolicy::allow_all())
-            .try_with_permission_config(&resolution.config.legacy_permission_as_agent())
-            .expect("legacy permission compiles into agent policy");
-    assert_eq!(
-        policy.tool_policy.execution_mode(),
-        crate::permission::ExecutionMode::Ask
-    );
-
-    // Dangerous command rejected by deny pattern even though mode=ask would
-    // otherwise just prompt.
-    let danger = crate::message::FirstPartyToolInput::Bash(crate::message::BashToolInput {
-        command: "rm -rf /tmp/oops".to_string(),
-        description: String::new(),
-        timeout_ms: None,
-        workdir: None,
-    });
-    match policy.authorize_first_party_tool(&danger) {
-        crate::permission::PermissionDecision::Deny { .. } => {}
-        other => panic!("expected Deny, got {other:?}"),
-    }
+        .expect_err("legacy permission config should fail");
+    assert!(matches!(err, ConfigError::ParseFile { .. }));
 }
 
 #[test]
-fn legacy_permission_bash_rules_fallback_into_agent_policy() {
+fn loader_rejects_removed_execution_mode_permission_field() {
     let path = write_temp_config(
         r#"
-[permission]
-default_read = "allow"
-default_write = "deny"
-
-[[permission.bash]]
-pattern = "git *"
-mode = "allow"
-
-[[permission.bash]]
-pattern = "rm *"
-mode = "ask"
+[permission.tools]
+execution_mode = "ask"
 "#,
     );
 
-    let env = TestEnvironment::default();
-    let loader = ConfigLoader::new(env);
-    let resolution = loader
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
         .load(&LoadConfigRequest {
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect("config should load");
-
-    assert_eq!(resolution.config.permission.bash_rules.len(), 2);
-    assert_eq!(resolution.config.permission.bash_rules[0].pattern, "git *");
-
-    let merged = resolution
-        .config
-        .agent_permission_with_legacy_fallback(&crate::agent::AgentPermissionConfig::default());
-    assert_eq!(
-        merged.default_read,
-        Some(crate::permission::PermissionMode::Allow)
-    );
-    assert_eq!(
-        merged.default_write,
-        Some(crate::permission::PermissionMode::Deny)
-    );
-    assert_eq!(merged.bash_rules.len(), 2);
-
-    let agent = crate::agent::Agent::new("build", crate::permission::PermissionPolicy::allow_all())
-        .try_with_permission_config(&merged)
-        .expect("merged legacy permission compiles into agent policy");
-
-    let git_status = crate::message::FirstPartyToolInput::Bash(crate::message::BashToolInput {
-        command: "git status".to_string(),
-        description: String::new(),
-        timeout_ms: None,
-        workdir: None,
-    });
-    assert_eq!(
-        agent.authorize_first_party_tool(&git_status),
-        crate::permission::PermissionDecision::Allow
-    );
-
-    let rm = crate::message::FirstPartyToolInput::Bash(crate::message::BashToolInput {
-        command: "rm -rf node_modules".to_string(),
-        description: String::new(),
-        timeout_ms: None,
-        workdir: None,
-    });
-    match agent.authorize_first_party_tool(&rm) {
-        crate::permission::PermissionDecision::Ask { .. } => {}
-        other => panic!("expected ask decision, got {other:?}"),
-    }
+        .expect_err("removed execution_mode field should fail");
+    assert!(matches!(err, ConfigError::ParseFile { .. }));
 }
 
 #[test]
-fn no_legacy_permission_means_no_agent_fallback() {
-    let path = write_temp_config("");
-    let resolution = ConfigLoader::new(TestEnvironment::default())
+fn loader_rejects_removed_tool_default_permission_fields() {
+    let path = write_temp_config(
+        r#"
+[permission.tools]
+read_only_default = "allow"
+mutating_default = "ask"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
         .load(&LoadConfigRequest {
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect("default config should load");
+        .expect_err("removed tool default fields should fail");
+    assert!(matches!(err, ConfigError::ParseFile { .. }));
+}
 
-    assert!(!resolution.config.permission_explicit);
-    assert!(resolution.config.legacy_permission_as_agent().is_empty());
+#[test]
+fn cli_override_parser_rejects_removed_permission_overrides() {
+    let err = "permission.default_write=ask"
+        .parse::<ConfigOverride>()
+        .expect_err("permission override should be rejected");
+    assert!(matches!(err, ConfigError::InvalidOverride(_)));
 }
 
 #[test]
@@ -1224,13 +1166,55 @@ fn agent_config_and_default_agent_parse() {
 [runtime]
 default_agent = "planner"
 
+[permission.path]
+workspace = { read = "allow", write = "ask" }
+external = { read = "ask", write = "deny" }
+
+[permission.path.rules]
+"<cwd>/.env*" = { read = "ask", write = "deny" }
+
+[permission.network]
+internet = "ask"
+private = "deny"
+loopback = "deny"
+
+[permission.network.rules]
+"github.com:443" = "allow"
+
+[permission.tools.tags]
+read_only = "allow"
+network = "ask"
+mutating = "ask"
+
+[permission.tools.first_party]
+bash = "ask"
+
 [agents.planner]
 description = "Planning agent"
 prompt = "You are a planner."
 allowed_tools = ["read", "grep"]
-permission = { default_read = "allow", default_write = "deny", execution_mode = "ask", tools = { bash = "ask" }, read = { "*.env" = "ask", "*" = "allow" }, external_directory = { "*" = "ask", "/tmp/allowed/**" = "allow" }, tool_rules = { bash = { "git push *" = "deny", "git *" = "allow", "*" = "ask" } } }
 model = "openai/gpt-5"
 aliases = ["plan"]
+
+[agents.planner.permission.inherit]
+path = true
+network = true
+tools = true
+plugin_tools = true
+
+[agents.planner.permission.path]
+workspace = { read = "allow", write = "deny" }
+
+[agents.planner.permission.path.rules]
+"<cwd>/docs/**" = { read = "allow", write = "ask" }
+
+[agents.planner.permission.tools.first_party]
+todo_write = "allow"
+
+[agents.planner.permission.tools.rules.bash]
+"git push *" = "deny"
+"git *" = "allow"
+"*" = "ask"
 "#,
     );
 
@@ -1255,49 +1239,73 @@ aliases = ["plan"]
     assert_eq!(planner.prompt, "You are a planner.");
     assert_eq!(planner.allowed_tools, vec!["read", "grep"]);
     assert_eq!(
-        planner.permission.default_read,
+        resolution
+            .config
+            .permission
+            .path
+            .workspace
+            .as_ref()
+            .and_then(|modes| modes.write),
+        Some(crate::permission::PermissionMode::Ask)
+    );
+    assert!(
+        resolution
+            .config
+            .permission
+            .path
+            .rules
+            .contains_key("<cwd>/.env*")
+    );
+    assert_eq!(
+        resolution.config.permission.network.internet,
+        Some(crate::permission::PermissionMode::Ask)
+    );
+    assert_eq!(
+        resolution
+            .config
+            .permission
+            .network
+            .rules
+            .get("github.com:443"),
+        Some(&crate::permission::PermissionMode::Allow)
+    );
+    assert_eq!(
+        resolution.config.permission.tools.tags.get("network"),
+        Some(&crate::permission::PermissionMode::Ask)
+    );
+    assert_eq!(
+        planner
+            .permission
+            .path
+            .as_ref()
+            .and_then(|path| path.workspace.as_ref())
+            .and_then(|modes| modes.read),
         Some(crate::permission::PermissionMode::Allow)
     );
     assert_eq!(
-        planner.permission.default_write,
+        planner
+            .permission
+            .path
+            .as_ref()
+            .and_then(|path| path.workspace.as_ref())
+            .and_then(|modes| modes.write),
         Some(crate::permission::PermissionMode::Deny)
     );
     assert_eq!(
-        planner.permission.execution_mode,
-        Some(crate::permission::ExecutionMode::Ask)
+        planner
+            .permission
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.first_party.get("todo_write")),
+        Some(&crate::permission::PermissionMode::Allow)
     );
-    assert_eq!(
-        planner.permission.tools.get("bash"),
-        Some(&crate::permission::PermissionMode::Ask)
-    );
-    match planner.permission.read.as_ref() {
-        Some(crate::agent::AgentPermissionRules::Ordered(entries)) => {
-            let collected = entries
-                .iter()
-                .map(|(pattern, mode)| (pattern.as_str(), *mode))
-                .collect::<Vec<_>>();
-            assert_eq!(collected.len(), 2);
-            assert!(collected.contains(&("*.env", crate::permission::PermissionMode::Ask)));
-            assert!(collected.contains(&("*", crate::permission::PermissionMode::Allow)));
-        }
-        other => panic!("expected ordered read rules, got {other:?}"),
-    }
-    match planner.permission.external_directory.as_ref() {
-        Some(crate::agent::AgentPermissionRules::Ordered(entries)) => {
-            let collected = entries
-                .iter()
-                .map(|(pattern, mode)| (pattern.as_str(), *mode))
-                .collect::<Vec<_>>();
-            assert_eq!(collected.len(), 2);
-            assert!(collected.contains(&("*", crate::permission::PermissionMode::Ask)));
-            assert!(
-                collected.contains(&("/tmp/allowed/**", crate::permission::PermissionMode::Allow,))
-            );
-        }
-        other => panic!("expected ordered external_directory rules, got {other:?}"),
-    }
-    match planner.permission.tool_rules.get("bash") {
-        Some(crate::agent::AgentPermissionRules::Ordered(entries)) => {
+    match planner
+        .permission
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.rules.get("bash"))
+    {
+        Some(crate::agent::ToolPermissionRules::Ordered(entries)) => {
             let collected = entries
                 .iter()
                 .map(|(pattern, mode)| (pattern.as_str(), *mode))

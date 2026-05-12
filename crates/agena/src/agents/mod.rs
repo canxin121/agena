@@ -378,42 +378,52 @@ fn home_dir() -> Option<PathBuf> {
         })
 }
 
+fn builtin_permission(
+    workspace_write: crate::permission::PermissionMode,
+    external: crate::permission::PermissionMode,
+    first_party: &[(&str, crate::permission::PermissionMode)],
+) -> crate::agent::AgentPermissionConfig {
+    crate::agent::AgentPermissionConfig {
+        path: Some(crate::agent::PathPermissionConfig {
+            workspace: Some(crate::agent::PathAccessModes {
+                read: Some(crate::permission::PermissionMode::Allow),
+                write: Some(workspace_write),
+            }),
+            external: Some(crate::agent::PathAccessModes {
+                read: Some(external),
+                write: Some(external),
+            }),
+            ..Default::default()
+        }),
+        tools: Some(crate::agent::ToolPermissionConfig {
+            first_party: first_party
+                .iter()
+                .map(|(name, mode)| ((*name).to_string(), *mode))
+                .collect(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
 fn builtin_profiles() -> Vec<AgentProfile> {
     vec![
         builtin_profile(
             "build",
             "Primary coding agent for normal end-to-end implementation work.",
             &[],
-            crate::agent::AgentPermissionConfig {
-                default_read: Some(crate::permission::PermissionMode::Allow),
-                default_write: Some(crate::permission::PermissionMode::Ask),
-                default_external_directory: Some(crate::permission::PermissionMode::Ask),
-                execution_mode: Some(crate::permission::ExecutionMode::Auto),
-                tools: std::collections::BTreeMap::from([
-                    (
-                        "ask_user".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "todo_write".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "enter_plan_mode".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "exit_plan_mode".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    ("task".to_string(), crate::permission::PermissionMode::Allow),
-                    (
-                        "tool_search".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                ]),
-                ..Default::default()
-            },
+            builtin_permission(
+                crate::permission::PermissionMode::Ask,
+                crate::permission::PermissionMode::Ask,
+                &[
+                    ("ask_user", crate::permission::PermissionMode::Allow),
+                    ("todo_write", crate::permission::PermissionMode::Allow),
+                    ("enter_plan_mode", crate::permission::PermissionMode::Allow),
+                    ("exit_plan_mode", crate::permission::PermissionMode::Allow),
+                    ("task", crate::permission::PermissionMode::Allow),
+                    ("tool_search", crate::permission::PermissionMode::Allow),
+                ],
+            ),
             Some("openai/gpt-5.3-codex"),
             &["default", "main"],
             "You are the primary engineering agent. Own the task end to end, choose tools pragmatically, delegate when it helps, preserve surrounding behavior, and avoid reverting unrelated work.",
@@ -433,43 +443,22 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "ask_user",
                 "tool_search",
             ],
-            crate::agent::AgentPermissionConfig {
-                default_read: Some(crate::permission::PermissionMode::Allow),
-                default_write: Some(crate::permission::PermissionMode::Deny),
-                default_external_directory: Some(crate::permission::PermissionMode::Ask),
-                execution_mode: Some(crate::permission::ExecutionMode::Ask),
-                tools: std::collections::BTreeMap::from([
-                    ("read".to_string(), crate::permission::PermissionMode::Allow),
-                    (
-                        "view_file".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    ("glob".to_string(), crate::permission::PermissionMode::Allow),
-                    ("grep".to_string(), crate::permission::PermissionMode::Allow),
-                    (
-                        "web_fetch".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "web_search".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "tool_search".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "todo_write".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "ask_user".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    ("bash".to_string(), crate::permission::PermissionMode::Ask),
-                ]),
-                ..Default::default()
-            },
+            builtin_permission(
+                crate::permission::PermissionMode::Deny,
+                crate::permission::PermissionMode::Ask,
+                &[
+                    ("read", crate::permission::PermissionMode::Allow),
+                    ("view_file", crate::permission::PermissionMode::Allow),
+                    ("glob", crate::permission::PermissionMode::Allow),
+                    ("grep", crate::permission::PermissionMode::Allow),
+                    ("web_fetch", crate::permission::PermissionMode::Allow),
+                    ("web_search", crate::permission::PermissionMode::Allow),
+                    ("tool_search", crate::permission::PermissionMode::Allow),
+                    ("todo_write", crate::permission::PermissionMode::Allow),
+                    ("ask_user", crate::permission::PermissionMode::Allow),
+                    ("bash", crate::permission::PermissionMode::Ask),
+                ],
+            ),
             None,
             &["delegate", "helper"],
             "You are a general-purpose delegated agent. Investigate broadly, combine code reading with focused web research when useful, and return evidence-backed conclusions without making workspace edits unless explicitly allowed.",
@@ -486,31 +475,19 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "web_fetch",
                 "web_search",
             ],
-            crate::agent::AgentPermissionConfig {
-                default_read: Some(crate::permission::PermissionMode::Allow),
-                default_write: Some(crate::permission::PermissionMode::Deny),
-                default_external_directory: Some(crate::permission::PermissionMode::Ask),
-                execution_mode: Some(crate::permission::ExecutionMode::Ask),
-                tools: std::collections::BTreeMap::from([
-                    ("read".to_string(), crate::permission::PermissionMode::Allow),
-                    (
-                        "view_file".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    ("glob".to_string(), crate::permission::PermissionMode::Allow),
-                    ("grep".to_string(), crate::permission::PermissionMode::Allow),
-                    ("bash".to_string(), crate::permission::PermissionMode::Ask),
-                    (
-                        "web_fetch".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "web_search".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                ]),
-                ..Default::default()
-            },
+            builtin_permission(
+                crate::permission::PermissionMode::Deny,
+                crate::permission::PermissionMode::Ask,
+                &[
+                    ("read", crate::permission::PermissionMode::Allow),
+                    ("view_file", crate::permission::PermissionMode::Allow),
+                    ("glob", crate::permission::PermissionMode::Allow),
+                    ("grep", crate::permission::PermissionMode::Allow),
+                    ("bash", crate::permission::PermissionMode::Ask),
+                    ("web_fetch", crate::permission::PermissionMode::Allow),
+                    ("web_search", crate::permission::PermissionMode::Allow),
+                ],
+            ),
             None,
             &["read", "reader"],
             "You are a focused read-only engineering explorer. Gather evidence quickly, inspect code paths, summarize findings concisely, and do not make edits.",
@@ -527,31 +504,19 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "web_fetch",
                 "web_search",
             ],
-            crate::agent::AgentPermissionConfig {
-                default_read: Some(crate::permission::PermissionMode::Allow),
-                default_write: Some(crate::permission::PermissionMode::Deny),
-                default_external_directory: Some(crate::permission::PermissionMode::Ask),
-                execution_mode: Some(crate::permission::ExecutionMode::Ask),
-                tools: std::collections::BTreeMap::from([
-                    ("read".to_string(), crate::permission::PermissionMode::Allow),
-                    (
-                        "view_file".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    ("glob".to_string(), crate::permission::PermissionMode::Allow),
-                    ("grep".to_string(), crate::permission::PermissionMode::Allow),
-                    (
-                        "web_fetch".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "web_search".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    ("bash".to_string(), crate::permission::PermissionMode::Ask),
-                ]),
-                ..Default::default()
-            },
+            builtin_permission(
+                crate::permission::PermissionMode::Deny,
+                crate::permission::PermissionMode::Ask,
+                &[
+                    ("read", crate::permission::PermissionMode::Allow),
+                    ("view_file", crate::permission::PermissionMode::Allow),
+                    ("glob", crate::permission::PermissionMode::Allow),
+                    ("grep", crate::permission::PermissionMode::Allow),
+                    ("web_fetch", crate::permission::PermissionMode::Allow),
+                    ("web_search", crate::permission::PermissionMode::Allow),
+                    ("bash", crate::permission::PermissionMode::Ask),
+                ],
+            ),
             None,
             &["research", "docs"],
             "You are a read-only research agent for external documentation, APIs, and dependency behavior. Prefer direct evidence from docs, source, or fetched pages, separate verified facts from inference, and do not modify the user's workspace.",
@@ -569,14 +534,11 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "notebook_edit",
                 "todo_write",
             ],
-            crate::agent::AgentPermissionConfig {
-                default_read: Some(crate::permission::PermissionMode::Allow),
-                default_write: Some(crate::permission::PermissionMode::Ask),
-                default_external_directory: Some(crate::permission::PermissionMode::Ask),
-                execution_mode: Some(crate::permission::ExecutionMode::Auto),
-                tools: std::collections::BTreeMap::new(),
-                ..Default::default()
-            },
+            builtin_permission(
+                crate::permission::PermissionMode::Ask,
+                crate::permission::PermissionMode::Ask,
+                &[],
+            ),
             Some("openai/gpt-5.3-codex"),
             &["edit", "builder", "codex"],
             "You are a pragmatic implementation agent. Make the requested code changes, preserve surrounding behavior, adapt to concurrent edits, and avoid reverting unrelated work.",
@@ -585,17 +547,11 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             "verify",
             "Validation agent for targeted testing and regression checks.",
             &["read", "view_file", "glob", "grep", "bash", "todo_write"],
-            crate::agent::AgentPermissionConfig {
-                default_read: Some(crate::permission::PermissionMode::Allow),
-                default_write: Some(crate::permission::PermissionMode::Deny),
-                default_external_directory: Some(crate::permission::PermissionMode::Ask),
-                execution_mode: Some(crate::permission::ExecutionMode::Ask),
-                tools: std::collections::BTreeMap::from([(
-                    "bash".to_string(),
-                    crate::permission::PermissionMode::Ask,
-                )]),
-                ..Default::default()
-            },
+            builtin_permission(
+                crate::permission::PermissionMode::Deny,
+                crate::permission::PermissionMode::Ask,
+                &[("bash", crate::permission::PermissionMode::Ask)],
+            ),
             None,
             &["review", "reviewer", "test"],
             "You are a verification agent. Run focused checks, inspect outputs critically, look for regressions, and report the remaining risks plainly.",
@@ -613,27 +569,15 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "enter_plan_mode",
                 "exit_plan_mode",
             ],
-            crate::agent::AgentPermissionConfig {
-                default_read: Some(crate::permission::PermissionMode::Allow),
-                default_write: Some(crate::permission::PermissionMode::Deny),
-                default_external_directory: Some(crate::permission::PermissionMode::Ask),
-                execution_mode: Some(crate::permission::ExecutionMode::Ask),
-                tools: std::collections::BTreeMap::from([
-                    (
-                        "enter_plan_mode".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "exit_plan_mode".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                    (
-                        "todo_write".to_string(),
-                        crate::permission::PermissionMode::Allow,
-                    ),
-                ]),
-                ..Default::default()
-            },
+            builtin_permission(
+                crate::permission::PermissionMode::Deny,
+                crate::permission::PermissionMode::Ask,
+                &[
+                    ("enter_plan_mode", crate::permission::PermissionMode::Allow),
+                    ("exit_plan_mode", crate::permission::PermissionMode::Allow),
+                    ("todo_write", crate::permission::PermissionMode::Allow),
+                ],
+            ),
             None,
             &["plan", "planning", "design"],
             "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable. Prefer read-only investigation unless the user explicitly asks to execute.",
@@ -642,17 +586,11 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             "reviewer",
             "Code review agent focused on bugs, risks, and missing tests.",
             &["read", "view_file", "glob", "grep", "bash"],
-            crate::agent::AgentPermissionConfig {
-                default_read: Some(crate::permission::PermissionMode::Allow),
-                default_write: Some(crate::permission::PermissionMode::Deny),
-                default_external_directory: Some(crate::permission::PermissionMode::Ask),
-                execution_mode: Some(crate::permission::ExecutionMode::Ask),
-                tools: std::collections::BTreeMap::from([(
-                    "bash".to_string(),
-                    crate::permission::PermissionMode::Ask,
-                )]),
-                ..Default::default()
-            },
+            builtin_permission(
+                crate::permission::PermissionMode::Deny,
+                crate::permission::PermissionMode::Ask,
+                &[("bash", crate::permission::PermissionMode::Ask)],
+            ),
             None,
             &["audit", "critic"],
             "You are a strict code review agent. Prioritize correctness issues, behavioral regressions, and test gaps. Findings come first; summaries are secondary.",

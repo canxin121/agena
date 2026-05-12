@@ -26,6 +26,12 @@ pub enum PermissionAction {
         workspace_root: String,
         target_path: String,
     },
+    NetworkAccess {
+        target: String,
+        host: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

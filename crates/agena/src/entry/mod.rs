@@ -35,19 +35,22 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    AskUserToolInput, CustomToolOutput, FirstPartyToolInput, FirstPartyToolOutput, Message,
-    PartContent, PluginInvocation, StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput,
+    AskUserToolInput, CustomToolOutput, FilesystemEffect, FirstPartyToolInput,
+    FirstPartyToolOutput, Message, PartContent, PluginInvocation, StructuredObject,
+    ToolExecutionPart, ToolInvocation, ToolOutput,
 };
-use crate::permission::{AccessKind, PermissionAction, PermissionDecision};
+use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
     EntryDefinitionInput as PluginEntryDefinitionInput, EntrySource as SdkEntrySource, PluginHost,
     PluginHostBuilder, ToolAfterInput as PluginToolAfterInput,
     ToolBeforeInput as PluginToolBeforeInput, ToolFailureInput as PluginToolFailureInput,
     ToolInvokeInput as PluginToolInvokeInput,
+    ToolPermissionNetworksInput as PluginToolPermissionNetworksInput,
     ToolPermissionPathsInput as PluginToolPermissionPathsInput,
     sdk::{
         EntryBehavior as SdkEntryBehavior, EntryStreamingMode as SdkEntryStreamingMode,
-        InputPathSpec as SdkInputPathSpec, PathKind as SdkPathKind,
+        InputNetworkSpec as SdkInputNetworkSpec, InputPathSpec as SdkInputPathSpec,
+        NetworkAccessSpec as SdkNetworkAccessSpec, PathKind as SdkPathKind,
         PlanModePolicy as SdkPlanModePolicy, ShellEnvInput as PluginShellEnvInput,
     },
 };
@@ -65,7 +68,7 @@ pub use monitor::{
 };
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
 pub use result::{FirstPartyExecution, ToolExecutionView, ToolInvocationExecution};
-pub use shell::{ExecutionPolicy, ShellError, ShellOutput, ShellRequest};
+pub use shell::{ShellError, ShellOutput, ShellRequest};
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 pub use worktree::{
     ActiveWorktree, ManagedWorktree, WorktreeRegistry, list_active as worktree_list_active,
@@ -236,7 +239,7 @@ pub struct PreparedShellCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PermissionExecutionMode {
+enum PermissionEnforcementMode {
     Enforced,
     Bypassed,
 }
@@ -294,26 +297,17 @@ pub struct ToolExecutor {
     subagent_registry: crate::agents::SubagentRegistry,
     monitor_registry: Option<Arc<dyn MonitorService>>,
     truncator: ToolOutputTruncator,
-    sandbox_policy: ExecutionPolicy,
     plugins: Arc<PluginHost>,
     web_search_backend: crate::config::WebSearchBackend,
     plan_registry: Option<plan::PlanRegistry>,
     worktree_registry: Option<worktree::WorktreeRegistry>,
     scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
-    permission_mode: PermissionExecutionMode,
+    permission_mode: PermissionEnforcementMode,
 }
 
 impl ToolExecutor {
     pub fn new(workspace_root: impl Into<PathBuf>, agent: Agent) -> Self {
-        Self::with_sandbox_policy(workspace_root, agent, ExecutionPolicy::workspace_write())
-    }
-
-    pub fn with_sandbox_policy(
-        workspace_root: impl Into<PathBuf>,
-        agent: Agent,
-        sandbox_policy: ExecutionPolicy,
-    ) -> Self {
         Self {
             workspace_root: workspace_root.into(),
             agent,
@@ -321,14 +315,13 @@ impl ToolExecutor {
             subagent_registry: crate::agents::SubagentRegistry::empty(),
             monitor_registry: monitor::default_registry(),
             truncator: ToolOutputTruncator::default(),
-            sandbox_policy,
             plugins: PluginHost::new_empty(),
             web_search_backend: crate::config::WebSearchBackend::DuckDuckGoHtml,
             plan_registry: None,
             worktree_registry: None,
             scheduler: None,
             lsp_registry: None,
-            permission_mode: PermissionExecutionMode::Enforced,
+            permission_mode: PermissionEnforcementMode::Enforced,
         }
     }
 
@@ -424,7 +417,7 @@ impl ToolExecutor {
         let tool_name = invocation_name(invocation);
         let (behavior, policy) = self
             .invocation_manifest_metadata(invocation)
-            .unwrap_or((SdkEntryBehavior::WriteSandboxed, SdkPlanModePolicy::Blocked));
+            .unwrap_or((SdkEntryBehavior::Mutating, SdkPlanModePolicy::Blocked));
 
         match policy {
             SdkPlanModePolicy::Allowed => Ok(()),
@@ -498,10 +491,6 @@ impl ToolExecutor {
 
     pub fn agent(&self) -> &Agent {
         &self.agent
-    }
-
-    pub fn sandbox_policy(&self) -> &ExecutionPolicy {
-        &self.sandbox_policy
     }
 
     pub fn monitor_registry(&self) -> Option<&Arc<dyn MonitorService>> {
@@ -746,11 +735,10 @@ impl ToolExecutor {
                 "tool '{tool_name}' disabled for current model profile"
             )));
         }
-        let sensitive = !matches!(definition.behavior, EntryBehavior::ReadOnly);
         Ok((
             tool_name.clone(),
             self.agent
-                .authorize_tool_call(tool_name.as_str(), sensitive),
+                .authorize_tool_tags(tool_name.as_str(), &definition.tags),
         ))
     }
 
@@ -823,6 +811,124 @@ impl ToolExecutor {
         Ok(())
     }
 
+    fn collect_declared_network_checks(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        input: &serde_json::Value,
+        input_specs: &[SdkInputNetworkSpec],
+        static_specs: &[SdkNetworkAccessSpec],
+    ) -> Result<(), ToolError> {
+        for spec in static_specs {
+            self.push_network_check(checks, spec.target.as_str())?;
+        }
+        for request in extract_input_network_requests(input, input_specs)? {
+            self.push_network_check(checks, request.target.as_str())?;
+        }
+        Ok(())
+    }
+
+    fn collect_dynamic_network_checks(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        handle: &crate::plugin::PluginEntryHandle,
+        input: &serde_json::Value,
+    ) -> Result<(), ToolError> {
+        let result = self.plugins.dispatch_tool_permission_networks(
+            handle,
+            PluginToolPermissionNetworksInput {
+                tool_name: handle.original_name.clone(),
+                workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                input: input.clone(),
+            },
+        );
+
+        let network_requests = match result {
+            Ok(network_requests) => network_requests,
+            Err(err)
+                if err.code == crate::plugin::sdk::PluginErrorCode::NotImplemented
+                    || err.message.contains("method not found")
+                    || err.message.contains("not implemented") =>
+            {
+                return Ok(());
+            }
+            Err(err) => return Err(ToolError::Plugin(err.message)),
+        };
+
+        for request in network_requests {
+            self.push_network_check(checks, request.target.as_str())?;
+        }
+        Ok(())
+    }
+
+    fn collect_declared_filesystem_effect_checks(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        first_party: Option<&FirstPartyToolInput>,
+    ) -> Result<(), ToolError> {
+        match first_party {
+            Some(FirstPartyToolInput::Bash(input)) => {
+                validate_shell_filesystem_effects(
+                    "bash",
+                    input.command.as_str(),
+                    &input.filesystem_effects,
+                )?;
+                let base = self.shell_effect_base_path(input.workdir.as_deref());
+                self.push_filesystem_effect_checks(
+                    checks,
+                    &input.filesystem_effects,
+                    base.as_path(),
+                );
+            }
+            Some(FirstPartyToolInput::PowerShell(input)) => {
+                let base = self.shell_effect_base_path(input.workdir.as_deref());
+                self.push_filesystem_effect_checks(
+                    checks,
+                    &input.filesystem_effects,
+                    base.as_path(),
+                );
+            }
+            Some(FirstPartyToolInput::Monitor(crate::message::MonitorToolInput::Start {
+                command,
+                workdir,
+                filesystem_effects,
+                ..
+            })) => {
+                validate_shell_filesystem_effects("monitor", command.as_str(), filesystem_effects)?;
+                let base = self.shell_effect_base_path(workdir.as_deref());
+                self.push_filesystem_effect_checks(checks, filesystem_effects, base.as_path());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn collect_first_party_network_checks(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        first_party: Option<&FirstPartyToolInput>,
+    ) -> Result<(), ToolError> {
+        match first_party {
+            Some(FirstPartyToolInput::WebFetch(input)) => {
+                let raw_url = input.url.trim();
+                if raw_url.is_empty() {
+                    return Ok(());
+                }
+                let url = if let Some(rest) = raw_url.strip_prefix("http://") {
+                    format!("https://{rest}")
+                } else {
+                    raw_url.to_string()
+                };
+                self.push_network_check(checks, url.as_str())?;
+            }
+            Some(FirstPartyToolInput::WebSearch(_)) => {
+                let backend = self.web_search_backend();
+                self.push_network_check(checks, web_search::web_search_backend_target(&backend))?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn push_requested_path_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
@@ -831,6 +937,23 @@ impl ToolExecutor {
     ) {
         let target = self.resolve_target_path(path);
         self.push_path_checks(checks, sdk_path_kind_to_access_kind(kind), &target);
+    }
+
+    fn push_filesystem_effect_checks(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        effects: &[FilesystemEffect],
+        base_path: &Path,
+    ) {
+        for effect in effects {
+            let target = self.resolve_filesystem_effect_path(effect.path.as_str(), base_path);
+            if effect.access.includes_read() {
+                self.push_path_checks(checks, AccessKind::Read, &target);
+            }
+            if effect.access.includes_write() {
+                self.push_path_checks(checks, AccessKind::Write, &target);
+            }
+        }
     }
 
     pub fn execute_first_party_detailed(
@@ -896,7 +1019,7 @@ impl ToolExecutor {
             .unwrap_or_else(|| self.clone());
         scoped_executor.ensure_first_party_enabled(input)?;
 
-        if scoped_executor.permission_mode == PermissionExecutionMode::Enforced {
+        if scoped_executor.permission_mode == PermissionEnforcementMode::Enforced {
             match scoped_executor.agent.authorize_first_party_tool(input) {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
@@ -1050,12 +1173,21 @@ impl ToolExecutor {
         if let Some(resolution) =
             self.plugin_resolution_for_invocation(invocation, first_party.as_ref())
         {
+            self.collect_declared_filesystem_effect_checks(&mut checks, first_party.as_ref())?;
+            self.collect_first_party_network_checks(&mut checks, first_party.as_ref())?;
             self.collect_declared_path_checks(
                 &mut checks,
                 &input_value,
                 &resolution.decl.input_paths,
             )?;
             self.collect_dynamic_path_checks(&mut checks, &resolution.handle, &input_value)?;
+            self.collect_declared_network_checks(
+                &mut checks,
+                &input_value,
+                &resolution.decl.input_networks,
+                &resolution.decl.network_access,
+            )?;
+            self.collect_dynamic_network_checks(&mut checks, &resolution.handle, &input_value)?;
         }
         Ok(checks)
     }
@@ -1286,7 +1418,7 @@ impl ToolExecutor {
         prepared_shell_command: Option<PreparedShellCommand>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         let mut trusted = self.clone();
-        trusted.permission_mode = PermissionExecutionMode::Bypassed;
+        trusted.permission_mode = PermissionEnforcementMode::Bypassed;
         trusted.execute_invocation_detailed_with_prepared_shell(
             invocation,
             session_id,
@@ -1448,6 +1580,25 @@ impl ToolExecutor {
         self.resolve_target_path_with_context(raw_path, None)
     }
 
+    pub(crate) fn shell_effect_base_path(&self, workdir: Option<&str>) -> PathBuf {
+        workdir
+            .map(|workdir| self.resolve_target_path(workdir))
+            .unwrap_or_else(|| self.workspace_root().to_path_buf())
+    }
+
+    pub(crate) fn resolve_filesystem_effect_path(
+        &self,
+        raw_path: &str,
+        base_path: &Path,
+    ) -> PathBuf {
+        let candidate = PathBuf::from(raw_path);
+        if candidate.is_absolute() {
+            candidate
+        } else {
+            base_path.join(candidate)
+        }
+    }
+
     pub(crate) fn resolve_target_path_with_context(
         &self,
         raw_path: &str,
@@ -1465,7 +1616,7 @@ impl ToolExecutor {
         &self,
         request: &ShellRequest,
     ) -> Result<ShellOutput, ToolError> {
-        shell::execute(request, self.sandbox_policy()).map_err(ToolError::from)
+        shell::execute(request).map_err(ToolError::from)
     }
 
     pub(crate) fn effective_workspace_root<'a>(
@@ -1505,23 +1656,45 @@ impl ToolExecutor {
         self.ensure_access_permission(AccessKind::Write, target_path)
     }
 
+    pub(crate) fn ensure_filesystem_effects_permission(
+        &self,
+        effects: &[FilesystemEffect],
+        base_path: &Path,
+    ) -> Result<(), ToolError> {
+        for effect in effects {
+            let target = self.resolve_filesystem_effect_path(effect.path.as_str(), base_path);
+            if effect.access.includes_read() {
+                self.ensure_access_permission(AccessKind::Read, &target)?;
+            }
+            if effect.access.includes_write() {
+                self.ensure_access_permission(AccessKind::Write, &target)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ensure_network_permission(
+        &self,
+        target: &NetworkTarget,
+    ) -> Result<(), ToolError> {
+        if self.permission_mode == PermissionEnforcementMode::Bypassed {
+            return Ok(());
+        }
+
+        match self.agent.authorize_network_connect(target) {
+            PermissionDecision::Allow => Ok(()),
+            PermissionDecision::Ask { reason } => Err(ToolError::PermissionAsk(reason)),
+            PermissionDecision::Deny { reason } => Err(ToolError::PermissionDenied(reason)),
+        }
+    }
+
     fn ensure_access_permission(
         &self,
         access: AccessKind,
         target_path: &Path,
     ) -> Result<(), ToolError> {
-        if self.permission_mode == PermissionExecutionMode::Bypassed {
+        if self.permission_mode == PermissionEnforcementMode::Bypassed {
             return Ok(());
-        }
-
-        match self.agent.authorize_path_access(
-            AccessKind::ExternalDirectory,
-            self.workspace_root(),
-            target_path,
-        ) {
-            PermissionDecision::Allow => {}
-            PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
-            PermissionDecision::Deny { reason } => return Err(ToolError::PermissionDenied(reason)),
         }
 
         match self
@@ -1545,18 +1718,6 @@ impl ToolExecutor {
 
         checks.push(ToolPermissionCheck {
             action: PermissionAction::PathAccess {
-                access_kind: access_kind_name(AccessKind::ExternalDirectory).to_string(),
-                workspace_root: workspace_root.clone(),
-                target_path: target.clone(),
-            },
-            decision: self.agent.authorize_path_access(
-                AccessKind::ExternalDirectory,
-                self.workspace_root(),
-                target_path,
-            ),
-        });
-        checks.push(ToolPermissionCheck {
-            action: PermissionAction::PathAccess {
                 access_kind: access_kind_name(access).to_string(),
                 workspace_root,
                 target_path: target,
@@ -1565,6 +1726,27 @@ impl ToolExecutor {
                 .agent
                 .authorize_path_access(access, self.workspace_root(), target_path),
         });
+    }
+
+    fn push_network_check(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        target: &str,
+    ) -> Result<(), ToolError> {
+        let target = NetworkTarget::parse(target).map_err(|err| {
+            ToolError::InvalidInput(format!(
+                "invalid network permission target `{target}`: {err}"
+            ))
+        })?;
+        checks.push(ToolPermissionCheck {
+            action: PermissionAction::NetworkAccess {
+                target: target.original().to_string(),
+                host: target.host().to_string(),
+                port: target.port(),
+            },
+            decision: self.agent.authorize_network_connect(&target),
+        });
+        Ok(())
     }
 }
 
@@ -1576,8 +1758,22 @@ fn access_kind_name(access: AccessKind) -> &'static str {
     match access {
         AccessKind::Read => "read",
         AccessKind::Write => "write",
-        AccessKind::ExternalDirectory => "external_directory",
     }
+}
+
+fn validate_shell_filesystem_effects(
+    tool_name: &str,
+    command: &str,
+    effects: &[FilesystemEffect],
+) -> Result<(), ToolError> {
+    if effects.is_empty()
+        && let Some(reason) = bash::mutating_command_reason(command)
+    {
+        return Err(ToolError::InvalidInput(format!(
+            "{tool_name} filesystem_effects must declare at least one path because the command appears to modify files: {reason}"
+        )));
+    }
+    Ok(())
 }
 
 fn invocation_name(invocation: &ToolInvocation) -> String {
@@ -1619,6 +1815,9 @@ fn first_party_plugin_error(tool_name: &str, err: crate::plugin::PluginError) ->
     }
     if let Some(reason) = detail.strip_prefix("permission confirmation required: ") {
         return ToolError::PermissionAsk(reason.to_string());
+    }
+    if let Some(reason) = detail.strip_prefix("invalid tool input: ") {
+        return ToolError::InvalidInput(reason.to_string());
     }
     ToolError::Plugin(err.message)
 }
@@ -1741,6 +1940,37 @@ fn extract_input_path_requests(
     Ok(requests)
 }
 
+fn extract_input_network_requests(
+    input: &serde_json::Value,
+    specs: &[SdkInputNetworkSpec],
+) -> Result<Vec<crate::plugin::sdk::NetworkRequest>, ToolError> {
+    let mut requests = Vec::new();
+    for spec in specs {
+        let matches = extract_jsonpath_values(input, spec.jsonpath.as_str())?;
+        if matches.is_empty() {
+            if spec.optional {
+                continue;
+            }
+            return Err(ToolError::InvalidInput(format!(
+                "missing required input network '{}'",
+                spec.jsonpath
+            )));
+        }
+        for value in matches {
+            let Some(target) = value.as_str() else {
+                return Err(ToolError::InvalidInput(format!(
+                    "input network '{}' must resolve to a string",
+                    spec.jsonpath
+                )));
+            };
+            requests.push(crate::plugin::sdk::NetworkRequest {
+                target: target.to_string(),
+            });
+        }
+    }
+    Ok(requests)
+}
+
 fn extract_jsonpath_values<'a>(
     input: &'a serde_json::Value,
     jsonpath: &str,
@@ -1833,11 +2063,11 @@ mod tests {
     use uuid::Uuid;
 
     use crate::message::{
-        ApplyPatchToolInput, BashToolInput, FileChangeKind, FirstPartyToolInput,
-        FirstPartyToolOutput, GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput,
-        StructuredObject, TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority,
-        TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput,
-        ToolSearchToolInput, ViewFileToolInput,
+        ApplyPatchToolInput, BashToolInput, FileChangeKind, FilesystemAccess, FilesystemEffect,
+        FirstPartyToolInput, FirstPartyToolOutput, GlobToolInput, GrepToolInput, Message,
+        PartContent, ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TimeRange,
+        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation,
+        ToolOutput, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -1850,7 +2080,7 @@ mod tests {
     use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
-    use super::{EntrySource, ExecutionPolicy, ToolError, ToolExecutor};
+    use super::{EntrySource, ToolError, ToolExecutor};
     use crate::plugins::bundled::router as bundled_router;
 
     #[derive(Debug)]
@@ -1875,12 +2105,6 @@ mod tests {
     fn build_executor(root: &Path) -> ToolExecutor {
         let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
         ToolExecutor::new(root, agent).with_plugin_manager(build_first_party_plugin_manager(root))
-    }
-
-    fn build_executor_with_policy(root: &Path, policy: ExecutionPolicy) -> ToolExecutor {
-        let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
-        ToolExecutor::with_sandbox_policy(root, agent, policy)
-            .with_plugin_manager(build_first_party_plugin_manager(root))
     }
 
     #[derive(Debug)]
@@ -1999,7 +2223,9 @@ mod tests {
                                     "type": "array",
                                     "items": { "type": "string" }
                                 },
-                                "dynamic_path": { "type": "string" }
+                                "dynamic_path": { "type": "string" },
+                                "url": { "type": "string" },
+                                "dynamic_network": { "type": "string" }
                             },
                             "required": ["file_path"]
                         }),
@@ -2014,6 +2240,10 @@ mod tests {
                     .input_path(InputPathSpec {
                         jsonpath: "$.extra_paths[*]".to_string(),
                         kind: PathKind::Read,
+                        optional: true,
+                    })
+                    .input_network(InputNetworkSpec {
+                        jsonpath: "$.url".to_string(),
                         optional: true,
                     }),
                 )
@@ -2097,6 +2327,23 @@ mod tests {
                 return Ok(Vec::new());
             };
             Ok(vec![PathRequest::write(dynamic_path)])
+        }
+
+        async fn permission_networks(
+            &self,
+            tool: &str,
+            input: &serde_json::Value,
+        ) -> Result<Vec<NetworkRequest>> {
+            if tool != "plugin_paths" {
+                return Ok(Vec::new());
+            }
+            let Some(target) = input
+                .get("dynamic_network")
+                .and_then(|value| value.as_str())
+            else {
+                return Ok(Vec::new());
+            };
+            Ok(vec![NetworkRequest::connect(target)])
         }
 
         async fn shell_env(&self, _input: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
@@ -2745,15 +2992,15 @@ mod tests {
     }
 
     #[test]
-    fn bash_first_party_runs_command_with_read_only_policy() {
+    fn bash_first_party_runs_command() {
         if cfg!(windows) {
             // Windows host environments can include PATH entries whose ACL cannot be audited
-            // in sandbox preflight, which makes this smoke test flaky/non-portable.
+            // in shell preflight, which makes this smoke test flaky/non-portable.
             return;
         }
 
         let workspace = TempWorkspace::new();
-        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
+        let executor = build_executor(&workspace.root);
 
         let result = executor
             .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
@@ -2761,6 +3008,7 @@ mod tests {
                 description: "smoke bash".to_string(),
                 timeout_ms: Some(30_000),
                 workdir: None,
+                filesystem_effects: Vec::new(),
             }))
             .expect("bash first_party should succeed");
 
@@ -2789,7 +3037,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("notes.txt"), "alpha\nbeta\n")
             .expect("failed to seed notes file");
-        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
+        let executor = build_executor(&workspace.root);
 
         let result = executor
             .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
@@ -2797,6 +3045,10 @@ mod tests {
                 description: "search missing text".to_string(),
                 timeout_ms: Some(30_000),
                 workdir: None,
+                filesystem_effects: vec![crate::message::FilesystemEffect {
+                    path: "notes.txt".to_string(),
+                    access: crate::message::FilesystemAccess::Read,
+                }],
             }))
             .expect("bash first_party should succeed");
 
@@ -2838,7 +3090,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("left.txt"), "alpha\n").expect("failed to write left file");
         fs::write(workspace.root.join("right.txt"), "beta\n").expect("failed to write right file");
-        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
+        let executor = build_executor(&workspace.root);
 
         let result = executor
             .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
@@ -2846,6 +3098,16 @@ mod tests {
                 description: "compare files".to_string(),
                 timeout_ms: Some(30_000),
                 workdir: None,
+                filesystem_effects: vec![
+                    crate::message::FilesystemEffect {
+                        path: "left.txt".to_string(),
+                        access: crate::message::FilesystemAccess::Read,
+                    },
+                    crate::message::FilesystemEffect {
+                        path: "right.txt".to_string(),
+                        access: crate::message::FilesystemAccess::Read,
+                    },
+                ],
             }))
             .expect("bash first_party should succeed");
 
@@ -2871,13 +3133,13 @@ mod tests {
     }
 
     #[test]
-    fn bash_first_party_blocks_obvious_write_commands_in_read_only_policy() {
+    fn bash_first_party_rejects_obvious_write_without_declared_effects() {
         if cfg!(windows) {
             return;
         }
 
         let workspace = TempWorkspace::new();
-        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only());
+        let executor = build_executor(&workspace.root);
 
         let err = executor
             .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
@@ -2885,15 +3147,16 @@ mod tests {
                 description: "attempt write".to_string(),
                 timeout_ms: Some(30_000),
                 workdir: None,
+                filesystem_effects: Vec::new(),
             }))
             .expect_err("write command should be rejected before execution");
 
         match err {
-            ToolError::PermissionDenied(message) => {
-                assert!(message.contains("read-only sandbox"));
-                assert!(message.contains("output redirection"));
+            ToolError::InvalidInput(message) => {
+                assert!(message.contains("filesystem_effects"));
+                assert!(message.contains("modify files"));
             }
-            other => panic!("expected permission denial, got {other:?}"),
+            other => panic!("expected invalid input, got {other:?}"),
         }
     }
 
@@ -3027,7 +3290,9 @@ mod tests {
             input: StructuredObject::try_from(json!({
                 "file_path": "docs/spec.md",
                 "extra_paths": ["notes/a.md", "notes/b.md"],
-                "dynamic_path": "logs/output.txt"
+                "dynamic_path": "logs/output.txt",
+                "url": "https://docs.rs/",
+                "dynamic_network": "api.example.com:443"
             }))
             .expect("structured object should build"),
         };
@@ -3064,6 +3329,19 @@ mod tests {
             "write".to_string(),
             super::normalize_path_for_display(&workspace.root.join("logs/output.txt")),
         )));
+
+        let network_actions = checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::NetworkAccess { host, port, .. } => {
+                    Some((host.clone(), *port))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(network_actions.contains(&("docs.rs".to_string(), Some(443))));
+        assert!(network_actions.contains(&("api.example.com".to_string(), Some(443))));
     }
 
     #[test]
@@ -3104,13 +3382,270 @@ mod tests {
     }
 
     #[test]
+    fn web_fetch_uses_network_permission_policy() {
+        let workspace = TempWorkspace::new();
+        let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all())
+            .try_with_permission_config(&crate::agent::PermissionConfig {
+                network: crate::agent::NetworkPermissionConfig {
+                    loopback: Some(crate::permission::PermissionMode::Deny),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .expect("network permission config compiles");
+        let executor = ToolExecutor::new(workspace.root.clone(), agent)
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+
+        let err = executor
+            .execute_first_party_detailed(&FirstPartyToolInput::WebFetch(WebFetchToolInput {
+                url: "http://localhost:8000/".to_string(),
+                prompt: None,
+            }))
+            .expect_err("loopback fetch should be denied before request");
+
+        match err {
+            ToolError::PermissionDenied(reason) => assert!(reason.contains("loopback")),
+            other => panic!("expected network permission denial, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn collect_permission_checks_for_bash_invocation_uses_declared_filesystem_effects() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+        let outside = workspace.root.with_file_name(format!(
+            "{}-outside.txt",
+            workspace
+                .root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("agena")
+        ));
+        let invocation = FirstPartyToolInput::Bash(BashToolInput {
+            command: "cat src/lib.rs > target/out.txt".to_string(),
+            description: "declared effects".to_string(),
+            timeout_ms: Some(30_000),
+            workdir: Some("packages/app".to_string()),
+            filesystem_effects: vec![
+                FilesystemEffect {
+                    path: "src/lib.rs".to_string(),
+                    access: FilesystemAccess::Read,
+                },
+                FilesystemEffect {
+                    path: "target/out.txt".to_string(),
+                    access: FilesystemAccess::Write,
+                },
+                FilesystemEffect {
+                    path: "Cargo.lock".to_string(),
+                    access: FilesystemAccess::ReadWrite,
+                },
+                FilesystemEffect {
+                    path: outside.to_string_lossy().to_string(),
+                    access: FilesystemAccess::Write,
+                },
+            ],
+        })
+        .into_invocation();
+
+        let checks = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect("permission collection should succeed");
+
+        let path_actions = checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } => Some((access_kind.clone(), target_path.clone())),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(path_actions.contains(&(
+            "read".to_string(),
+            super::normalize_path_for_display(&workspace.root.join("packages/app/src/lib.rs")),
+        )));
+        assert!(path_actions.contains(&(
+            "write".to_string(),
+            super::normalize_path_for_display(&workspace.root.join("packages/app/target/out.txt")),
+        )));
+        assert!(path_actions.contains(&(
+            "read".to_string(),
+            super::normalize_path_for_display(&workspace.root.join("packages/app/Cargo.lock")),
+        )));
+        assert!(path_actions.contains(&(
+            "write".to_string(),
+            super::normalize_path_for_display(&workspace.root.join("packages/app/Cargo.lock")),
+        )));
+        assert!(path_actions.contains(&(
+            "write".to_string(),
+            super::normalize_path_for_display(&outside),
+        )));
+    }
+
+    #[test]
+    fn collect_permission_checks_for_declared_bash_write_uses_path_policy() {
+        let workspace = TempWorkspace::new();
+        let agent = crate::agent::Agent::new(
+            "build",
+            PermissionPolicy::new(
+                crate::permission::PermissionMode::Allow,
+                crate::permission::PermissionMode::Deny,
+            ),
+        );
+        let executor = ToolExecutor::new(&workspace.root, agent)
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+        let invocation = FirstPartyToolInput::Bash(BashToolInput {
+            command: "touch created.txt".to_string(),
+            description: "declared write".to_string(),
+            timeout_ms: Some(30_000),
+            workdir: None,
+            filesystem_effects: vec![FilesystemEffect {
+                path: "created.txt".to_string(),
+                access: FilesystemAccess::Write,
+            }],
+        })
+        .into_invocation();
+
+        let checks = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect("permission collection should succeed");
+        let write_decision = checks
+            .iter()
+            .find_map(|check| match &check.action {
+                crate::permission::PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } if access_kind == "write"
+                    && target_path
+                        == &super::normalize_path_for_display(
+                            &workspace.root.join("created.txt"),
+                        ) =>
+                {
+                    Some(&check.decision)
+                }
+                _ => None,
+            })
+            .expect("declared write path should be checked");
+
+        match write_decision {
+            crate::permission::PermissionDecision::Deny { reason } => {
+                assert!(reason.contains("write"));
+            }
+            other => panic!("expected declared write to follow path policy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bash_input_requires_filesystem_effects_field() {
+        let err = serde_json::from_value::<BashToolInput>(json!({
+            "command": "pwd",
+            "description": "",
+            "timeout_ms": null,
+            "workdir": null
+        }))
+        .expect_err("bash input should require filesystem_effects");
+
+        assert!(err.to_string().contains("filesystem_effects"));
+    }
+
+    #[test]
+    fn bash_tool_schema_requires_filesystem_effects_field() {
+        let schema = crate::entry::definition::json_schema_for::<BashToolInput>();
+        let required = schema
+            .get("required")
+            .and_then(serde_json::Value::as_array)
+            .expect("bash schema should declare required fields");
+
+        assert!(
+            required
+                .iter()
+                .any(|field| field.as_str() == Some("filesystem_effects"))
+        );
+        assert!(
+            schema
+                .pointer("/properties/filesystem_effects")
+                .and_then(serde_json::Value::as_object)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn bash_invocation_rejects_obvious_write_without_declared_effects() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+        let invocation = FirstPartyToolInput::Bash(BashToolInput {
+            command: "touch created.txt".to_string(),
+            description: "missing effects".to_string(),
+            timeout_ms: Some(30_000),
+            workdir: None,
+            filesystem_effects: Vec::new(),
+        })
+        .into_invocation();
+
+        let err = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect_err("mutating bash without filesystem effects should be rejected");
+        match err {
+            ToolError::InvalidInput(message) => {
+                assert!(message.contains("filesystem_effects"));
+                assert!(message.contains("modify files"));
+            }
+            other => panic!("expected invalid input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bash_execution_enforces_declared_filesystem_effect_permissions() {
+        if cfg!(windows) {
+            return;
+        }
+
+        let workspace = TempWorkspace::new();
+        let agent = crate::agent::Agent::new(
+            "build",
+            PermissionPolicy::new(
+                crate::permission::PermissionMode::Allow,
+                crate::permission::PermissionMode::Deny,
+            ),
+        );
+        let executor = ToolExecutor::new(&workspace.root, agent)
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+
+        let err = executor
+            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
+                command: "printf ok".to_string(),
+                description: "declared write denied".to_string(),
+                timeout_ms: Some(30_000),
+                workdir: None,
+                filesystem_effects: vec![FilesystemEffect {
+                    path: "created.txt".to_string(),
+                    access: FilesystemAccess::Write,
+                }],
+            }))
+            .expect_err("declared write should be denied by path policy");
+
+        match err {
+            ToolError::PermissionDenied(message) => {
+                assert!(message.contains("write"));
+            }
+            other => panic!("expected permission denial, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn bash_invocation_applies_plugin_shell_env_overrides() {
         if cfg!(windows) {
             return;
         }
 
         let workspace = TempWorkspace::new();
-        let executor = build_executor_with_policy(&workspace.root, ExecutionPolicy::read_only())
+        let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root));
 
         let execution = executor
@@ -3120,6 +3655,7 @@ mod tests {
                     description: "print plugin env".to_string(),
                     timeout_ms: Some(30_000),
                     workdir: None,
+                    filesystem_effects: Vec::new(),
                 })
                 .into_invocation(),
                 10,
@@ -3140,14 +3676,11 @@ mod tests {
 
     #[test]
     fn enforce_plan_mode_allows_read_only_bash_and_blocks_mutating_bash() {
-        use crate::message::{StructuredField, StructuredObject, StructuredValue};
         use crate::session::PlanState;
 
         let workspace = TempWorkspace::new();
         let registry = super::plan_registry_for_executor();
-        let executor =
-            build_executor_with_policy(&workspace.root, ExecutionPolicy::workspace_write())
-                .with_plan_registry(registry.clone());
+        let executor = build_executor(&workspace.root).with_plan_registry(registry.clone());
 
         // Activate plan mode for session 7.
         registry.write().insert(
@@ -3160,17 +3693,14 @@ mod tests {
         );
 
         let bash_input = |cmd: &str| -> ToolInvocation {
-            let mut input = StructuredObject::default();
-            input.fields.push(StructuredField {
-                name: "command".to_string(),
-                value: StructuredValue::Text {
-                    value: cmd.to_string(),
-                },
-            });
-            ToolInvocation {
-                name: "bash".to_string(),
-                input,
-            }
+            FirstPartyToolInput::Bash(BashToolInput {
+                command: cmd.to_string(),
+                description: String::new(),
+                timeout_ms: None,
+                workdir: None,
+                filesystem_effects: Vec::new(),
+            })
+            .into_invocation()
         };
 
         // Read-only bash is allowed in plan mode.
@@ -3205,14 +3735,11 @@ mod tests {
 
     #[test]
     fn enforce_plan_mode_uses_session_lookup() {
-        use crate::message::{StructuredField, StructuredObject, StructuredValue};
         use crate::session::PlanState;
 
         let workspace = TempWorkspace::new();
         let registry = super::plan_registry_for_executor();
-        let executor =
-            build_executor_with_policy(&workspace.root, ExecutionPolicy::workspace_write())
-                .with_plan_registry(registry.clone());
+        let executor = build_executor(&workspace.root).with_plan_registry(registry.clone());
         registry.write().insert(
             42,
             PlanState {
@@ -3222,17 +3749,14 @@ mod tests {
             },
         );
 
-        let mut input = StructuredObject::default();
-        input.fields.push(StructuredField {
-            name: "command".to_string(),
-            value: StructuredValue::Text {
-                value: "rm -rf /".to_string(),
-            },
-        });
-        let inv = ToolInvocation {
-            name: "bash".to_string(),
-            input,
-        };
+        let inv = FirstPartyToolInput::Bash(BashToolInput {
+            command: "rm -rf /".to_string(),
+            description: String::new(),
+            timeout_ms: None,
+            workdir: None,
+            filesystem_effects: Vec::new(),
+        })
+        .into_invocation();
 
         // Different session id — plan mode does not apply.
         executor

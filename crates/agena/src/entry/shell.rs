@@ -1,12 +1,9 @@
-//! In-tree shell executor that replaces the procwarden sandbox.
+//! In-tree shell executor.
 //!
 //! `tool::shell` provides a small synchronous command runner with a watchdog
 //! timeout, stdout/stderr capture, and shell-injection environment scrubbing.
-//! It deliberately does *not* implement OS-level sandboxing — agena gates
-//! filesystem and tool access through `crate::permission` instead. The
-//! `ExecutionPolicy` enum stays as a semantic token so call sites can refuse
-//! mutating bash commands under a `ReadOnly` profile, but it no longer maps
-//! onto a kernel sandbox.
+//! It deliberately does *not* implement OS-level sandboxing. Agena gates
+//! filesystem and tool access through `crate::permission` instead.
 
 use std::collections::HashMap;
 use std::io::{self, Read};
@@ -15,40 +12,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-/// High-level execution profile. Drives both the bash classifier (block
-/// mutating commands under `ReadOnly`) and the env scrubber (skipped for
-/// `DangerFullAccess`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionPolicy {
-    ReadOnly,
-    #[default]
-    WorkspaceWrite,
-    DangerFullAccess,
-}
-
-impl ExecutionPolicy {
-    pub const fn read_only() -> Self {
-        Self::ReadOnly
-    }
-
-    pub const fn workspace_write() -> Self {
-        Self::WorkspaceWrite
-    }
-
-    pub const fn danger_full_access() -> Self {
-        Self::DangerFullAccess
-    }
-
-    /// Whether this policy permits writes anywhere on disk. The permission
-    /// system still gates per-path; this just controls env scrubbing.
-    pub const fn is_unrestricted(&self) -> bool {
-        matches!(self, Self::DangerFullAccess)
-    }
-}
 
 /// Single shell invocation.
 #[derive(Debug, Clone)]
@@ -82,13 +46,10 @@ pub enum ShellError {
 
 /// Run a command synchronously, scrubbing dangerous loader env vars and
 /// enforcing `timeout_ms` via a watchdog thread.
-pub fn execute(
-    request: &ShellRequest,
-    policy: &ExecutionPolicy,
-) -> Result<ShellOutput, ShellError> {
+pub fn execute(request: &ShellRequest) -> Result<ShellOutput, ShellError> {
     validate(request)?;
 
-    let env = sanitize_env(&request.env, policy);
+    let env = sanitize_env(&request.env);
     let (program, args) = request
         .command
         .split_first()
@@ -164,17 +125,8 @@ fn validate(request: &ShellRequest) -> Result<(), ShellError> {
     Ok(())
 }
 
-/// Strip env vars that can hijack a child shell or dynamic loader. Skipped
-/// when policy is `DangerFullAccess` so privileged callers can still pass
-/// `LD_PRELOAD` etc. through deliberately.
-fn sanitize_env(
-    env: &HashMap<String, String>,
-    policy: &ExecutionPolicy,
-) -> HashMap<String, String> {
-    if policy.is_unrestricted() {
-        return env.clone();
-    }
-
+/// Strip env vars that can hijack a child shell or dynamic loader.
+fn sanitize_env(env: &HashMap<String, String>) -> HashMap<String, String> {
     const BLOCKED_EXACT: &[&str] = &[
         "BASH_ENV",
         "ENV",
@@ -289,7 +241,7 @@ mod tests {
             env: HashMap::new(),
             timeout_ms: None,
         };
-        let err = execute(&req, &ExecutionPolicy::WorkspaceWrite).unwrap_err();
+        let err = execute(&req).unwrap_err();
         assert!(matches!(err, ShellError::InvalidRequest(_)));
     }
 
@@ -299,7 +251,7 @@ mod tests {
             vec!["true"],
             std::path::Path::new("/this/path/should/not/exist/abc123"),
         );
-        let err = execute(&req, &ExecutionPolicy::WorkspaceWrite).unwrap_err();
+        let err = execute(&req).unwrap_err();
         assert!(matches!(err, ShellError::InvalidRequest(_)));
     }
 
@@ -307,7 +259,7 @@ mod tests {
     fn echo_round_trip() {
         let cwd = std::env::current_dir().unwrap();
         let req = req(vec!["/bin/sh", "-c", "echo hi"], cwd.as_path());
-        let out = execute(&req, &ExecutionPolicy::WorkspaceWrite).unwrap();
+        let out = execute(&req).unwrap();
         assert_eq!(out.exit_code, 0);
         assert_eq!(out.stdout.trim(), "hi");
         assert!(out.stderr.is_empty());
@@ -328,13 +280,13 @@ mod tests {
             env: HashMap::new(),
             timeout_ms: Some(150),
         };
-        let out = execute(&req, &ExecutionPolicy::WorkspaceWrite).unwrap();
+        let out = execute(&req).unwrap();
         assert!(out.timed_out, "expected timed_out=true");
         assert!(out.duration < Duration::from_secs(2));
     }
 
     #[test]
-    fn env_sanitizer_strips_loader_vars_under_workspace_write() {
+    fn env_sanitizer_strips_loader_vars() {
         let mut env = HashMap::new();
         env.insert("PATH".to_string(), "/usr/bin".to_string());
         env.insert("LD_PRELOAD".to_string(), "evil.so".to_string());
@@ -344,18 +296,10 @@ mod tests {
         );
         env.insert("BASH_FUNC_x".to_string(), "() { :; }".to_string());
 
-        let scrubbed = sanitize_env(&env, &ExecutionPolicy::WorkspaceWrite);
+        let scrubbed = sanitize_env(&env);
         assert!(scrubbed.contains_key("PATH"));
         assert!(!scrubbed.contains_key("LD_PRELOAD"));
         assert!(!scrubbed.contains_key("DYLD_INSERT_LIBRARIES"));
         assert!(!scrubbed.contains_key("BASH_FUNC_x"));
-    }
-
-    #[test]
-    fn env_sanitizer_passes_through_under_danger_full_access() {
-        let mut env = HashMap::new();
-        env.insert("LD_PRELOAD".to_string(), "explicit.so".to_string());
-        let kept = sanitize_env(&env, &ExecutionPolicy::DangerFullAccess);
-        assert_eq!(kept.get("LD_PRELOAD"), Some(&"explicit.so".to_string()));
     }
 }

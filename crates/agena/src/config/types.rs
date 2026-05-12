@@ -4,15 +4,11 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
-use crate::{
-    agent::{AgentBashRule, AgentPermissionConfig},
-    permission::{BashPatternRule, ExecutionMode, PermissionConfigError, PermissionMode},
-    provider::{
-        ConfiguredModelDefinition, OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
-        ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
-        ProviderStreamReplayConfig, ThinkingRequest,
-        auth::{ConfiguredAuthStore, FileAuthStore, KeyringAuthStore},
-    },
+use crate::provider::{
+    ConfiguredModelDefinition, OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
+    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+    ProviderStreamReplayConfig, ThinkingRequest,
+    auth::{ConfiguredAuthStore, FileAuthStore, KeyringAuthStore},
 };
 
 use super::ConfigError;
@@ -61,11 +57,13 @@ pub struct ResolvedConfig {
     pub auth: AuthConfig,
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
+    )]
+    pub permission: crate::agent::PermissionConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<String, AgentConfig>,
-    pub permission: PermissionConfig,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub permission_explicit: bool,
     pub plugins: PluginConfig,
     pub plugin_storage: PluginStorageConfig,
     pub memory: MemoryConfig,
@@ -97,20 +95,6 @@ impl ResolvedConfig {
                 max_tracked_events: self.runtime.stream_replay.max_tracked_events,
             },
         }
-    }
-
-    pub fn legacy_permission_as_agent(&self) -> AgentPermissionConfig {
-        if !self.permission_explicit {
-            return AgentPermissionConfig::default();
-        }
-        self.permission.clone().into_agent_permission()
-    }
-
-    pub fn agent_permission_with_legacy_fallback(
-        &self,
-        permission: &AgentPermissionConfig,
-    ) -> AgentPermissionConfig {
-        self.legacy_permission_as_agent().merged_with(permission)
     }
 
     pub fn auth_store(&self) -> ConfiguredAuthStore {
@@ -307,52 +291,6 @@ pub struct AgentConfig {
     pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PermissionConfig {
-    pub default_read: PermissionMode,
-    pub default_write: PermissionMode,
-    pub default_external_directory: PermissionMode,
-    #[serde(default)]
-    pub execution_mode: ExecutionMode,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bash_rules: Vec<BashRuleConfig>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bash_deny_patterns: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BashRuleConfig {
-    pub pattern: String,
-    pub mode: PermissionMode,
-}
-
-impl BashRuleConfig {
-    pub fn compile(&self) -> Result<BashPatternRule, PermissionConfigError> {
-        BashPatternRule::new(self.pattern.clone(), self.mode)
-    }
-}
-
-impl PermissionConfig {
-    pub fn into_agent_permission(self) -> AgentPermissionConfig {
-        AgentPermissionConfig {
-            default_read: Some(self.default_read),
-            default_write: Some(self.default_write),
-            default_external_directory: Some(self.default_external_directory),
-            execution_mode: Some(self.execution_mode),
-            bash_rules: self
-                .bash_rules
-                .into_iter()
-                .map(|rule| AgentBashRule {
-                    pattern: rule.pattern,
-                    mode: rule.mode,
-                })
-                .collect(),
-            bash_deny_patterns: self.bash_deny_patterns,
-            ..Default::default()
-        }
-    }
 }
 
 pub use agena_plugin_host::PluginsConfig as PluginConfig;

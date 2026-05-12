@@ -33,8 +33,8 @@ pub use crate::host_api::{
 };
 pub use crate::manifest::{
     EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,
-    InputPathSpec, PathKind, PlanModePolicy, PluginEntryDecl, PluginManifest,
-    PluginManifestBuilder, TransportKind,
+    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathKind, PlanModePolicy, PluginEntryDecl,
+    PluginManifest, PluginManifestBuilder, TransportKind,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
 

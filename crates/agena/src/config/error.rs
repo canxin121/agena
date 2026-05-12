@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use crate::{error::AppError, permission::PermissionMode};
+use crate::error::AppError;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -24,8 +24,6 @@ pub enum ConfigError {
     UnsupportedModeEnvironment,
     #[error("invalid override `{0}`")]
     InvalidOverride(String),
-    #[error("invalid permission mode `{0}`")]
-    InvalidPermissionMode(String),
     #[error("invalid numeric value for `{key}`: {value}")]
     InvalidNumber { key: String, value: String },
     #[error("provider `{provider_id}` is missing kind")]
@@ -56,15 +54,6 @@ pub enum ConfigError {
     SerializeJson(#[from] serde_json::Error),
     #[error("failed to encode config as toml: {0}")]
     SerializeToml(#[from] toml::ser::Error),
-}
-
-pub(crate) fn parse_permission_mode(value: &str) -> Result<PermissionMode, ConfigError> {
-    match value.trim() {
-        "allow" => Ok(PermissionMode::Allow),
-        "ask" => Ok(PermissionMode::Ask),
-        "deny" => Ok(PermissionMode::Deny),
-        _ => Err(ConfigError::InvalidPermissionMode(value.to_owned())),
-    }
 }
 
 pub(crate) fn parse_numeric<T>(value: &str, key: &str) -> Result<T, ConfigError>

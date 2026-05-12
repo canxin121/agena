@@ -11,6 +11,35 @@ use super::{
 
 pub type ToolAttachment = AttachmentItem;
 
+/// Filesystem access mode declared by a tool invocation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum FilesystemAccess {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+impl FilesystemAccess {
+    pub const fn includes_read(self) -> bool {
+        matches!(self, Self::Read | Self::ReadWrite)
+    }
+
+    pub const fn includes_write(self) -> bool {
+        matches!(self, Self::Write | Self::ReadWrite)
+    }
+}
+
+/// One path a command may read, write, or both.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct FilesystemEffect {
+    /// File or directory path affected by the command. For shell tools,
+    /// relative paths are resolved from the command working directory.
+    pub path: String,
+    pub access: FilesystemAccess,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct BashToolInput {
     pub command: String,
@@ -20,6 +49,9 @@ pub struct BashToolInput {
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
+    /// Filesystem paths the command may read or write. Pass an empty list only
+    /// when the command has no filesystem effect beyond entering `workdir`.
+    pub filesystem_effects: Vec<FilesystemEffect>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -169,6 +201,9 @@ pub enum MonitorToolInput {
         /// Optional working directory; defaults to workspace root.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workdir: Option<String>,
+        /// Filesystem paths the command may read or write. Relative paths are
+        /// resolved from the monitor working directory.
+        filesystem_effects: Vec<FilesystemEffect>,
         /// Auto-kill after this many ms when not persistent. Default 300000, max 3_600_000.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
@@ -414,6 +449,9 @@ pub struct PowerShellToolInput {
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
+    /// Filesystem paths the command may read or write. Pass an empty list only
+    /// when the command has no filesystem effect beyond entering `workdir`.
+    pub filesystem_effects: Vec<FilesystemEffect>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]

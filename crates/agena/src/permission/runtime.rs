@@ -289,6 +289,12 @@ fn permission_subject(action: &PermissionAction) -> serde_json::Value {
             "workspace_root": workspace_root,
             "target_path": target_path,
         }),
+        PermissionAction::NetworkAccess { target, host, port } => serde_json::json!({
+            "kind": "network_access",
+            "target": target,
+            "host": host,
+            "port": port,
+        }),
     }
 }
 

@@ -26,17 +26,26 @@ pub(crate) fn execute(
             command,
             description,
             workdir,
+            filesystem_effects,
             timeout_ms,
             persistent,
             include_pattern,
             max_buffered_lines,
             capture_stderr,
         } => {
+            if filesystem_effects.is_empty()
+                && let Some(reason) = super::bash::mutating_command_reason(command)
+            {
+                return Err(ToolError::InvalidInput(format!(
+                    "monitor filesystem_effects must declare at least one path because the command appears to modify files: {reason}"
+                )));
+            }
             let cwd = workdir
                 .as_deref()
                 .map(|w| executor.resolve_target_path(w))
                 .unwrap_or_else(|| executor.workspace_root().to_path_buf());
             executor.ensure_read_permission(&cwd)?;
+            executor.ensure_filesystem_effects_permission(filesystem_effects, &cwd)?;
 
             let env = inherited_environment();
             let started = registry

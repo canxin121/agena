@@ -125,18 +125,17 @@ prompt = "You are a planning agent."
 allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
 mode = "all"
 
-[agents.plan.permission]
-default_read = "allow"
-default_write = "deny"
-default_external_directory = "ask"
-execution_mode = "ask"
+[permission.path]
+workspace = { read = "allow", write = "ask" }
+external = { read = "ask", write = "ask" }
 
-# Legacy compatibility only. Prefer `[agents.<name>.permission]` for new configs.
-# [permission]
-# default_read = "allow"
-# default_write = "deny"
-# default_external_directory = "deny"
-# mode = "auto"
+[agents.plan.permission.path]
+workspace = { read = "allow", write = "deny" }
+
+[agents.plan.permission.tools.first_party]
+enter_plan_mode = "allow"
+exit_plan_mode = "allow"
+todo_write = "allow"
 
 [memory.project_instructions]
 enabled = true
@@ -575,90 +574,46 @@ max_bytes = 67108864
 | `ttl_secs` | `u64` | `900` | `> 0` | session cache TTL |
 | `max_bytes` | `usize` | `67108864` | `> 0` | session cache 最大总字节数 |
 
-## 4.6 Legacy `[permission]`
+## 4.6 权限 `[permission]` 与 `[agents.<name>.permission]`
 
-这一节描述的是旧配置的 **shared fallback policy**。新配置应优先使用
-`[agents.<name>.permission]`，把权限和 prompt / model / run defaults 一起绑定到
-具体 agent 上。
-
-- `runtime.default_agent` 会决定新的 root session 默认使用哪个 agent
-- `[agents.<name>]` 可以为单个 agent 配置 prompt / model / permission / run defaults
-- 顶层 `[permission]` 只为旧配置兼容保留；未显式配置时不会注入 agent fallback
-- 如果旧配置显式写了 `[permission]`，agent 自己的 `permission` 配置会覆盖这层 fallback
-
-```toml
-[permission]
-default_read = "allow"
-default_write = "deny"
-default_external_directory = "deny"
-mode = "auto"
-
-[[permission.bash]]
-pattern = "git *"
-mode = "allow"
-
-[[permission.bash_deny]]
-pattern = "rm -rf /*"
-```
-
-### 4.6.1 顶层字段
-
-| 字段 | 类型 | 默认值 | 可选值 | 说明 |
-|---|---|---:|---|---|
-| `default_read` | `string` | `"allow"` | `allow`, `ask`, `deny` | 默认读权限 |
-| `default_write` | `string` | `"deny"` | `allow`, `ask`, `deny` | 默认写权限 |
-| `default_external_directory` | `string` | `"deny"` | `allow`, `ask`, `deny` | 访问 workspace 外目录的默认权限 |
-| `mode` | `string` | `"auto"` | `auto`, `ask` | 敏感一方工具执行模式 |
-
-`mode` 的含义：
-
-- `auto`：
-  - 静态 allow/ask/deny 规则照常生效
-  - 不会自动把敏感工具升级成 ask
-- `ask`：
-  - 在其他规则判断为 `allow` 后
-  - 如果工具是敏感工具（如 `bash` / `apply_patch` / `notebook_edit` / `powershell`）
-  - 会自动升级成 `ask`
-
-### 4.6.2 `[[permission.bash]]`
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `pattern` | `string` | `globset` 风格 glob，匹配 bash 命令字符串 |
-| `mode` | `string` | `allow`, `ask`, `deny` |
-
-规则特点：
-
-- 只对 `bash` first-party tool 生效
-- **首个匹配规则优先**
-- 在 general execution mode 之前生效
-
-### 4.6.3 `[[permission.bash_deny]]`
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `pattern` | `string` | `globset` 风格 glob |
-
-规则特点：
-
-- 只要匹配，**无条件 deny**
-- 优先级高于 `permission.bash`
-
-CLI `-c` 支持的 permission 字段只有：
-
-- `permission.default_read`
-- `permission.default_write`
-- `permission.default_external_directory`
-
-不支持通过 CLI `-c` 直接设置 `permission.mode` / bash rule 列表。
-
-## 4.6.4 Agent-first 推荐方式
-
-更推荐优先写：
+权限分两层：顶层 `[permission]` 是默认 policy，具体 agent 的
+`[agents.<name>.permission]` 是 overlay。agent 默认继承顶层各 section，
+也可以通过 `inherit` 显式关闭继承。
 
 ```toml
 [runtime]
 default_agent = "build"
+
+[permission.path]
+workspace = { read = "allow", write = "ask" }
+external = { read = "ask", write = "deny" }
+
+[permission.path.rules]
+"<cwd>/.env*" = { read = "ask", write = "deny" }
+"<home>/.ssh/**" = { read = "deny", write = "deny" }
+
+[permission.network]
+internet = "ask"
+private = "deny"
+loopback = "deny"
+
+[permission.network.rules]
+"github.com:443" = "allow"
+"*.corp.local:443" = "ask"
+
+[permission.tools.tags]
+read_only = "allow"
+filesystem_read = "allow"
+filesystem_write = "ask"
+network = "ask"
+internet = "ask"
+mutating = "ask"
+task = "ask"
+shell = "ask"
+
+[permission.tools.first_party]
+bash = "ask"
+apply_patch = "ask"
 
 [agents.plan]
 description = "Read-only planning agent"
@@ -666,17 +621,156 @@ prompt = "You are a planning agent."
 allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
 mode = "all"
 
-[agents.plan.permission]
-default_read = "allow"
-default_write = "deny"
-default_external_directory = "ask"
-execution_mode = "ask"
+[agents.plan.permission.inherit]
+path = true
+network = true
+tools = true
+plugin_tools = true
+
+[agents.plan.permission.path]
+workspace = { read = "allow", write = "deny" }
+external = { read = "ask", write = "deny" }
+
+[agents.plan.permission.tools.first_party]
+enter_plan_mode = "allow"
+exit_plan_mode = "allow"
+todo_write = "allow"
+
+[agents.plan.permission.tools.rules.bash]
+"git status*" = "allow"
+"git push *" = "deny"
+"rm -rf *" = "deny"
 ```
 
-也就是：
+### 4.6.1 Path 权限
 
-- 新配置不要再把顶层 `[permission]` 当主要入口
-- 每个 agent 的行为、提示词、工具许可与默认运行参数放进 `[agents.<name>]`
+`path` 统一描述 workspace 内和 workspace 外的读写权限。旧的
+`default_read` / `default_write` / `default_external_directory` /
+`read` / `write` / `external_directory` 已移除。
+
+```toml
+[permission.path]
+workspace = { read = "allow", write = "ask" }
+external = { read = "ask", write = "deny" }
+
+[permission.path.rules]
+"<cwd>/src/**" = { read = "allow", write = "ask" }
+"<cwd>/secrets/**" = { read = "deny", write = "deny" }
+"<tmp>/agena/**" = "read_write"
+```
+
+| 字段 | 类型 | 可选值 | 说明 |
+|---|---|---|---|
+| `workspace` | inline table | `allow`, `ask`, `deny` | workspace 内默认 read/write |
+| `external` | inline table | `allow`, `ask`, `deny` | workspace 外默认 read/write |
+| `rules` | table | `allow`, `ask`, `deny`, `read`, `read_write`, table | 按路径 pattern 覆盖 read/write |
+
+路径 marker：
+
+- `<cwd>` / `<workspace>`：当前 session 的 effective workspace root
+- `<home>`：用户 home
+- `<tmp>`：系统临时目录
+- 无 marker 的相对 pattern 默认按 `<cwd>` 相对路径解释
+
+### 4.6.2 Network 权限
+
+`network` 统一描述出站连接权限。默认分类包括：
+
+- `internet`：公网目标，以及不能静态证明是内网的域名
+- `private`：RFC1918/private IP、link-local、单段主机名、`.local` / `.lan` / `.internal` / `.corp` / `.home.arpa`
+- `loopback`：`localhost` / `*.localhost` / loopback IP
+
+```toml
+[permission.network]
+internet = "ask"
+private = "deny"
+loopback = "deny"
+
+[permission.network.rules]
+"github.com:443" = "allow"
+"*.corp.local:443" = "ask"
+"10.0.0.0/8:*" = "deny"
+"localhost:*" = "deny"
+```
+
+network rule 支持：
+
+- host：`github.com`
+- host + port：`github.com:443`
+- wildcard host：`*.corp.local:443`
+- CIDR：`10.0.0.0/8:*`
+- `*` / `:*` 风格端口通配
+
+插件可以在 manifest 里用 `input_networks` / `network_access` 声明网络目标，也可以通过 `permission_networks` hook 动态返回目标。host 会在工具执行前把这些目标交给 network policy 判断。
+
+### 4.6.3 工具权限
+
+`tools` 描述 tag 默认值、first-party 工具、plugin 工具，以及工具内部规则：
+
+```toml
+[permission.tools.tags]
+read_only = "allow"
+filesystem_read = "allow"
+filesystem_write = "ask"
+network = "ask"
+internet = "ask"
+mutating = "ask"
+task = "ask"
+shell = "ask"
+
+[permission.tools.first_party]
+read = "allow"
+grep = "allow"
+bash = "ask"
+apply_patch = "ask"
+
+[permission.tools.plugin]
+"github.create_issue" = "ask"
+"fs.read_file" = "allow"
+
+[permission.tools.rules.bash]
+"git status*" = "allow"
+"cargo test*" = "ask"
+"git push *" = "deny"
+```
+
+当一个 tool 命中多个 tag 时，默认权限按最保守的结果合并：
+
+```text
+deny > ask > allow
+```
+
+例如一个 tool 同时命中 `read_only = "allow"` 和 `network = "ask"`，最终默认是 `ask`。精确 tool 规则仍然覆盖 tag 默认；bash command rule 仍然可以按命令 pattern 做更细覆盖。
+
+### 4.6.4 Agent 继承
+
+`inherit` 可以是布尔值，也可以按 section 配置：
+
+```toml
+[agents.locked.permission]
+inherit = false
+
+[agents.locked.permission.path]
+workspace = { read = "allow", write = "deny" }
+external = { read = "deny", write = "deny" }
+```
+
+```toml
+[agents.plan.permission.inherit]
+path = true
+network = true
+tools = true
+plugin_tools = true
+```
+
+agent overlay 的 path rules 会追加在顶层 rules 之后，因此最后匹配的规则优先。
+
+### 4.6.5 配置原则
+
+- 顶层 `[permission]` 是新的默认权限 schema，不兼容旧 `[permission] mode = ...`
+- `permission.tools.default` / `read_only_default` / `mutating_default` 已移除，改用 `[permission.tools.tags]`
+- 旧的 `[[permission.bash]]`、`[[permission.bash_deny]]`、`tool_rules`、`bash_rules`、`bash_deny_patterns` 配置入口已移除
+- 每个 agent 的提示词、工具白名单、模型和 permission overlay 仍放在 `[agents.<name>]`
 - 用 `runtime.default_agent` 控制新 root session 的默认 agent
 
 ## 4.7 `[memory.project_instructions]`
@@ -1704,9 +1798,6 @@ export AGENA_PROVIDER__GOOGLE_VERTEX__BASE_URL=https://us-central1-aiplatform.go
 - `tracing.filter=<value>`
 - `tracing.database_level=<value>`
 - `ui.locale=<value>`
-- `permission.default_read=allow|ask|deny`
-- `permission.default_write=allow|ask|deny`
-- `permission.default_external_directory=allow|ask|deny`
 - `runtime.provider_http.timeout_secs=<u64>`
 - `runtime.provider_http.connect_timeout_secs=<u64>`
 - `runtime.request_retry.max_retries=<u32>`
@@ -1785,11 +1876,14 @@ prompt = "You are a planning agent."
 allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
 mode = "all"
 
-[agents.plan.permission]
-default_read = "allow"
-default_write = "deny"
-default_external_directory = "ask"
-execution_mode = "ask"
+[agents.plan.permission.path]
+workspace = { read = "allow", write = "deny" }
+external = { read = "ask", write = "ask" }
+
+[agents.plan.permission.tools.first_party]
+enter_plan_mode = "allow"
+exit_plan_mode = "allow"
+todo_write = "allow"
 ```
 
 ## 13. 推荐阅读顺序

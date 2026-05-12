@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use agena::{
-    agent::{AgentMode, AgentPermissionConfig, AgentRunConfig},
+    agent::{AgentMode, AgentPermissionConfig, AgentRunConfig, PermissionConfig},
     agents::AgentScope,
     message::{
         MessageMetadata, MessagePart, MessageStatus, MessageUsage, PartContent, UserInputReply,
@@ -729,8 +729,8 @@ pub struct SessionExecutionContextResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt_override: Option<String>,
     pub allowed_tools: Vec<String>,
-    #[serde(default, skip_serializing_if = "AgentPermissionConfig::is_empty")]
-    pub agent_permission: AgentPermissionConfig,
+    #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
+    pub agent_permission: PermissionConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -841,6 +841,12 @@ pub struct PermissionRuleResource {
     pub workspace_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_port: Option<u16>,
     pub mode: PermissionMode,
     pub scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -911,6 +917,12 @@ pub struct PermissionRuleWriteRequest {
     pub workspace_root: Option<String>,
     #[serde(default)]
     pub target_path: Option<String>,
+    #[serde(default)]
+    pub network_target: Option<String>,
+    #[serde(default)]
+    pub network_host: Option<String>,
+    #[serde(default)]
+    pub network_port: Option<u16>,
     #[serde(default)]
     pub scope: Option<String>,
     #[serde(default)]

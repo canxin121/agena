@@ -57,6 +57,21 @@ pub struct PluginEntryDecl {
     /// be derived dynamically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_paths: Vec<InputPathSpec>,
+    /// Declarative network-permission specs. The host extracts hosts/URLs from
+    /// the entry input via JSONPath before invocation and audits them as
+    /// outbound connect targets. Use [`Plugin::permission_networks`] for
+    /// targets that can only be derived dynamically.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_networks: Vec<InputNetworkSpec>,
+    /// Static outbound network targets used by this entry regardless of input.
+    /// Typical values are URLs (`https://api.example.com/search`) or
+    /// `host:port` patterns (`api.example.com:443`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network_access: Vec<NetworkAccessSpec>,
+    /// Host-policy tags used to derive the tool default permission when the
+    /// entry does not have an exact tool rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search_terms: Vec<String>,
     #[serde(default)]
@@ -85,8 +100,7 @@ fn default_entry_behavior() -> EntryBehavior {
 #[serde(rename_all = "snake_case")]
 pub enum EntryBehavior {
     ReadOnly,
-    WriteSandboxed,
-    WriteUnsandboxed,
+    Mutating,
     Task,
 }
 
@@ -163,6 +177,23 @@ pub struct InputPathSpec {
     /// If true, missing matches are silently ignored instead of erroring.
     #[serde(default)]
     pub optional: bool,
+}
+
+/// Single declarative network extraction rule. `jsonpath` uses the same subset
+/// as [`InputPathSpec`]. Each match must resolve to a string URL, host, or
+/// host:port target.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InputNetworkSpec {
+    pub jsonpath: String,
+    /// If true, missing matches are silently ignored instead of erroring.
+    #[serde(default)]
+    pub optional: bool,
+}
+
+/// One static outbound network target used by a plugin entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkAccessSpec {
+    pub target: String,
 }
 
 bitflags::bitflags! {
@@ -379,6 +410,9 @@ impl PluginEntryDecl {
             input_schema: schema,
             expose_as: None,
             input_paths: Vec::new(),
+            input_networks: Vec::new(),
+            network_access: Vec::new(),
+            tags: Vec::new(),
             search_terms: Vec::new(),
             load_priority: EntryLoadPriority::Standard,
             concurrency_safe: None,
@@ -407,6 +441,37 @@ impl PluginEntryDecl {
 
     pub fn input_path(mut self, spec: InputPathSpec) -> Self {
         self.input_paths.push(spec);
+        self
+    }
+
+    pub fn input_network(mut self, spec: InputNetworkSpec) -> Self {
+        self.input_networks.push(spec);
+        self
+    }
+
+    pub fn network_access(mut self, spec: NetworkAccessSpec) -> Self {
+        self.network_access.push(spec);
+        self
+    }
+
+    pub fn tag(mut self, tag: impl Into<String>) -> Self {
+        let tag = tag.into();
+        if !tag.trim().is_empty() {
+            self.tags.push(tag);
+        }
+        self
+    }
+
+    pub fn tags<I, S>(mut self, tags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.tags = tags
+            .into_iter()
+            .map(Into::into)
+            .filter(|tag| !tag.trim().is_empty())
+            .collect();
         self
     }
 

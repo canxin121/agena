@@ -92,8 +92,8 @@ Defined in `crates/agena/src/plugins/bundled/fs.rs`.
 | `view_file` | Read-only | Attach a local file back into the conversation as multimodal input |
 | `glob` | Read-only | Search files by glob pattern |
 | `grep` | Read-only | Search file contents by regex |
-| `apply_patch` | Write-sandboxed | Apply structured file patches |
-| `notebook_edit` | Write-sandboxed | Edit a Jupyter notebook cell |
+| `apply_patch` | Mutating | Apply structured file patches |
+| `notebook_edit` | Mutating | Edit a Jupyter notebook cell |
 
 ### 2.2 Shell entries (`agena.shell`)
 
@@ -101,9 +101,9 @@ Defined in `crates/agena/src/plugins/bundled/shell.rs`.
 
 | Entry | Behavior | Purpose |
 |---|---|---|
-| `bash` | Write-sandboxed | Run a shell command in the workspace |
-| `powershell` | Write-sandboxed | Run a PowerShell command |
-| `monitor` | Write-sandboxed | Start, list, read, and stop long-running monitored processes |
+| `bash` | Mutating | Run a shell command in the workspace |
+| `powershell` | Mutating | Run a PowerShell command |
+| `monitor` | Mutating | Start, list, read, and stop long-running monitored processes |
 
 ### 2.3 Web entries (`agena.web`)
 
@@ -129,8 +129,8 @@ Defined in `crates/agena/src/plugins/bundled/workflow.rs`.
 | `ask_user` | Read-only | Ask short questions and wait for answers |
 | `enter_plan_mode` | Read-only | Enter plan mode |
 | `exit_plan_mode` | Read-only | Exit plan mode |
-| `enter_worktree` | Write-sandboxed | Create or attach to a worktree |
-| `exit_worktree` | Write-sandboxed | Leave the current worktree |
+| `enter_worktree` | Mutating | Create or attach to a worktree |
+| `exit_worktree` | Mutating | Leave the current worktree |
 
 ### 2.5 LSP entries (`agena.lsp`)
 

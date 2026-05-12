@@ -277,7 +277,6 @@ impl RuntimeSnapshot {
             crate::agents::default_user_agents_dir().as_deref(),
         );
         register_config_agents(&agents, &resolution, &resolution.config.agents);
-        apply_legacy_permission_fallback(&agents, &resolution.config);
         let reusing_session_manager = existing_session_manager.is_some();
         let lsp_registry = if resolution.config.lsp.servers.is_empty() {
             None
@@ -530,7 +529,7 @@ fn build_tool_executor(
 ) -> ToolExecutor {
     let agent = build_profile_agent(
         "build",
-        crate::agent::AgentPermissionConfig::default(),
+        crate::agent::PermissionConfig::default(),
         resolution,
     );
     let worktree_registry = crate::tool::worktree_registry_for_executor();
@@ -724,6 +723,7 @@ fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig
         max_turn_loops: defaults.max_turn_loops,
         doom_loop: defaults.doom_loop,
         default_agent: resolution.config.runtime.default_agent.clone(),
+        permission: resolution.config.permission.clone(),
     }
 }
 
@@ -758,33 +758,11 @@ fn register_config_agents(
     }
 }
 
-fn apply_legacy_permission_fallback(
-    registry: &crate::agents::SubagentRegistry,
-    config: &crate::config::ResolvedConfig,
-) {
-    if !config.permission_explicit {
-        return;
-    }
-
-    for mut profile in registry.list() {
-        profile.frontmatter.permission =
-            config.agent_permission_with_legacy_fallback(&profile.frontmatter.permission);
-        registry.register_runtime(profile);
-    }
-}
-
 fn build_profile_agent(
     name: impl Into<String>,
-    permission: crate::agent::AgentPermissionConfig,
-    resolution: &ConfigResolution,
+    permission: crate::agent::PermissionConfig,
+    _resolution: &ConfigResolution,
 ) -> Agent {
-    let permission = if resolution.config.permission_explicit {
-        resolution
-            .config
-            .agent_permission_with_legacy_fallback(&permission)
-    } else {
-        permission
-    };
     let agent = Agent::new(name, crate::permission::PermissionPolicy::allow_all());
     match agent.try_with_permission_config(&permission) {
         Ok(agent) => agent,
@@ -965,7 +943,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn build_profile_agent_ignores_default_legacy_permission_when_not_explicit() {
+    fn build_profile_agent_uses_only_profile_permission() {
         let config_path = std::env::temp_dir().join(format!(
             "agena-runtime-snapshot-empty-test-{}.toml",
             std::process::id()
@@ -981,7 +959,7 @@ mod tests {
 
         let agent = build_profile_agent(
             "build",
-            crate::agent::AgentPermissionConfig::default(),
+            crate::agent::PermissionConfig::default(),
             &resolution,
         );
 
@@ -993,39 +971,5 @@ mod tests {
             ),
             PermissionDecision::Allow
         );
-    }
-
-    #[test]
-    fn build_profile_agent_applies_explicit_legacy_permission_as_fallback() {
-        let config_path = std::env::temp_dir().join(format!(
-            "agena-runtime-snapshot-test-{}.toml",
-            std::process::id()
-        ));
-        std::fs::write(&config_path, "[permission]\ndefault_write = \"deny\"\n")
-            .expect("test config should be written");
-
-        let resolution = ConfigLoader::<ProcessEnvironment>::new(ProcessEnvironment)
-            .load(&LoadConfigRequest {
-                config_path: Some(config_path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .expect("config should load");
-
-        let agent = build_profile_agent(
-            "build",
-            crate::agent::AgentPermissionConfig::default(),
-            &resolution,
-        );
-
-        match agent.authorize_path_access(
-            AccessKind::Write,
-            Path::new("/workspace"),
-            Path::new("/workspace/file.txt"),
-        ) {
-            PermissionDecision::Deny { .. } => {}
-            other => panic!("expected deny from explicit legacy fallback, got {other:?}"),
-        }
-
-        let _ = std::fs::remove_file(config_path);
     }
 }

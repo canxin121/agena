@@ -56,8 +56,9 @@ use crate::sdk::{
     ProviderListInput, ProviderListPatch, SessionCompactedInput, SessionCompactingInput,
     SessionCompactingPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
     ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolPermissionPathsInput, ToolStreamChunk,
-    ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
+    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolPermissionNetworksInput,
+    ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput,
+    UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
@@ -622,6 +623,45 @@ impl PluginHost {
                     ..Default::default()
                 },
                 call_with_timeout(&plugin, method::HOOK_TOOL_PERMISSION_PATHS, params, timeout),
+            )
+            .await
+        });
+        let value = result.map_err(transport_to_plugin_error)?;
+        serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
+    }
+
+    pub fn dispatch_tool_permission_networks(
+        &self,
+        handle: &PluginEntryHandle,
+        input: ToolPermissionNetworksInput,
+    ) -> Result<Vec<crate::sdk::NetworkRequest>, PluginError> {
+        let plugin = self
+            .plugins_by_id
+            .get(&handle.plugin_id)
+            .cloned()
+            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id)))?;
+        let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
+        let mut input = input;
+        input.tool_name = handle.original_name.clone();
+        let params =
+            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+        let plugin_id = handle.plugin_id.clone();
+        let entry_name = handle.original_name.clone();
+        let workspace_root = input.workspace_root.clone();
+        let result = self.block_on_static(async move {
+            host_api::with_host_callback_context(
+                HostCallbackContext {
+                    plugin_id: Some(plugin_id),
+                    workspace_root: Some(workspace_root),
+                    entry_name: Some(entry_name),
+                    ..Default::default()
+                },
+                call_with_timeout(
+                    &plugin,
+                    method::HOOK_TOOL_PERMISSION_NETWORKS,
+                    params,
+                    timeout,
+                ),
             )
             .await
         });

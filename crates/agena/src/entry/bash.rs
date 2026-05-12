@@ -1,7 +1,7 @@
 use std::cmp::min;
 use std::collections::HashMap;
 
-use super::shell::{ExecutionPolicy, ShellRequest};
+use super::shell::ShellRequest;
 
 use crate::message::{BashToolInput, FirstPartyToolOutput};
 use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
@@ -82,11 +82,11 @@ pub(super) fn execute(
     }
 
     let analysis = analyze_command(input.command.as_str());
-    if matches!(executor.sandbox_policy(), ExecutionPolicy::ReadOnly)
+    if input.filesystem_effects.is_empty()
         && let CommandClassification::Mutating { reason } = &analysis.classification
     {
-        return Err(ToolError::PermissionDenied(format!(
-            "bash command appears to modify files under a read-only sandbox: {reason}"
+        return Err(ToolError::InvalidInput(format!(
+            "bash filesystem_effects must declare at least one path because the command appears to modify files: {reason}"
         )));
     }
 
@@ -96,6 +96,7 @@ pub(super) fn execute(
         .map(|workdir| executor.resolve_target_path(workdir))
         .unwrap_or_else(|| executor.workspace_root().to_path_buf());
     executor.ensure_read_permission(&cwd)?;
+    executor.ensure_filesystem_effects_permission(&input.filesystem_effects, &cwd)?;
 
     let mut env = inherited_environment();
     env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
@@ -249,10 +250,6 @@ pub(super) fn execute(
         view.metadata
             .insert("final_command".to_string(), final_command.clone());
     }
-    view.metadata.insert(
-        "sandbox_mode".to_string(),
-        format!("{:?}", executor.sandbox_policy()),
-    );
     if execution.timed_out {
         view.metadata.insert(
             "timeout_ms".to_string(),
@@ -296,6 +293,13 @@ pub fn is_read_only_command(command: &str) -> bool {
         analyze_command(command).classification,
         CommandClassification::ReadOnly
     )
+}
+
+pub(super) fn mutating_command_reason(command: &str) -> Option<String> {
+    match analyze_command(command).classification {
+        CommandClassification::Mutating { reason } => Some(reason),
+        CommandClassification::ReadOnly | CommandClassification::Unknown => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

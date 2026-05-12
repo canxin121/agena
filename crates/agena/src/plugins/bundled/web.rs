@@ -1,7 +1,10 @@
 //! First-party `agena.web` plugin: web_fetch / web_search.
 
 use crate::message::{WebFetchToolInput, WebSearchToolInput};
-use crate::plugin::sdk::{EntryBehavior as SdkEntryBehavior, PlanModePolicy, PluginEntryDecl};
+use crate::plugin::sdk::{
+    EntryBehavior as SdkEntryBehavior, InputNetworkSpec, NetworkAccessSpec, PlanModePolicy,
+    PluginEntryDecl,
+};
 use crate::plugins::bundled::router::FirstPartyRouterPlugin;
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
@@ -24,6 +27,11 @@ fn entries() -> Vec<PluginEntryDecl> {
             "Fetch a URL and return its content as Markdown. HTTP is upgraded to HTTPS; cached for 15 minutes.",
         )
         .behavior(SdkEntryBehavior::ReadOnly)
+        .tags(["read_only", "network", "internet"])
+        .input_network(InputNetworkSpec {
+            jsonpath: "$.url".to_string(),
+            optional: false,
+        })
         .search_terms(["web", "fetch", "download", "url", "http", "page"])
         .deferred_load()
         .plan_mode_policy(PlanModePolicy::Allowed),
@@ -35,6 +43,10 @@ fn entries() -> Vec<PluginEntryDecl> {
             "Search the web. Backend selectable in config (tavily, exa, brave, or duckduckgo_html as zero-config default).",
         )
         .behavior(SdkEntryBehavior::ReadOnly)
+        .tags(["read_only", "network", "internet"])
+        .network_access(NetworkAccessSpec {
+            target: "https://html.duckduckgo.com/html/".to_string(),
+        })
         .search_terms(["web", "search", "google", "ddg", "find online"])
         .deferred_load()
         .plan_mode_policy(PlanModePolicy::Allowed),

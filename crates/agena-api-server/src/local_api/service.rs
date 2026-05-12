@@ -1427,32 +1427,58 @@ fn permission_rule_resource(
     let action: PermissionAction = serde_json::from_str(row.action_key.as_str())
         .map_err(AppError::from)
         .map_err(api_error_from_app)?;
-    let (subject_kind, tool_name, qualifier, path_access_kind, workspace_root, target_path) =
-        match action {
-            PermissionAction::BuiltinTool {
-                tool_name,
-                qualifier,
-            } => (
-                "builtin_tool".to_string(),
-                Some(tool_name),
-                qualifier,
-                None,
-                None,
-                None,
-            ),
-            PermissionAction::PathAccess {
-                access_kind,
-                workspace_root,
-                target_path,
-            } => (
-                "path_access".to_string(),
-                None,
-                None,
-                Some(access_kind),
-                Some(workspace_root),
-                Some(target_path),
-            ),
-        };
+    let (
+        subject_kind,
+        tool_name,
+        qualifier,
+        path_access_kind,
+        workspace_root,
+        target_path,
+        network_target,
+        network_host,
+        network_port,
+    ) = match action {
+        PermissionAction::BuiltinTool {
+            tool_name,
+            qualifier,
+        } => (
+            "builtin_tool".to_string(),
+            Some(tool_name),
+            qualifier,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        PermissionAction::PathAccess {
+            access_kind,
+            workspace_root,
+            target_path,
+        } => (
+            "path_access".to_string(),
+            None,
+            None,
+            Some(access_kind),
+            Some(workspace_root),
+            Some(target_path),
+            None,
+            None,
+            None,
+        ),
+        PermissionAction::NetworkAccess { target, host, port } => (
+            "network_access".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(target),
+            Some(host),
+            port,
+        ),
+    };
     Ok(PermissionRuleResource {
         id: row.id,
         action_key: row.action_key.clone(),
@@ -1462,6 +1488,9 @@ fn permission_rule_resource(
         path_access_kind,
         workspace_root,
         target_path,
+        network_target,
+        network_host,
+        network_port,
         mode: permission_mode_from_string(row.mode.as_str())?,
         scope: row.scope.clone(),
         session_id: row.session_id,
@@ -1590,6 +1619,32 @@ fn permission_action_from_write_request(
                 access_kind,
                 workspace_root,
                 target_path,
+            })
+        }
+        Some("network_access") => {
+            let target = request
+                .network_target
+                .as_deref()
+                .or(request.network_host.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                        "network_target or network_host is required for network_access rule",
+                    )
+                })?
+                .to_string();
+            let parsed = agena::permission::NetworkTarget::parse(
+                request
+                    .network_port
+                    .map(|port| format!("{target}:{port}"))
+                    .unwrap_or_else(|| target.clone()),
+            )
+            .map_err(|err| ApiError::bad_request(format!("invalid network target: {err}")))?;
+            Ok(PermissionAction::NetworkAccess {
+                target,
+                host: parsed.host().to_string(),
+                port: parsed.port(),
             })
         }
         Some(other) => Err(ApiError::bad_request(format!(

@@ -1,9 +1,9 @@
 use std::{path::PathBuf, str::FromStr};
 
 use super::{
-    AuthStoreBackend, ConfigError, RawAuthConfig, RawConfig, RawPermissionConfig,
-    RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig, RawStreamReplayConfig,
-    RawTracingConfig, RawUiConfig, parse_numeric, parse_permission_mode,
+    AuthStoreBackend, ConfigError, RawAuthConfig, RawConfig, RawProviderHttpConfig,
+    RawRequestRetryConfig, RawRuntimeConfig, RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
+    parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,9 +13,6 @@ pub enum ConfigOverride {
     TracingFilter(String),
     TracingDatabaseLevel(String),
     UiLocale(String),
-    PermissionDefaultRead(crate::permission::PermissionMode),
-    PermissionDefaultWrite(crate::permission::PermissionMode),
-    PermissionDefaultExternalDirectory(crate::permission::PermissionMode),
     ProviderHttpTimeoutSecs(u64),
     ProviderConnectTimeoutSecs(u64),
     RequestRetryMaxRetries(u32),
@@ -49,15 +46,6 @@ impl FromStr for ConfigOverride {
             "tracing.filter" => Ok(Self::TracingFilter(raw_value.to_owned())),
             "tracing.database_level" => Ok(Self::TracingDatabaseLevel(raw_value.to_owned())),
             "ui.locale" => Ok(Self::UiLocale(raw_value.to_owned())),
-            "permission.default_read" => Ok(Self::PermissionDefaultRead(parse_permission_mode(
-                raw_value,
-            )?)),
-            "permission.default_write" => Ok(Self::PermissionDefaultWrite(parse_permission_mode(
-                raw_value,
-            )?)),
-            "permission.default_external_directory" => Ok(
-                Self::PermissionDefaultExternalDirectory(parse_permission_mode(raw_value)?),
-            ),
             "runtime.provider_http.timeout_secs" => Ok(Self::ProviderHttpTimeoutSecs(
                 parse_numeric(raw_value, key)?,
             )),
@@ -113,24 +101,6 @@ impl ConfigOverride {
             }
             Self::UiLocale(locale) => {
                 config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale.clone());
-            }
-            Self::PermissionDefaultRead(mode) => {
-                config
-                    .permission
-                    .get_or_insert_with(RawPermissionConfig::default)
-                    .default_read = Some(*mode);
-            }
-            Self::PermissionDefaultWrite(mode) => {
-                config
-                    .permission
-                    .get_or_insert_with(RawPermissionConfig::default)
-                    .default_write = Some(*mode);
-            }
-            Self::PermissionDefaultExternalDirectory(mode) => {
-                config
-                    .permission
-                    .get_or_insert_with(RawPermissionConfig::default)
-                    .default_external_directory = Some(*mode);
             }
             Self::ProviderHttpTimeoutSecs(value) => {
                 config

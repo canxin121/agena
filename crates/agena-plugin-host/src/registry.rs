@@ -222,8 +222,7 @@ pub fn per_entry_host_capabilities(
 pub fn behavior_label(b: EntryBehavior) -> &'static str {
     match b {
         EntryBehavior::ReadOnly => "read-only",
-        EntryBehavior::WriteSandboxed => "write-sandboxed",
-        EntryBehavior::WriteUnsandboxed => "write-unsandboxed",
+        EntryBehavior::Mutating => "mutating",
         EntryBehavior::Task => "task",
     }
 }

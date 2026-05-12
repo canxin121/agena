@@ -169,13 +169,14 @@ bash / read / glob / grep / view_file / apply_patch / web_fetch / web_search / t
   - 背景：procwarden（landlock+bwrap）在跨发行版 / 容器 / Mac 上几乎不可用，价值不抵成本
   - **第一阶段：删除 procwarden（已完成 ✅）**
     - [x] 删除 `procwarden` crate dep（`crates/agena/Cargo.toml`）
-    - [x] 新增 `crates/agena/src/tool/shell.rs`：`ExecutionPolicy { ReadOnly / WorkspaceWrite / DangerFullAccess }` + `ShellRequest` / `ShellOutput` / `ShellError` + `execute()`，含 watchdog 超时与 loader-env 清洗（`LD_PRELOAD` / `DYLD_*` / `BASH_FUNC_*` 等），6 个单测覆盖
-    - [x] `tool/mod.rs` / `tool/bash.rs`：`SandboxPolicy` → `ExecutionPolicy`、`execute_sandboxed_command` → `execute_shell_command`、`ToolError::Sandbox` → `ToolError::Shell`，删除无状态 `sandbox_manager` 字段
+    - [x] 新增 `crates/agena/src/tool/shell.rs`：`ShellRequest` / `ShellOutput` / `ShellError` + `execute()`，含 watchdog 超时与默认 loader-env 清洗（`LD_PRELOAD` / `DYLD_*` / `BASH_FUNC_*` 等）
+    - [x] `tool/mod.rs` / `tool/bash.rs`：删除 `SandboxPolicy` / `ExecutionPolicy` / `execute_sandboxed_command` / `ToolError::Sandbox` / 无状态 `sandbox_manager`，shell 写入控制改由路径级权限规则承担
     - [x] `agena-plugin-sdk/src/host_api.rs`：删除 `execute_sandboxed_command` 钩子与 `SandboxCommandRequest` / `SandboxCommandResponse` / `SandboxMode` 类型（零外部调用）
-    - [x] `cargo test -p agena --lib -- --test-threads=1` 367/367 通过（含 `bash_first_party_blocks_obvious_write_commands_in_read_only_policy` 关键回归测试）
+    - [x] `cargo test -p agena --lib -- --test-threads=1` 通过（关键回归测试改为路径级 `filesystem_effects` + `PermissionPolicy`）
   - **第二阶段：权限层增强（进行中）** — 参考 opencode `permission.{edit,bash,read,task,...}` + Claude Code `settings.json [permissions]`
-    - [x] **bash 命令模式 allow/ask/deny**：`ToolPermissionPolicy::with_bash_pattern_rule` + `[[permission.bash]]` 配置段（`pattern` + `mode`），首匹配胜出，仅作用于 `FirstPartyToolInput::Bash`，4 个单测 + 1 个端到端 config 测试
-    - [x] **执行模式 `auto` / `ask`** + **bash 全局 deny 列表**：`ExecutionMode { Auto, Ask }` 通过 `[permission] mode = "ask"` 启用，自动把 bash / apply_patch 的 Allow 决策提升为 Ask；`[[permission.bash_deny]] pattern = "rm -rf /*"` 在所有规则之前无条件 Deny；`Plan` 档由现有 plan-mode 路径覆盖（#3）；3 单测 + 1 端到端 config 测试
+    - [x] **bash 命令模式 allow/ask/deny**：`ToolPermissionPolicy::with_bash_pattern_rule` + `[permission.tools.rules.bash]` / `[agents.<name>.permission.tools.rules.bash]` 配置段（pattern -> mode），仅作用于 `FirstPartyToolInput::Bash`
+    - [x] **网络权限规则**：`[permission.network]` 支持 `internet` / `private` / `loopback` 默认和 host/port/wildcard/CIDR rules，web_fetch/web_search 与 plugin network declarations 接入统一审批
+    - [x] **工具 tag 默认权限**：`[permission.tools.tags]` 按 `read_only` / `filesystem_read` / `filesystem_write` / `network` / `mutating` 等 tag 组合 fallback；多 tag 命中按 `deny > ask > allow` 合并
     - [ ] PreToolUse 钩子前置：UI/CLI 弹审批，记忆"始终允许"决策（`PermissionRuntime` 已有 AllowAlways/DenyAlways 持久化路径，待 UI 接入）
     - [ ] 把 `[permissions]` 同步进 `~/.agena/settings.json` 命名空间（目前只有 TOML config）
   - 文档：新 `docs/PERMISSIONS.md` 取代原计划的 `docs/SANDBOX.md`

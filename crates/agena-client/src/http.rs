@@ -403,6 +403,9 @@ impl AgenaClient {
                 path_access_kind,
                 workspace_root,
                 target_path,
+                network_target,
+                network_host,
+                network_port,
                 scope,
                 session_id,
                 mode,
@@ -435,6 +438,18 @@ impl AgenaClient {
                 if let Some(target_path) = target_path {
                     body.insert("target_path".to_string(), serde_json::json!(target_path));
                 }
+                if let Some(network_target) = network_target {
+                    body.insert(
+                        "network_target".to_string(),
+                        serde_json::json!(network_target),
+                    );
+                }
+                if let Some(network_host) = network_host {
+                    body.insert("network_host".to_string(), serde_json::json!(network_host));
+                }
+                if let Some(network_port) = network_port {
+                    body.insert("network_port".to_string(), serde_json::json!(network_port));
+                }
                 if let Some(scope) = scope {
                     body.insert("scope".to_string(), serde_json::json!(scope));
                 }
@@ -456,6 +471,9 @@ impl AgenaClient {
                     path_access_kind,
                     workspace_root,
                     target_path,
+                    network_target,
+                    network_host,
+                    network_port,
                     scope,
                     session_id,
                     mode,
@@ -487,6 +505,18 @@ impl AgenaClient {
                 }
                 if let Some(target_path) = target_path {
                     body.insert("target_path".to_string(), serde_json::json!(target_path));
+                }
+                if let Some(network_target) = network_target {
+                    body.insert(
+                        "network_target".to_string(),
+                        serde_json::json!(network_target),
+                    );
+                }
+                if let Some(network_host) = network_host {
+                    body.insert("network_host".to_string(), serde_json::json!(network_host));
+                }
+                if let Some(network_port) = network_port {
+                    body.insert("network_port".to_string(), serde_json::json!(network_port));
                 }
                 if let Some(scope) = scope {
                     body.insert("scope".to_string(), serde_json::json!(scope));

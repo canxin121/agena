@@ -237,6 +237,12 @@ pub struct UpsertPermissionRuleParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
@@ -279,6 +285,9 @@ mod tests {
                 path_access_kind: None,
                 workspace_root: None,
                 target_path: None,
+                network_target: None,
+                network_host: None,
+                network_port: None,
                 scope: Some("workspace".to_string()),
                 session_id: None,
                 mode: crate::resource::PermissionMode::Allow,

@@ -923,66 +923,134 @@ pub enum AgentPermissionMode {
     Deny,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentExecutionMode {
-    #[default]
-    Auto,
-    Ask,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct AgentPermissionConfig {
+    #[serde(default, skip_serializing_if = "AgentPermissionInheritance::is_empty")]
+    pub inherit: AgentPermissionInheritance,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_read: Option<AgentPermissionMode>,
+    pub path: Option<AgentPathPermissionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_write: Option<AgentPermissionMode>,
+    pub network: Option<AgentNetworkPermissionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_external_directory: Option<AgentPermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_mode: Option<AgentExecutionMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<String, AgentPermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<AgentPermissionRules>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub write: Option<AgentPermissionRules>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_directory: Option<AgentPermissionRules>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tool_rules: BTreeMap<String, AgentPermissionRules>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bash_rules: Vec<AgentBashRule>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bash_deny_patterns: Vec<String>,
+    pub tools: Option<AgentToolPermissionConfig>,
 }
 
 impl AgentPermissionConfig {
     pub fn is_empty(&self) -> bool {
-        self.default_read.is_none()
-            && self.default_write.is_none()
-            && self.default_external_directory.is_none()
-            && self.execution_mode.is_none()
-            && self.tools.is_empty()
-            && self.read.is_none()
-            && self.write.is_none()
-            && self.external_directory.is_none()
-            && self.tool_rules.is_empty()
-            && self.bash_rules.is_empty()
-            && self.bash_deny_patterns.is_empty()
+        self.inherit.is_empty()
+            && self.path.is_none()
+            && self.network.is_none()
+            && self.tools.is_none()
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentBashRule {
-    pub pattern: String,
-    pub mode: AgentPermissionMode,
+#[serde(untagged)]
+pub enum AgentPermissionInheritance {
+    All(bool),
+    Sections(AgentPermissionInheritanceSections),
+}
+
+impl Default for AgentPermissionInheritance {
+    fn default() -> Self {
+        Self::Sections(AgentPermissionInheritanceSections::default())
+    }
+}
+
+impl AgentPermissionInheritance {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::All(_) => false,
+            Self::Sections(sections) => sections.is_empty(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct AgentPermissionInheritanceSections {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_tools: Option<bool>,
+}
+
+impl AgentPermissionInheritanceSections {
+    pub fn is_empty(&self) -> bool {
+        self.path.is_none()
+            && self.network.is_none()
+            && self.tools.is_none()
+            && self.plugin_tools.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct AgentPathPermissionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<AgentPathAccessModes>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<AgentPathAccessModes>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub rules: IndexMap<String, AgentPathAccessRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct AgentPathAccessModes {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write: Option<AgentPermissionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
-pub enum AgentPermissionRules {
+pub enum AgentPathAccessRule {
+    Modes(AgentPathAccessModes),
+    Shorthand(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct AgentNetworkPermissionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internet: Option<AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private: Option<AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loopback: Option<AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub rules: IndexMap<String, AgentPermissionMode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct AgentToolPermissionConfig {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tags: BTreeMap<String, AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub first_party: BTreeMap<String, AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin: BTreeMap<String, AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rules: BTreeMap<String, AgentToolPermissionRules>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AgentToolPermissionRules {
     Mode(AgentPermissionMode),
     Ordered(IndexMap<String, AgentPermissionMode>),
 }

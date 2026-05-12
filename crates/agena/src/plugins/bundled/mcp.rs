@@ -186,7 +186,7 @@ fn tool_entry_decl(server: String, tool: ToolDescriptor) -> PluginEntryDecl {
         .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
     PluginEntryDecl::new(name, schema)
         .description(tool.description.unwrap_or_default())
-        .behavior(SdkEntryBehavior::WriteUnsandboxed)
+        .behavior(SdkEntryBehavior::Mutating)
         .search_terms(["mcp".to_string(), server, "tool".to_string(), tool.name])
 }
 

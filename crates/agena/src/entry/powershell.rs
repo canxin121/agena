@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::message::{FirstPartyToolOutput, PowerShellToolInput};
 
-use super::shell::{ExecutionPolicy, ShellRequest};
+use super::shell::ShellRequest;
 use super::{
     FirstPartyExecution, FirstPartyExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
 };
@@ -26,18 +26,13 @@ pub(super) fn execute(
             "powershell command must not be empty".to_string(),
         ));
     }
-    if matches!(executor.sandbox_policy(), ExecutionPolicy::ReadOnly) {
-        return Err(ToolError::PermissionDenied(
-            "powershell is blocked under a read-only sandbox policy".to_string(),
-        ));
-    }
-
     let cwd = input
         .workdir
         .as_deref()
         .map(|workdir| executor.resolve_target_path(workdir))
         .unwrap_or_else(|| executor.workspace_root().to_path_buf());
     executor.ensure_read_permission(&cwd)?;
+    executor.ensure_filesystem_effects_permission(&input.filesystem_effects, &cwd)?;
 
     let mut env = inherited_environment();
     env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
@@ -172,6 +167,7 @@ mod tests {
                 description: String::new(),
                 timeout_ms: None,
                 workdir: None,
+                filesystem_effects: Vec::new(),
             },
             FirstPartyExecutionContext::default(),
         )

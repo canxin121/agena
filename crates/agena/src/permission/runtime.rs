@@ -9,7 +9,7 @@ use super::request::{
     PendingPermission, PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
 };
 use super::store::{PermissionRuleStore, PermissionStoreError};
-use super::{PermissionDecision, PermissionMode};
+use super::{PermissionDecision, PermissionMode, PermissionRiskLevel};
 use crate::plugin::{
     PermissionAdvice as PluginPermissionAdvice,
     PermissionAskInput as PluginPermissionAskInput,
@@ -235,39 +235,61 @@ fn apply_plugin_advice<S>(
         scope: None,
         operator: None,
     };
-    match advice.decision {
-        PluginPermissionDecision::Allow => PermissionRuntimeDecision::Immediate(PermissionDecision::Allow),
-        PluginPermissionDecision::Deny => PermissionRuntimeDecision::Immediate(PermissionDecision::Deny {
-            reason: if advice.reason.trim().is_empty() {
-                "denied by plugin advice".to_string()
-            } else {
-                advice.reason
-            },
-        }),
-        PluginPermissionDecision::Prompt => PermissionRuntimeDecision::Pending(PendingPermission {
+    match apply_advisory_permission_decision(base, advice.decision, &explanation) {
+        PermissionDecision::Allow => PermissionRuntimeDecision::Immediate(PermissionDecision::Allow),
+        PermissionDecision::Deny { reason } => {
+            PermissionRuntimeDecision::Immediate(PermissionDecision::Deny { reason })
+        }
+        PermissionDecision::Ask { reason } => PermissionRuntimeDecision::Pending(PendingPermission {
             request: PermissionRequest {
                 request_id: Uuid::new_v4().to_string(),
                 session_id,
                 action,
-                reason: match base {
-                    PermissionDecision::Ask { reason } => reason,
-                    PermissionDecision::Deny { reason } => reason,
-                    PermissionDecision::Allow => "permission requires confirmation".to_string(),
-                },
+                reason,
                 explanation,
                 source: Some("plugin_permission_advice".to_string()),
                 scope: None,
                 operator: None,
-                risk: match advice.risk {
-                    crate::plugin::sdk::PermissionRiskLevel::Low => super::PermissionRiskLevel::Low,
-                    crate::plugin::sdk::PermissionRiskLevel::Medium => super::PermissionRiskLevel::Medium,
-                    crate::plugin::sdk::PermissionRiskLevel::High => super::PermissionRiskLevel::High,
-                    crate::plugin::sdk::PermissionRiskLevel::Critical => super::PermissionRiskLevel::Critical,
-                },
+                risk: plugin_risk_to_core(advice.risk),
                 trace: vec![trace_step],
                 created_at: Utc::now(),
             },
         }),
+    }
+}
+
+fn apply_advisory_permission_decision(
+    base: PermissionDecision,
+    advice: PluginPermissionDecision,
+    explanation: &str,
+) -> PermissionDecision {
+    match (base, advice) {
+        (PermissionDecision::Deny { reason }, _) => PermissionDecision::Deny { reason },
+        (_, PluginPermissionDecision::Deny) => PermissionDecision::Deny {
+            reason: if explanation.trim().is_empty() {
+                "denied by plugin advice".to_string()
+            } else {
+                explanation.to_string()
+            },
+        },
+        (PermissionDecision::Ask { reason }, _) => PermissionDecision::Ask { reason },
+        (PermissionDecision::Allow, PluginPermissionDecision::Prompt) => PermissionDecision::Ask {
+            reason: if explanation.trim().is_empty() {
+                "permission requires confirmation".to_string()
+            } else {
+                explanation.to_string()
+            },
+        },
+        (PermissionDecision::Allow, PluginPermissionDecision::Allow) => PermissionDecision::Allow,
+    }
+}
+
+fn plugin_risk_to_core(risk: crate::plugin::sdk::PermissionRiskLevel) -> PermissionRiskLevel {
+    match risk {
+        crate::plugin::sdk::PermissionRiskLevel::Low => PermissionRiskLevel::Low,
+        crate::plugin::sdk::PermissionRiskLevel::Medium => PermissionRiskLevel::Medium,
+        crate::plugin::sdk::PermissionRiskLevel::High => PermissionRiskLevel::High,
+        crate::plugin::sdk::PermissionRiskLevel::Critical => PermissionRiskLevel::Critical,
     }
 }
 

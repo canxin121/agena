@@ -379,6 +379,41 @@ impl SessionManager {
         })
     }
 
+    pub async fn execute_host_invoked_tool(
+        &self,
+        session_id: i64,
+        call_id: i64,
+        invocation: ToolInvocation,
+    ) -> Result<ToolInvocationExecution, AppError> {
+        let session = self.get_session(session_id).await?;
+        let state = self.execution_state();
+        let scoped_executor = state
+            .tool_executor
+            .for_session_context(&session.runtime.execution);
+        let prepared = scoped_executor
+            .prepare_invocation(&invocation, session.id, call_id)
+            .map_err(tool_error_to_app_error)?;
+        let (invocation, prepared_shell_command) = scoped_executor
+            .prepare_bash_invocation(&prepared.invocation, session.id, call_id)
+            .map_err(tool_error_to_app_error)?;
+        scoped_executor
+            .enforce_plan_mode_for(&invocation, session.id)
+            .map_err(tool_error_to_app_error)?;
+        self.require_immediate_tool_permissions(session.id, &scoped_executor, &invocation)
+            .await?;
+        tokio::task::spawn_blocking(move || {
+            scoped_executor.execute_invocation_detailed_with_prepared_shell(
+                &invocation,
+                session_id,
+                call_id,
+                prepared_shell_command,
+            )
+        })
+        .await
+        .map_err(|err| AppError::Internal(format!("host-invoked tool task failed: {err}")))?
+        .map_err(tool_error_to_app_error)
+    }
+
     pub fn with_config(self, config: SessionManagerConfig) -> Self {
         let mut next = (*self.execution.load_full()).clone();
         next.config = config;
@@ -2234,7 +2269,7 @@ impl SessionManager {
             .map_err(tool_error_to_app_error)?
         {
             if !matches!(
-                self.resolve_permission_decision(session.id, &check)
+                self.resolve_permission_decision(Some(session.id), &check)
                     .await?
                     .decision,
                 PermissionDecision::Allow
@@ -2347,7 +2382,9 @@ impl SessionManager {
             .collect_permission_checks_for_invocation(&resolved.invocation)
             .map_err(tool_error_to_app_error)?
         {
-            let resolution = self.resolve_permission_decision(session.id, &check).await?;
+            let resolution = self
+                .resolve_permission_decision(Some(session.id), &check)
+                .await?;
             match resolution.decision {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Ask { reason } => {
@@ -2433,13 +2470,13 @@ impl SessionManager {
 
     async fn resolve_permission_decision(
         &self,
-        session_id: i64,
+        session_id: Option<i64>,
         check: &ToolPermissionCheck,
     ) -> Result<crate::permission::PermissionResolution, AppError> {
         let key = permission_action_key(&check.action)?;
         let persisted_rule = self
             .store
-            .resolve_permission_rule(key.as_str(), Some(session_id))
+            .resolve_permission_rule(key.as_str(), session_id)
             .await?;
         let mut resolution =
             resolve_permission_with_persisted_rule(check.decision.clone(), persisted_rule.as_ref());
@@ -2457,7 +2494,7 @@ impl SessionManager {
                     PermissionDecision::Ask { .. } => crate::plugin::PermissionDecision::Prompt,
                 };
                 let req = crate::plugin::PermissionAskInput {
-                    session_id,
+                    session_id: session_id.unwrap_or(-1),
                     action: format!("{:?}", check.action),
                     subject: permission_subject(&check.action),
                     default_decision,
@@ -2543,39 +2580,16 @@ impl SessionManager {
                             format!("{} (plugin: {plugin_id})", advice.reason)
                         };
                         resolution.explanation = explanation.clone();
-                        resolution.risk = match advice.risk {
-                            crate::plugin::sdk::PermissionRiskLevel::Low => {
-                                PermissionRiskLevel::Low
-                            }
-                            crate::plugin::sdk::PermissionRiskLevel::Medium => {
-                                PermissionRiskLevel::Medium
-                            }
-                            crate::plugin::sdk::PermissionRiskLevel::High => {
-                                PermissionRiskLevel::High
-                            }
-                            crate::plugin::sdk::PermissionRiskLevel::Critical => {
-                                PermissionRiskLevel::Critical
-                            }
-                        };
-                        resolution.decision = match advice.decision {
-                            crate::plugin::PermissionDecision::Allow => PermissionDecision::Allow,
-                            crate::plugin::PermissionDecision::Deny => PermissionDecision::Deny {
-                                reason: if advice.reason.trim().is_empty() {
-                                    "denied by plugin advice".to_string()
-                                } else {
-                                    advice.reason.clone()
-                                },
-                            },
-                            crate::plugin::PermissionDecision::Prompt => PermissionDecision::Ask {
-                                reason: match resolution.decision.clone() {
-                                    PermissionDecision::Ask { reason }
-                                    | PermissionDecision::Deny { reason } => reason,
-                                    PermissionDecision::Allow => {
-                                        "permission requires confirmation".to_string()
-                                    }
-                                },
-                            },
-                        };
+                        let plugin_risk = plugin_risk_to_core(advice.risk);
+                        resolution.decision = apply_advisory_permission_decision(
+                            resolution.decision.clone(),
+                            advice.decision,
+                            &explanation,
+                        );
+                        resolution.risk = max_permission_risk(
+                            max_permission_risk(resolution.risk, plugin_risk),
+                            risk_for_permission_decision(&resolution.decision),
+                        );
                         resolution.trace.push(DecisionTraceStep {
                             source_kind: PolicySourceKind::PluginAdvice,
                             summary: format!(
@@ -2601,6 +2615,35 @@ impl SessionManager {
         }
 
         Ok(resolution)
+    }
+
+    async fn require_immediate_tool_permissions(
+        &self,
+        session_id: i64,
+        executor: &ToolExecutor,
+        invocation: &ToolInvocation,
+    ) -> Result<(), AppError> {
+        for check in executor
+            .collect_permission_checks_for_invocation(invocation)
+            .map_err(tool_error_to_app_error)?
+        {
+            match self
+                .resolve_permission_decision(Some(session_id), &check)
+                .await?
+                .decision
+            {
+                PermissionDecision::Allow => {}
+                PermissionDecision::Ask { reason } => {
+                    return Err(AppError::Internal(format!(
+                        "permission confirmation required: {reason}"
+                    )));
+                }
+                PermissionDecision::Deny { reason } => {
+                    return Err(AppError::Internal(format!("permission denied: {reason}")));
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn apply_permission_request(
@@ -3908,6 +3951,73 @@ fn tool_error_to_app_error(err: ToolError) -> AppError {
     }
 }
 
+fn apply_advisory_permission_decision(
+    base: PermissionDecision,
+    advice: crate::plugin::PermissionDecision,
+    explanation: &str,
+) -> PermissionDecision {
+    match (base, advice) {
+        (PermissionDecision::Deny { reason }, _) => PermissionDecision::Deny { reason },
+        (_, crate::plugin::PermissionDecision::Deny) => PermissionDecision::Deny {
+            reason: if explanation.trim().is_empty() {
+                "denied by plugin advice".to_string()
+            } else {
+                explanation.to_string()
+            },
+        },
+        (PermissionDecision::Ask { reason }, _) => PermissionDecision::Ask { reason },
+        (PermissionDecision::Allow, crate::plugin::PermissionDecision::Prompt) => {
+            PermissionDecision::Ask {
+                reason: if explanation.trim().is_empty() {
+                    "permission requires confirmation".to_string()
+                } else {
+                    explanation.to_string()
+                },
+            }
+        }
+        (PermissionDecision::Allow, crate::plugin::PermissionDecision::Allow) => {
+            PermissionDecision::Allow
+        }
+    }
+}
+
+fn risk_for_permission_decision(decision: &PermissionDecision) -> PermissionRiskLevel {
+    match decision {
+        PermissionDecision::Allow => PermissionRiskLevel::Low,
+        PermissionDecision::Ask { .. } => PermissionRiskLevel::Medium,
+        PermissionDecision::Deny { .. } => PermissionRiskLevel::High,
+    }
+}
+
+fn plugin_risk_to_core(risk: crate::plugin::sdk::PermissionRiskLevel) -> PermissionRiskLevel {
+    match risk {
+        crate::plugin::sdk::PermissionRiskLevel::Low => PermissionRiskLevel::Low,
+        crate::plugin::sdk::PermissionRiskLevel::Medium => PermissionRiskLevel::Medium,
+        crate::plugin::sdk::PermissionRiskLevel::High => PermissionRiskLevel::High,
+        crate::plugin::sdk::PermissionRiskLevel::Critical => PermissionRiskLevel::Critical,
+    }
+}
+
+fn max_permission_risk(
+    left: PermissionRiskLevel,
+    right: PermissionRiskLevel,
+) -> PermissionRiskLevel {
+    if permission_risk_rank(left) >= permission_risk_rank(right) {
+        left
+    } else {
+        right
+    }
+}
+
+fn permission_risk_rank(risk: PermissionRiskLevel) -> u8 {
+    match risk {
+        PermissionRiskLevel::Low => 0,
+        PermissionRiskLevel::Medium => 1,
+        PermissionRiskLevel::High => 2,
+        PermissionRiskLevel::Critical => 3,
+    }
+}
+
 fn ask_user_title(request: &UserInputRequest) -> String {
     match request.questions.len() {
         0 => "Ask user".to_string(),
@@ -4163,6 +4273,95 @@ mod tests {
         ) -> crate::plugin::sdk::Result<()> {
             let _ = self.tx.send(input);
             Ok(())
+        }
+    }
+
+    struct HostInvokeSourceFixturePlugin {
+        host: tokio::sync::RwLock<Option<Arc<dyn crate::plugin::sdk::host_api::HostClient>>>,
+    }
+
+    impl HostInvokeSourceFixturePlugin {
+        fn new() -> Self {
+            Self {
+                host: tokio::sync::RwLock::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl crate::plugin::sdk::Plugin for HostInvokeSourceFixturePlugin {
+        fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
+            crate::plugin::sdk::PluginManifest::builder("host-invoke-source-fixture", "0.1.0")
+                .entry(
+                    crate::plugin::sdk::PluginEntryDecl::new(
+                        "host_invoke_source",
+                        serde_json::json!({"type": "object"}),
+                    )
+                    .description("Call another tool through host/tool.invoke.")
+                    .host_capability(crate::plugin::sdk::HostCapability::InvokeTool),
+                )
+                .build()
+        }
+
+        async fn init(
+            &self,
+            _ctx: crate::plugin::sdk::InitContext,
+            host: Arc<dyn crate::plugin::sdk::host_api::HostClient>,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::InitOutcome> {
+            *self.host.write().await = Some(host);
+            Ok(crate::plugin::sdk::InitOutcome::ack(self.manifest()))
+        }
+
+        async fn tool_invoke(
+            &self,
+            input: crate::plugin::sdk::ToolInvokeInput,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
+            match input.tool_name.as_str() {
+                "host_invoke_source" => {
+                    let host = self
+                        .host
+                        .read()
+                        .await
+                        .clone()
+                        .expect("host client should be installed");
+                    host.invoke_tool("host_invoke_target".to_string(), serde_json::json!({}))
+                        .await
+                }
+                other => Err(crate::plugin::PluginError::new(format!(
+                    "unexpected tool {other}"
+                ))),
+            }
+        }
+    }
+
+    struct HostInvokeTargetFixturePlugin;
+
+    #[async_trait]
+    impl crate::plugin::sdk::Plugin for HostInvokeTargetFixturePlugin {
+        fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
+            crate::plugin::sdk::PluginManifest::builder("host-invoke-target-fixture", "0.1.0")
+                .entry(
+                    crate::plugin::sdk::PluginEntryDecl::new(
+                        "host_invoke_target",
+                        serde_json::json!({"type": "object"}),
+                    )
+                    .description("Target tool for host/tool.invoke."),
+                )
+                .build()
+        }
+
+        async fn tool_invoke(
+            &self,
+            input: crate::plugin::sdk::ToolInvokeInput,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
+            match input.tool_name.as_str() {
+                "host_invoke_target" => Ok(
+                    crate::plugin::sdk::ToolInvokeOutput::text("target ok").with_title("Target")
+                ),
+                other => Err(crate::plugin::PluginError::new(format!(
+                    "unexpected tool {other}"
+                ))),
+            }
         }
     }
 
@@ -4789,6 +4988,41 @@ mod tests {
         (host, rx)
     }
 
+    async fn build_host_invoke_plugin_host(
+        workspace_root: &std::path::Path,
+    ) -> Arc<crate::plugin::PluginHost> {
+        let mut list = BTreeMap::new();
+        list.insert(
+            "source".to_string(),
+            crate::plugin::PluginEntry::Static {
+                options: serde_json::Value::Null,
+                timeouts: Default::default(),
+            },
+        );
+        list.insert(
+            "target".to_string(),
+            crate::plugin::PluginEntry::Static {
+                options: serde_json::Value::Null,
+                timeouts: Default::default(),
+            },
+        );
+        let config = crate::plugin::PluginsConfig {
+            enabled: true,
+            timeouts: Default::default(),
+            list,
+            trusted_keys: Default::default(),
+            default_quota: Default::default(),
+            quotas: Default::default(),
+        };
+        crate::plugin::PluginHostBuilder::new(workspace_root, "test")
+            .with_config(config)
+            .register_static("source", HostInvokeSourceFixturePlugin::new())
+            .register_static("target", HostInvokeTargetFixturePlugin)
+            .build()
+            .await
+            .expect("plugin host should build")
+    }
+
     async fn build_streaming_plugin_host(
         workspace_root: &std::path::Path,
     ) -> (
@@ -4827,6 +5061,104 @@ mod tests {
             .await
             .expect("plugin host should build");
         (host, chunk_sent, finish)
+    }
+
+    #[derive(Clone)]
+    struct HostInvokeRuntimeTestHostClient {
+        manager: Arc<tokio::sync::RwLock<Option<Arc<SessionManager>>>>,
+    }
+
+    impl HostInvokeRuntimeTestHostClient {
+        fn new() -> Self {
+            Self {
+                manager: Arc::new(tokio::sync::RwLock::new(None)),
+            }
+        }
+
+        async fn install_manager(&self, manager: Arc<SessionManager>) {
+            *self.manager.write().await = Some(manager);
+        }
+    }
+
+    fn host_invoke_execution_output(
+        execution: ToolInvocationExecution,
+    ) -> crate::plugin::sdk::ToolInvokeOutput {
+        let payload = match execution.output {
+            ToolOutput::Custom { output } => Some(serde_json::Value::from(output.payload)),
+            ToolOutput::Mcp { output } => serde_json::to_value(output).ok(),
+            ToolOutput::None => None,
+        };
+        crate::plugin::sdk::ToolInvokeOutput {
+            title: execution.view.title,
+            output_text: execution.view.output_text,
+            payload,
+            metadata: execution.view.metadata.into_iter().collect(),
+            attachments: execution.view.attachments,
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::plugin::sdk::host_api::HostClient for HostInvokeRuntimeTestHostClient {
+        async fn log(
+            &self,
+            _level: crate::plugin::sdk::host_api::LogLevel,
+            _message: String,
+            _fields: serde_json::Value,
+        ) {
+        }
+
+        async fn publish_event(
+            &self,
+            _env: crate::plugin::sdk::EventEnvelope,
+        ) -> crate::plugin::sdk::Result<()> {
+            Ok(())
+        }
+
+        async fn subscribe_events(
+            &self,
+            _filter: crate::plugin::sdk::EventFilter,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::host_api::EventSubscription> {
+            Ok(crate::plugin::sdk::host_api::EventSubscription { id: "sub".into() })
+        }
+
+        async fn ask_permission(
+            &self,
+            _req: crate::plugin::sdk::PermissionAskInput,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::PermissionDecision> {
+            Ok(crate::plugin::sdk::PermissionDecision::Prompt)
+        }
+
+        async fn read_config(
+            &self,
+            _path: Option<String>,
+        ) -> crate::plugin::sdk::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+
+        async fn invoke_tool(
+            &self,
+            tool: String,
+            input: serde_json::Value,
+        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
+            let manager =
+                self.manager.read().await.clone().ok_or_else(|| {
+                    crate::plugin::PluginError::new("session manager not installed")
+                })?;
+            let context = crate::plugin::sdk::host_api::current_host_callback_context()
+                .ok_or_else(|| crate::plugin::PluginError::new("missing host callback context"))?;
+            let session_id = context
+                .session_id
+                .ok_or_else(|| crate::plugin::PluginError::new("missing session_id"))?;
+            let call_id = context.call_id.unwrap_or(-1);
+            let structured = crate::message::StructuredObject::try_from(input)
+                .map_err(|err| crate::plugin::PluginError::invalid_params(err.to_string()))?;
+            let invocation = ToolInvocation::new(tool, structured);
+            let execution = manager
+                .execute_host_invoked_tool(session_id, call_id, invocation)
+                .await
+                .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?;
+            Ok(host_invoke_execution_output(execution))
+        }
     }
 
     #[derive(Clone)]
@@ -5017,6 +5349,178 @@ mod tests {
                 _ => None,
             })
             .expect("session should contain a pending permission request")
+    }
+
+    #[tokio::test]
+    async fn host_invoked_tool_obeys_target_tool_permission_policy() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "host_invoke_permission.db").await;
+        let plugins = build_host_invoke_plugin_host(&workspace.root).await;
+        let manager = build_manager_with_provider_and_plugins_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all().with_tool_mode(
+                "host_invoke_target",
+                crate::permission::PermissionMode::Deny,
+            ),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+            plugins,
+        )
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "host invoke permission".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+        let invocation = crate::message::ToolInvocation::new(
+            "host_invoke_target",
+            crate::message::StructuredObject::default(),
+        );
+
+        let err = manager
+            .execute_host_invoked_tool(session.id, 42, invocation)
+            .await
+            .expect_err("host-invoked target should be denied");
+
+        assert!(
+            err.to_string().contains("permission denied"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_invoked_tool_executes_when_permissions_allow() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "host_invoke_allow.db").await;
+        let plugins = build_host_invoke_plugin_host(&workspace.root).await;
+        let manager = build_manager_with_provider_and_plugins_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+            plugins,
+        )
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "host invoke allow".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+        let invocation = crate::message::ToolInvocation::new(
+            "host_invoke_target",
+            crate::message::StructuredObject::default(),
+        );
+
+        let execution = manager
+            .execute_host_invoked_tool(session.id, 42, invocation)
+            .await
+            .expect("host-invoked target should execute");
+
+        assert_eq!(execution.view.output_text, "target ok");
+    }
+
+    #[tokio::test]
+    async fn host_tool_invoke_callback_obeys_target_tool_permission_policy() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "host_invoke_callback_permission.db").await;
+        let plugins = build_host_invoke_plugin_host(&workspace.root).await;
+        let host_client = HostInvokeRuntimeTestHostClient::new();
+        plugins
+            .host_handle()
+            .install_client(Arc::new(host_client.clone()))
+            .await;
+        let manager = Arc::new(
+            build_manager_with_provider_and_plugins_on_db(
+                &workspace.root,
+                db,
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all().with_tool_mode(
+                    "host_invoke_target",
+                    crate::permission::PermissionMode::Deny,
+                ),
+                SessionManagerConfig::default(),
+                ContextPolicy::default(),
+                ScriptedProvider,
+                plugins,
+            )
+            .await,
+        );
+        host_client.install_manager(Arc::clone(&manager)).await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "host invoke callback permission".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+        let invocation = crate::message::ToolInvocation::new(
+            "host_invoke_source",
+            crate::message::StructuredObject::default(),
+        );
+
+        let err = manager
+            .execute_host_invoked_tool(session.id, 42, invocation)
+            .await
+            .expect_err("host/tool.invoke target should be denied");
+
+        assert!(
+            err.to_string().contains("permission denied"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_tool_invoke_callback_executes_when_permissions_allow() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "host_invoke_callback_allow.db").await;
+        let plugins = build_host_invoke_plugin_host(&workspace.root).await;
+        let host_client = HostInvokeRuntimeTestHostClient::new();
+        plugins
+            .host_handle()
+            .install_client(Arc::new(host_client.clone()))
+            .await;
+        let manager = Arc::new(
+            build_manager_with_provider_and_plugins_on_db(
+                &workspace.root,
+                db,
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+                SessionManagerConfig::default(),
+                ContextPolicy::default(),
+                ScriptedProvider,
+                plugins,
+            )
+            .await,
+        );
+        host_client.install_manager(Arc::clone(&manager)).await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "host invoke callback allow".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+        let invocation = crate::message::ToolInvocation::new(
+            "host_invoke_source",
+            crate::message::StructuredObject::default(),
+        );
+
+        let execution = manager
+            .execute_host_invoked_tool(session.id, 42, invocation)
+            .await
+            .expect("host/tool.invoke target should execute");
+
+        assert_eq!(execution.view.output_text, "target ok");
     }
 
     fn run_options() -> SessionRunOptions {

@@ -841,6 +841,29 @@ mutating_default = "ask"
 }
 
 #[test]
+fn loader_rejects_removed_plugin_wasm_sandbox_field() {
+    let path = write_temp_config(
+        r#"
+[plugins.list.tool]
+kind = "wasm"
+path = "./tool.wasm"
+
+[plugins.list.tool.sandbox]
+allow_fs_read = ["/repo"]
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("removed wasm sandbox config should fail");
+    assert!(matches!(err, ConfigError::ParseFile { .. }));
+}
+
+#[test]
 fn cli_override_parser_rejects_removed_permission_overrides() {
     let err = "permission.default_write=ask"
         .parse::<ConfigOverride>()

@@ -202,18 +202,12 @@ auth = { kind = "bearer", token_env = "PLUGIN_TOKEN" }
 options = { org = "acme" }
 timeouts = { chat = "5s" }
 
-[plugins.list.sandboxed_wasm]
+[plugins.list.tool_wasm]
 kind = "wasm"
 path = "./plugins/tool.wasm"
 options = { mode = "safe" }
 timeouts = { tool_invoke = "20s" }
 sha256 = "..."
-
-[plugins.list.sandboxed_wasm.sandbox]
-allow_fs_read = ["/repo"]
-allow_fs_write = ["/tmp"]
-allow_net = false
-allow_env = ["HOME"]
 
 [providers.openai]
 kind = "openai"
@@ -1077,12 +1071,6 @@ path = "./plugins/tool.wasm"
 options = { mode = "safe" }
 timeouts = { tool_invoke = "20s" }
 sha256 = "..."
-
-[plugins.list.tool.sandbox]
-allow_fs_read = ["/repo"]
-allow_fs_write = ["/tmp"]
-allow_net = false
-allow_env = ["HOME"]
 ```
 
 字段：
@@ -1094,15 +1082,11 @@ allow_env = ["HOME"]
 | `options` | `json-like` | 否 | 自定义配置 |
 | `timeouts` | `object` | 否 | timeout 覆盖 |
 | `sha256` | `string \| null` | 否 | wasm 字节 sha256 |
-| `sandbox.allow_fs_read` | `string[]` | 否 | 只读预打开路径 |
-| `sandbox.allow_fs_write` | `string[]` | 否 | 读写预打开路径 |
-| `sandbox.allow_net` | `bool` | 否 | 是否允许网络 |
-| `sandbox.allow_env` | `string[]` | 否 | 允许透传的环境变量名 |
 
 说明：
 
 - 相对 `path` 会相对配置文件所在目录解释
-- 默认 sandbox 是全拒绝
+- Agena 不提供插件硬隔离配置；插件通过 host API 调用工具、路径、网络等能力时，统一走权限系统
 - 需要 host 编译时启用 `wasm` feature
 
 ### 4.9.11 关于 plugin storage

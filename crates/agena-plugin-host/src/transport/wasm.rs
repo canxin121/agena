@@ -10,11 +10,10 @@
 //! indicates an empty / `null` value. Use the high bit of the length to
 //! signal an error (length |= 0x8000_0000).
 //!
-//! WASI preview1 imports are wired only when the operator opts in via
-//! `[plugins.list.<id>.sandbox]`. Default policy is "no host imports": the
-//! linker still adds preview1 stubs but the WasiCtx has no preopens, no
-//! env, no network. Pluggable preopen / env / net align with
-//! [`crate::config::WasmSandboxConfig`].
+//! WASI preview1 imports are present for ABI compatibility, but agena does
+//! not expose per-plugin hard sandbox configuration. The host policy layer
+//! applies to plugin host API calls; direct WASI filesystem, environment, and
+//! network access is not configured by agena.
 
 #![cfg(feature = "wasm")]
 
@@ -23,10 +22,9 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use wasmtime::{Engine, Instance, Linker, Module, Store, TypedFunc};
+use wasmtime_wasi::WasiCtxBuilder;
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
-use crate::config::WasmSandboxConfig;
 use crate::error::TransportError;
 use crate::sdk::PluginError;
 use crate::transport::PluginTransport;
@@ -46,30 +44,16 @@ struct WasmInner {
 
 impl WasmTransport {
     pub fn load(path: &Path) -> Result<Self, TransportError> {
-        Self::load_with_sandbox(path, &WasmSandboxConfig::default())
-    }
-
-    pub fn load_with_sandbox(
-        path: &Path,
-        sandbox: &WasmSandboxConfig,
-    ) -> Result<Self, TransportError> {
         let bytes = std::fs::read(path)
             .map_err(|e| TransportError::Io(format!("read wasm `{}`: {e}", path.display())))?;
-        Self::from_bytes_with_sandbox(&bytes, sandbox)
+        Self::from_bytes(&bytes)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, TransportError> {
-        Self::from_bytes_with_sandbox(bytes, &WasmSandboxConfig::default())
-    }
-
-    pub fn from_bytes_with_sandbox(
-        bytes: &[u8],
-        sandbox: &WasmSandboxConfig,
-    ) -> Result<Self, TransportError> {
         let engine = Engine::default();
         let module = Module::new(&engine, bytes)
             .map_err(|e| TransportError::Io(format!("compile wasm: {e}")))?;
-        let wasi = build_wasi_ctx(sandbox)?;
+        let wasi = build_wasi_ctx();
         let mut store = Store::new(&engine, wasi);
         let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
         p1::add_to_linker_sync(&mut linker, |state: &mut WasiP1Ctx| state)
@@ -100,39 +84,8 @@ impl WasmTransport {
     }
 }
 
-fn build_wasi_ctx(sandbox: &WasmSandboxConfig) -> Result<WasiP1Ctx, TransportError> {
-    let mut builder = WasiCtxBuilder::new();
-    for path in &sandbox.allow_fs_read {
-        let display = path.display().to_string();
-        builder
-            .preopened_dir(path, &display, DirPerms::READ, FilePerms::READ)
-            .map_err(|e| {
-                TransportError::Io(format!(
-                    "wasm sandbox: cannot preopen read path `{display}`: {e}"
-                ))
-            })?;
-    }
-    for path in &sandbox.allow_fs_write {
-        let display = path.display().to_string();
-        builder
-            .preopened_dir(path, &display, DirPerms::all(), FilePerms::all())
-            .map_err(|e| {
-                TransportError::Io(format!(
-                    "wasm sandbox: cannot preopen write path `{display}`: {e}"
-                ))
-            })?;
-    }
-    for name in &sandbox.allow_env {
-        if let Ok(value) = std::env::var(name) {
-            builder.env(name, value);
-        }
-    }
-    if sandbox.allow_net {
-        builder.allow_tcp(true);
-        builder.allow_udp(true);
-        builder.allow_ip_name_lookup(true);
-    }
-    Ok(builder.build_p1())
+fn build_wasi_ctx() -> WasiP1Ctx {
+    WasiCtxBuilder::new().build_p1()
 }
 
 #[async_trait]

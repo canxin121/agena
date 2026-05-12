@@ -149,12 +149,7 @@ pub async fn load_entry(
             Arc::new(t)
         }
         #[cfg(feature = "wasm")]
-        PluginEntry::Wasm {
-            path,
-            sha256,
-            sandbox,
-            ..
-        } => {
+        PluginEntry::Wasm { path, sha256, .. } => {
             let resolved = if path.is_absolute() {
                 path.clone()
             } else {
@@ -167,11 +162,12 @@ pub async fn load_entry(
                     message: e,
                 })?;
             }
-            let t = crate::transport::wasm::WasmTransport::load_with_sandbox(&resolved, sandbox)
-                .map_err(|e| HostError::Load {
+            let t = crate::transport::wasm::WasmTransport::load(&resolved).map_err(|e| {
+                HostError::Load {
                     plugin: plugin_id.to_string(),
                     message: e.to_string(),
-                })?;
+                }
+            })?;
             Arc::new(t)
         }
         #[cfg(not(feature = "wasm"))]
@@ -291,13 +287,9 @@ fn plugin_trust_level(
             }
         }
         PluginEntry::Http { .. } => "remote".to_string(),
-        PluginEntry::Wasm {
-            sha256, sandbox, ..
-        } => {
+        PluginEntry::Wasm { sha256, .. } => {
             if sha256.is_some() {
-                "sandboxed".to_string()
-            } else if !sandbox.is_default() {
-                "sandboxed".to_string()
+                "checksummed".to_string()
             } else {
                 "unverified".to_string()
             }
@@ -346,18 +338,10 @@ fn plugin_provenance(
         PluginEntry::Http { url, .. } => {
             provenance.push(format!("url:{}", url));
         }
-        PluginEntry::Wasm {
-            path,
-            sha256,
-            sandbox,
-            ..
-        } => {
+        PluginEntry::Wasm { path, sha256, .. } => {
             provenance.push(format!("path:{}", path.display()));
             if sha256.is_some() {
                 provenance.push("sha256 configured".to_string());
-            }
-            if !sandbox.is_default() {
-                provenance.push("sandbox policy configured".to_string());
             }
         }
     }

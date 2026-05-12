@@ -255,6 +255,10 @@ enum AppMessage {
         session_id: i64,
         result: UiResult<SessionExecutionResource>,
     },
+    SessionCompacted {
+        session_id: i64,
+        result: UiResult<SessionExecutionResource>,
+    },
     SessionRenamed {
         session_id: i64,
         result: UiResult<SessionResource>,
@@ -1985,6 +1989,9 @@ impl App {
             AppMessage::SessionContinued { session_id, result } => {
                 self.handle_session_continued(session_id, result)
             }
+            AppMessage::SessionCompacted { session_id, result } => {
+                self.handle_session_compacted(session_id, result)
+            }
             AppMessage::SessionRenamed { session_id, result } => {
                 self.handle_session_renamed(session_id, result)
             }
@@ -2323,12 +2330,13 @@ impl App {
         execution: SessionExecutionResource,
         refresh: bool,
     ) {
-        self.transcript.submitting = false;
-        self.submitting_session_ids.remove(&session_id);
-        if self.transcript.session_id == Some(session_id) {
+        let transcript_is_target = self.transcript.session_id == Some(session_id);
+        if transcript_is_target {
+            self.transcript.submitting = false;
             self.transcript.apply_execution(execution);
         }
-        if refresh {
+        self.submitting_session_ids.remove(&session_id);
+        if refresh && transcript_is_target {
             self.request_refresh(session_id, true);
         }
         self.request_sessions(false);
@@ -2343,6 +2351,26 @@ impl App {
             Ok(execution) => self.handle_session_execution_updated(session_id, execution, true),
             Err(error) => {
                 self.transcript.submitting = false;
+                self.submitting_session_ids.remove(&session_id);
+                self.flash_error(error);
+            }
+        }
+    }
+
+    fn handle_session_compacted(
+        &mut self,
+        session_id: i64,
+        result: UiResult<SessionExecutionResource>,
+    ) {
+        match result {
+            Ok(execution) => {
+                self.handle_session_execution_updated(session_id, execution, true);
+                self.flash_success(ui_text::t(&self.i18n, "flash-session-compacted"));
+            }
+            Err(error) => {
+                if self.transcript.session_id == Some(session_id) {
+                    self.transcript.submitting = false;
+                }
                 self.submitting_session_ids.remove(&session_id);
                 self.flash_error(error);
             }
@@ -3036,6 +3064,23 @@ impl App {
         });
     }
 
+    fn request_compact(&mut self, session_id: i64) {
+        if self.transcript.session_id == Some(session_id) {
+            self.transcript.submitting = true;
+        }
+        self.submitting_session_ids.insert(session_id);
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        let options = self.run_options.to_request();
+        tokio::spawn(async move {
+            let result = backend
+                .compact_session_with_options(session_id, options)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::SessionCompacted { session_id, result });
+        });
+    }
+
     /// Steer the in-flight turn by injecting `parts` as a new user message
     /// the model will see on its next step. If the backend reports the
     /// turn is no longer steerable, fall back to enqueueing the original
@@ -3375,6 +3420,18 @@ impl App {
             return;
         }
         self.request_continue(session_id);
+    }
+
+    fn handle_compact_command(&mut self) {
+        let Some(session_id) = self.current_or_selected_session_id() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        if self.session_is_busy(session_id) {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
+            return;
+        }
+        self.request_compact(session_id);
     }
 
     fn reply_permission(&mut self, kind: PermissionReplyKind) {
@@ -4361,6 +4418,7 @@ impl App {
             CommandId::Memory => self.handle_memory_command(spec, args),
             CommandId::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
             CommandId::Continue => self.continue_current_session(),
+            CommandId::Compact => self.handle_compact_command(),
             CommandId::UserInput => self.open_user_input_overlay(),
             CommandId::Allow => self.reply_permission(PermissionReplyKind::AllowOnce),
             CommandId::AllowAlways => self.reply_permission(PermissionReplyKind::AllowAlways),

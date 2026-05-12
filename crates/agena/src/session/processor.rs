@@ -30,6 +30,7 @@ use super::{context_governor::ContextGovernor, store::ProcessorPartIdAllocator};
 pub(crate) struct SessionRunRequest {
     pub session_id: i64,
     pub model: ModelRef,
+    pub model_variant: Option<String>,
     pub completion: CompletionRequest,
     pub next_message_id: i64,
     pub part_ids: ProcessorPartIdAllocator,
@@ -342,6 +343,7 @@ impl SessionProcessor {
             generated_by_call_id: None,
             model_provider_id: run.model.provider_id.to_string(),
             model_id: run.completion.model.to_string(),
+            model_variant: run.model_variant.clone(),
             provider_metadata: None,
             tags: Vec::new(),
         };
@@ -1449,6 +1451,7 @@ mod tests {
             .run_turn(SessionRunRequest {
                 session_id: 1,
                 model: ModelRef::new("ordered-stream", "ordered-model"),
+                model_variant: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,
@@ -1558,6 +1561,7 @@ mod tests {
             .run_turn(SessionRunRequest {
                 session_id: 1,
                 model: ModelRef::new("ordered-stream", "ordered-model"),
+                model_variant: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,
@@ -1657,6 +1661,7 @@ mod tests {
             .run_turn(SessionRunRequest {
                 session_id: 1,
                 model: ModelRef::new("ordered-stream", "ordered-model"),
+                model_variant: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,
@@ -1761,6 +1766,7 @@ mod tests {
             .run_turn(SessionRunRequest {
                 session_id: 7,
                 model: ModelRef::new("ordered-stream", "ordered-model"),
+                model_variant: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,

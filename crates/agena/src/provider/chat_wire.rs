@@ -207,14 +207,14 @@ pub(crate) fn map_response_format(fmt: Option<&ResponseFormat>) -> Option<ChatRe
 // ─── Reasoning effort mapping ─────────────────────────────────────────────────
 
 /// Convert a `ThinkingRequest` to an OpenAI `reasoning_effort` string for
-/// o-series models.  Returns `None` for non-o-series models or when thinking
+/// OpenAI reasoning models. Returns `None` for non-reasoning models or when thinking
 /// is disabled / absent.
 pub(crate) fn reasoning_effort(thinking: Option<&ThinkingRequest>, model: &str) -> Option<String> {
-    let is_o_series = model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4");
-    if !is_o_series {
+    if !supports_reasoning_effort(model) {
         return None;
     }
     match thinking {
+        Some(ThinkingRequest::Effort { effort }) => Some(effort.as_str().to_owned()),
         Some(ThinkingRequest::Enabled { budget_tokens }) => {
             let effort = if *budget_tokens > 10_000 {
                 "high"
@@ -227,6 +227,15 @@ pub(crate) fn reasoning_effort(thinking: Option<&ThinkingRequest>, model: &str) 
         }
         _ => None,
     }
+}
+
+fn supports_reasoning_effort(model: &str) -> bool {
+    let normalized = model.to_ascii_lowercase();
+    normalized.starts_with("o1")
+        || normalized.starts_with("o3")
+        || normalized.starts_with("o4")
+        || normalized.starts_with("gpt-5")
+        || normalized.contains("codex")
 }
 
 // ─── Response / decode types ──────────────────────────────────────────────────

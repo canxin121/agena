@@ -4,15 +4,18 @@ import type { ProviderModel, ProviderSummary } from '@/agena/lib/agenaApi'
 const props = defineProps<{
   selectedProviderId: string
   selectedModelId: string
+  selectedVariant: string
   providers: ProviderSummary[]
   providerDefaultModel: (providerId: string) => string
   providerModelOptions: (providerId: string) => ProviderModel[]
   providerModelLabel: (model: ProviderModel) => string
+  modelVariantOptions: () => Array<{ id: string; label: string; description: string }>
 }>()
 
 const emit = defineEmits<{
   'update:selectedProviderId': [value: string]
   'update:selectedModelId': [value: string]
+  'update:selectedVariant': [value: string]
 }>()
 </script>
 
@@ -28,7 +31,8 @@ const emit = defineEmits<{
           class="select"
           @change="
             emit('update:selectedProviderId', ($event.target as HTMLSelectElement).value),
-            emit('update:selectedModelId', props.providerDefaultModel(($event.target as HTMLSelectElement).value))
+            emit('update:selectedModelId', props.providerDefaultModel(($event.target as HTMLSelectElement).value)),
+            emit('update:selectedVariant', '')
           "
         >
           <option value="">Auto</option>
@@ -43,7 +47,10 @@ const emit = defineEmits<{
           id="model-id"
           :value="props.selectedModelId"
           class="select"
-          @change="emit('update:selectedModelId', ($event.target as HTMLSelectElement).value)"
+          @change="
+            emit('update:selectedModelId', ($event.target as HTMLSelectElement).value),
+            emit('update:selectedVariant', '')
+          "
         >
           <option value="">Auto</option>
           <option
@@ -52,6 +59,21 @@ const emit = defineEmits<{
             :value="model.id"
           >
             {{ props.providerModelLabel(model) }}
+          </option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="label" for="variant-id">Variant</label>
+        <select
+          id="variant-id"
+          :value="props.selectedVariant"
+          class="select"
+          :disabled="props.modelVariantOptions().length === 0"
+          @change="emit('update:selectedVariant', ($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">Default</option>
+          <option v-for="variant in props.modelVariantOptions()" :key="variant.id" :value="variant.id">
+            {{ variant.label }}
           </option>
         </select>
       </div>

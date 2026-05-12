@@ -44,6 +44,7 @@ export type ChatSessionActionsInput = {
   }>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
+  selectedVariant: Ref<string>
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sending: Ref<boolean>
@@ -276,6 +277,10 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         text,
         providerId: input.selectedProviderId.value || undefined,
         modelId: input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
+        variant:
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedVariant.value
+            ? input.selectedVariant.value
+            : undefined,
       })
       input.sessionState.value = state
       input.composer.value = ''
@@ -299,6 +304,10 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         sessionId,
         providerId: input.selectedProviderId.value || undefined,
         modelId: input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
+        variant:
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedVariant.value
+            ? input.selectedVariant.value
+            : undefined,
       })
       input.syncEventStream()
       await input.refreshConversation(false)

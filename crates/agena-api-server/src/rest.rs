@@ -2281,7 +2281,6 @@ mod tests {
             api_key: Some("sk-test".to_owned()),
             api_key_env: None,
             extra_headers: Default::default(),
-            default_thinking: None,
             options: OpenAiProviderOptions {
                 api_mode: OpenAiApiModeConfig::Responses,
                 stream_mode: StreamTransportMode::Sse,

@@ -7,12 +7,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::model::{
     CapabilitySupport, Model, ModelCapabilities, ModelFamily, ModelId, ModelInputModality,
-    ModelLifecycle, ModelMetadata,
+    ModelLifecycle, ModelMetadata, ModelVariant,
 };
 
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider, PromptCacheShape,
-    StreamResumePolicy,
+    StreamResumePolicy, ThinkingRequest,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -442,6 +442,44 @@ fn validate_named_patch(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ConfiguredModelVariant {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingRequest>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
+}
+
+impl ConfiguredModelVariant {
+    pub fn is_empty(&self) -> bool {
+        self.display_name.is_none()
+            && self.description.is_none()
+            && self.thinking.is_none()
+            && !self.disabled
+    }
+
+    fn apply_to_variant(&self, base: Option<&ModelVariant>) -> Option<ModelVariant> {
+        if self.disabled {
+            return None;
+        }
+        let mut variant = base.cloned().unwrap_or_default();
+        if let Some(display_name) = self.display_name.clone() {
+            variant.display_name = Some(display_name);
+        }
+        if let Some(description) = self.description.clone() {
+            variant.description = Some(description);
+        }
+        if let Some(thinking) = self.thinking.clone() {
+            variant.thinking = Some(thinking);
+        }
+        Some(variant)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ConfiguredModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
@@ -455,6 +493,8 @@ pub struct ConfiguredModelDefinition {
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub variants: BTreeMap<String, ConfiguredModelVariant>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
 }
@@ -467,6 +507,7 @@ impl ConfiguredModelDefinition {
             && self.context_window_tokens.is_none()
             && self.max_output_tokens.is_none()
             && self.description.is_none()
+            && self.variants.is_empty()
             && self.capabilities.is_empty()
     }
 
@@ -509,8 +550,26 @@ impl ConfiguredModelDefinition {
             .clone()
             .with_fallbacks_from(metadata_fallback);
         model.metadata = self.metadata().with_fallbacks_from(&base_metadata);
+        model.variants = apply_configured_variants(model.variants, self.variants.iter());
         model
     }
+}
+
+fn apply_configured_variants<'a>(
+    mut variants: BTreeMap<String, ModelVariant>,
+    model_variants: impl Iterator<Item = (&'a String, &'a ConfiguredModelVariant)>,
+) -> BTreeMap<String, ModelVariant> {
+    for (name, configured) in model_variants {
+        match configured.apply_to_variant(variants.get(name)) {
+            Some(variant) => {
+                variants.insert(name.clone(), variant);
+            }
+            None => {
+                variants.remove(name);
+            }
+        }
+    }
+    variants
 }
 
 #[derive(Clone)]
@@ -552,6 +611,16 @@ impl ConfiguredModelsProvider {
             .map(|configured| configured.metadata().with_fallbacks_from(&base))
             .unwrap_or(base)
     }
+
+    fn configured_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
+        apply_configured_variants(
+            self.target.model_variants(model),
+            self.configured_model(model)
+                .map(|configured| configured.variants.iter())
+                .into_iter()
+                .flatten(),
+        )
+    }
 }
 
 #[async_trait]
@@ -570,6 +639,10 @@ impl ModelProvider for ConfiguredModelsProvider {
 
     fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
         self.configured_metadata(model)
+    }
+
+    fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
+        self.configured_variants(model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -598,6 +671,8 @@ impl ModelProvider for ConfiguredModelsProvider {
                     &capability_fallback,
                     &metadata_fallback,
                 );
+            } else {
+                model.variants = self.configured_variants(&model.id);
             }
         }
 
@@ -770,6 +845,64 @@ mod tests {
         );
         assert_eq!(configured.metadata.family, Some(ModelFamily::Gpt));
         assert_eq!(configured.metadata.lifecycle, Some(ModelLifecycle::Preview));
+    }
+
+    #[tokio::test]
+    async fn configured_provider_applies_model_variants() {
+        let target = std::sync::Arc::new(StaticProvider {
+            default_model: ModelId::new("base-model"),
+            listed_models: vec![
+                Model::new("test-provider", "base-model"),
+                Model::new("test-provider", "other-model"),
+            ],
+            fallback_capabilities: ModelCapabilities::default(),
+            fallback_metadata: ModelMetadata::default(),
+        });
+
+        let provider = ConfiguredModelsProvider::new(
+            target,
+            BTreeMap::from([(
+                "base-model".to_owned(),
+                ConfiguredModelDefinition {
+                    variants: BTreeMap::from([(
+                        "deep".to_owned(),
+                        ConfiguredModelVariant {
+                            display_name: Some("Deep".to_owned()),
+                            description: Some("More reasoning".to_owned()),
+                            thinking: Some(ThinkingRequest::Enabled {
+                                budget_tokens: 30_000,
+                            }),
+                            disabled: false,
+                        },
+                    )]),
+                    ..ConfiguredModelDefinition::default()
+                },
+            )]),
+        );
+
+        let models = provider
+            .list_models()
+            .await
+            .expect("configured provider should list models");
+        let model = models
+            .iter()
+            .find(|model| model.id.as_str() == "base-model")
+            .expect("base model should be listed");
+
+        assert_eq!(
+            model
+                .variants
+                .get("deep")
+                .and_then(|variant| variant.thinking.clone()),
+            Some(ThinkingRequest::Enabled {
+                budget_tokens: 30_000
+            })
+        );
+        let other_model = models
+            .iter()
+            .find(|model| model.id.as_str() == "other-model")
+            .expect("other model should be listed");
+        assert!(!other_model.variants.contains_key("deep"));
     }
 
     #[test]

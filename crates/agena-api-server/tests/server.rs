@@ -77,6 +77,8 @@ impl ModelProvider for TestProvider {
 fn test_run_options() -> SessionRunOptions {
     SessionRunOptions {
         model: ModelRef::new("test", "test-model"),
+        variant: None,
+        thinking: None,
         system: None,
         temperature: None,
         max_output_tokens: Some(128),

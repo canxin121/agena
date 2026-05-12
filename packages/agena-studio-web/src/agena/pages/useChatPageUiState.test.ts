@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { reactive, ref } from 'vue'
+import { nextTick, reactive, ref } from 'vue'
 
 import type { ProviderModel, ProviderSummary, WorkspaceResource } from '@/agena/lib/agenaApi'
 
@@ -9,7 +9,14 @@ function createInput() {
   const providerModels: Record<string, ProviderModel[]> = {
     anthropic: [
       { provider_id: 'anthropic', id: 'claude-opus-4-7', display_name: 'Claude Opus 4.7' },
-      { provider_id: 'anthropic', id: 'claude-sonnet-4-6' },
+      {
+        provider_id: 'anthropic',
+        id: 'claude-sonnet-4-6',
+        variants: {
+          light: { display_name: 'Light', description: 'Quick thinking' },
+          deep: { display_name: 'Deep', description: 'More thinking' },
+        },
+      },
     ],
   }
   const providers = ref<ProviderSummary[]>([
@@ -25,6 +32,7 @@ function createInput() {
     providers,
     selectedModelId: ref(''),
     selectedProviderId: ref(''),
+    selectedVariant: ref(''),
     selectedWorkspaceId: ref<number | null>(null),
     userInputDrafts: reactive<Record<string, Record<string, string>>>({}),
     workspaces,
@@ -51,6 +59,22 @@ describe('useChatPageUiState', () => {
       'Claude Opus 4.7',
     )
     expect(ui.providerModelLabel({ provider_id: 'anthropic', id: 'claude-sonnet-4-6' })).toBe('claude-sonnet-4-6')
+  })
+
+  test('variant options follow the selected model', async () => {
+    const { input, ui } = createInput()
+
+    input.selectedProviderId.value = 'anthropic'
+    input.selectedModelId.value = 'claude-sonnet-4-6'
+
+    expect(ui.modelVariantOptions().map((item) => item.id)).toEqual(['light', 'deep'])
+
+    input.selectedVariant.value = 'deep'
+    input.selectedModelId.value = 'claude-opus-4-7'
+    await nextTick()
+
+    expect(input.selectedVariant.value).toBe('')
+    expect(ui.modelVariantOptions()).toEqual([])
   })
 
   test('watch selects provider default model when model is empty', async () => {

@@ -14,6 +14,7 @@ path = "src/main.rs"
 agena = { workspace = true }
 agena-api-server = { workspace = true, features = ["jsonrpc"] }
 agena-otel = { workspace = true }
+agena-tui = { path = "../agena-tui" }
 async-trait = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

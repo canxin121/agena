@@ -619,6 +619,21 @@ impl Backend {
         .context("failed to continue session")
     }
 
+    pub async fn compact_session_with_options(
+        &self,
+        session_id: i64,
+        request: RunOptions,
+    ) -> Result<SessionExecutionResource> {
+        let options = self
+            .resolve_session_run_options(session_id, request)
+            .await?;
+        self.session_manager()?
+            .compact_session(session_id, options)
+            .await
+            .context("failed to compact session")?;
+        self.get_session_state(session_id).await
+    }
+
     /// Best-effort cancel of the in-flight turn for `session_id`. Forwards
     /// to `SessionManager::cancel_active_turn`; the manager owns the
     /// `CancellationToken` for the spawned turn task. If no turn is
@@ -725,6 +740,19 @@ impl Backend {
             .current_snapshot()
             .plugin_manager()
             .statusline_segments()
+    }
+
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
+    pub fn workspace_name(&self) -> String {
+        self.workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| self.workspace_root.display().to_string())
     }
 
     pub fn plugin_theme_palettes(&self) -> Vec<agena::plugin::HostThemePalette> {
@@ -1475,6 +1503,49 @@ impl Backend {
                 .ok_or_else(|| anyhow!("session not found: {parent_id}"))?;
         }
         Ok(current)
+    }
+
+    async fn resolve_session_run_options(
+        &self,
+        session_id: i64,
+        request: RunOptions,
+    ) -> Result<agena::session::SessionRunOptions> {
+        let RunOptions {
+            model,
+            agent_profile,
+            system,
+            temperature,
+            max_output_tokens,
+            max_turn_loops,
+        } = request;
+
+        let mut options = self
+            .session_manager()?
+            .resolve_scheduled_run_options(session_id)
+            .await
+            .context("failed to resolve session run options")?;
+
+        if let Some(model) = model {
+            options.model = model;
+        }
+
+        if let Some(system) = system {
+            options.system = Some(system);
+        }
+        if let Some(temperature) = temperature {
+            options.temperature = Some(temperature);
+        }
+        if let Some(max_output_tokens) = max_output_tokens {
+            options.max_output_tokens = Some(max_output_tokens);
+        }
+        if let Some(agent_profile) = agent_profile {
+            options.agent_profile = Some(agent_profile);
+        }
+        if let Some(max_turn_loops) = max_turn_loops {
+            options.max_turn_loops = Some(max_turn_loops);
+        }
+
+        Ok(options)
     }
 
     fn session_manager(&self) -> Result<Arc<agena::session::SessionManager>> {

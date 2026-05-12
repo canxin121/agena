@@ -788,6 +788,42 @@ impl SessionManager {
         result
     }
 
+    pub async fn compact_session(
+        &self,
+        session_id: i64,
+        options: SessionRunOptions,
+    ) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        let session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let options = self.apply_execution_context_to_run_options(&session, options)?;
+        let active_messages = prompt_window::active_prompt_messages(&session);
+        let scoped_executor = state
+            .tool_executor
+            .for_session_context(&session.runtime.execution);
+        let tools = scoped_executor.available_tools_for_messages_and_loaded(
+            active_messages.as_slice(),
+            session.runtime.loaded_deferred_tools(),
+        );
+        let prompt_budget =
+            self.prompt_budget_for_turn(&session, &options, tools.as_slice(), state.as_ref());
+
+        if !prompt_window::can_compact(
+            active_messages.as_slice(),
+            state.processor.keep_tail_messages(),
+            prompt_budget.max_prompt_chars,
+        ) {
+            return Err(AppError::Internal(
+                "prompt window cannot be compacted further".to_string(),
+            ));
+        }
+
+        self.compact_prompt_window(session, &options, active_messages.as_slice(), state)
+            .await
+    }
+
     pub async fn spawn_subtask(
         &self,
         request: SessionSubtaskRequest,

@@ -14,11 +14,18 @@
 其中关键入口如下：
 
 - CLI app：`apps/agena-cli`
+- Terminal UI compatibility launcher：`apps/agena-tui`
 - Unified v1 API server app：`apps/agena-studio-server`
 - Unified v1 API server crate：`crates/agena-api-server`
 - Studio server app：`apps/agena-studio-server`
 - Studio desktop app：`apps/agena-studio-desktop`
 - Studio web package：`packages/agena-studio-web`
+
+其中 `agena` 现在是统一的终端产品入口：
+
+- 直接运行 `agena` 会启动内置 TUI
+- `agena tui ...` 会显式以 TUI 模式启动并透传会话 / 搜索 / 日志参数
+- `agena-tui` 保留为兼容包装器，内部复用同一套 TUI 启动链
 
 ## Agena Studio
 

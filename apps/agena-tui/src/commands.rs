@@ -28,6 +28,7 @@ pub enum CommandId {
     Memory,
     Pager,
     Continue,
+    Compact,
     UserInput,
     Allow,
     AllowAlways,
@@ -275,6 +276,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["resume-run"],
         arguments: "",
         summary_key: "command-continue-summary",
+    },
+    CommandSpec {
+        id: CommandId::Compact,
+        name: "compact",
+        aliases: &["summarize"],
+        arguments: "",
+        summary_key: "command-compact-summary",
     },
     CommandSpec {
         id: CommandId::UserInput,
@@ -528,6 +536,13 @@ mod tests {
         let parsed = parse_command("/events 80").expect("timeline command should parse");
         assert_eq!(parsed.spec.id, CommandId::Timeline);
         assert_eq!(parsed.args, "80");
+    }
+
+    #[test]
+    fn parse_command_supports_compact_alias() {
+        let parsed = parse_command("/summarize").expect("compact command should parse");
+        assert_eq!(parsed.spec.id, CommandId::Compact);
+        assert_eq!(parsed.args, "");
     }
 
     #[test]

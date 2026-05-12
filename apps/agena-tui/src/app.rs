@@ -44,7 +44,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use serde::{Deserialize, Serialize};
-use textwrap::{Options as WrapOptions, WordSplitter, wrap};
 use tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     time::interval,
@@ -65,6 +64,16 @@ use crate::keybindings::{ComposerAction, ComposerKeyBindings};
 use crate::terminal;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::ui_text;
+
+mod transcript_view;
+mod view;
+
+#[cfg(test)]
+use self::transcript_view::tool_output_preview;
+use self::transcript_view::{
+    render_message, render_transcript_export_markdown, rewind_message_preview,
+    sanitize_terminal_text,
+};
 
 const MESSAGE_PAGE_SIZE: u64 = 40;
 const TIMELINE_EVENT_LIMIT: u64 = 200;
@@ -243,6 +252,10 @@ enum AppMessage {
         result: UiResult<SessionExecutionResource>,
     },
     SessionContinued {
+        session_id: i64,
+        result: UiResult<SessionExecutionResource>,
+    },
+    SessionCompacted {
         session_id: i64,
         result: UiResult<SessionExecutionResource>,
     },
@@ -1976,6 +1989,9 @@ impl App {
             AppMessage::SessionContinued { session_id, result } => {
                 self.handle_session_continued(session_id, result)
             }
+            AppMessage::SessionCompacted { session_id, result } => {
+                self.handle_session_compacted(session_id, result)
+            }
             AppMessage::SessionRenamed { session_id, result } => {
                 self.handle_session_renamed(session_id, result)
             }
@@ -2314,12 +2330,13 @@ impl App {
         execution: SessionExecutionResource,
         refresh: bool,
     ) {
-        self.transcript.submitting = false;
-        self.submitting_session_ids.remove(&session_id);
-        if self.transcript.session_id == Some(session_id) {
+        let transcript_is_target = self.transcript.session_id == Some(session_id);
+        if transcript_is_target {
+            self.transcript.submitting = false;
             self.transcript.apply_execution(execution);
         }
-        if refresh {
+        self.submitting_session_ids.remove(&session_id);
+        if refresh && transcript_is_target {
             self.request_refresh(session_id, true);
         }
         self.request_sessions(false);
@@ -2334,6 +2351,26 @@ impl App {
             Ok(execution) => self.handle_session_execution_updated(session_id, execution, true),
             Err(error) => {
                 self.transcript.submitting = false;
+                self.submitting_session_ids.remove(&session_id);
+                self.flash_error(error);
+            }
+        }
+    }
+
+    fn handle_session_compacted(
+        &mut self,
+        session_id: i64,
+        result: UiResult<SessionExecutionResource>,
+    ) {
+        match result {
+            Ok(execution) => {
+                self.handle_session_execution_updated(session_id, execution, true);
+                self.flash_success(ui_text::t(&self.i18n, "flash-session-compacted"));
+            }
+            Err(error) => {
+                if self.transcript.session_id == Some(session_id) {
+                    self.transcript.submitting = false;
+                }
                 self.submitting_session_ids.remove(&session_id);
                 self.flash_error(error);
             }
@@ -3027,6 +3064,23 @@ impl App {
         });
     }
 
+    fn request_compact(&mut self, session_id: i64) {
+        if self.transcript.session_id == Some(session_id) {
+            self.transcript.submitting = true;
+        }
+        self.submitting_session_ids.insert(session_id);
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        let options = self.run_options.to_request();
+        tokio::spawn(async move {
+            let result = backend
+                .compact_session_with_options(session_id, options)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::SessionCompacted { session_id, result });
+        });
+    }
+
     /// Steer the in-flight turn by injecting `parts` as a new user message
     /// the model will see on its next step. If the backend reports the
     /// turn is no longer steerable, fall back to enqueueing the original
@@ -3366,6 +3420,18 @@ impl App {
             return;
         }
         self.request_continue(session_id);
+    }
+
+    fn handle_compact_command(&mut self) {
+        let Some(session_id) = self.current_or_selected_session_id() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        if self.session_is_busy(session_id) {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
+            return;
+        }
+        self.request_compact(session_id);
     }
 
     fn reply_permission(&mut self, kind: PermissionReplyKind) {
@@ -4201,13 +4267,15 @@ impl App {
             parts.push(format!("#{session_id}"));
         }
 
+        parts.push(self.workspace_context_label());
+
         if let Some(theme) = self.plugin_theme.as_ref() {
-            parts.push(format!("theme={}", theme.id));
+            parts.push(format!("theme {}", theme.id));
         }
 
         let plugin_segments = self.backend.plugin_statusline_segments();
         if !plugin_segments.is_empty() {
-            parts.push(format!("statusline+{}", plugin_segments.len()));
+            parts.push(format!("status {}", plugin_segments.len()));
         }
 
         if let Some(session) = self.current_or_selected_session_summary() {
@@ -4350,6 +4418,7 @@ impl App {
             CommandId::Memory => self.handle_memory_command(spec, args),
             CommandId::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
             CommandId::Continue => self.continue_current_session(),
+            CommandId::Compact => self.handle_compact_command(),
             CommandId::UserInput => self.open_user_input_overlay(),
             CommandId::Allow => self.reply_permission(PermissionReplyKind::AllowOnce),
             CommandId::AllowAlways => self.reply_permission(PermissionReplyKind::AllowAlways),
@@ -5090,14 +5159,19 @@ impl App {
                 .summary()
                 .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default")),
         ];
-        parts.extend(self.current_execution_context_parts());
+        parts.extend(
+            self.current_execution_context_parts()
+                .into_iter()
+                .filter(|part| !part.starts_with("cwd=")),
+        );
+        parts.push(self.workspace_context_label());
         parts.push(format!(
-            "queue_key={} submit_key={}",
+            "keys q={} send={}",
             self.keybindings.queue.len(),
             self.keybindings.submit.len()
         ));
         parts.push(format!(
-            "statusline={}",
+            "statusline {}",
             if self.backend.plugin_statusline_segments().is_empty() {
                 "default"
             } else {
@@ -5105,7 +5179,7 @@ impl App {
             }
         ));
         if let Some(theme) = self.plugin_theme.as_ref() {
-            parts.push(format!("theme={}", theme.id));
+            parts.push(format!("theme {}", theme.id));
         }
         self.i18n.text_args(
             "flash-runtime-status",
@@ -5118,9 +5192,7 @@ impl App {
             .run_options
             .summary()
             .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default"));
-        let cwd = std::env::current_dir()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|_| "<unavailable>".to_owned());
+        let cwd = self.backend.workspace_root().display().to_string();
         let session = self
             .transcript
             .session_id
@@ -5141,6 +5213,10 @@ impl App {
         self.sessions
             .view_mode
             .label(&self.i18n, self.sessions.subtree_root_id)
+    }
+
+    fn workspace_context_label(&self) -> String {
+        format!("ws {}", self.backend.workspace_name())
     }
 
     fn current_execution_context_parts(&self) -> Vec<String> {
@@ -5913,1261 +5989,6 @@ impl App {
         {
             self.request_messages(session_id, MessageLoadMode::Prepend);
         }
-    }
-
-    fn draw(&mut self, frame: &mut Frame) {
-        let area = frame.area();
-        let composer_height = self.composer_height();
-        let vertical = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(8),
-                Constraint::Length(composer_height),
-                Constraint::Length(1),
-            ])
-            .split(area);
-
-        let main = vertical[0];
-        let composer = vertical[1];
-        let status = vertical[2];
-
-        let horizontal = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Min(32)])
-            .split(main);
-
-        let transcript = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(4), Constraint::Min(4)])
-            .split(horizontal[1]);
-
-        self.layout = LayoutCache {
-            transcript_body: inner_rect(transcript[1]),
-        };
-
-        self.transcript.clamp_scroll(
-            self.layout.transcript_body.width,
-            self.layout.transcript_body.height,
-        );
-
-        self.render_sessions(frame, horizontal[0]);
-        self.render_transcript_header(frame, transcript[0]);
-        self.render_transcript(frame, transcript[1]);
-        self.render_composer(frame, composer);
-        self.render_status(frame, status);
-        self.render_overlay(frame, area);
-    }
-
-    fn render_sessions(&mut self, frame: &mut Frame, area: Rect) {
-        let title = ui_text::sessions_title(
-            &self.i18n,
-            self.current_session_view_summary().as_str(),
-            self.sessions.search_query.as_str(),
-        );
-        let current_session_id = self.transcript.session_id;
-        let current_parent_id = self.current_parent_session_id();
-        let session_depths = session_depth_map(self.sessions.items.as_slice());
-
-        if self.sessions.items.is_empty() && self.sessions.initialized {
-            let empty = Paragraph::new(ui_text::t(&self.i18n, "sessions-empty"))
-                .block(Block::default().title(title).borders(Borders::ALL))
-                .alignment(Alignment::Center);
-            frame.render_widget(empty, area);
-            return;
-        }
-
-        let mut items = self
-            .sessions
-            .items
-            .iter()
-            .map(|session| {
-                let is_open = self.transcript.session_id == Some(session.id);
-                let lineage_relation = self
-                    .current_lineage_item(session.id)
-                    .map(|item| item.relation);
-                let is_current_child =
-                    current_session_id.is_some_and(|id| session.parent_id == Some(id));
-                let is_current_parent = current_parent_id == Some(session.id);
-                let depth = session_depths.get(&session.id).copied().unwrap_or_default();
-                let mut title_style = Style::default();
-                if is_open {
-                    title_style = title_style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
-                }
-
-                let mut title_spans = vec![Span::styled(
-                    format!(
-                        "{}{}",
-                        "  ".repeat(depth),
-                        if depth == 0 { "◆ " } else { "↳ " }
-                    ),
-                    Style::default().fg(Color::DarkGray),
-                )];
-                title_spans.push(Span::styled(session.title.clone(), title_style));
-                if is_open {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-current")),
-                        Style::default().fg(Color::Cyan),
-                    ));
-                }
-                if is_current_parent {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-parent")),
-                        Style::default().fg(Color::Yellow),
-                    ));
-                } else if matches!(lineage_relation, Some(LineageRelation::Ancestor)) {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-ancestor")),
-                        Style::default().fg(Color::Yellow),
-                    ));
-                }
-                if is_current_child || matches!(lineage_relation, Some(LineageRelation::Child)) {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-child")),
-                        Style::default().fg(Color::Green),
-                    ));
-                } else if matches!(lineage_relation, Some(LineageRelation::Sibling)) {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!("[{}]", ui_text::t(&self.i18n, "session-tag-sibling")),
-                        Style::default().fg(Color::Blue),
-                    ));
-                }
-                if session.child_session_count > 0 {
-                    title_spans.push(Span::raw(" "));
-                    title_spans.push(Span::styled(
-                        format!(
-                            "[{}]",
-                            self.i18n.text_args(
-                                "session-summary-children",
-                                &crate::fl_args!("count" => session.child_session_count as i64),
-                            )
-                        ),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-
-                let meta = ui_text::session_meta(
-                    &self.i18n,
-                    session.id,
-                    session.message_count,
-                    session.updated_at,
-                );
-                let mut meta_parts = vec![meta];
-                if let Some(parent_id) = session.parent_id {
-                    meta_parts.push(self.i18n.text_args(
-                        "session-summary-parent",
-                        &crate::fl_args!("id" => parent_id),
-                    ));
-                }
-                ListItem::new(vec![
-                    Line::from(title_spans),
-                    Line::from(Span::styled(
-                        meta_parts.join(" | "),
-                        Style::default().fg(Color::DarkGray),
-                    )),
-                ])
-            })
-            .collect::<Vec<_>>();
-
-        if self.sessions.loading_more {
-            items.push(ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "sessions-loading-more"),
-                Style::default().fg(Color::DarkGray),
-            ))));
-        } else if self.sessions.has_more {
-            items.push(ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "sessions-more"),
-                Style::default().fg(Color::DarkGray),
-            ))));
-        }
-
-        let list = List::new(items)
-            .block(Block::default().title(title).borders(Borders::ALL))
-            .highlight_style(
-                Style::default()
-                    .bg(Color::Rgb(32, 46, 64))
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol(">> ");
-
-        let mut state = ListState::default();
-        state.select(self.sessions.selection_for_render());
-        frame.render_stateful_widget(list, area, &mut state);
-    }
-
-    fn render_transcript_header(&mut self, frame: &mut Frame, area: Rect) {
-        let is_running = self.transcript.execution.as_ref().is_some_and(|execution| {
-            execution.run_state != SessionRunState::Idle || execution.blocked
-        });
-        let title = ui_text::transcript_header_title(
-            &self.i18n,
-            self.transcript.session_id,
-            self.transcript.session_title.as_str(),
-            is_running,
-        );
-        let mut top_right = Vec::new();
-        if self.transcript.submitting {
-            top_right.push(ui_text::t(&self.i18n, "transcript-header-busy"));
-        }
-        if self.transcript.loading_initial {
-            top_right.push(ui_text::t(&self.i18n, "transcript-header-loading"));
-        } else if self.transcript.loading_older {
-            top_right.push(ui_text::t(&self.i18n, "transcript-header-loading-older"));
-        }
-
-        let mut bottom_left = Vec::new();
-        if let Some(execution) = self.transcript.execution.as_ref() {
-            bottom_left.push(ui_text::session_meta(
-                &self.i18n,
-                execution.session.id,
-                execution.session.message_count,
-                execution.session.updated_at,
-            ));
-            if let Some(parent_id) = execution.session.parent_id {
-                bottom_left.push(self.i18n.text_args(
-                    "session-summary-parent",
-                    &crate::fl_args!("id" => parent_id),
-                ));
-            }
-            if execution.session.child_session_count > 0 {
-                bottom_left.push(self.i18n.text_args(
-                    "session-summary-children",
-                    &crate::fl_args!("count" => execution.session.child_session_count as i64),
-                ));
-            }
-        }
-        bottom_left.extend(self.current_lineage_context_parts());
-        bottom_left.extend(self.current_execution_context_parts());
-        bottom_left.push(self.current_session_view_summary());
-        if let Some(summary) = self.run_options.summary() {
-            bottom_left.push(summary);
-        }
-
-        let mut bottom_right = Vec::new();
-        let total_lines = self
-            .transcript
-            .rendered(self.layout.transcript_body.width.max(1))
-            .lines
-            .len();
-        if total_lines > 0 {
-            let first_line = min(self.transcript.scroll.saturating_add(1), total_lines);
-            let last_line = min(
-                self.transcript
-                    .scroll
-                    .saturating_add(self.layout.transcript_body.height.max(1) as usize),
-                total_lines,
-            );
-            let percent = ((last_line as f64 / total_lines as f64) * 100.0).round() as u16;
-            bottom_right.push(ui_text::transcript_lines_summary(
-                &self.i18n,
-                first_line,
-                last_line,
-                total_lines,
-                percent,
-            ));
-        }
-        if self.transcript.follow_tail {
-            bottom_right.push(ui_text::t(&self.i18n, "transcript-header-tail"));
-        }
-        if !self.transcript.search_query.trim().is_empty() {
-            bottom_right.push(ui_text::transcript_search_summary(
-                &self.i18n,
-                self.transcript.search_query.as_str(),
-                self.transcript.current_search_match_number(),
-                self.transcript.current_search_match_count(),
-            ));
-        }
-
-        let block = Block::default().borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        if inner.width == 0 || inner.height == 0 {
-            return;
-        }
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(inner);
-        self.render_header_row(
-            frame,
-            rows[0],
-            title,
-            top_right.join(" | "),
-            Style::default().add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::DarkGray),
-        );
-        self.render_header_row(
-            frame,
-            rows[1],
-            bottom_left.join(" | "),
-            bottom_right.join(" | "),
-            Style::default().fg(Color::DarkGray),
-            Style::default().fg(Color::DarkGray),
-        );
-    }
-
-    fn render_transcript(&mut self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .title(ui_text::transcript_panel_title(&self.i18n))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        if inner.width == 0 || inner.height == 0 {
-            return;
-        }
-
-        let lines = if self.transcript.session_id.is_none() {
-            vec![
-                Line::from(ui_text::t(&self.i18n, "no-session-selected")),
-                Line::from(ui_text::t(&self.i18n, "no-session-selected-hint")),
-            ]
-        } else {
-            let rendered = self.transcript.rendered(inner.width).clone();
-            let matches = rendered.search_matches.clone();
-            let active_match = self
-                .transcript
-                .search_match_index
-                .and_then(|index| matches.get(index).copied());
-            rendered
-                .lines
-                .iter()
-                .enumerate()
-                .map(|(idx, line)| {
-                    let line_is_active = active_match == Some(idx);
-                    let line_has_match = matches.contains(&idx);
-                    highlight_search_line(
-                        line.text.as_str(),
-                        line.style,
-                        self.transcript.search_query.as_str(),
-                        line_is_active,
-                        line_has_match,
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-
-        let paragraph = Paragraph::new(Text::from(lines))
-            .scroll((min(self.transcript.scroll, u16::MAX as usize) as u16, 0))
-            .wrap(Wrap { trim: false });
-        frame.render_widget(paragraph, inner);
-    }
-
-    fn render_composer(&self, frame: &mut Frame, area: Rect) {
-        let mut title = ui_text::composer_title(&self.i18n, self.transcript.session_id);
-        if let Some(summary) = self.run_options.summary() {
-            title = format!("{title}[{summary}] ");
-        }
-        // Queue indicator in the composer title — `· N queued · preview…`
-        // (mirrors Claude Code's `· N queued`). Only shown when non-empty.
-        if !self.queue.is_empty() {
-            let preview = self.queue.first_preview(40).unwrap_or_default();
-            if preview.is_empty() {
-                title = format!("{title}· {} queued ", self.queue.len());
-            } else {
-                title = format!("{title}· {} queued · {preview} ", self.queue.len());
-            }
-        }
-        if self.transcript.submitting {
-            title = format!("{title}· esc to interrupt ");
-        }
-        let block = Block::default().title(title).borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        if inner.width == 0 || inner.height == 0 {
-            return;
-        }
-
-        let view = self.composer.render_view(inner.width, inner.height);
-        let content = if self.composer.text().is_empty() {
-            Text::from(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "composer-placeholder"),
-                Style::default().fg(Color::DarkGray),
-            )))
-        } else {
-            Text::from(view.lines.clone())
-        };
-
-        frame.render_widget(Paragraph::new(content), inner);
-
-        if self.overlay.is_none() && self.focus == Focus::Composer {
-            frame.set_cursor_position((
-                inner.x.saturating_add(view.cursor_x),
-                inner.y.saturating_add(view.cursor_y),
-            ));
-        }
-    }
-
-    fn render_status(&self, frame: &mut Frame, area: Rect) {
-        if let Some(flash) = &self.flash {
-            let style = match flash.level {
-                FlashLevel::Success => {
-                    Style::default().fg(self.theme_color("flash_success", Color::Green))
-                }
-                FlashLevel::Warning => {
-                    Style::default().fg(self.theme_color("flash_warning", Color::Yellow))
-                }
-                FlashLevel::Error => {
-                    Style::default().fg(self.theme_color("flash_error", Color::Red))
-                }
-                FlashLevel::Info => {
-                    Style::default().fg(self.theme_color("flash_info", Color::Cyan))
-                }
-            };
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(flash.text.clone(), style))),
-                area,
-            );
-            return;
-        }
-
-        let base_style = Style::default().fg(self.theme_color("status", Color::DarkGray));
-        let mut spans = Vec::new();
-        let text = if let Some(text) = self
-            .status_line
-            .as_ref()
-            .and_then(|status_line| status_line.text.clone())
-        {
-            text
-        } else {
-            let default_hint = match self.focus {
-                Focus::Sessions => ui_text::t(&self.i18n, "status-sessions"),
-                Focus::Transcript => ui_text::t(&self.i18n, "status-transcript"),
-                Focus::Composer => ui_text::t(&self.i18n, "status-composer"),
-            };
-            self.status_context_summary()
-                .map(|context| format!("{context}  |  {default_hint}"))
-                .unwrap_or(default_hint)
-        };
-        spans.push(Span::styled(text, base_style));
-
-        for segment in self.backend.plugin_statusline_segments() {
-            if segment.content.trim().is_empty() {
-                continue;
-            }
-            spans.push(Span::styled("  |  ", base_style));
-            let style = segment
-                .color
-                .as_deref()
-                .and_then(parse_tui_color)
-                .map(|color| Style::default().fg(color))
-                .unwrap_or(base_style);
-            spans.push(Span::styled(segment.content, style));
-        }
-
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
-    }
-
-    fn theme_color(&self, key: &str, fallback: Color) -> Color {
-        self.plugin_theme
-            .as_ref()
-            .and_then(|theme| theme.colors.get(key))
-            .and_then(|value| parse_tui_color(value))
-            .unwrap_or(fallback)
-    }
-
-    fn render_header_row(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        left: String,
-        right: String,
-        left_style: Style,
-        right_style: Style,
-    ) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        if right.trim().is_empty() {
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(left, left_style))),
-                area,
-            );
-            return;
-        }
-
-        let right_width = UnicodeWidthStr::width(right.as_str()).saturating_add(1) as u16;
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(0),
-                Constraint::Length(min(area.width, right_width)),
-            ])
-            .split(area);
-
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(left, left_style))),
-            columns[0],
-        );
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(right, right_style)))
-                .alignment(Alignment::Right),
-            columns[1],
-        );
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        let Some(overlay) = &self.overlay else {
-            return;
-        };
-
-        match overlay {
-            Overlay::Help => {
-                let area = centered_rect(area, 92, 36);
-                frame.render_widget(Clear, area);
-                let help_lines = ui_text::help_lines(&self.i18n);
-                let text = help_lines
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        if index == 0 {
-                            Line::from(Span::styled(
-                                value,
-                                Style::default().add_modifier(Modifier::BOLD),
-                            ))
-                        } else {
-                            Line::from(value)
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let widget = Paragraph::new(Text::from(text))
-                    .block(
-                        Block::default()
-                            .title(format!(" {} ", ui_text::t(&self.i18n, "help-title")))
-                            .borders(Borders::ALL),
-                    )
-                    .wrap(Wrap { trim: false });
-                frame.render_widget(widget, area);
-            }
-            Overlay::SessionSearch(dialog)
-            | Overlay::TranscriptSearch(dialog)
-            | Overlay::SessionRename(dialog) => {
-                self.render_line_overlay(frame, area, dialog);
-            }
-            Overlay::PermissionRuleEdit(dialog) => {
-                self.render_permission_rule_edit_overlay(frame, area, dialog);
-            }
-            Overlay::FileAttach(dialog) => {
-                self.render_file_attach_overlay(frame, area, dialog);
-            }
-            Overlay::Permission(dialog) => {
-                self.render_permission_overlay(frame, area, dialog);
-            }
-            Overlay::UserInputReply(dialog) => {
-                self.render_user_input_overlay(frame, area, dialog);
-            }
-            Overlay::Confirm(dialog) => {
-                self.render_confirm_overlay(frame, area, dialog);
-            }
-            Overlay::Picker(dialog) => {
-                self.render_picker_overlay(frame, area, dialog);
-            }
-            Overlay::Timeline(dialog) => {
-                self.render_timeline_overlay(frame, area, dialog);
-            }
-            Overlay::PluginInspector(dialog) => {
-                self.render_plugin_inspector_overlay(frame, area, dialog);
-            }
-        }
-    }
-
-    fn render_line_overlay(&self, frame: &mut Frame, area: Rect, dialog: &LineInputOverlay) {
-        let area = centered_rect(area, 70, 7);
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(format!(" {} ", dialog.title))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(1),
-            ])
-            .split(inner);
-
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
-        let view = dialog.input.render_view(rows[1].width, 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(view.lines.clone()))
-                .block(Block::default().borders(Borders::BOTTOM)),
-            rows[1],
-        );
-        frame.render_widget(
-            Paragraph::new(ui_text::t(&self.i18n, "overlay-line-footer")),
-            rows[2],
-        );
-        frame.set_cursor_position((
-            rows[1].x.saturating_add(view.cursor_x),
-            rows[1].y.saturating_add(view.cursor_y),
-        ));
-    }
-
-    fn render_permission_rule_edit_overlay(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        dialog: &PermissionRuleEditOverlay,
-    ) {
-        let area = centered_rect(area, 82, 11);
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(format!(" {} ", dialog.title))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Min(2),
-            ])
-            .split(inner);
-
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
-        frame.render_widget(
-            Paragraph::new(permission_rule_edit_help())
-                .block(Block::default().borders(Borders::BOTTOM))
-                .wrap(Wrap { trim: false }),
-            rows[1],
-        );
-        let input_view = dialog.input.render_view(rows[2].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(input_view.lines.clone()))
-                .block(Block::default().borders(Borders::BOTTOM)),
-            rows[2],
-        );
-        frame.render_widget(
-            Paragraph::new(render_permission_rule_preview(dialog.input.text()))
-                .wrap(Wrap { trim: false }),
-            rows[3],
-        );
-        frame.set_cursor_position((
-            rows[2].x.saturating_add(input_view.cursor_x),
-            rows[2].y.saturating_add(input_view.cursor_y),
-        ));
-    }
-
-    fn render_file_attach_overlay(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        dialog: &FileAttachOverlay,
-    ) {
-        let area = centered_rect(area, 88, 18);
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(format!(
-                " {} ",
-                ui_text::t(&self.i18n, "overlay-attach-title")
-            ))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(3),
-                Constraint::Min(6),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-
-        frame.render_widget(
-            Paragraph::new(ui_text::t(&self.i18n, "overlay-attach-prompt")),
-            rows[0],
-        );
-
-        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(input_view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
-            rows[1],
-        );
-
-        let result_items = if dialog.results.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "overlay-attach-no-match"),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else {
-            dialog
-                .results
-                .iter()
-                .map(|path| ListItem::new(path.to_string_lossy().to_string()))
-                .collect::<Vec<_>>()
-        };
-        let list = List::new(result_items)
-            .block(Block::default().borders(Borders::ALL).title(format!(
-                " {} ",
-                ui_text::t(&self.i18n, "overlay-attach-matches")
-            )))
-            .highlight_style(Style::default().bg(Color::Rgb(32, 46, 64)))
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select((!dialog.results.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(list, rows[2], &mut state);
-
-        frame.render_widget(
-            Paragraph::new(ui_text::t(&self.i18n, "overlay-attach-footer")),
-            rows[3],
-        );
-
-        frame.set_cursor_position((
-            rows[1]
-                .x
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_x),
-            rows[1]
-                .y
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_y),
-        ));
-    }
-
-    fn render_permission_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PermissionOverlay) {
-        let area = centered_rect(area, 84, 15);
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(format!(
-                " {} ",
-                ui_text::t(&self.i18n, "overlay-permission-title")
-            ))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(7),
-                Constraint::Length(4),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-
-        let mut lines = Vec::new();
-        lines.push(Line::from(Span::styled(
-            self.i18n.text_args(
-                "overlay-permission-request-id",
-                &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
-            ),
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(permission_action_label(
-            &self.i18n,
-            &dialog.request.action,
-        )));
-        lines.push(Line::from(self.i18n.text_args(
-            "overlay-permission-reason",
-            &crate::fl_args!("reason" => dialog.request.reason.clone()),
-        )));
-        if !dialog.request.explanation.trim().is_empty() {
-            lines.push(Line::from(format!(
-                "Explanation: {}",
-                dialog.request.explanation
-            )));
-        }
-        let mut facts = Vec::new();
-        facts.push(format!(
-            "risk={}",
-            permission_risk_label(dialog.request.risk)
-        ));
-        if let Some(source) = dialog.request.source.as_deref() {
-            facts.push(format!("source={source}"));
-        }
-        if let Some(scope) = dialog.request.scope {
-            facts.push(format!("scope={scope}"));
-        }
-        if let Some(operator) = dialog.request.operator.as_deref() {
-            facts.push(format!("operator={operator}"));
-        }
-        if !facts.is_empty() {
-            lines.push(Line::from(facts.join(" · ")));
-        }
-        if let Some(session_id) = dialog.request.session_id {
-            lines.push(Line::from(self.i18n.text_args(
-                "overlay-permission-session",
-                &crate::fl_args!("session" => session_id),
-            )));
-        }
-        append_permission_trace_lines(&mut lines, &dialog.request.trace);
-
-        frame.render_widget(
-            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
-            rows[0],
-        );
-
-        let choices = permission_overlay_choices(&self.i18n);
-        let items = choices
-            .iter()
-            .map(|label| ListItem::new(label.clone()))
-            .collect::<Vec<_>>();
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL))
-            .highlight_style(Style::default().bg(Color::Rgb(32, 46, 64)))
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select(Some(dialog.selected));
-        frame.render_stateful_widget(list, rows[1], &mut state);
-
-        frame.render_widget(
-            Paragraph::new(ui_text::t(&self.i18n, "overlay-permission-footer")),
-            rows[2],
-        );
-    }
-
-    fn render_user_input_overlay(&self, frame: &mut Frame, area: Rect, dialog: &UserInputOverlay) {
-        let height = min(18, area.height.saturating_sub(4));
-        let area = centered_rect(area, 84, height);
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(format!(
-                " {} ",
-                ui_text::t(&self.i18n, "overlay-user-input-title")
-            ))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(8),
-                Constraint::Length(3),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-
-        let mut lines = Vec::new();
-        lines.push(Line::from(Span::styled(
-            self.i18n.text_args(
-                "overlay-user-input-request-id",
-                &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
-            ),
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(""));
-        for question in &dialog.request.questions {
-            lines.push(Line::from(Span::styled(
-                format!("{} ({})", question.question, question.id),
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
-            for option in &question.options {
-                let mut text = format!("  - {}", option.label);
-                if !option.description.trim().is_empty() {
-                    text.push_str(format!(" | {}", option.description).as_str());
-                }
-                lines.push(Line::from(text));
-            }
-            if question.allow_custom {
-                lines.push(Line::from(format!(
-                    "  - {}",
-                    ui_text::t(&self.i18n, "overlay-user-input-custom-allowed")
-                )));
-            }
-            lines.push(Line::from(""));
-        }
-        lines.push(Line::from(ui_text::t(
-            &self.i18n,
-            "overlay-user-input-reply-format",
-        )));
-        lines.push(Line::from(ui_text::t(
-            &self.i18n,
-            "overlay-user-input-cancel-hint",
-        )));
-
-        frame.render_widget(
-            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
-            rows[0],
-        );
-
-        let view = dialog.input.render_view(rows[1].width, rows[1].height);
-        frame.render_widget(
-            Paragraph::new(Text::from(view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
-            rows[1],
-        );
-        frame.render_widget(
-            Paragraph::new(ui_text::t(&self.i18n, "overlay-user-input-footer")),
-            rows[2],
-        );
-        frame.set_cursor_position((
-            rows[1].x.saturating_add(1).saturating_add(view.cursor_x),
-            rows[1].y.saturating_add(1).saturating_add(view.cursor_y),
-        ));
-    }
-
-    fn render_confirm_overlay(&self, frame: &mut Frame, area: Rect, dialog: &ConfirmOverlay) {
-        let body_height = dialog.body_lines.len() as u16;
-        let area = centered_rect(area, 76, max(8, body_height.saturating_add(4)));
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(format!(" {} ", dialog.title))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(body_height), Constraint::Length(1)])
-            .split(inner);
-
-        let body = dialog
-            .body_lines
-            .iter()
-            .enumerate()
-            .map(|(index, line)| {
-                if index == 0 {
-                    Line::from(Span::styled(
-                        line.clone(),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ))
-                } else {
-                    Line::from(line.clone())
-                }
-            })
-            .collect::<Vec<_>>();
-        frame.render_widget(
-            Paragraph::new(Text::from(body)).wrap(Wrap { trim: false }),
-            rows[0],
-        );
-        frame.render_widget(
-            Paragraph::new(dialog.footer.clone()).alignment(Alignment::Right),
-            rows[1],
-        );
-    }
-
-    fn render_picker_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PickerOverlay) {
-        let area = centered_rect(area, 88, 18);
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(format!(" {} ", dialog.title))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(3),
-                Constraint::Min(6),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
-
-        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(input_view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
-            rows[1],
-        );
-
-        let result_items = if dialog.loading {
-            vec![ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "overlay-picker-loading"),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else if dialog.items.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                dialog.empty_message.clone(),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else {
-            dialog
-                .items
-                .iter()
-                .map(|item| {
-                    ListItem::new(vec![
-                        Line::from(item.label.clone()),
-                        Line::from(Span::styled(
-                            item.detail.clone(),
-                            Style::default().fg(Color::DarkGray),
-                        )),
-                    ])
-                })
-                .collect::<Vec<_>>()
-        };
-
-        let list = List::new(result_items)
-            .block(Block::default().borders(Borders::ALL))
-            .highlight_style(Style::default().bg(Color::Rgb(32, 46, 64)))
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select((!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(list, rows[2], &mut state);
-
-        frame.render_widget(Paragraph::new(dialog.footer.clone()), rows[3]);
-        frame.set_cursor_position((
-            rows[1]
-                .x
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_x),
-            rows[1]
-                .y
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_y),
-        ));
-    }
-
-    fn render_timeline_overlay(&self, frame: &mut Frame, area: Rect, dialog: &TimelineOverlay) {
-        let area = centered_rect(area, 94, 24);
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(format!(" {} ", dialog.title))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(3),
-                Constraint::Min(10),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
-
-        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(input_view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
-            rows[1],
-        );
-
-        let content = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(44), Constraint::Percentage(56)])
-            .split(rows[2]);
-
-        let list_items = if dialog.loading {
-            vec![ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "overlay-picker-loading"),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else if dialog.items.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                dialog.empty_message.clone(),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else {
-            dialog
-                .items
-                .iter()
-                .map(|item| ListItem::new(item.summary.clone()))
-                .collect::<Vec<_>>()
-        };
-        let list = List::new(list_items)
-            .block(
-                Block::default()
-                    .title(format!(
-                        " {} ",
-                        ui_text::t(&self.i18n, "overlay-timeline-events")
-                    ))
-                    .borders(Borders::ALL),
-            )
-            .highlight_style(Style::default().bg(Color::Rgb(32, 46, 64)))
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select((!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(list, content[0], &mut state);
-
-        let detail = if dialog.loading {
-            ui_text::t(&self.i18n, "overlay-picker-loading")
-        } else {
-            dialog
-                .items
-                .get(dialog.selected)
-                .map(|item| item.detail.clone())
-                .unwrap_or_else(|| dialog.empty_message.clone())
-        };
-        frame.render_widget(
-            Paragraph::new(detail)
-                .block(
-                    Block::default()
-                        .title(format!(
-                            " {} ",
-                            ui_text::t(&self.i18n, "overlay-timeline-detail")
-                        ))
-                        .borders(Borders::ALL),
-                )
-                .wrap(Wrap { trim: false }),
-            content[1],
-        );
-
-        frame.render_widget(Paragraph::new(dialog.footer.clone()), rows[3]);
-        frame.set_cursor_position((
-            rows[1]
-                .x
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_x),
-            rows[1]
-                .y
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_y),
-        ));
-    }
-
-    fn render_plugin_inspector_overlay(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        dialog: &PluginInspectorOverlay,
-    ) {
-        let area = centered_rect(area, 96, 28);
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(format!(" {} ", dialog.title))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(3),
-                Constraint::Min(12),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-
-        frame.render_widget(Paragraph::new(dialog.prompt.clone()), rows[0]);
-
-        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(input_view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
-            rows[1],
-        );
-
-        let content = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-            .split(rows[2]);
-        let right = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-            .split(content[1]);
-
-        let list_items = if dialog.items.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                dialog.empty_message.clone(),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else {
-            dialog
-                .items
-                .iter()
-                .map(|item| {
-                    let style = match item.state {
-                        agena::plugin::status::PluginRunState::Running => {
-                            Style::default().fg(Color::Green)
-                        }
-                        agena::plugin::status::PluginRunState::Restarting => {
-                            Style::default().fg(Color::Yellow)
-                        }
-                        agena::plugin::status::PluginRunState::Failed => {
-                            Style::default().fg(Color::Red)
-                        }
-                        agena::plugin::status::PluginRunState::Stopped => {
-                            Style::default().fg(Color::DarkGray)
-                        }
-                    };
-                    ListItem::new(Line::from(Span::styled(item.summary.clone(), style)))
-                })
-                .collect::<Vec<_>>()
-        };
-        let list = List::new(list_items)
-            .block(
-                Block::default()
-                    .title(format!(
-                        " {} ",
-                        ui_text::t(&self.i18n, "overlay-plugins-list")
-                    ))
-                    .borders(Borders::ALL),
-            )
-            .highlight_style(Style::default().bg(Color::Rgb(32, 46, 64)))
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select((!dialog.items.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(list, content[0], &mut state);
-
-        let detail = dialog
-            .items
-            .get(dialog.selected)
-            .map(|item| item.detail.clone())
-            .unwrap_or_else(|| dialog.empty_message.clone());
-        frame.render_widget(
-            Paragraph::new(detail)
-                .block(
-                    Block::default()
-                        .title(format!(
-                            " {} ",
-                            ui_text::t(&self.i18n, "overlay-plugins-detail")
-                        ))
-                        .borders(Borders::ALL),
-                )
-                .wrap(Wrap { trim: false }),
-            right[0],
-        );
-
-        let logs = dialog
-            .items
-            .get(dialog.selected)
-            .map(|item| item.logs.clone())
-            .unwrap_or_else(|| dialog.empty_message.clone());
-        frame.render_widget(
-            Paragraph::new(logs)
-                .block(
-                    Block::default()
-                        .title(format!(
-                            " {} ",
-                            ui_text::t(&self.i18n, "overlay-plugins-logs")
-                        ))
-                        .borders(Borders::ALL),
-                )
-                .wrap(Wrap { trim: false }),
-            right[1],
-        );
-
-        frame.render_widget(Paragraph::new(dialog.footer.clone()), rows[3]);
-        frame.set_cursor_position((
-            rows[1]
-                .x
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_x),
-            rows[1]
-                .y
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_y),
-        ));
-    }
-
-    fn composer_height(&self) -> u16 {
-        let line_count = max(1, self.composer.logical_line_count());
-        min(12, line_count as u16 + 2)
     }
 
     fn flash(&mut self, level: FlashLevel, text: impl Into<String>) {
@@ -8723,437 +7544,6 @@ fn message_sort_key(message: &MessageResource) -> (i64, i64) {
     (message.created_at.timestamp_millis(), message.id)
 }
 
-fn render_message(message: &MessageResource, width: u16, i18n: &I18n) -> Vec<RenderedLine> {
-    let mut lines = Vec::new();
-    let role_style = style_for_role(message.role);
-    lines.push(RenderedLine {
-        text: format!(
-            "[{} | {} | {}]",
-            ui_text::role_label(i18n, message.role),
-            format_timestamp(message.created_at),
-            ui_text::message_state_label(i18n, message.state)
-        ),
-        style: role_style.add_modifier(Modifier::BOLD),
-    });
-
-    if let Some(parts) = &message.parts {
-        for part in parts {
-            render_part(part, width, &mut lines, i18n);
-        }
-    } else {
-        lines.push(RenderedLine::dim(ui_text::message_parts_not_loaded(
-            i18n,
-            message.part_count as usize,
-        )));
-    }
-
-    if let Some(usage) = &message.usage {
-        lines.push(RenderedLine {
-            text: ui_text::message_usage(
-                i18n,
-                usage.input_tokens,
-                usage.output_tokens,
-                usage.reasoning_tokens,
-            ),
-            style: Style::default().fg(Color::DarkGray),
-        });
-    }
-
-    if let Some(finish) = &message.finish
-        && !finish.trim().is_empty()
-    {
-        lines.push(RenderedLine {
-            text: ui_text::message_finish(i18n, finish),
-            style: Style::default().fg(Color::DarkGray),
-        });
-    }
-
-    if message.parts.as_ref().is_none_or(Vec::is_empty) {
-        lines.push(RenderedLine::dim(format!(
-            "  {}",
-            ui_text::t(i18n, "message-empty")
-        )));
-    }
-
-    lines
-        .into_iter()
-        .flat_map(|line| wrap_rendered_line(line, width))
-        .collect::<Vec<_>>()
-}
-
-fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n: &I18n) {
-    let prefix = "  ";
-    match part.content.as_ref() {
-        Some(PartContent::Text(text)) => {
-            push_multiline(out, prefix, text.text.as_str(), Style::default(), width)
-        }
-        Some(PartContent::Reasoning(reasoning)) => {
-            let summary = if !reasoning.summary.is_empty() {
-                reasoning.summary.join(" ")
-            } else {
-                reasoning.raw_content.join(" ")
-            };
-            push_multiline(
-                out,
-                prefix,
-                i18n.text_args("message-thinking", &crate::fl_args!("summary" => summary))
-                    .as_str(),
-                Style::default().fg(Color::DarkGray),
-                width,
-            );
-        }
-        Some(PartContent::ToolExecution(tool)) => render_tool_execution(tool, out, width, i18n),
-        Some(PartContent::CommandExecution(command)) => {
-            out.push(RenderedLine {
-                text: format!("{prefix}$ {}", command.command),
-                style: Style::default().fg(Color::Yellow),
-            });
-            if let Some(output) = &command.output
-                && !output.trim().is_empty()
-            {
-                push_multiline(out, "    ", output, Style::default().fg(Color::Gray), width);
-            }
-            out.push(RenderedLine::dim(format!(
-                "    {}",
-                i18n.text_args(
-                    "message-command-status",
-                    &crate::fl_args!(
-                        "status" => ui_text::execution_status_label(i18n, command.status),
-                        "exit" => command.exit_code.unwrap_or(-1),
-                    ),
-                )
-            )));
-        }
-        Some(PartContent::FileChange(change)) => {
-            out.push(RenderedLine {
-                text: format!("{prefix}{}", ui_text::t(i18n, "message-file-changes")),
-                style: Style::default().fg(Color::Magenta),
-            });
-            for entry in &change.changes {
-                let path = if entry.kind == FileChangeKind::Moved {
-                    entry
-                        .from_path
-                        .as_ref()
-                        .map(|from_path| format!("{from_path} -> {}", entry.path))
-                        .unwrap_or_else(|| entry.path.clone())
-                } else {
-                    entry.path.clone()
-                };
-                out.push(RenderedLine::plain(format!(
-                    "    - {} ({})",
-                    path,
-                    ui_text::file_change_kind_label(i18n, entry.kind)
-                )));
-            }
-        }
-        Some(PartContent::WebSearch(search)) => {
-            out.push(RenderedLine {
-                text: format!(
-                    "{prefix}{}",
-                    i18n.text_args(
-                        "message-search",
-                        &crate::fl_args!("query" => search.query.as_str())
-                    )
-                ),
-                style: Style::default().fg(Color::Cyan),
-            });
-            for result in &search.results {
-                out.push(RenderedLine::plain(format!("    - {}", result.title)));
-                out.push(RenderedLine::dim(format!("      {}", result.url)));
-                if let Some(snippet) = &result.snippet
-                    && !snippet.trim().is_empty()
-                {
-                    push_multiline(out, "      ", snippet, Style::default(), width);
-                }
-            }
-        }
-        Some(PartContent::TodoList(todo)) => {
-            out.push(RenderedLine {
-                text: format!("{prefix}{}", ui_text::t(i18n, "message-todo-list")),
-                style: Style::default().fg(Color::Blue),
-            });
-            for item in &todo.items {
-                out.push(RenderedLine::plain(format!(
-                    "    - [{}|{}] {}",
-                    ui_text::todo_status_label(i18n, item.status),
-                    ui_text::todo_priority_label(i18n, item.priority),
-                    item.content
-                )));
-            }
-        }
-        Some(PartContent::Error(error)) => {
-            out.push(RenderedLine {
-                text: format!(
-                    "{prefix}{}",
-                    i18n.text_args(
-                        "message-error",
-                        &crate::fl_args!(
-                            "code" => error.code.as_str(),
-                            "message" => error.message.as_str(),
-                        ),
-                    )
-                ),
-                style: Style::default().fg(Color::Red),
-            });
-        }
-        Some(PartContent::Attachment(attachment)) => {
-            out.push(RenderedLine {
-                text: format!("{prefix}{}", ui_text::t(i18n, "message-attachments")),
-                style: Style::default().fg(Color::Magenta),
-            });
-            for item in &attachment.attachments {
-                let label = item
-                    .title
-                    .as_ref()
-                    .or(item.filename.as_ref())
-                    .cloned()
-                    .unwrap_or_else(|| item.mime.clone());
-                out.push(RenderedLine::plain(format!("    - {label}")));
-            }
-        }
-        Some(PartContent::PermissionRequest(permission)) => {
-            push_multiline(
-                out,
-                prefix,
-                ui_text::permission_summary(i18n, permission).as_str(),
-                Style::default().fg(Color::Yellow),
-                width,
-            );
-        }
-        Some(PartContent::UserInputRequest(request)) => {
-            out.push(RenderedLine {
-                text: format!(
-                    "{prefix}{}",
-                    i18n.text_args(
-                        "message-awaiting-user-input",
-                        &crate::fl_args!("request_id" => request.request.request_id.as_str()),
-                    )
-                ),
-                style: Style::default().fg(Color::Yellow),
-            });
-            for question in &request.request.questions {
-                out.push(RenderedLine::plain(ui_text::message_question_line(
-                    i18n,
-                    question.question.as_str(),
-                    question.id.as_str(),
-                )));
-            }
-        }
-        None => {
-            let fallback = part
-                .summary
-                .clone()
-                .unwrap_or_else(|| ui_text::t(i18n, "message-part-detail-unavailable"));
-            push_multiline(
-                out,
-                prefix,
-                fallback.as_str(),
-                Style::default().fg(Color::DarkGray),
-                width,
-            );
-        }
-    }
-}
-
-fn render_tool_execution(
-    tool: &ToolExecutionPart,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-) {
-    match tool {
-        ToolExecutionPart::Pending {
-            invocation, title, ..
-        } => {
-            let label = if title.trim().is_empty() {
-                tool_invocation_label(invocation)
-            } else {
-                title.clone()
-            };
-            out.push(RenderedLine {
-                text: format!(
-                    "  {}",
-                    i18n.text_args("message-tool-pending", &crate::fl_args!("label" => label))
-                ),
-                style: Style::default().fg(Color::Yellow),
-            });
-        }
-        ToolExecutionPart::InProgress {
-            invocation,
-            title,
-            output_text,
-            ..
-        } => {
-            let label = if title.trim().is_empty() {
-                tool_invocation_label(invocation)
-            } else {
-                title.clone()
-            };
-            out.push(RenderedLine {
-                text: format!(
-                    "  {}",
-                    i18n.text_args("message-tool-running", &crate::fl_args!("label" => label))
-                ),
-                style: Style::default().fg(Color::Yellow),
-            });
-            if !output_text.trim().is_empty() {
-                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
-            }
-        }
-        ToolExecutionPart::Completed {
-            invocation,
-            output_text,
-            blocks,
-            details,
-            ..
-        } => {
-            out.push(RenderedLine {
-                text: format!(
-                    "  {}",
-                    i18n.text_args(
-                        "message-tool-done",
-                        &crate::fl_args!("label" => tool_invocation_label(invocation)),
-                    )
-                ),
-                style: Style::default().fg(Color::Green),
-            });
-            if !output_text.trim().is_empty() {
-                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
-            }
-            if let Some(diff) = apply_patch_diff(details) {
-                out.push(RenderedLine::dim(format!(
-                    "    diff ({} lines)",
-                    diff.lines().count()
-                )));
-                push_tool_output_preview(
-                    out,
-                    "    ",
-                    diff.as_str(),
-                    Style::default().fg(Color::DarkGray),
-                    width,
-                    i18n,
-                );
-            }
-            if !blocks.is_empty() {
-                out.push(RenderedLine::dim(ui_text::message_tool_result_blocks(
-                    i18n,
-                    blocks.len(),
-                )));
-            }
-        }
-        ToolExecutionPart::Failed {
-            invocation,
-            error_message,
-            output_text,
-            ..
-        } => {
-            out.push(RenderedLine {
-                text: format!(
-                    "  {}",
-                    i18n.text_args(
-                        "message-tool-failed",
-                        &crate::fl_args!("label" => tool_invocation_label(invocation)),
-                    )
-                ),
-                style: Style::default().fg(Color::Red),
-            });
-            if !error_message.trim().is_empty() {
-                push_multiline(
-                    out,
-                    "    ",
-                    error_message,
-                    Style::default().fg(Color::Red),
-                    width,
-                );
-            }
-            if !output_text.trim().is_empty() {
-                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
-            }
-        }
-    }
-}
-
-fn apply_patch_diff(details: &agena::message::ToolOutput) -> Option<String> {
-    match details.as_first_party()? {
-        FirstPartyToolOutput::ApplyPatch { diff, .. } if !diff.trim().is_empty() => Some(diff),
-        _ => None,
-    }
-}
-
-fn tool_invocation_label(invocation: &ToolInvocation) -> String {
-    if let Some(input) = invocation.as_first_party() {
-        return match input {
-            FirstPartyToolInput::Bash(input) => format!("bash {}", input.command),
-            FirstPartyToolInput::Read(input) => format!("read {}", input.file_path),
-            FirstPartyToolInput::ViewFile(input) => format!("view_file {}", input.path),
-            FirstPartyToolInput::ApplyPatch(_) => "apply_patch".to_string(),
-            FirstPartyToolInput::Glob(input) => format!("glob {}", input.pattern),
-            FirstPartyToolInput::Grep(input) => format!("grep {}", input.pattern),
-            FirstPartyToolInput::Task(input) => format!("task {}", input.description),
-            FirstPartyToolInput::ToolSearch(input) => format!("tool_search {}", input.query),
-            FirstPartyToolInput::TodoWrite(_) => "todo_write".to_string(),
-            FirstPartyToolInput::AskUser(_) => "ask_user".to_string(),
-            FirstPartyToolInput::Monitor(input) => match input {
-                agena::message::MonitorToolInput::Start { command, .. } => {
-                    format!("monitor start {command}")
-                }
-                agena::message::MonitorToolInput::List {} => "monitor list".to_string(),
-                agena::message::MonitorToolInput::Read { monitor_id, .. } => {
-                    format!("monitor read {monitor_id}")
-                }
-                agena::message::MonitorToolInput::Stop { monitor_id } => {
-                    format!("monitor stop {monitor_id}")
-                }
-            },
-            FirstPartyToolInput::WebFetch(input) => format!("web_fetch {}", input.url),
-            FirstPartyToolInput::WebSearch(input) => format!("web_search {}", input.query),
-            FirstPartyToolInput::EnterPlanMode(_) => "enter_plan_mode".to_string(),
-            FirstPartyToolInput::ExitPlanMode(_) => "exit_plan_mode".to_string(),
-            FirstPartyToolInput::EnterWorktree(input) => match (&input.name, &input.path) {
-                (Some(n), _) => format!("enter_worktree name={n}"),
-                (_, Some(p)) => format!("enter_worktree path={p}"),
-                _ => "enter_worktree".to_string(),
-            },
-            FirstPartyToolInput::ExitWorktree(input) => format!("exit_worktree {}", input.action),
-            FirstPartyToolInput::CronCreate(input) => {
-                format!("cron_create {}", input.expression)
-            }
-            FirstPartyToolInput::CronList(_) => "cron_list".to_string(),
-            FirstPartyToolInput::CronDelete(input) => format!("cron_delete {}", input.id),
-            FirstPartyToolInput::ScheduleWakeup(input) => {
-                format!("schedule_wakeup +{}s", input.delay_seconds)
-            }
-            FirstPartyToolInput::LspDefinition(input) => {
-                format!(
-                    "lsp_definition {}:{}:{}",
-                    input.file_path, input.line, input.character
-                )
-            }
-            FirstPartyToolInput::LspReferences(input) => {
-                format!(
-                    "lsp_references {}:{}:{}",
-                    input.file_path, input.line, input.character
-                )
-            }
-            FirstPartyToolInput::LspHover(input) => {
-                format!(
-                    "lsp_hover {}:{}:{}",
-                    input.file_path, input.line, input.character
-                )
-            }
-            FirstPartyToolInput::LspDiagnostics(input) => {
-                format!("lsp_diagnostics {}", input.file_path)
-            }
-            FirstPartyToolInput::NotebookEdit(input) => {
-                format!("notebook_edit {}", input.notebook_path)
-            }
-            FirstPartyToolInput::PowerShell(input) => format!("powershell {}", input.command),
-        };
-    }
-    let ToolInvocation { name, .. } = invocation;
-    name.clone()
-}
-
 fn permission_overlay_choice(selected: usize) -> PermissionOverlayChoice {
     match selected {
         0 => PermissionOverlayChoice {
@@ -9254,128 +7644,12 @@ struct ToolOutputPreview {
     omitted_lines: usize,
 }
 
-fn push_tool_output_preview(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    text: &str,
-    style: Style,
-    width: u16,
-    i18n: &I18n,
-) {
-    let preview = tool_output_preview(text);
-    push_multiline(out, prefix, preview.text.as_str(), style, width);
-    if preview.omitted_lines > 0 {
-        out.push(RenderedLine::dim(i18n.text_args(
-            "message-tool-output-collapsed",
-            &crate::fl_args!("lines" => preview.omitted_lines as i64),
-        )));
-    }
-}
-
-fn tool_output_preview(text: &str) -> ToolOutputPreview {
-    let total_lines = text.split('\n').count();
-    let mut preview = String::new();
-    let mut used_chars = 0_usize;
-    let mut included_lines = 0_usize;
-    let mut truncated = false;
-
-    for (index, line) in text.split('\n').enumerate() {
-        if index >= TOOL_CARD_PREVIEW_LINES {
-            truncated = true;
-            break;
-        }
-
-        let separator_chars = usize::from(index > 0);
-        let line_chars = line.chars().count();
-        if used_chars
-            .saturating_add(separator_chars)
-            .saturating_add(line_chars)
-            > TOOL_CARD_PREVIEW_CHARS
-        {
-            if index > 0 {
-                preview.push('\n');
-            }
-            let remaining = TOOL_CARD_PREVIEW_CHARS
-                .saturating_sub(used_chars)
-                .saturating_sub(separator_chars);
-            preview.extend(line.chars().take(remaining));
-            included_lines = index + 1;
-            truncated = true;
-            break;
-        }
-
-        if index > 0 {
-            preview.push('\n');
-            used_chars += 1;
-        }
-        preview.push_str(line);
-        used_chars += line_chars;
-        included_lines = index + 1;
-    }
-
-    let mut omitted_lines = if truncated {
-        total_lines.saturating_sub(included_lines)
-    } else {
-        0
-    };
-    if truncated && omitted_lines == 0 {
-        omitted_lines = 1;
-    }
-
-    ToolOutputPreview {
-        text: preview,
-        omitted_lines,
-    }
-}
-
-fn push_multiline(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, style: Style, width: u16) {
-    for raw_line in text.split('\n') {
-        out.extend(wrap_rendered_line(
-            RenderedLine {
-                text: format!("{prefix}{raw_line}"),
-                style,
-            },
-            width,
-        ));
-    }
-}
-
-fn wrap_rendered_line(line: RenderedLine, width: u16) -> Vec<RenderedLine> {
-    if width <= 1 {
-        return vec![line];
-    }
-    if UnicodeWidthStr::width(line.text.as_str()) <= width as usize {
-        return vec![line];
-    }
-
-    let options = WrapOptions::new(width as usize)
-        .break_words(false)
-        .word_splitter(WordSplitter::NoHyphenation);
-    wrap(line.text.as_str(), options)
-        .into_iter()
-        .map(|segment| RenderedLine {
-            text: segment.into_owned(),
-            style: line.style,
-        })
-        .collect()
-}
-
-#[allow(dead_code)]
-fn role_label(role: Role) -> &'static str {
-    match role {
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::System => "system",
-        Role::Tool => "tool",
-    }
-}
-
 fn style_for_role(role: Role) -> Style {
     match role {
         Role::User => Style::default().fg(Color::Green),
         Role::Assistant => Style::default().fg(Color::Cyan),
         Role::System => Style::default().fg(Color::Magenta),
-        Role::Tool => Style::default().fg(Color::Yellow),
+        Role::Tool => Style::default().fg(Color::Magenta),
     }
 }
 
@@ -9581,87 +7855,6 @@ fn format_relative_time(timestamp: DateTime<Utc>) -> String {
     } else {
         format!("{}d ago", delta.num_days())
     }
-}
-
-fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String {
-    let preview = render_message(message, 72, i18n)
-        .into_iter()
-        .skip(1)
-        .map(|line| line.text.trim().to_string())
-        .find(|line| !line.is_empty())
-        .unwrap_or_else(|| ui_text::t(i18n, "message-empty"));
-    truncate_display_width(preview.as_str(), 64)
-}
-
-fn render_transcript_export_markdown(
-    i18n: &I18n,
-    session_id: Option<i64>,
-    session_title: &str,
-    execution: Option<&SessionExecutionResource>,
-    messages: &[MessageResource],
-    has_more_older: bool,
-) -> String {
-    if session_id.is_none() && messages.is_empty() {
-        return String::new();
-    }
-
-    let title = if !session_title.trim().is_empty() {
-        session_title.trim().to_string()
-    } else if let Some(session_id) = session_id {
-        ui_text::session_fallback_title(i18n, session_id)
-    } else {
-        "Agena Transcript Export".to_string()
-    };
-
-    let mut out = vec![format!("# {title}"), String::new()];
-    if let Some(session_id) = session_id {
-        out.push(format!("- Session ID: {session_id}"));
-    }
-    out.push(format!(
-        "- Exported At: {}",
-        Local::now().format("%Y-%m-%d %H:%M:%S %z")
-    ));
-    out.push(format!("- Messages Loaded: {}", messages.len()));
-    out.push(format!(
-        "- Older Messages Omitted: {}",
-        if has_more_older { "yes" } else { "no" }
-    ));
-    if let Some(execution) = execution {
-        if let Some(parent_id) = execution.session.parent_id {
-            out.push(format!("- Parent Session: #{parent_id}"));
-        }
-        out.push(format!(
-            "- Child Sessions: {}",
-            execution.session.child_session_count
-        ));
-    }
-    out.push(String::new());
-
-    if messages.is_empty() {
-        out.push("_No messages loaded in this session._".to_string());
-        return out.join("\n");
-    }
-
-    for message in messages {
-        let timestamp = format_timestamp(message.created_at);
-        out.push(format!(
-            "## {} · {} · {}",
-            ui_text::role_label(i18n, message.role),
-            ui_text::message_state_label(i18n, message.state),
-            timestamp,
-        ));
-        out.push(String::new());
-        out.push("~~~~text".to_string());
-        out.extend(
-            render_message(message, u16::MAX, i18n)
-                .into_iter()
-                .map(|line| line.text),
-        );
-        out.push("~~~~".to_string());
-        out.push(String::new());
-    }
-
-    out.join("\n")
 }
 
 fn build_timeline_item(record: &DomainEvent) -> TimelineItem {
@@ -10400,6 +8593,7 @@ fn draft_title_source(draft: &ComposerDraft) -> Option<String> {
 }
 
 fn truncate_display_width(text: &str, max_width: usize) -> String {
+    let text = sanitize_terminal_text(text);
     let mut width = 0_usize;
     let mut out = String::new();
     for ch in text.chars() {
@@ -10414,6 +8608,17 @@ fn truncate_display_width(text: &str, max_width: usize) -> String {
         text.chars().take(max_width).collect()
     } else {
         out
+    }
+}
+
+fn adaptive_sessions_width(total_width: u16) -> u16 {
+    match total_width {
+        0..=79 => min(
+            total_width.saturating_div(3).max(20),
+            total_width.saturating_sub(24),
+        ),
+        80..=119 => min(28, total_width.saturating_sub(24)),
+        _ => min(34, total_width.saturating_sub(32)),
     }
 }
 
@@ -10476,56 +8681,6 @@ fn contains_case_insensitive(text: &str, query: &str) -> bool {
             .contains(trimmed.to_lowercase().as_str())
 }
 
-fn highlight_search_line(
-    text: &str,
-    base_style: Style,
-    query: &str,
-    active_match: bool,
-    has_match: bool,
-) -> Line<'static> {
-    let line_style = if active_match {
-        base_style.bg(Color::Rgb(60, 43, 8))
-    } else if has_match {
-        base_style.bg(Color::Rgb(36, 28, 7))
-    } else {
-        base_style
-    };
-
-    if !has_match || query.trim().is_empty() {
-        return Line::from(Span::styled(text.to_string(), line_style));
-    }
-
-    let ranges = find_search_ranges(text, query);
-    if ranges.is_empty() {
-        return Line::from(Span::styled(text.to_string(), line_style));
-    }
-
-    let mut spans = Vec::new();
-    let mut cursor = 0;
-    for range in ranges {
-        if cursor < range.start {
-            spans.push(Span::styled(
-                text[cursor..range.start].to_string(),
-                line_style,
-            ));
-        }
-        let match_style = if active_match {
-            line_style
-                .bg(Color::Rgb(121, 86, 10))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            line_style.bg(Color::Rgb(84, 61, 10))
-        };
-        spans.push(Span::styled(text[range.clone()].to_string(), match_style));
-        cursor = range.end;
-    }
-    if cursor < text.len() {
-        spans.push(Span::styled(text[cursor..].to_string(), line_style));
-    }
-
-    Line::from(spans)
-}
-
 fn find_search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
     let query = query.trim();
     if query.is_empty() {
@@ -10574,41 +8729,6 @@ fn find_query_match_from(text: &str, query: &str, start_at: usize) -> Option<(us
     }
 }
 
-fn parse_tui_color(value: &str) -> Option<Color> {
-    let value = value.trim();
-    let lower = value.to_ascii_lowercase();
-    match lower.as_str() {
-        "black" => Some(Color::Black),
-        "red" => Some(Color::Red),
-        "green" => Some(Color::Green),
-        "yellow" => Some(Color::Yellow),
-        "blue" => Some(Color::Blue),
-        "magenta" => Some(Color::Magenta),
-        "cyan" => Some(Color::Cyan),
-        "gray" | "grey" => Some(Color::Gray),
-        "darkgray" | "dark_gray" | "dark-grey" | "darkgrey" => Some(Color::DarkGray),
-        "lightred" | "light_red" | "light-red" => Some(Color::LightRed),
-        "lightgreen" | "light_green" | "light-green" => Some(Color::LightGreen),
-        "lightyellow" | "light_yellow" | "light-yellow" => Some(Color::LightYellow),
-        "lightblue" | "light_blue" | "light-blue" => Some(Color::LightBlue),
-        "lightmagenta" | "light_magenta" | "light-magenta" => Some(Color::LightMagenta),
-        "lightcyan" | "light_cyan" | "light-cyan" => Some(Color::LightCyan),
-        "white" => Some(Color::White),
-        _ => parse_hex_color(value),
-    }
-}
-
-fn parse_hex_color(value: &str) -> Option<Color> {
-    let hex = value.strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-    let red = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let green = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let blue = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(Color::Rgb(red, green, blue))
-}
-
 fn run_status_line_command(
     command: String,
     session_id: Option<String>,
@@ -10635,28 +8755,6 @@ fn run_status_line_command(
     let text = String::from_utf8_lossy(&output.stdout);
     let line = text.lines().next().unwrap_or_default().trim();
     (!line.is_empty()).then(|| line.to_string())
-}
-
-fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let width = min(width, area.width.saturating_sub(2));
-    let height = min(height, area.height.saturating_sub(2));
-    let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height) / 2;
-    Rect {
-        x,
-        y,
-        width,
-        height,
-    }
-}
-
-fn inner_rect(area: Rect) -> Rect {
-    Rect {
-        x: area.x.saturating_add(1),
-        y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(2),
-    }
 }
 
 fn split_editor_lines_with_offsets(text: &str) -> Vec<Range<usize>> {
@@ -11468,14 +9566,19 @@ fn split_command_args_once(value: &str) -> Option<(&str, &str)> {
 mod tests {
     use super::*;
     use agena::{
+        config::LoadConfigRequest,
         event::{CommandContext, CommandEndEvent},
         message::{
             ExecutionStatus, MessageMetadata, MessageStatus, PartContent, UserInputOption,
             UserInputQuestion,
         },
+        runtime::AgenaRuntime,
     };
     use chrono::Utc;
+    use ratatui::{Terminal, backend::TestBackend};
+    use sea_orm::Database;
     use serde_json::json;
+    use std::{fs, sync::Arc};
 
     #[test]
     fn derive_title_uses_first_non_empty_line() {
@@ -11638,6 +9741,300 @@ mod tests {
 
         assert_eq!(preview.text.lines().count(), TOOL_CARD_PREVIEW_LINES);
         assert_eq!(preview.omitted_lines, 3);
+    }
+
+    #[test]
+    fn render_message_uses_structured_card_layout() {
+        let now = Utc::now();
+        let lines = render_message(
+            &MessageResource {
+                id: 10,
+                session_id: 42,
+                role: Role::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: MessageMetadata::default(),
+                usage: None,
+                finish: None,
+                part_count: 1,
+                parts: Some(vec![MessagePart::with_content(
+                    11,
+                    10,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text("alpha beta gamma delta epsilon"),
+                )]),
+            },
+            22,
+            &I18n::english(),
+        );
+
+        assert!(lines[0].text.starts_with("[assistant]"));
+        assert!(lines.iter().skip(1).all(|line| line.text.starts_with("  ")));
+        assert!(lines.iter().any(|line| line.text.contains("alpha beta")));
+    }
+
+    #[tokio::test]
+    async fn draw_sanitizes_shell_chrome_and_renders_workspace_label() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key = "test"
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root.clone()),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        let now = Utc::now();
+        app.sessions.initialized = true;
+        app.sessions.items = vec![test_session(
+            7,
+            None,
+            "bad\u{1b}[31mtitle\u{7}\u{2068}rtl\u{2069}",
+            now,
+        )];
+        app.sessions.selected = 0;
+        app.transcript.session_id = Some(7);
+        app.transcript.session_title = "bad\u{1b}[31mtitle\u{7}\u{2068}rtl\u{2069}".to_string();
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("test terminal should build");
+        terminal
+            .draw(|frame| app.draw(frame))
+            .expect("draw should succeed");
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("ws "));
+        assert!(rendered.contains("bad"));
+        assert!(rendered.contains("title"));
+        assert!(rendered.contains("rtl"));
+        assert!(!rendered.contains("\u{1b}"));
+        assert!(!rendered.contains("\u{7}"));
+        assert!(!rendered.contains("\u{2068}"));
+        assert!(!rendered.contains("\u{2069}"));
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn draw_compact_layout_handles_stacked_sessions_without_panic() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key = "test"
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root.clone()),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        let now = Utc::now();
+        app.sessions.initialized = true;
+        app.sessions.items = vec![
+            test_session(1, None, "Root Session", now),
+            test_session(2, Some(1), "Child Session", now),
+        ];
+        app.sessions.selected = 1;
+        app.transcript.session_id = Some(2);
+        app.transcript.session_title = "Child Session".to_string();
+
+        let backend = TestBackend::new(72, 14);
+        let mut terminal = Terminal::new(backend).expect("test terminal should build");
+        terminal
+            .draw(|frame| app.draw(frame))
+            .expect("draw should succeed");
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Sessions"));
+        assert!(rendered.contains("Child Session"));
+        assert!(rendered.contains("current"));
+        assert!(rendered.contains("ws "));
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn draw_permission_overlay_sanitizes_localized_request_fields() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+api_key = "test"
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root.clone()),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        app.overlay = Some(Overlay::Permission(PermissionOverlay {
+            session_id: 7,
+            request: PermissionRequest {
+                request_id: "req\u{2068}-7\u{2069}\u{7}".to_string(),
+                session_id: Some(7),
+                action: PermissionAction::BuiltinTool {
+                    tool_name: "exec\u{2068}".to_string(),
+                    qualifier: Some("rg\u{2069}".to_string()),
+                },
+                reason: "Need \u{1b}[31mworkspace\u{1b}[0m access\u{2068}".to_string(),
+                explanation: "Check \u{2068}repo\u{2069}\u{7}".to_string(),
+                source: Some("policy\u{2068}".to_string()),
+                scope: Some(PermissionScope::Session),
+                operator: Some("agent\u{2069}".to_string()),
+                risk: PermissionRiskLevel::High,
+                trace: vec![DecisionTraceStep {
+                    source_kind: PolicySourceKind::ManagedPolicy,
+                    summary: "managed\u{2068} summary".to_string(),
+                    source: Some("trace\u{2069}".to_string()),
+                    scope: Some(PermissionScope::Workspace),
+                    operator: Some("reviewer\u{2068}".to_string()),
+                }],
+                created_at: Utc::now(),
+            },
+            selected: 0,
+        }));
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should build");
+        terminal
+            .draw(|frame| app.draw(frame))
+            .expect("draw should succeed");
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Permission Request"));
+        assert!(rendered.contains("req"));
+        assert!(rendered.contains("workspace"));
+        assert!(rendered.contains("repo"));
+        assert!(rendered.contains("policy"));
+        assert!(rendered.contains("agent"));
+        assert!(!rendered.contains("\u{1b}"));
+        assert!(!rendered.contains("\u{7}"));
+        assert!(!rendered.contains("\u{2068}"));
+        assert!(!rendered.contains("\u{2069}"));
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rewind_message_preview_prefers_first_text_line() {
+        let now = Utc::now();
+        let preview = rewind_message_preview(
+            &MessageResource {
+                id: 10,
+                session_id: 42,
+                role: Role::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: MessageMetadata::default(),
+                usage: None,
+                finish: None,
+                part_count: 1,
+                parts: Some(vec![MessagePart::with_content(
+                    11,
+                    10,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text("\n\n  first line\nsecond line"),
+                )]),
+            },
+            &I18n::english(),
+        );
+
+        assert_eq!(preview, "first line");
     }
 
     #[test]
@@ -11949,8 +10346,13 @@ mod tests {
 
     #[test]
     fn highlight_search_line_preserves_unmatched_text() {
-        let line =
-            highlight_search_line("alpha hello omega", Style::default(), "hello", false, true);
+        let line = view::highlight_search_line(
+            "alpha hello omega",
+            Style::default(),
+            "hello",
+            false,
+            true,
+        );
         let rendered = line
             .spans
             .iter()
@@ -12172,6 +10574,99 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_terminal_text_strips_ansi_and_carriage_returns() {
+        let text = "\u{1b}[31mred\u{1b}[0m\r\nnext\u{7}\u{2068}rtl\u{2069}";
+        assert_eq!(sanitize_terminal_text(text), "red\nnext rtl");
+    }
+
+    #[test]
+    fn composer_height_reserves_footer_and_context_rows() {
+        assert_eq!(2_u16 + u16::from(false), 2);
+        assert_eq!(2_u16 + u16::from(true), 3);
+    }
+
+    #[test]
+    fn adaptive_sessions_width_preserves_transcript_space() {
+        assert_eq!(adaptive_sessions_width(70), 23);
+        assert_eq!(adaptive_sessions_width(100), 28);
+        assert_eq!(adaptive_sessions_width(160), 34);
+    }
+
+    #[test]
+    fn adaptive_modal_size_expands_to_available_space_on_small_terminals() {
+        assert_eq!(view::adaptive_modal_width(60, 92), 58);
+        assert_eq!(view::adaptive_modal_height(16, 24), 14);
+    }
+
+    #[test]
+    fn adaptive_modal_size_preserves_readable_padding_on_mid_sized_terminals() {
+        assert_eq!(view::adaptive_modal_width(88, 96), 86);
+        assert_eq!(view::adaptive_modal_height(24, 28), 22);
+    }
+
+    #[test]
+    fn adaptive_detail_split_falls_back_before_panels_collapse() {
+        assert_eq!(
+            view::adaptive_detail_split(70, 40, 46),
+            [Constraint::Percentage(50), Constraint::Percentage(50)]
+        );
+        assert_eq!(
+            view::adaptive_vertical_split(16, 7, 9),
+            [Constraint::Percentage(50), Constraint::Percentage(50)]
+        );
+    }
+
+    #[test]
+    fn detail_overlays_stack_before_side_by_side_becomes_unreadable() {
+        assert!(view::should_stack_detail_layout(70, 40, 46));
+        assert!(view::should_stack_detail_layout(74, 34, 48));
+        assert!(!view::should_stack_detail_layout(120, 40, 46));
+    }
+
+    #[test]
+    fn sessions_stack_above_transcript_on_narrow_terminals() {
+        assert!(view::should_stack_sessions_layout(80));
+        assert!(view::should_stack_sessions_layout(91));
+        assert!(!view::should_stack_sessions_layout(92));
+    }
+
+    #[test]
+    fn adaptive_sessions_height_stays_within_compact_bounds() {
+        assert_eq!(view::adaptive_sessions_height(15), 6);
+        assert_eq!(view::adaptive_sessions_height(24), 8);
+        assert_eq!(view::adaptive_sessions_height(40), 10);
+    }
+
+    #[test]
+    fn transcript_surface_header_height_expands_with_available_height() {
+        assert_eq!(view::transcript_surface_header_height(8), 2);
+        assert_eq!(view::transcript_surface_header_height(14), 3);
+        assert_eq!(view::transcript_surface_header_height(24), 4);
+    }
+
+    #[test]
+    fn session_sidebar_header_height_respects_compact_layouts() {
+        assert_eq!(view::session_sidebar_header_height(4), 2);
+        assert_eq!(view::session_sidebar_header_height(6), 3);
+        assert_eq!(view::session_sidebar_header_height(9), 4);
+    }
+
+    #[test]
+    fn truncate_display_text_adds_ellipsis_when_needed() {
+        assert_eq!(view::truncate_display_text("workspace-root", 8), "works...");
+        assert_eq!(view::truncate_display_text("agena", 8), "agena");
+    }
+
+    #[test]
+    fn composer_height_accounts_for_extra_rows() {
+        let logical_lines = 1_u16;
+        let no_items_height = min(14, logical_lines + 2);
+        let with_items_height = min(14, logical_lines + 3);
+        assert_eq!(no_items_height, 3);
+        assert_eq!(with_items_height, 4);
+    }
+
+    #[test]
     fn build_lineage_session_items_marks_descendants_of_current_as_children() {
         let now = Utc::now();
         let mut current = test_session(1, None, "Current Root", now);
@@ -12262,5 +10757,12 @@ mod tests {
             child_session_count: 0,
             last_message_at: None,
         }
+    }
+
+    fn write_test_runtime_config(content: &str) -> PathBuf {
+        let dir = tempfile::tempdir().expect("tempdir should exist");
+        let path = dir.keep().join("agena-tui-test.toml");
+        fs::write(&path, content).expect("config should be written");
+        path
     }
 }

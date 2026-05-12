@@ -1,4 +1,4 @@
-cli-about = Agena terminal chat application
+cli-about = Agena unified terminal workspace
 
 pane-sessions = Sessions
 pane-sessions-search = Sessions [{$query}]
@@ -195,6 +195,7 @@ flash-timeline-event-copied = copied selected timeline event
 flash-clipboard-copy-failed = clipboard copy failed: {$error}
 flash-command-requires-session = this action requires an open session
 flash-session-busy = session is busy
+flash-session-compacted = session compacted
 flash-no-permission-request = no pending permission request
 flash-no-user-input-request = no pending user input request
 flash-provider-selected = provider selected: {$provider} (default {$model})
@@ -349,6 +350,7 @@ command-runtime-summary = Open a searchable runtime summary inspector
 command-export-summary = Export the loaded transcript as markdown and open it in the editor
 command-pager-summary = Open the loaded transcript in a terminal pager
 command-continue-summary = Continue the current blocked or pending session
+command-compact-summary = Compact the current session prompt window now
 command-user-input-summary = Reply to the first pending user-input request
 command-allow-summary = Allow the first pending permission request once
 command-allow-always-summary = Always allow the first pending permission request

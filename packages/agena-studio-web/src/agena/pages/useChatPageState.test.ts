@@ -22,6 +22,7 @@ describe('useChatPageState', () => {
     expect(state.composer.value).toBe('')
     expect(state.selectedProviderId.value).toBe('')
     expect(state.selectedModelId.value).toBe('')
+    expect(state.selectedVariant.value).toBe('')
     expect(state.loading.value).toBe(false)
     expect(state.sending.value).toBe(false)
     expect(state.continuing.value).toBe(false)

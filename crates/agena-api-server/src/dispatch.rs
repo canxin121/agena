@@ -66,6 +66,7 @@ async fn run_options_to_core(
             session_id,
             SessionRunOptionsRequest {
                 model: options.model.clone(),
+                variant: options.variant.clone(),
                 agent_profile: options.agent_profile.clone(),
                 system: options.system.clone(),
                 temperature: options.temperature,
@@ -166,6 +167,7 @@ fn execution_context_from_http(
         agent_permission: value.agent_permission,
         model_provider_id: value.model_provider_id,
         model_id: value.model_id,
+        model_variant: value.model_variant,
         agent_run: value.agent_run,
         effective_workspace_root: value.effective_workspace_root,
         task_id: value.task_id,
@@ -1161,6 +1163,7 @@ api_key = "dummy"
         let session_id = create_session(&state, &workspace_root, "single provider").await;
         let options = RunOptions {
             model: None,
+            variant: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -1195,6 +1198,7 @@ default_model = "qwen3:14b"
         let session_id = create_session(&state, &workspace_root, "multiple providers").await;
         let options = RunOptions {
             model: None,
+            variant: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -1230,6 +1234,7 @@ default_model = "qwen3:14b"
         let session_id = create_session(&state, &workspace_root, "explicit model").await;
         let options = RunOptions {
             model: Some(ModelRef::new("openai", "gpt-5.4")),
+            variant: None,
             agent_profile: None,
             system: Some("be concise".into()),
             temperature: Some(0.7),
@@ -1244,6 +1249,85 @@ default_model = "qwen3:14b"
         assert_eq!(core.system.as_deref(), Some("be concise"));
         assert_eq!(core.temperature, Some(0.7));
         assert_eq!(core.max_output_tokens, Some(256));
+    }
+
+    #[tokio::test]
+    async fn run_options_to_core_resolves_model_variant_thinking() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-5.4"
+api_key = "dummy"
+
+[providers.openai.models."gpt-5.4".variants.light]
+thinking = { type = "enabled", budget_tokens = 3000 }
+
+[providers.openai.models."gpt-5.4".variants.deep]
+thinking = { type = "enabled", budget_tokens = 30000 }
+"#,
+            "model-variant",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "variant").await;
+        let options = RunOptions {
+            model: Some(ModelRef::new("openai", "gpt-5.4")),
+            variant: Some("deep".to_string()),
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+
+        let core = run_options_to_core(&state, session_id, &options)
+            .await
+            .expect("variant should resolve");
+
+        assert_eq!(core.variant.as_deref(), Some("deep"));
+        assert_eq!(
+            core.thinking,
+            Some(agena::provider::ThinkingRequest::Enabled {
+                budget_tokens: 30000
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn run_options_to_core_rejects_unknown_model_variant() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-5.4"
+api_key = "dummy"
+
+[providers.openai.models."gpt-5.4".variants.light]
+thinking = { type = "enabled", budget_tokens = 3000 }
+"#,
+            "unknown-model-variant",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "variant").await;
+        let options = RunOptions {
+            model: Some(ModelRef::new("openai", "gpt-5.4")),
+            variant: Some("deep".to_string()),
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+
+        let error = run_options_to_core(&state, session_id, &options)
+            .await
+            .expect_err("unknown variant should be rejected");
+
+        assert!(
+            matches!(error, ServerError::BadRequest(message) if message.contains("has no variant `deep`"))
+        );
     }
 
     #[tokio::test]

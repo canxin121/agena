@@ -85,6 +85,8 @@ pub struct TurnRuntimeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_window_generation: Option<u64>,
@@ -117,6 +119,7 @@ impl TurnRuntimeState {
             && self.pending_tool_calls.is_empty()
             && self.model_provider_id.is_none()
             && self.model_id.is_none()
+            && self.model_variant.is_none()
             && self.prompt_cache_key.is_none()
             && self.prompt_window_generation.is_none()
             && self.latest_event_seq.is_none()
@@ -125,6 +128,7 @@ impl TurnRuntimeState {
     pub fn clear_active_request(&mut self) {
         self.model_provider_id = None;
         self.model_id = None;
+        self.model_variant = None;
         self.prompt_cache_key = None;
         self.prompt_window_generation = None;
     }
@@ -133,12 +137,14 @@ impl TurnRuntimeState {
         &mut self,
         provider_id: String,
         model_id: String,
+        model_variant: Option<String>,
         prompt_cache_key: String,
         prompt_window_generation: u64,
     ) {
         self.status = SessionRuntimeStatus::AwaitingModel;
         self.model_provider_id = Some(provider_id);
         self.model_id = Some(model_id);
+        self.model_variant = model_variant.filter(|value| !value.trim().is_empty());
         self.prompt_cache_key = Some(prompt_cache_key);
         self.prompt_window_generation = Some(prompt_window_generation);
     }
@@ -322,6 +328,8 @@ pub struct SessionExecutionContext {
     pub model_provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_variant: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "crate::agent::AgentRunConfig::is_empty"
@@ -345,6 +353,7 @@ impl SessionExecutionContext {
             && self.agent_permission.is_empty()
             && self.model_provider_id.is_none()
             && self.model_id.is_none()
+            && self.model_variant.is_none()
             && self.agent_run.is_empty()
             && self.effective_workspace_root.is_none()
             && self.task_id.is_none()
@@ -396,9 +405,17 @@ impl SessionRuntimeState {
         ))
     }
 
+    pub fn model_variant_override(&self) -> Option<&str> {
+        self.execution.model_variant.as_deref()
+    }
+
     pub fn set_model_override(&mut self, provider_id: Option<String>, model_id: Option<String>) {
         self.execution.model_provider_id = provider_id.filter(|value| !value.trim().is_empty());
         self.execution.model_id = model_id.filter(|value| !value.trim().is_empty());
+    }
+
+    pub fn set_model_variant_override(&mut self, variant: Option<String>) {
+        self.execution.model_variant = variant.filter(|value| !value.trim().is_empty());
     }
 
     pub fn provider_anchor(
@@ -601,6 +618,7 @@ impl Session {
         if status == SessionRuntimeStatus::AwaitingModel {
             snapshot.model_provider_id = previous.model_provider_id;
             snapshot.model_id = previous.model_id;
+            snapshot.model_variant = previous.model_variant;
             snapshot.prompt_cache_key = previous.prompt_cache_key;
             snapshot.prompt_window_generation = previous.prompt_window_generation;
         }
@@ -1060,6 +1078,7 @@ mod tests {
         session.runtime.turn.record_model_request(
             "openai".to_owned(),
             "gpt-5".to_owned(),
+            Some("high".to_owned()),
             "cache-key".to_owned(),
             42,
         );
@@ -1075,6 +1094,7 @@ mod tests {
             Some("openai")
         );
         assert_eq!(session.runtime.turn.model_id.as_deref(), Some("gpt-5"));
+        assert_eq!(session.runtime.turn.model_variant.as_deref(), Some("high"));
         assert_eq!(
             session.runtime.turn.prompt_cache_key.as_deref(),
             Some("cache-key")

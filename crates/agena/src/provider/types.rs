@@ -9,12 +9,37 @@ use crate::{
 /// Controls extended thinking / reasoning for providers that support it.
 ///
 /// For Anthropic: maps to the `thinking` request field with `budget_tokens`.
-/// For OpenAI o-series: maps to `reasoning_effort` ("low"/"medium"/"high") derived from budget.
+/// For OpenAI reasoning models: maps to `reasoning_effort`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThinkingRequest {
     Enabled { budget_tokens: u32 },
+    Effort { effort: ReasoningEffort },
     Disabled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl ReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
 }
 
 /// Instructs the provider to produce output in a specific format.

@@ -10,6 +10,7 @@ export type ChatPageUiStateInput = {
   providers: Ref<ProviderSummary[]>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
+  selectedVariant: Ref<string>
   selectedWorkspaceId: Ref<number | null>
   userInputDrafts: Record<string, Record<string, string>>
   workspaces: Ref<WorkspaceResource[]>
@@ -49,6 +50,19 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     return model.display_name?.trim() || model.id
   }
 
+  function selectedProviderModel(): ProviderModel | undefined {
+    return providerModelOptions(input.selectedProviderId.value).find((model) => model.id === input.selectedModelId.value)
+  }
+
+  function modelVariantOptions(): Array<{ id: string; label: string; description: string }> {
+    const variants = selectedProviderModel()?.variants || {}
+    return Object.entries(variants).map(([id, variant]) => ({
+      id,
+      label: variant.display_name?.trim() || id,
+      description: variant.description?.trim() || id,
+    }))
+  }
+
   function formatMessageTime(value: string): string {
     const date = new Date(value)
     if (Number.isNaN(date.getTime())) return value
@@ -83,9 +97,14 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
 
   watch(input.selectedProviderId, (providerId) => {
     if (!providerId) return
+    input.selectedVariant.value = ''
     if (!input.selectedModelId.value) {
       input.selectedModelId.value = providerDefaultModel(providerId)
     }
+  })
+
+  watch(input.selectedModelId, () => {
+    input.selectedVariant.value = ''
   })
 
   return {
@@ -97,6 +116,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     providerDefaultModel,
     providerModelLabel,
     providerModelOptions,
+    modelVariantOptions,
     readUserAnswer,
     scrollToMessage,
     updateUserAnswer,

@@ -177,6 +177,32 @@ default_write = "ask"
 }
 
 #[test]
+fn loader_rejects_provider_level_variants() {
+    let path = write_temp_config(
+        r#"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-5"
+
+[providers.openai.variants.deep]
+thinking = { type = "effort", effort = "high" }
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("provider-level variants should fail validation");
+    assert!(
+        matches!(err, ConfigError::Validation(message) if message.contains("provider-level variants are not supported"))
+    );
+}
+
+#[test]
 fn loader_rejects_agena_mode_env() {
     let loader = ConfigLoader::new(TestEnvironment {
         vars: BTreeMap::from([("AGENA_MODE".to_owned(), "prod".to_owned())]),

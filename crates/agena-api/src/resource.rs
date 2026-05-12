@@ -292,6 +292,8 @@ pub struct SessionExecutionContextResource {
     pub model_provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_variant: Option<String>,
     #[serde(default, skip_serializing_if = "AgentRunConfig::is_empty")]
     pub agent_run: AgentRunConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -318,6 +320,8 @@ pub struct SessionExecutionResource {
 pub struct RunOptions {
     #[serde(default)]
     pub model: Option<ModelRef>,
+    #[serde(default)]
+    pub variant: Option<String>,
     #[serde(default)]
     pub agent_profile: Option<String>,
     #[serde(default)]

@@ -7,7 +7,7 @@ use tracing_subscriber::EnvFilter;
 use crate::provider::{
     ConfiguredModelDefinition, OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
-    ProviderStreamReplayConfig, ThinkingRequest,
+    ProviderStreamReplayConfig,
     auth::{ConfiguredAuthStore, FileAuthStore, KeyringAuthStore},
 };
 
@@ -357,7 +357,6 @@ pub struct HttpProviderConfig<T> {
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
     pub extra_headers: BTreeMap<String, String>,
-    pub default_thinking: Option<ThinkingRequest>,
     pub options: T,
 }
 
@@ -369,7 +368,6 @@ impl<T: fmt::Debug> fmt::Debug for HttpProviderConfig<T> {
             .field("api_key", &redacted(self.api_key.as_deref()))
             .field("api_key_env", &self.api_key_env)
             .field("extra_headers", &self.extra_headers)
-            .field("default_thinking", &self.default_thinking)
             .field("options", &self.options)
             .finish()
     }

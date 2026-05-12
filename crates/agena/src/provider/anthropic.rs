@@ -32,7 +32,6 @@ pub struct AnthropicProvider {
     auth_header: String,
     auth_scheme: Option<String>,
     extra_headers: HashMap<String, String>,
-    default_thinking: Option<ThinkingRequest>,
 }
 
 impl AnthropicProvider {
@@ -73,13 +72,7 @@ impl AnthropicProvider {
             auth_header: "x-api-key".to_owned(),
             auth_scheme: None,
             extra_headers,
-            default_thinking: None,
         }
-    }
-
-    pub fn with_default_thinking(mut self, thinking: Option<ThinkingRequest>) -> Self {
-        self.default_thinking = thinking;
-        self
     }
 
     pub fn with_auth_header(
@@ -347,15 +340,8 @@ impl ModelProvider for AnthropicProvider {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
 
-        let effective_thinking = request.thinking.as_ref().or(self.default_thinking.as_ref());
-        let include_thinking = matches!(effective_thinking, Some(ThinkingRequest::Enabled { .. }));
-        let thinking_body = effective_thinking.and_then(|t| match t {
-            ThinkingRequest::Enabled { budget_tokens } => Some(serde_json::json!({
-                "type": "enabled",
-                "budget_tokens": budget_tokens
-            })),
-            ThinkingRequest::Disabled => None,
-        });
+        let thinking_body = anthropic_thinking_body(request.thinking.as_ref());
+        let include_thinking = thinking_body.is_some();
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -524,17 +510,7 @@ impl ModelProvider for AnthropicProvider {
             tools,
             temperature: request.temperature,
             stream: Some(true),
-            thinking: request
-                .thinking
-                .as_ref()
-                .or(self.default_thinking.as_ref())
-                .and_then(|t| match t {
-                    ThinkingRequest::Enabled { budget_tokens } => Some(serde_json::json!({
-                        "type": "enabled",
-                        "budget_tokens": budget_tokens
-                    })),
-                    ThinkingRequest::Disabled => None,
-                }),
+            thinking: anthropic_thinking_body(request.thinking.as_ref()),
             stop_sequences: request.stop_sequences,
             top_p: request.top_p,
             top_k: request.top_k,
@@ -559,10 +535,7 @@ impl ModelProvider for AnthropicProvider {
         let mut events = sse::json_events(response);
         let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = model;
-        let include_thinking = matches!(
-            request.thinking.as_ref().or(self.default_thinking.as_ref()),
-            Some(ThinkingRequest::Enabled { .. })
-        );
+        let include_thinking = anthropic_thinking_body(request.thinking.as_ref()).is_some();
 
         let stream = async_stream::try_stream! {
             let mut pending_tool_calls: HashMap<usize, AnthropicToolCallState> = HashMap::new();
@@ -930,6 +903,26 @@ fn map_anthropic_usage(u: AnthropicUsage) -> CompletionUsage {
         total_cost: 0.0,
     }
     .into()
+}
+
+fn anthropic_thinking_body(thinking: Option<&ThinkingRequest>) -> Option<serde_json::Value> {
+    let budget_tokens = match thinking? {
+        ThinkingRequest::Enabled { budget_tokens } => *budget_tokens,
+        ThinkingRequest::Effort { effort } => match effort {
+            crate::provider::ReasoningEffort::Minimal => 1_024,
+            crate::provider::ReasoningEffort::Low => 4_000,
+            crate::provider::ReasoningEffort::Medium => 10_000,
+            crate::provider::ReasoningEffort::High => 16_000,
+            crate::provider::ReasoningEffort::Xhigh | crate::provider::ReasoningEffort::Max => {
+                31_999
+            }
+        },
+        ThinkingRequest::Disabled => return None,
+    };
+    Some(serde_json::json!({
+        "type": "enabled",
+        "budget_tokens": budget_tokens
+    }))
 }
 
 fn merge_anthropic_usage(

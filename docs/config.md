@@ -218,13 +218,19 @@ api_key_env = "OPENAI_API_KEY"
 api_mode = "responses"
 stream_mode = "sse"
 realtime_ws_url = "wss://..."
-default_thinking = "standard"
-thinking_depths = { light = 3000, standard = 10000, deep = 30000 }
 extra_headers = { "X-Trace" = "1" }
 
 [providers.openai.models."gpt-5"]
 input = { unsupported = ["image"] }
 features = ["tool_calling"]
+
+[providers.openai.models."gpt-5".variants.standard]
+display_name = "Standard"
+thinking = { type = "effort", effort = "medium" }
+
+[providers.openai.models."gpt-5".variants.deep]
+display_name = "Deep"
+thinking = { type = "effort", effort = "high" }
 
 [providers.compat]
 kind = "openai_compatible"
@@ -1126,8 +1132,6 @@ sha256 = "..."
 | `extra_headers` | `map<string,string>` | 额外 HTTP header |
 | `stream_mode` | `string` | `sse` / `realtime_websocket` |
 | `realtime_ws_url` | `string` | realtime websocket URL |
-| `thinking_depths` | `map<string,u32>` | 命名的 thinking budget |
-| `default_thinking` | `string` | 默认 thinking preset 名，或 `disabled` |
 | `models` | `map<string,object>` | provider 下按模型 id 显式声明的模型配置 |
 
 此外，某些 kind 还会用到：
@@ -1164,28 +1168,40 @@ sha256 = "..."
 - `google_vertex`
 - `cloudflare_ai_gateway`
 
-### 5.3 `thinking_depths` 与 `default_thinking`
+### 5.3 `variants`
 
 ```toml
 [providers.openai]
 kind = "openai"
 base_url = "https://api.openai.com/v1"
 default_model = "o3-mini"
-default_thinking = "standard"
 
-[providers.openai.thinking_depths]
-light = 3000
-standard = 10000
-deep = 30000
+[providers.openai.models."o3-mini".variants.light]
+display_name = "Light"
+description = "Lower reasoning budget for o3-mini"
+thinking = { type = "effort", effort = "low" }
+
+[providers.openai.models."o3-mini".variants.deep]
+display_name = "Deep"
+description = "Higher reasoning budget for o3-mini"
+thinking = { type = "effort", effort = "high" }
+
+[providers.openai.models."gpt-5".variants.max]
+display_name = "Max"
+thinking = { type = "effort", effort = "max" }
 ```
 
 规则：
 
-- `thinking_depths`：`name -> budget_tokens`
-- `default_thinking`：
-  - 要么是 `thinking_depths` 里的 key
-  - 要么是字面量 `"disabled"`
-- 如果 `default_thinking` 引用了不存在的 key，会配置校验失败
+- `variants` 是命名的模型运行变体，运行时通过 `variant` 选择
+- variant 必须绑定到具体模型：`[providers.<id>.models."<model-id>".variants.<name>]`
+- provider 级 `[providers.<id>.variants.<name>]` 不支持，配置会直接报错
+- 不选择 `variant` 时，Agena 不会注入显式 thinking/reasoning 设置
+- `thinking` 支持：
+  - `{ type = "enabled", budget_tokens = 30000 }`
+  - `{ type = "effort", effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }`
+  - `{ type = "disabled" }`
+- `disabled = true` 可以隐藏/移除该模型已有的同名 variant
 
 ### 5.4 `models`
 
@@ -1217,6 +1233,7 @@ features = ["tool_calling"]
 | `context_window_tokens` | `u32` | 否 |  | 上下文窗口大小 |
 | `max_output_tokens` | `u32` | 否 |  | 最大输出 token |
 | `description` | `string` | 否 |  | 描述文本 |
+| `variants` | `map<string,object>` | 否 |  | 该模型专属或覆盖的 variant 配置 |
 | `input` | `array<string>` or `object` | 否 | 输入模态：`text`, `image`, `document`, `audio`, `video`, `file` | 紧凑输入能力 patch |
 | `features` | `array<string>` or `object` | 否 | 特性：`tool_calling`, `streaming`, `reasoning`, `structured_output`, `temperature` | 紧凑特性 patch |
 
@@ -1267,7 +1284,6 @@ extra_headers = { "X-Trace" = "1" }
 | `api_mode` | 否 | `responses` | `responses`, `chat`, `auto` | OpenAI API 模式 |
 | `stream_mode` | 否 | `sse` | `sse`, `realtime_websocket` | 流式传输方式 |
 | `realtime_ws_url` | 否 | `null` |  | realtime websocket URL |
-| `thinking_depths` / `default_thinking` | 否 |  |  | reasoning 预算配置 |
 | `models` | 否 | `{}` |  | 按模型 id 显式声明模型配置 |
 
 #### 5.5.3 `kind = "openai_compatible"`
@@ -1294,7 +1310,6 @@ realtime_ws_url = "wss://..."
 | `auth_scheme` | 否 | `"Bearer"` | 认证 scheme |
 | `stream_mode` | 否 | `sse` | 流模式 |
 | `realtime_ws_url` | 否 | `null` | 实时 WS URL |
-| `thinking_depths` / `default_thinking` | 否 |  | reasoning 预算 |
 | `models` | 否 | `{}` | 按模型 id 显式声明模型配置 |
 
 #### 5.5.4 `kind = "sap_ai_core"`
@@ -1334,7 +1349,6 @@ auth_header = "x-api-key"
 | `extra_headers` | 否 | `{}` | 额外 header |
 | `auth_header` | 否 | `"x-api-key"` | 认证 header |
 | `auth_scheme` | 否 | `null` | 可选认证 scheme |
-| `thinking_depths` / `default_thinking` | 否 |  | reasoning 预算 |
 | `models` | 否 | `{}` | 按模型 id 显式声明模型配置 |
 
 #### 5.5.6 `kind = "gemini"`
@@ -1353,7 +1367,6 @@ api_key_env = "GEMINI_API_KEY"
 | `default_model` | 是 |  | 默认模型 |
 | `api_key` / `api_key_env` | 否 | `null` | 鉴权 |
 | `extra_headers` | 否 | `{}` | 额外 header |
-| `thinking_depths` / `default_thinking` | 否 |  | reasoning 预算 |
 | `models` | 否 | `{}` | 按模型 id 显式声明模型配置 |
 
 #### 5.5.7 `kind = "codex"`
@@ -1821,7 +1834,8 @@ agena \
 - `runtime.session_cache.max_sessions = 0`
 - `runtime.session_cache.ttl_secs = 0`
 - `runtime.session_cache.max_bytes = 0`
-- `default_thinking` 指向不存在的 `thinking_depths` key
+- `providers.<id>.variants` provider 级 variant 配置不受支持
+- `providers.<id>.models."<model-id>".variants` 里某个 variant 名为空白，或 variant 没有设置任何字段
 - Bedrock 只写了 `access_key_id` 或只写了 `secret_access_key`
 - `providers.<id>.models` 里某个 model id 为空白
 - `providers.<id>.models."<model-id>"` 没有设置任何字段

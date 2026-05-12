@@ -25,11 +25,11 @@ transcript-empty-session = Todavia no hay mensajes en esta sesion.
 no-session-selected = No hay ninguna sesion seleccionada.
 no-session-selected-hint = Use el panel de sesiones o empiece a escribir en el editor para crear una.
 composer-session-new = nueva sesion
-composer-placeholder = Enter envia. F3 adjunta archivo. Alt/Shift+Enter o Ctrl+J inserta salto de linea. F4 edicion externa. F6 imagen del portapapeles.
+composer-placeholder = Mensaje para Agena. Enter envia. / comandos. F3 archivo.
 
-status-sessions = Tab cambia de panel | / busca sesiones | Enter abre | n nueva sesion | q salir
-status-transcript = Tab cambia de panel | / o Ctrl+F busca | y copia la transcripcion | Y copia la vista | q salir
-status-composer = Enter envia | F3 adjunta | F4 edita | F6 imagen | Tab cambia de panel | q salir
+status-sessions = Sesiones: Enter abre | / busca | n nueva | q salir
+status-transcript = Transcripcion: j/k desplaza | / busca | y copia | v visor
+status-composer = Entrada: Enter envia | Shift+Enter nueva linea | / comandos | Tab foco
 
 help-title = Ayuda
 help-header = Agena TUI
@@ -122,10 +122,10 @@ message-attachments = adjuntos
 message-awaiting-user-input = esperando entrada de usuario: {$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = detalle de parte no disponible
-message-tool-pending = herramienta pendiente: {$label}
-message-tool-running = herramienta en ejecucion: {$label}
-message-tool-done = herramienta terminada: {$label}
-message-tool-failed = herramienta fallida: {$label}
+message-tool-pending = pendiente: {$label}
+message-tool-running = ejecutando: {$label}
+message-tool-done = listo: {$label}
+message-tool-failed = fallo: {$label}
 message-tool-result-blocks = {$count} bloques de resultado
 
 todo-status-pending = pending

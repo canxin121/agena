@@ -25,11 +25,11 @@ transcript-empty-session = 目前工作階段還沒有訊息。
 no-session-selected = 尚未選擇工作階段。
 no-session-selected-hint = 請在工作階段面板中選擇，或直接在輸入區開始輸入以建立新工作階段。
 composer-session-new = 新工作階段
-composer-placeholder = Enter 送出。F3 附加檔案。Alt/Shift+Enter 或 Ctrl+J 插入換行。F4 外部編輯。F6 剪貼簿圖片。
+composer-placeholder = 輸入給 Agena。Enter 送出。/ 指令。F3 附件。
 
-status-sessions = Tab 切換面板 | / 搜尋工作階段 | Enter 開啟 | n 新建工作階段 | q 離開
-status-transcript = Tab 切換面板 | / 或 Ctrl+F 搜尋 | y 複製全文 | Y 複製視窗 | q 離開
-status-composer = Enter 送出 | F3 附加 | F4 編輯 | F6 圖片 | Tab 切換面板 | q 離開
+status-sessions = 工作階段：Enter 開啟 | / 搜尋 | n 新建 | q 離開
+status-transcript = 記錄：j/k 捲動 | / 搜尋 | y 複製 | v 分頁
+status-composer = 輸入：Enter 送出 | Shift+Enter 換行 | / 指令 | Tab 聚焦
 
 help-title = 說明
 help-header = Agena TUI
@@ -122,10 +122,10 @@ message-attachments = 附件
 message-awaiting-user-input = 等待使用者輸入：{$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = 此分段詳情不可用
-message-tool-pending = 工具待執行：{$label}
-message-tool-running = 工具執行中：{$label}
-message-tool-done = 工具已完成：{$label}
-message-tool-failed = 工具失敗：{$label}
+message-tool-pending = 待執行：{$label}
+message-tool-running = 執行中：{$label}
+message-tool-done = 完成：{$label}
+message-tool-failed = 失敗：{$label}
 message-tool-result-blocks = {$count} 個結果區塊
 
 todo-status-pending = 待處理

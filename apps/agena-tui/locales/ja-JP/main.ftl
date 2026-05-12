@@ -25,11 +25,11 @@ transcript-empty-session = このセッションにはまだメッセージが�
 no-session-selected = セッションが選択されていません。
 no-session-selected-hint = セッションペインを使うか、入力欄に入力を始めて新しいセッションを作成してください。
 composer-session-new = 新しいセッション
-composer-placeholder = Enter で送信。F3 でファイル添付。Alt/Shift+Enter または Ctrl+J で改行。F4 で外部編集。F6 でクリップボード画像。
+composer-placeholder = Agena へ入力。Enter 送信。/ コマンド。F3 添付。
 
-status-sessions = Tab でペイン切替 | / でセッション検索 | Enter で開く | n で新規セッション | q で終了
-status-transcript = Tab でペイン切替 | / または Ctrl+F で検索 | y で全文コピー | Y で表示範囲コピー | q で終了
-status-composer = Enter で送信 | F3 添付 | F4 編集 | F6 画像 | Tab でペイン切替 | q で終了
+status-sessions = セッション: Enter 開く | / 検索 | n 新規 | q 終了
+status-transcript = 記録: j/k スクロール | / 検索 | y コピー | v ページャ
+status-composer = 入力: Enter 送信 | Shift+Enter 改行 | / コマンド | Tab フォーカス
 
 help-title = ヘルプ
 help-header = Agena TUI
@@ -122,10 +122,10 @@ message-attachments = 添付
 message-awaiting-user-input = ユーザー入力待ち: {$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = パート詳細を利用できません
-message-tool-pending = ツール保留: {$label}
-message-tool-running = ツール実行中: {$label}
-message-tool-done = ツール完了: {$label}
-message-tool-failed = ツール失敗: {$label}
+message-tool-pending = 保留: {$label}
+message-tool-running = 実行中: {$label}
+message-tool-done = 完了: {$label}
+message-tool-failed = 失敗: {$label}
 message-tool-result-blocks = {$count} 個の結果ブロック
 
 todo-status-pending = pending

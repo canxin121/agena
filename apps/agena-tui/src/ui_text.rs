@@ -20,17 +20,10 @@ pub fn transcript_header_title(
     i18n: &I18n,
     session_id: Option<i64>,
     session_title: &str,
-    is_running: bool,
+    _is_running: bool,
 ) -> String {
     match session_id {
-        Some(id) => {
-            let mut value = format!(" {} (#{id}", session_title);
-            if is_running {
-                value.push_str(format!(", {}", t(i18n, "session-running")).as_str());
-            }
-            value.push_str(") ");
-            value
-        }
+        Some(id) => format!(" {}  #{} ", session_title, id),
         None => format!(" {} ", t(i18n, "pane-transcript")),
     }
 }
@@ -52,24 +45,6 @@ pub fn session_meta(i18n: &I18n, id: i64, message_count: u64, updated_at: DateTi
             "id" => id,
             "message_count" => message_count,
             "updated" => format_relative_time(i18n, updated_at),
-        ),
-    )
-}
-
-pub fn transcript_lines_summary(
-    i18n: &I18n,
-    first: usize,
-    last: usize,
-    total: usize,
-    percent: u16,
-) -> String {
-    i18n.text_args(
-        "transcript-header-lines",
-        &fl_args!(
-            "first" => first as i64,
-            "last" => last as i64,
-            "total" => total as i64,
-            "percent" => percent as i64,
         ),
     )
 }
@@ -241,64 +216,11 @@ pub fn help_lines(i18n: &I18n) -> Vec<String> {
     vec![
         t(i18n, "help-header"),
         String::new(),
-        t(i18n, "help-section-sessions"),
-        t(i18n, "help-sessions-line-1"),
-        t(i18n, "help-sessions-line-2"),
-        t(i18n, "help-sessions-line-3"),
-        t(i18n, "help-sessions-line-4"),
-        t(i18n, "help-sessions-line-5"),
-        String::new(),
-        t(i18n, "help-section-transcript"),
-        t(i18n, "help-transcript-line-1"),
-        t(i18n, "help-transcript-line-2"),
-        t(i18n, "help-transcript-line-3"),
-        t(i18n, "help-transcript-line-4"),
-        t(i18n, "help-transcript-line-5"),
-        t(i18n, "help-transcript-line-6"),
-        t(i18n, "help-transcript-line-7"),
-        t(i18n, "help-transcript-line-8"),
-        String::new(),
-        t(i18n, "help-section-composer"),
-        t(i18n, "help-composer-line-1"),
-        t(i18n, "help-composer-line-2"),
-        t(i18n, "help-composer-line-3"),
-        t(i18n, "help-composer-line-4"),
-        t(i18n, "help-composer-line-5"),
-        t(i18n, "help-composer-line-6"),
-        t(i18n, "help-composer-line-7"),
-        t(i18n, "help-composer-line-8"),
-        t(i18n, "help-composer-line-9"),
-        t(i18n, "help-composer-line-10"),
-        String::new(),
-        t(i18n, "help-section-actions"),
-        t(i18n, "help-actions-line-1"),
-        t(i18n, "help-actions-line-2"),
-        t(i18n, "help-actions-line-3"),
-        t(i18n, "help-actions-line-4"),
-        t(i18n, "help-actions-line-5"),
+        t(i18n, "status-composer"),
+        t(i18n, "status-transcript"),
+        t(i18n, "status-sessions"),
         t(i18n, "help-actions-line-6"),
     ]
-}
-
-pub fn message_usage(i18n: &I18n, input: u64, output: u64, reasoning: u64) -> String {
-    format!(
-        "  {}",
-        i18n.text_args(
-            "message-usage",
-            &fl_args!(
-                "input" => input,
-                "output" => output,
-                "reasoning" => reasoning,
-            ),
-        )
-    )
-}
-
-pub fn message_finish(i18n: &I18n, finish: &str) -> String {
-    format!(
-        "  {}",
-        i18n.text_args("message-finish", &fl_args!("finish" => finish))
-    )
 }
 
 pub fn message_parts_not_loaded(i18n: &I18n, count: usize) -> String {

@@ -41,11 +41,11 @@ transcript-empty-session = 当前会话还没有消息。
 no-session-selected = 尚未选择会话。
 no-session-selected-hint = 请在会话面板中选择，或直接在输入框中开始输入以创建新会话。
 composer-session-new = 新会话
-composer-placeholder = Enter 入队（空闲时直接发送）。Ctrl+Enter 立即发送（AI 工作时注入）。Up 编辑队列。Esc 中断。Shift+Enter 换行。F3 附件。F4 编辑器。F6 图片。
+composer-placeholder = 输入给 Agena。Enter 发送。/ 命令。F3 附件。
 
-status-sessions = Tab 切换面板 | s 恢复会话 | b 分支历史 | / 搜索 | 1 全部 | 2 根 | 3 子树 | m 循环 | Enter 打开 | [ 父会话 | ] 子会话 | R 重命名 | t 时间线 | P 插件 | v 分页查看 | q 退出
-status-transcript = Tab 切换面板 | s 恢复会话 | b 分支历史 | / 或 Ctrl+F 搜索 | Alt+P 命令 | 1/2/3 切视图 | [ 父会话 | ] 子会话 | R 重命名 | t 时间线 | Enter 时间线跳转 | P 插件 | e 导出 | v 分页查看 | y/Y 复制 | q 退出
-status-composer = Enter 入队/发送 | Ctrl+Enter 立即发送 | Up 编辑队列 | Esc 中断 | / 命令 | Alt+P 面板 | F3 附件 | F4 编辑器 | Tab 切换 | q 退出
+status-sessions = 会话：Enter 打开 | / 搜索 | n 新建 | q 退出
+status-transcript = 记录：j/k 滚动 | / 搜索 | y 复制 | v 分页
+status-composer = 输入：Enter 发送 | Shift+Enter 换行 | / 命令 | Tab 聚焦
 
 help-title = 帮助
 help-header = Agena TUI
@@ -265,12 +265,12 @@ message-attachments = 附件
 message-awaiting-user-input = 等待用户输入：{$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = 该分段详情不可用
-message-tool-pending = 工具待执行：{$label}
-message-tool-running = 工具运行中：{$label}
-message-tool-done = 工具已完成：{$label}
-message-tool-failed = 工具失败：{$label}
+message-tool-pending = 待执行：{$label}
+message-tool-running = 运行中：{$label}
+message-tool-done = 完成：{$label}
+message-tool-failed = 失败：{$label}
 message-tool-result-blocks = {$count} 个结果块
-message-tool-output-collapsed =     … 已隐藏 {$lines} 行；可打开 transcript pager 查看完整上下文
+message-tool-output-collapsed =     … 还有 {$lines} 行
 
 todo-status-pending = 待处理
 todo-status-in-progress = 进行中

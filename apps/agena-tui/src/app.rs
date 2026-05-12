@@ -86,9 +86,10 @@ const PASTE_BURST_MIN_CHARS: u16 = 3;
 const PASTE_BURST_CHAR_INTERVAL_MS: u64 = 8;
 const PASTE_ENTER_SUPPRESS_WINDOW_MS: u64 = 120;
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
-const TOOL_CARD_PREVIEW_LINES: usize = 18;
-const TOOL_CARD_PREVIEW_CHARS: usize = 6_000;
+const TOOL_CARD_PREVIEW_LINES: usize = 8;
+const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
 const PROMPT_SUMMARY_TAG: &str = "prompt_summary";
+const MAX_SLASH_COMMAND_SUGGESTIONS: usize = 6;
 
 #[derive(Debug, Clone, Default)]
 pub struct LaunchOptions {
@@ -159,6 +160,8 @@ pub struct App {
     run_options: RunOptionsState,
     composer: Editor,
     composer_items: Vec<ComposerItem>,
+    slash_command_suggestions: Option<SlashCommandSuggestionState>,
+    dismissed_slash_command_suggestions_for: Option<String>,
     draft_store: DraftStore,
     draft_store_path: PathBuf,
     draft_store_dirty: bool,
@@ -687,6 +690,34 @@ pub struct ComposerDraftElement {
     pub range: Range<usize>,
 }
 
+#[derive(Debug, Clone)]
+struct SlashCommandSuggestionState {
+    query: String,
+    fingerprint: String,
+    items: Vec<SlashCommandSuggestionItem>,
+    selected: usize,
+}
+
+#[derive(Debug, Clone)]
+struct SlashCommandSuggestionItem {
+    label: String,
+    detail: String,
+    value: SlashCommandSuggestionValue,
+}
+
+#[derive(Debug, Clone)]
+enum SlashCommandSuggestionValue {
+    Command(&'static CommandSpec),
+    RuntimeEntry(String),
+}
+
+#[derive(Debug, Clone)]
+struct SlashCommandSuggestionContext {
+    query: String,
+    fingerprint: String,
+    name_range: Range<usize>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 struct PersistentDraftStore {
     #[serde(default = "persistent_draft_store_version")]
@@ -845,6 +876,8 @@ impl App {
             run_options: RunOptionsState::default(),
             composer: Editor::default(),
             composer_items: Vec::new(),
+            slash_command_suggestions: None,
+            dismissed_slash_command_suggestions_for: None,
             draft_store,
             draft_store_path,
             draft_store_dirty: false,
@@ -1028,12 +1061,15 @@ impl App {
             }
         }
 
-        if matches!(key.code, KeyCode::Tab) {
+        if matches!(key.code, KeyCode::Tab)
+            && !(self.focus == Focus::Composer && self.slash_command_suggestions.is_some())
+        {
             self.focus = match self.focus {
                 Focus::Sessions => Focus::Transcript,
                 Focus::Transcript => Focus::Composer,
                 Focus::Composer => Focus::Sessions,
             };
+            self.slash_command_suggestions = None;
             return;
         }
 
@@ -1043,6 +1079,7 @@ impl App {
                 Focus::Transcript => Focus::Sessions,
                 Focus::Composer => Focus::Transcript,
             };
+            self.slash_command_suggestions = None;
             return;
         }
 
@@ -1751,6 +1788,8 @@ impl App {
             } else {
                 self.composer.insert_str(text.as_str());
             }
+            self.sync_composer_items_with_editor();
+            self.sync_slash_command_suggestions();
         }
     }
 
@@ -1848,6 +1887,9 @@ impl App {
     }
 
     fn handle_composer_key(&mut self, key: KeyEvent) {
+        if self.handle_slash_command_suggestion_key(key) {
+            return;
+        }
         // Esc handling is special — double-tap clears the input. We track
         // it before consulting the configurable bindings.
         if matches!(key.code, KeyCode::Esc) && key.modifiers.is_empty() {
@@ -1869,10 +1911,12 @@ impl App {
                 }
                 ComposerAction::Newline => {
                     self.composer.insert_explicit_newline();
+                    self.sync_slash_command_suggestions();
                     return;
                 }
                 ComposerAction::EditQueue => {
                     if self.try_pop_queue_into_editor() {
+                        self.sync_slash_command_suggestions();
                         return;
                     }
                     // Fall through to normal cursor-up behavior when queue
@@ -1907,8 +1951,203 @@ impl App {
             _ => {
                 self.composer.handle_multiline_input_key(key);
                 self.sync_composer_items_with_editor();
+                self.sync_slash_command_suggestions();
             }
         }
+    }
+
+    fn handle_slash_command_suggestion_key(&mut self, key: KeyEvent) -> bool {
+        if self.slash_command_suggestions.is_none() {
+            return false;
+        }
+
+        match key {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_slash_command_suggestion(-1);
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_slash_command_suggestion(1);
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.dismiss_slash_command_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            } => {
+                self.complete_selected_slash_command_suggestion(false);
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.complete_selected_slash_command_suggestion(true);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn move_slash_command_suggestion(&mut self, delta: isize) {
+        let Some(state) = self.slash_command_suggestions.as_mut() else {
+            return;
+        };
+        if state.items.is_empty() {
+            state.selected = 0;
+            return;
+        }
+        let len = state.items.len() as isize;
+        state.selected = (state.selected as isize + delta).rem_euclid(len) as usize;
+    }
+
+    fn dismiss_slash_command_suggestions(&mut self) {
+        if let Some(state) = self.slash_command_suggestions.take() {
+            self.dismissed_slash_command_suggestions_for = Some(state.fingerprint);
+        }
+    }
+
+    fn complete_selected_slash_command_suggestion(&mut self, submit: bool) {
+        let Some(item) = self.selected_slash_command_suggestion().cloned() else {
+            return;
+        };
+
+        self.apply_slash_command_completion(&item);
+        if submit {
+            self.submit_composer();
+        } else {
+            self.sync_slash_command_suggestions();
+        }
+    }
+
+    fn selected_slash_command_suggestion(&self) -> Option<&SlashCommandSuggestionItem> {
+        let state = self.slash_command_suggestions.as_ref()?;
+        state.items.get(state.selected)
+    }
+
+    fn apply_slash_command_completion(&mut self, item: &SlashCommandSuggestionItem) {
+        let Some(context) = self.slash_command_suggestion_context() else {
+            return;
+        };
+
+        let name = match &item.value {
+            SlashCommandSuggestionValue::Command(spec) => spec.name,
+            SlashCommandSuggestionValue::RuntimeEntry(name) => name.as_str(),
+        };
+        let replacement = format!("/{name}");
+        self.slash_command_suggestions = None;
+        self.dismissed_slash_command_suggestions_for = None;
+
+        self.composer
+            .remove_range(context.name_range.start, context.name_range.end);
+        self.composer
+            .insert_str_at(context.name_range.start, replacement.as_str());
+
+        let after_cursor_is_space = self.composer.text()[self.composer.cursor..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace);
+        if !after_cursor_is_space {
+            self.composer.insert_char(' ');
+        }
+        self.sync_composer_items_with_editor();
+    }
+
+    fn sync_slash_command_suggestions(&mut self) {
+        let Some(context) = self.slash_command_suggestion_context() else {
+            self.slash_command_suggestions = None;
+            return;
+        };
+        if self.dismissed_slash_command_suggestions_for.as_deref()
+            == Some(context.fingerprint.as_str())
+        {
+            self.slash_command_suggestions = None;
+            return;
+        }
+
+        let items = self.slash_command_suggestion_items(context.query.as_str());
+        if items.is_empty() {
+            self.slash_command_suggestions = None;
+            return;
+        }
+
+        let selected = self
+            .slash_command_suggestions
+            .as_ref()
+            .filter(|state| state.query == context.query)
+            .map(|state| min(state.selected, items.len().saturating_sub(1)))
+            .unwrap_or(0);
+        self.slash_command_suggestions = Some(SlashCommandSuggestionState {
+            query: context.query,
+            fingerprint: context.fingerprint,
+            items,
+            selected,
+        });
+    }
+
+    fn slash_command_suggestion_context(&self) -> Option<SlashCommandSuggestionContext> {
+        if self.focus != Focus::Composer || self.overlay.is_some() {
+            return None;
+        }
+
+        let context =
+            slash_command_suggestion_context_for_text(self.composer.text(), self.composer.cursor)?;
+        if !context.query.is_empty()
+            && self
+                .slash_command_suggestion_items(context.query.as_str())
+                .is_empty()
+        {
+            return None;
+        }
+        Some(context)
+    }
+
+    fn slash_command_suggestion_items(&self, query: &str) -> Vec<SlashCommandSuggestionItem> {
+        let query = query.trim().to_ascii_lowercase();
+        let mut items = commands::command_suggestions_for_prefix(query.as_str())
+            .into_iter()
+            .map(|spec| SlashCommandSuggestionItem {
+                label: format!("/{}", spec.name),
+                detail: ui_text::t(&self.i18n, spec.summary_key),
+                value: SlashCommandSuggestionValue::Command(spec),
+            })
+            .collect::<Vec<_>>();
+
+        items.extend(
+            self.backend
+                .runtime_entry_rows()
+                .into_iter()
+                .filter(|entry| runtime_entry_matches_slash_query(entry.label.as_str(), &query))
+                .map(|entry| {
+                    let label = entry.label;
+                    SlashCommandSuggestionItem {
+                        label: format!("/{label}"),
+                        detail: entry.detail,
+                        value: SlashCommandSuggestionValue::RuntimeEntry(label),
+                    }
+                }),
+        );
+        items
     }
 
     /// Single-Esc → leave composer focus. Double-Esc within the configured
@@ -1923,10 +2162,13 @@ impl App {
         if double {
             self.composer = Editor::default();
             self.composer_items.clear();
+            self.slash_command_suggestions = None;
+            self.dismissed_slash_command_suggestions_for = None;
             self.last_esc_at = None;
             return;
         }
         self.last_esc_at = Some(now);
+        self.slash_command_suggestions = None;
         self.focus = Focus::Transcript;
     }
 
@@ -4076,6 +4318,7 @@ impl App {
                 self.composer
                     .set_text(format!("/{entry_name} ").trim_end().to_string());
                 self.focus = Focus::Composer;
+                self.sync_slash_command_suggestions();
             }
             (PickerKind::WorkspaceSessions, PickerValue::Session(session_id)) => {
                 self.open_session(
@@ -4144,6 +4387,7 @@ impl App {
         self.composer.set_text(format!("/{} ", spec.name));
         self.composer.cursor = self.composer.text().len();
         self.focus = Focus::Composer;
+        self.sync_slash_command_suggestions();
     }
 
     fn apply_provider_override(&mut self, provider: ProviderSummaryResource) {
@@ -4211,13 +4455,6 @@ impl App {
         self.transcript.execution.as_ref()?.session.parent_id
     }
 
-    fn current_or_selected_session_summary(&self) -> Option<SessionResource> {
-        if let Some(execution) = self.transcript.execution.as_ref() {
-            return Some(execution.session.clone());
-        }
-        self.sessions.current_selected().cloned()
-    }
-
     fn current_lineage_item(&self, session_id: i64) -> Option<&LineageSessionItem> {
         let lineage = self.current_lineage.as_ref()?;
         (lineage.session_id == self.transcript.session_id?).then_some(())?;
@@ -4258,50 +4495,6 @@ impl App {
             ));
         }
         parts
-    }
-
-    fn status_context_summary(&self) -> Option<String> {
-        let mut parts = Vec::new();
-
-        if let Some(session_id) = self.current_or_selected_session_id() {
-            parts.push(format!("#{session_id}"));
-        }
-
-        parts.push(self.workspace_context_label());
-
-        if let Some(theme) = self.plugin_theme.as_ref() {
-            parts.push(format!("theme {}", theme.id));
-        }
-
-        let plugin_segments = self.backend.plugin_statusline_segments();
-        if !plugin_segments.is_empty() {
-            parts.push(format!("status {}", plugin_segments.len()));
-        }
-
-        if let Some(session) = self.current_or_selected_session_summary() {
-            if let Some(parent_id) = session.parent_id {
-                parts.push(self.i18n.text_args(
-                    "session-summary-parent",
-                    &crate::fl_args!("id" => parent_id),
-                ));
-            }
-            if session.child_session_count > 0 {
-                parts.push(self.i18n.text_args(
-                    "session-summary-children",
-                    &crate::fl_args!("count" => session.child_session_count as i64),
-                ));
-            }
-        }
-        parts.extend(self.current_lineage_context_parts());
-        parts.extend(self.current_execution_context_parts());
-
-        parts.push(self.current_session_view_summary());
-
-        if let Some(summary) = self.run_options.summary() {
-            parts.push(summary);
-        }
-
-        (!parts.is_empty()).then(|| parts.join(" | "))
     }
 
     fn open_parent_session(&mut self) {
@@ -5293,6 +5486,7 @@ impl App {
 
     fn flush_input_buffers_if_due(&mut self, now: Instant) {
         self.composer.flush_pending_input_if_due(now);
+        self.sync_slash_command_suggestions();
         if let Some(overlay) = &mut self.overlay {
             match overlay {
                 Overlay::SessionSearch(dialog)
@@ -5467,6 +5661,8 @@ impl App {
     fn clear_composer_state(&mut self) {
         self.composer.clear();
         self.composer_items.clear();
+        self.slash_command_suggestions = None;
+        self.dismissed_slash_command_suggestions_for = None;
     }
 
     fn current_composer_draft(&mut self) -> ComposerDraft {
@@ -5581,6 +5777,7 @@ impl App {
                 .set_elements(elements.into_iter().map(|element| element.range).collect());
             self.composer_items = items;
             self.sync_composer_items_with_editor();
+            self.sync_slash_command_suggestions();
         }
     }
 
@@ -5611,6 +5808,7 @@ impl App {
         self.composer.set_text(text);
         self.composer.set_elements(ranges);
         self.composer_items = kept;
+        self.sync_slash_command_suggestions();
     }
 
     fn build_submission_parts(&self, draft: &ComposerDraft) -> UiResult<Vec<PartContent>> {
@@ -9562,6 +9760,53 @@ fn split_command_args_once(value: &str) -> Option<(&str, &str)> {
     }
 }
 
+fn runtime_entry_matches_slash_query(label: &str, query: &str) -> bool {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    let label = label.to_ascii_lowercase();
+    label == query || label.starts_with(query.as_str())
+}
+
+fn slash_command_suggestion_context_for_text(
+    text: &str,
+    cursor: usize,
+) -> Option<SlashCommandSuggestionContext> {
+    let first_line_end = text.find('\n').unwrap_or(text.len());
+    if cursor > first_line_end {
+        return None;
+    }
+    let first_line = &text[..first_line_end];
+    if !first_line.starts_with('/') || first_line.starts_with("//") {
+        return None;
+    }
+
+    let name_start = 1;
+    let name_end = first_line[name_start..]
+        .find(char::is_whitespace)
+        .map(|index| name_start + index)
+        .unwrap_or(first_line.len());
+    if cursor > name_end {
+        return None;
+    }
+
+    let name = &first_line[name_start..name_end];
+    if name.contains('/') {
+        return None;
+    }
+    let rest_after_name = first_line[name_end..].trim_start();
+    if name.is_empty() && !rest_after_name.is_empty() {
+        return None;
+    }
+
+    Some(SlashCommandSuggestionContext {
+        query: name.to_ascii_lowercase(),
+        fingerprint: format!("{first_line}:{cursor}"),
+        name_range: 0..name_end,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9586,6 +9831,33 @@ mod tests {
             derive_session_title("\n\n  hello world  \nnext"),
             "hello world"
         );
+    }
+
+    #[test]
+    fn slash_command_context_accepts_bare_slash_and_prefixes() {
+        let bare = slash_command_suggestion_context_for_text("/", 1)
+            .expect("bare slash should show suggestions");
+        assert_eq!(bare.query, "");
+        assert_eq!(bare.name_range, 0..1);
+
+        let prefix = slash_command_suggestion_context_for_text("/rew", 4)
+            .expect("prefix should show suggestions");
+        assert_eq!(prefix.query, "rew");
+        assert_eq!(prefix.name_range, 0..4);
+    }
+
+    #[test]
+    fn slash_command_context_rejects_history_like_and_literal_inputs() {
+        assert!(slash_command_suggestion_context_for_text("/ test", 1).is_none());
+        assert!(slash_command_suggestion_context_for_text("//literal", 2).is_none());
+        assert!(slash_command_suggestion_context_for_text(" /rew", 5).is_none());
+    }
+
+    #[test]
+    fn slash_command_context_only_applies_while_cursor_is_on_name() {
+        assert!(slash_command_suggestion_context_for_text("/review focus", 4).is_some());
+        assert!(slash_command_suggestion_context_for_text("/review focus", 8).is_none());
+        assert!(slash_command_suggestion_context_for_text("/review\nnext", 8).is_none());
     }
 
     #[test]
@@ -9770,7 +10042,7 @@ mod tests {
             &I18n::english(),
         );
 
-        assert!(lines[0].text.starts_with("[assistant]"));
+        assert_eq!(lines[0].text, "assistant");
         assert!(lines.iter().skip(1).all(|line| line.text.starts_with("  ")));
         assert!(lines.iter().any(|line| line.text.contains("alpha beta")));
     }
@@ -9910,7 +10182,6 @@ api_key = "test"
             .collect::<String>();
         assert!(rendered.contains("Sessions"));
         assert!(rendered.contains("Child Session"));
-        assert!(rendered.contains("current"));
         assert!(rendered.contains("ws "));
 
         runtime.shutdown();
@@ -10580,7 +10851,7 @@ api_key = "test"
     }
 
     #[test]
-    fn composer_height_reserves_footer_and_context_rows() {
+    fn composer_height_reserves_optional_footer_rows() {
         assert_eq!(2_u16 + u16::from(false), 2);
         assert_eq!(2_u16 + u16::from(true), 3);
     }
@@ -10638,17 +10909,17 @@ api_key = "test"
     }
 
     #[test]
-    fn transcript_surface_header_height_expands_with_available_height() {
+    fn transcript_surface_header_height_stays_minimal() {
         assert_eq!(view::transcript_surface_header_height(8), 2);
-        assert_eq!(view::transcript_surface_header_height(14), 3);
-        assert_eq!(view::transcript_surface_header_height(24), 4);
+        assert_eq!(view::transcript_surface_header_height(14), 2);
+        assert_eq!(view::transcript_surface_header_height(24), 2);
     }
 
     #[test]
-    fn session_sidebar_header_height_respects_compact_layouts() {
+    fn session_sidebar_header_height_stays_minimal() {
         assert_eq!(view::session_sidebar_header_height(4), 2);
-        assert_eq!(view::session_sidebar_header_height(6), 3);
-        assert_eq!(view::session_sidebar_header_height(9), 4);
+        assert_eq!(view::session_sidebar_header_height(6), 2);
+        assert_eq!(view::session_sidebar_header_height(9), 2);
     }
 
     #[test]
@@ -10660,8 +10931,8 @@ api_key = "test"
     #[test]
     fn composer_height_accounts_for_extra_rows() {
         let logical_lines = 1_u16;
-        let no_items_height = min(14, logical_lines + 2);
-        let with_items_height = min(14, logical_lines + 3);
+        let no_items_height = min(12, logical_lines + 2);
+        let with_items_height = min(12, logical_lines + 3);
         assert_eq!(no_items_height, 3);
         assert_eq!(with_items_height, 4);
     }

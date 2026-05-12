@@ -25,11 +25,11 @@ transcript-empty-session = 이 세션에는 아직 메시지가 없습니다.
 no-session-selected = 선택된 세션이 없습니다.
 no-session-selected-hint = 세션 창을 사용하거나 입력창에 바로 입력을 시작해 새 세션을 만드세요.
 composer-session-new = 새 세션
-composer-placeholder = Enter 전송. F3 파일 첨부. Alt/Shift+Enter 또는 Ctrl+J 줄바꿈. F4 외부 편집. F6 클립보드 이미지.
+composer-placeholder = Agena에 입력. Enter 전송. / 명령. F3 첨부.
 
-status-sessions = Tab 창 전환 | / 세션 검색 | Enter 열기 | n 새 세션 | q 종료
-status-transcript = Tab 창 전환 | / 또는 Ctrl+F 검색 | y 전체 복사 | Y 뷰포트 복사 | q 종료
-status-composer = Enter 전송 | F3 첨부 | F4 편집 | F6 이미지 | Tab 창 전환 | q 종료
+status-sessions = 세션: Enter 열기 | / 검색 | n 새로 만들기 | q 종료
+status-transcript = 기록: j/k 스크롤 | / 검색 | y 복사 | v 페이저
+status-composer = 입력: Enter 전송 | Shift+Enter 줄바꿈 | / 명령 | Tab 포커스
 
 help-title = 도움말
 help-header = Agena TUI
@@ -122,10 +122,10 @@ message-attachments = 첨부
 message-awaiting-user-input = 사용자 입력 대기 중: {$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = 파트 상세를 사용할 수 없습니다
-message-tool-pending = 도구 대기 중: {$label}
-message-tool-running = 도구 실행 중: {$label}
-message-tool-done = 도구 완료: {$label}
-message-tool-failed = 도구 실패: {$label}
+message-tool-pending = 대기 중: {$label}
+message-tool-running = 실행 중: {$label}
+message-tool-done = 완료: {$label}
+message-tool-failed = 실패: {$label}
 message-tool-result-blocks = {$count}개 결과 블록
 
 todo-status-pending = pending

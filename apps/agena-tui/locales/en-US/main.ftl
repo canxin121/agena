@@ -41,11 +41,11 @@ transcript-empty-session = No messages in this session yet.
 no-session-selected = No session selected.
 no-session-selected-hint = Use the session pane or start typing in the composer to create one.
 composer-session-new = new session
-composer-placeholder = Enter queues (sends when idle). Ctrl+Enter sends now (steers when busy). Up edits queue. Esc cancels. Shift+Enter newline. F3 attach. F4 editor. F6 image.
+composer-placeholder = Message Agena. Enter send. / commands. F3 attach.
 
-status-sessions = Tab switch pane | s resume | b branches | / search | 1 all | 2 roots | 3 subtree | m cycle | Enter open | [ parent | ] children | R rename | t timeline | P plugins | v pager | q quit
-status-transcript = Tab switch pane | s resume | b branches | / or Ctrl+F search | Alt+P commands | 1/2/3 session views | [ parent | ] children | R rename | t timeline | Enter timeline jump | P plugins | e export | v pager | y/Y copy | q quit
-status-composer = Enter queue/send | Ctrl+Enter send-now | Up edit queue | Esc cancel | / command | Alt+P palette | F3 attach | F4 editor | Tab switch | q quit
+status-sessions = Sessions: Enter open | / search | n new | q quit
+status-transcript = Transcript: j/k scroll | / find | y copy | v pager
+status-composer = Composer: Enter send | Shift+Enter newline | / commands | Tab focus
 
 help-title = Help
 help-header = Agena TUI
@@ -266,12 +266,12 @@ message-attachments = attachments
 message-awaiting-user-input = awaiting user input: {$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = part detail unavailable
-message-tool-pending = tool pending: {$label}
-message-tool-running = tool running: {$label}
-message-tool-done = tool done: {$label}
-message-tool-failed = tool failed: {$label}
+message-tool-pending = pending: {$label}
+message-tool-running = running: {$label}
+message-tool-done = done: {$label}
+message-tool-failed = failed: {$label}
 message-tool-result-blocks = {$count} result blocks
-message-tool-output-collapsed =     … {$lines} more line(s) hidden; open transcript pager for full context
+message-tool-output-collapsed =     … {$lines} more
 
 todo-status-pending = pending
 todo-status-in-progress = in_progress

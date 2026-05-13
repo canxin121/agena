@@ -13,7 +13,8 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThinkingRequest {
-    Enabled { budget_tokens: u32 },
+    #[serde(rename = "budget", alias = "enabled")]
+    Budget { budget_tokens: u32 },
     Effort { effort: ReasoningEffort },
     Disabled,
 }
@@ -218,4 +219,44 @@ pub enum CompletionStreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<serde_json::Value>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThinkingRequest;
+
+    #[test]
+    fn thinking_request_serializes_budget_variant_with_budget_type() {
+        let value = ThinkingRequest::Budget {
+            budget_tokens: 4_096,
+        };
+
+        let json = serde_json::to_value(&value).expect("serialize thinking request");
+
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "budget",
+                "budget_tokens": 4096,
+            })
+        );
+    }
+
+    #[test]
+    fn thinking_request_accepts_legacy_enabled_alias() {
+        let json = serde_json::json!({
+            "type": "enabled",
+            "budget_tokens": 4096,
+        });
+
+        let value: ThinkingRequest =
+            serde_json::from_value(json).expect("deserialize legacy thinking request");
+
+        assert_eq!(
+            value,
+            ThinkingRequest::Budget {
+                budget_tokens: 4_096,
+            }
+        );
+    }
 }

@@ -869,7 +869,7 @@ mod tests {
                         ConfiguredModelVariant {
                             display_name: Some("Deep".to_owned()),
                             description: Some("More reasoning".to_owned()),
-                            thinking: Some(ThinkingRequest::Enabled {
+                            thinking: Some(ThinkingRequest::Budget {
                                 budget_tokens: 30_000,
                             }),
                             disabled: false,
@@ -894,7 +894,7 @@ mod tests {
                 .variants
                 .get("deep")
                 .and_then(|variant| variant.thinking.clone()),
-            Some(ThinkingRequest::Enabled {
+            Some(ThinkingRequest::Budget {
                 budget_tokens: 30_000
             })
         );

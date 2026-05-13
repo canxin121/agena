@@ -272,11 +272,11 @@ stream_mode = "sse"
 #
 # [providers.anthropic.models."claude-sonnet-4-5".variants.light]
 # display_name = "Light"
-# thinking = { type = "enabled", budget_tokens = 3000 }
+# thinking = { type = "budget", budget_tokens = 3000 }
 #
 # [providers.anthropic.models."claude-sonnet-4-5".variants.deep]
 # display_name = "Deep"
-# thinking = { type = "enabled", budget_tokens = 30000 }
+# thinking = { type = "budget", budget_tokens = 30000 }
 
 # Built-in / models.dev preset examples:
 #

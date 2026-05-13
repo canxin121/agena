@@ -155,6 +155,17 @@ AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS
 
 插件通过 `[plugins.list.<id>]` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
 
+环境变量和 CLI 覆盖中的布尔值支持：
+
+```text
+true
+1
+yes
+false
+0
+no
+```
+
 ### Provider-specific overlay
 
 Provider 环境变量使用双下划线分段：
@@ -285,7 +296,7 @@ otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
 headers = { }
 ```
 
-`enabled` 默认 false。endpoint 也可通过 `AGENA_OTEL_ENDPOINT` 或 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 提供。
+`enabled` 默认 false。`headers` 是发送到 OTLP endpoint 的 header map。Endpoint 也可通过 `AGENA_OTEL_ENDPOINT` 或 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 提供。
 
 ## Auth
 
@@ -395,6 +406,23 @@ stream_mode = "sse"
 realtime_ws_url = "wss://..."
 ```
 
+字段按 provider `kind` 生效：
+
+| kind | 配置字段 |
+| --- | --- |
+| `ollama` | `base_url`、`default_model` |
+| `openai` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers`、`api_mode`、`stream_mode`、`realtime_ws_url` |
+| `openai_compatible` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers`、`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url` |
+| `sap_ai_core` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers`、`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url` |
+| `anthropic` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers`、`auth_header`、`auth_scheme` |
+| `gemini` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers` |
+| `codex` | `default_model`、`auth_provider_id` |
+| `gitlab` | `instance_url`、`ai_gateway_url`、`default_model`、`auth_provider_id`、`api_key`、`api_key_env`、`ai_gateway_headers`、`feature_flags` |
+| `copilot` | `base_url`、`models_url`、`default_model`、`auth_provider_id` |
+| `amazon_bedrock` | `base_url`、`default_model`、`region`、`api_key`、`api_key_env`、`profile`、`access_key_id`、`secret_access_key`、`session_token` |
+| `google_vertex` | `base_url`、`default_model`、`access_token`、`access_token_env` |
+| `cloudflare_ai_gateway` | `base_url`、`default_model`、`api_key`、`api_key_env` |
+
 OpenAI 的 `api_mode`：
 
 ```text
@@ -419,6 +447,42 @@ Credential 解析顺序要按 provider 具体实现理解，但通常是：
 
 不要把真实 API key 提交到仓库。优先使用 `api_key_env` 或登录命令。
 
+Provider-specific credential 示例：
+
+```toml
+[providers.openrouter]
+kind = "openai_compatible"
+base_url = "https://openrouter.ai/api/v1"
+default_model = "openai/gpt-4.1-mini"
+api_key_env = "OPENROUTER_API_KEY"
+auth_header = "authorization"
+auth_scheme = "Bearer"
+
+[providers.gitlab]
+kind = "gitlab"
+instance_url = "https://gitlab.com"
+ai_gateway_url = "https://cloud.gitlab.com"
+auth_provider_id = "gitlab"
+api_key_env = "GITLAB_TOKEN"
+ai_gateway_headers = { "X-GitLab-Feature" = "agena" }
+feature_flags = { use_ai_gateway = true }
+
+[providers.bedrock]
+kind = "amazon_bedrock"
+base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
+default_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+region = "us-east-1"
+profile = "prod"
+
+[providers.vertex]
+kind = "google_vertex"
+base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google"
+default_model = "gemini-1.5-pro"
+access_token_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
+```
+
+Amazon Bedrock 配置 `api_key` 或 `api_key_env` 时使用 bearer credential；否则使用 SigV4，`profile`、`access_key_id`、`secret_access_key`、`session_token` 参与 SigV4 credential 解析，其中 `access_key_id` 和 `secret_access_key` 要成对配置。Google Vertex 配置 `access_token` 或 `access_token_env` 时使用静态 token；不配置 token 时使用 ADC。
+
 ### Preset provider
 
 `kind = "preset"` 会按 provider id 加载 provider preset。preset 数据来自 `AGENA_PROVIDER_PRESETS_PATH` 指定的 cache 或 models.dev；代码还内置了一些常见 preset，例如 `ollama`、`lmstudio`、`openrouter`、`deepseek`、`xai`、`groq`、`mistral`。
@@ -440,20 +504,109 @@ kind = "preset"
 
 ```toml
 [providers.openai.models."gpt-4.1-mini"]
-input = { unsupported = ["image"] }
-features = ["tool_calling"]
 display_name = "GPT-4.1 Mini"
 family = "gpt"
 lifecycle = "active"
 context_window_tokens = 200000
 max_output_tokens = 16384
+description = "Fast general-purpose model."
+input = { supported = ["text", "image"], unsupported = ["audio"] }
+features = { supported = ["tool_calling", "streaming"], unsupported = ["temperature"] }
 
 [providers.openai.models."gpt-4.1-mini".variants.light]
 display_name = "Light"
 thinking = { type = "effort", effort = "low" }
+
+[providers.openai.models."gpt-4.1-mini".variants.deep]
+display_name = "Deep"
+thinking = { type = "effort", effort = "high" }
 ```
 
-每个 model id 可以定义自己的 variants。
+`input` 和 `features` 都支持 compact array：
+
+```toml
+input = ["text", "image"]
+features = ["tool_calling", "streaming"]
+```
+
+也可以显式区分 `supported` 和 `unsupported`：
+
+```toml
+input = { supported = ["text", "document"], unsupported = ["audio", "video"] }
+features = { supported = ["reasoning"], unsupported = ["temperature"] }
+```
+
+`supported` 和 `unsupported` 都可以只写其中一个。同一个值不能同时出现在两边。
+
+`input` 可选值：
+
+```text
+text
+image
+document
+audio
+video
+file
+```
+
+`features` 可选值：
+
+```text
+tool_calling
+streaming
+reasoning
+structured_output
+temperature
+```
+
+`family` 可选值：
+
+```text
+gpt
+codex
+claude
+gemini
+llama
+mistral
+deepseek
+qwen
+nova
+grok
+phi
+command
+```
+
+`lifecycle` 可选值：
+
+```text
+active
+preview
+beta
+alpha
+experimental
+deprecated
+```
+
+每个 model id 可以定义自己的 variants。Variant 字段包括 `display_name`、`description`、`thinking`、`disabled`。
+
+`thinking` 写法：
+
+```toml
+thinking = { type = "enabled", budget_tokens = 4096 }
+thinking = { type = "effort", effort = "medium" }
+thinking = { type = "disabled" }
+```
+
+`effort` 可选：
+
+```text
+minimal
+low
+medium
+high
+xhigh
+max
+```
 
 ## Agents
 
@@ -471,6 +624,29 @@ model = "anthropic/claude-sonnet-4-6"
 aliases = ["planner"]
 ```
 
+Markdown frontmatter 示例：
+
+```markdown
+---
+description: "Read-only planning agent"
+mode: "all"
+allowed_entries: ["read", "view_file", "glob", "grep", "bash", "todo_write"]
+model: "anthropic/claude-sonnet-4-6"
+aliases: ["planner"]
+permission:
+  path:
+    workspace:
+      read: allow
+      write: deny
+  entries:
+    names:
+      bash: ask
+---
+You are a planning agent...
+```
+
+TOML agent 的 `prompt` 字段是 system prompt；Markdown agent 的正文是 system prompt。Markdown frontmatter 支持的字段和 TOML agent 基本一致，但不使用 `prompt` 和 `disabled`。
+
 字段：
 
 - `description`
@@ -487,7 +663,15 @@ aliases = ["planner"]
 - `aliases`
 - `disabled`
 
-`allowed_entries` 会收窄 agent 能调用的 entries 集合，同时保留已有 bash pattern 规则。
+`mode` 可选：
+
+```text
+primary
+subagent
+all
+```
+
+`allowed_entries` 会收窄 agent 能调用的 entries 集合，同时保留已有 bash pattern 规则。省略或写空数组表示不额外收窄。
 
 ## Permissions
 
@@ -534,13 +718,27 @@ todo_write = "allow"
 Agent permission 默认继承顶层 permission。可用 `inherit` 控制：
 
 ```toml
+[agents.plan.permission]
+inherit = false
+```
+
+`inherit` 也可以直接写成 inline table：
+
+```toml
+[agents.plan.permission]
+inherit = { path = true, network = false, entries = true }
+```
+
+也可以按 section 控制：
+
+```toml
 [agents.plan.permission.inherit]
 path = true
 network = true
 entries = true
 ```
 
-也可以写成 `inherit = false` 完全不继承。
+`inherit = true` 表示继承所有 section，`inherit = false` 表示不继承。按 section 写表时，未写的 section 默认继承。
 
 ### Path permission
 
@@ -553,9 +751,10 @@ external = { read = "ask", write = "deny" }
 "<cwd>/.env*" = { read = "ask", write = "deny" }
 "<cwd>/secrets/**" = "deny"
 "/tmp/allowed/**" = "read_write"
+"<home>/Downloads/*.txt" = "read"
 ```
 
-Path rule 支持 `{ read, write }` 或 shorthand：
+`workspace`、`external` 和每条 path rule 都可以写 `{ read, write }`，其中 `read`、`write` 可以只写其中一个；path rule 还支持 shorthand：
 
 ```text
 allow
@@ -563,6 +762,7 @@ ask
 deny
 none
 read
+read_only
 ro
 write
 write_only
@@ -570,6 +770,8 @@ wo
 read_write
 rw
 ```
+
+这些 shorthand 只用于 path rule。`read` / `read_only` / `ro` 表示读允许、写拒绝；`write` / `write_only` / `wo` 表示读拒绝、写允许；`read_write` / `rw` 表示读写都允许。Shorthand 大小写不敏感，`-` 会按 `_` 处理，例如 `read-write` 等价于 `read_write`。
 
 常用 path alias：
 
@@ -580,7 +782,7 @@ rw
 <tmp>
 ```
 
-Path rules 按插入顺序保存，权限匹配时后写规则优先。
+Path key 可以写 workspace 相对路径、绝对路径、alias 路径和 glob。Path rules 按插入顺序保存，权限匹配时后写规则优先。
 
 ### Network permission
 
@@ -592,11 +794,46 @@ loopback = "deny"
 
 [permission.network.rules]
 "github.com:443" = "allow"
-"*.corp.local:443" = "ask"
-"10.0.0.0/8:*" = "deny"
+"api.github.com" = "allow"
+"*.corp.local" = "ask"
+"*.corp.local:8443" = "allow"
+"10.0.0.0/8" = "deny"
+"172.16.0.0/12:*" = "ask"
+"fd00::/8" = "deny"
+"[::1]:3000" = "ask"
 ```
 
-规则可以匹配 host、通配 host、CIDR 和端口。后写规则优先。
+Network rule key 可以写成：
+
+```text
+*
+*:port
+host
+host:port
+host:*
+host-with-*
+*.domain
+*.domain:port
+*.domain:*
+IPv4
+IPv4:port
+IPv4:*
+CIDR
+CIDR:port
+CIDR:*
+IPv6
+IPv6 CIDR
+[IPv6]
+[IPv6]:port
+[IPv6]:*
+[IPv6 CIDR]
+[IPv6 CIDR]:port
+[IPv6 CIDR]:*
+```
+
+不写端口表示匹配任意端口，写 `:*` 也是匹配任意端口；写具体端口时只匹配该端口。Host pattern 支持 `*` 和 `?`，所以 `*.corp.local`、`api.*`、`db-??.internal` 都是有效写法。IPv6 地址需要匹配具体端口时使用 bracket 形式，例如 `[::1]:3000`；IPv6 地址或 CIDR 不写端口时直接写 `::1`、`fd00::/8`。URL 目标会解析出默认端口，例如 `https://github.com` 会按 `github.com:443` 匹配。后写规则优先。
+
+Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、`*.localhost` 和 loopback IP；`private` 匹配私有 IP、link-local IP、单段主机名，以及 `.local`、`.lan`、`.internal`、`.corp`、`.home.arpa`；其余走 `internet`。`rules` 命中时优先于这些默认策略。
 
 ### Entry permission
 
@@ -611,13 +848,21 @@ bash = "ask"
 apply_patch = "ask"
 "my-plugin.echo" = "ask"
 
+[permission.entries.rules]
+"my-plugin.echo" = "ask"
+
+[permission.entries.rules."my-plugin.echo"]
+"*" = "ask"
+
 [permission.entries.rules.bash]
 "git status" = "allow"
 "git push *" = "deny"
 "*" = "ask"
 ```
 
-`tags` 用于 entry 没有精确规则时的默认策略。`names` 按 entry 名匹配；first-party static plugin entries 和外部 plugin entries 使用同一个名字表。`rules.bash` 支持命令 pattern 覆盖。
+`tags` 用于 entry 没有精确规则时的默认策略。Entry 由 plugin manifest 声明自己的 tags，常见 tags 如 `filesystem_read`、`filesystem_write`、`network`、`internet`、`task`、`shell`。`names` 按 entry 名匹配；first-party static plugin entries 和外部 plugin entries 使用同一个名字表。
+
+`rules.<entry>` 可以直接写 mode，也可以写 pattern table。`bash` 的 pattern table 按命令 pattern 覆盖，`"*"` 是 fallback。其他 entry 使用直接 mode；需要 fallback 时也可以写 `rules.<entry>."*" = "ask"`。
 
 ## Memory
 
@@ -646,10 +891,24 @@ command = "python3 .agena/hooks/enrich_prompt.py"
 timeout_ms = 3000
 
 [[plugins.list."agena.hooks".options.hooks]]
+event = "pre_tool_use"
+command = "python3 .agena/hooks/check_tool.py"
+matcher = { tool = "bash" }
+timeout_ms = 5000
+
+[[plugins.list."agena.hooks".options.hooks]]
 event = "post_tool_use"
 url = "http://127.0.0.1:8080/agena-hook"
 timeout_ms = 2000
 ```
+
+Hook 字段：
+
+- `event`: hook 事件名。
+- `command`: 本地 shell command。
+- `url`: HTTP endpoint，hook input 会以 JSON POST 过去。
+- `matcher.tool`: 只匹配指定 entry/tool 名，支持 glob。
+- `timeout_ms`: 单次调用超时；省略时使用 30000。
 
 支持事件：
 
@@ -663,6 +922,15 @@ session_start
 session_end
 notification
 ```
+
+以下事件名也可以写在 `event` 中：
+
+| 等价写法 | 对应事件 |
+| --- | --- |
+| `tool_before` | `pre_tool_use` |
+| `tool_after` | `post_tool_use` |
+| `tool_failure` | `post_tool_use_failure` |
+| `agent_stop` | `stop` |
 
 Hook command 会收到事件相关环境变量，例如：
 
@@ -689,15 +957,31 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
 ```toml
 [plugins]
 enabled = true
-timeouts = { tool_invoke = "60s", permission_ask = "10s" }
+timeouts = { init = "10s", tool_invoke = "60s", permission_ask = "10s", fast = "500ms" }
+
+[plugins.default_quota]
+rate_per_sec = 20
+burst = 40
+max_concurrent = 8
+
+[plugins.quotas.echo]
+rate_per_sec = 5
+burst = 10
+max_concurrent = 2
+
+[plugins.trusted_keys]
+acme = "0123456789abcdef..."
 
 [plugins.list.echo]
 kind = "stdio"
 command = "node"
 args = ["./plugins/echo/index.js"]
 env = { LOG_LEVEL = "info" }
+cwd = "."
+sha256 = "..."
 restart = { policy = "on-failure", min_backoff = "1s", max_backoff = "30s", max_retries = 5 }
 options = { uppercase = true }
+timeouts = { tool_invoke = "30s" }
 ```
 
 顶层 `[plugins]` 字段：
@@ -717,6 +1001,64 @@ Plugin transport kind：
 - `http`: 远端 JSON-RPC over POST。
 - `wasm`: WebAssembly module。
 
+每种 transport 的字段：
+
+```toml
+[plugins.list."agena.memory"]
+kind = "static"
+timeouts = { init = "5s" }
+
+[plugins.list."agena.memory".options.project_instructions]
+enabled = true
+include_global = true
+
+[plugins.list.native]
+kind = "cdylib"
+path = "./plugins/native/libnative.so"
+sha256 = "..."
+signature = { key_id = "acme", signature = "..." }
+options = { mode = "strict" }
+timeouts = { tool_invoke = "20s" }
+
+[plugins.list.worker]
+kind = "stdio"
+command = "node"
+args = ["./plugins/worker/index.js"]
+env = { LOG_LEVEL = "info" }
+cwd = "."
+sha256 = "..."
+restart = { policy = "always", min_backoff = "1s", max_backoff = "30s", max_retries = 5 }
+options = { project = "rust" }
+timeouts = { tool_invoke = "45s" }
+
+[plugins.list.policy]
+kind = "http"
+url = "https://policy.example.com/agena/rpc"
+auth = { kind = "bearer", token_env = "AGENA_POLICY_TOKEN" }
+options = { org_id = "acme" }
+timeouts = { fast = "2s" }
+
+[plugins.list.sandboxed]
+kind = "wasm"
+path = "./plugins/sandboxed/plugin.wasm"
+sha256 = "..."
+options = { }
+timeouts = { init = "20s" }
+```
+
+`options` 是传给 plugin 的自由 JSON/TOML 配置；first-party static plugin 也通过 `options` 接收自己的配置。
+
+Timeout 字段：
+
+```text
+init
+tool_hook
+tool_invoke
+permission_ask
+chat
+fast
+```
+
 Timeout 字符串支持：
 
 ```text
@@ -725,6 +1067,24 @@ s
 m
 h
 ```
+
+Timeout 值在 TOML 中写字符串。不写单位时按秒解析，例如 `"30"` 等价于 `"30s"`。
+
+Quota 字段：
+
+```toml
+[plugins.default_quota]
+rate_per_sec = 20
+burst = 40
+max_concurrent = 8
+
+[plugins.quotas."cloud-policy"]
+rate_per_sec = 5
+burst = 10
+max_concurrent = 2
+```
+
+`rate_per_sec = 0` 表示不限制速率；`burst = 0` 表示使用 `rate_per_sec`；`rate_per_sec` 和 `burst` 都为 0 时关闭 token bucket。`max_concurrent = 0` 表示不限制并发。
 
 Stdio restart policy：
 
@@ -738,7 +1098,9 @@ HTTP plugin auth 支持：
 
 ```toml
 auth = { kind = "none" }
+auth = { kind = "bearer", token = "..." }
 auth = { kind = "bearer", token_env = "PLUGIN_TOKEN" }
+auth = { kind = "basic", username = "user", password = "..." }
 auth = { kind = "basic", username = "user", password_env = "PLUGIN_PASSWORD" }
 ```
 
@@ -776,17 +1138,46 @@ headers = { }
 auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
 ```
 
+MCP server transport：
+
+```text
+stdio
+http
+```
+
+`stdio` 字段：
+
+```text
+command
+args
+env
+cwd
+```
+
+`http` 字段：
+
+```text
+url
+mode
+headers
+auth
+```
+
 HTTP mode:
 
 - `streamable_http`
 - `sse`
 
+`mode` 省略时使用 `streamable_http`。`headers` 是普通 header map，`auth` 可以省略。
+
 HTTP auth:
 
-- `bearer`
-- `bearer_from_env`
-- `bearer_from_store`
-- `custom`
+```toml
+auth = { kind = "bearer", token = "..." }
+auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
+auth = { kind = "bearer_from_store" }
+auth = { kind = "custom", headers = { "X-Token" = "..." } }
+```
 
 配置了 MCP server 时，runtime 会构建 `McpConnectionManager`，并注册 MCP static plugin。
 
@@ -807,6 +1198,19 @@ root_markers = ["Cargo.toml"]
 initialization_options = {}
 ```
 
+LSP 字段：
+
+```text
+command
+args
+env
+file_extensions
+root_markers
+initialization_options
+```
+
+`file_extensions` 不带前导 `.`；写空数组表示该 server 匹配所有文件。`root_markers` 是用于识别项目根目录的文件名列表。`initialization_options` 是传给 language server 的 JSON/TOML object。
+
 LSP registry 是 lazy-spawn 的。相关 entry 首次触及匹配文件时才会启动对应 server。
 
 ## Web Plugin
@@ -825,6 +1229,8 @@ exa_api_key = "..."
 brave_api_key = "..."
 ```
 
+`fetch_enabled` 控制 `web_fetch` entry。Search backend 省略时使用 `duck_duck_go_html`。
+
 Search backend：
 
 - `tavily`
@@ -839,6 +1245,8 @@ TAVILY_API_KEY
 EXA_API_KEY
 BRAVE_API_KEY
 ```
+
+`duck_duck_go_html` 不需要 API key；`tavily` 使用 `tavily_api_key` 或 `TAVILY_API_KEY`，`exa` 使用 `exa_api_key` 或 `EXA_API_KEY`，`brave` 使用 `brave_api_key` 或 `BRAVE_API_KEY`。
 
 ## Studio 服务配置
 

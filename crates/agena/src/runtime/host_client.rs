@@ -22,7 +22,8 @@ use crate::plugin::sdk::host_api::{
     HostExitWorktreeRequest, HostLspDiagnostic, HostLspListDiagnosticsRequest,
     HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
     HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostMcpServerSpec, HostPlanEntry, HostPlanGetRequest,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest,
     HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
@@ -150,6 +151,23 @@ impl RuntimeHostClient {
     fn agents(&self) -> crate::agents::SubagentRegistry {
         self.runtime.current_snapshot().agents()
     }
+
+    async fn resolve_permission_check(
+        &self,
+        check: crate::tool::ToolPermissionCheck,
+    ) -> Result<HostPermissionCheckResponse, PluginError> {
+        let session_id = current_host_callback_context()
+            .and_then(|context| context.session_id)
+            .filter(|session_id| *session_id >= 0);
+        let Some(manager) = self.runtime.current_snapshot().session_manager() else {
+            return Ok(host_permission_check_response_from_decision(check.decision));
+        };
+        let resolution = manager
+            .resolve_tool_permission_check(session_id, &check)
+            .await
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(host_permission_check_response_from_resolution(resolution))
+    }
 }
 
 fn host_unavailable(message: impl Into<String>) -> PluginError {
@@ -195,6 +213,45 @@ fn map_storage_error(err: PluginStorageError) -> PluginError {
         },
         PluginStorageError::Io(_) | PluginStorageError::Secret(_) => {
             PluginError::new(err.to_string())
+        }
+    }
+}
+
+fn host_permission_check_response_from_resolution(
+    resolution: crate::permission::PermissionResolution,
+) -> HostPermissionCheckResponse {
+    let (decision, reason) = plugin_permission_decision_and_reason(resolution.decision);
+    HostPermissionCheckResponse {
+        decision,
+        reason,
+        explanation: resolution.explanation,
+    }
+}
+
+fn host_permission_check_response_from_decision(
+    decision: crate::permission::PermissionDecision,
+) -> HostPermissionCheckResponse {
+    let (decision, reason) = plugin_permission_decision_and_reason(decision);
+    let explanation = reason
+        .clone()
+        .unwrap_or_else(|| "permission allowed by current policy".to_string());
+    HostPermissionCheckResponse {
+        decision,
+        reason,
+        explanation,
+    }
+}
+
+fn plugin_permission_decision_and_reason(
+    decision: crate::permission::PermissionDecision,
+) -> (PluginPermissionDecision, Option<String>) {
+    match decision {
+        crate::permission::PermissionDecision::Allow => (PluginPermissionDecision::Allow, None),
+        crate::permission::PermissionDecision::Ask { reason } => {
+            (PluginPermissionDecision::Prompt, Some(reason))
+        }
+        crate::permission::PermissionDecision::Deny { reason } => {
+            (PluginPermissionDecision::Deny, Some(reason))
         }
     }
 }
@@ -499,6 +556,28 @@ impl HostClient for RuntimeHostClient {
         // The host doesn't surface a unified "ask user" affordance here.
         // For now, default to Prompt (i.e. "host has no opinion, fall back").
         Ok(PluginPermissionDecision::Prompt)
+    }
+
+    async fn check_path_permission(
+        &self,
+        req: HostPathPermissionCheckRequest,
+    ) -> Result<HostPermissionCheckResponse, PluginError> {
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        self.resolve_permission_check(
+            executor.requested_path_permission_check(req.path.as_str(), req.kind),
+        )
+        .await
+    }
+
+    async fn check_network_permission(
+        &self,
+        req: HostNetworkPermissionCheckRequest,
+    ) -> Result<HostPermissionCheckResponse, PluginError> {
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let check = executor
+            .network_permission_check(req.target.as_str())
+            .map_err(|err| PluginError::invalid_params(err.to_string()))?;
+        self.resolve_permission_check(check).await
     }
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value, PluginError> {

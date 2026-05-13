@@ -21,8 +21,8 @@ use crate::plugin::sdk::host_api::{
 };
 use crate::plugin::sdk::{
     EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
-    PlanModePolicy, Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
-    ToolInvokeOutput,
+    PathRequest, PlanModePolicy, Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult,
+    ToolInvokeInput, ToolInvokeOutput,
 };
 
 pub(crate) const WORKFLOW_PLUGIN_ID: &str = "agena.workflow";
@@ -347,6 +347,34 @@ impl Plugin for WorkflowPlugin {
             ))),
         }
     }
+
+    async fn permission_paths(
+        &self,
+        tool_name: &str,
+        input: &serde_json::Value,
+    ) -> SdkResult<Vec<PathRequest>> {
+        match tool_name {
+            "enter_plan_mode" => Ok(vec![PathRequest::write(".agena/plans")]),
+            "enter_worktree" => {
+                let input: EnterWorktreeToolInput = serde_json::from_value(input.clone())?;
+                if let Some(path) = input.path.filter(|path| !path.trim().is_empty()) {
+                    return Ok(vec![
+                        PathRequest::read(path.clone()),
+                        PathRequest::write(path),
+                    ]);
+                }
+                let path = input
+                    .name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(|name| format!(".agena/worktrees/{name}"))
+                    .unwrap_or_else(|| ".agena/worktrees".to_string());
+                Ok(vec![PathRequest::write(path)])
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
 }
 
 fn entries() -> Vec<PluginEntryDecl> {
@@ -434,6 +462,7 @@ fn entries() -> Vec<PluginEntryDecl> {
         )
         .behavior(SdkEntryBehavior::ReadOnly)
         .search_terms(["plan", "design", "approach", "outline"])
+        .tag("filesystem_write")
         .always_load()
         .plan_mode_policy(PlanModePolicy::Allowed)
         .host_capability(HostCapability::PlanRegistry),
@@ -458,6 +487,7 @@ fn entries() -> Vec<PluginEntryDecl> {
         )
         .behavior(SdkEntryBehavior::Mutating)
         .search_terms(["git", "worktree", "branch", "isolate"])
+        .tag("filesystem_write")
         .deferred_load()
         .host_capability(HostCapability::WorktreeRegistry),
         PluginEntryDecl::new(
@@ -469,6 +499,7 @@ fn entries() -> Vec<PluginEntryDecl> {
         )
         .behavior(SdkEntryBehavior::Mutating)
         .search_terms(["git", "worktree", "exit", "cleanup"])
+        .tag("filesystem_write")
         .deferred_load()
         .host_capability(HostCapability::WorktreeRegistry),
     ]

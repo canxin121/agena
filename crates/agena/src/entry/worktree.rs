@@ -62,9 +62,9 @@ pub(super) fn execute_enter(
     }
 
     let session = if let Some(p) = input.path.as_deref() {
-        enter_existing(&workspace, p)?
+        enter_existing(executor, &workspace, p)?
     } else {
-        create_new(&workspace, input.name.as_deref())?
+        create_new(executor, &workspace, input.name.as_deref())?
     };
 
     let view = ToolExecutionView::simple(
@@ -103,6 +103,8 @@ pub(super) fn execute_exit(
 
     let action = input.action.trim();
     if action == "remove" && session.created_here {
+        executor.ensure_read_permission(&session.path)?;
+        executor.ensure_edit_permission(&session.path)?;
         if !input.discard_changes {
             let dirty = git_is_dirty(&session.path)?;
             if dirty {
@@ -148,15 +150,21 @@ pub(super) fn execute_exit(
     ))
 }
 
-fn create_new(workspace: &Path, name: Option<&str>) -> Result<WorktreeSession, ToolError> {
+fn create_new(
+    executor: &ToolExecutor,
+    workspace: &Path,
+    name: Option<&str>,
+) -> Result<WorktreeSession, ToolError> {
     let slug = name
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(generate_slug);
     let base = workspace.join(".agena").join("worktrees");
+    executor.ensure_edit_permission(&base)?;
     std::fs::create_dir_all(&base)
         .map_err(|e| ToolError::Plugin(format!("enter_worktree: mkdir {base:?}: {e}")))?;
     let target = base.join(&slug);
+    executor.ensure_edit_permission(&target)?;
     if target.exists() {
         return Err(ToolError::Plugin(format!(
             "enter_worktree: target {target:?} already exists"
@@ -182,8 +190,14 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<WorktreeSession, T
     })
 }
 
-fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolError> {
+fn enter_existing(
+    executor: &ToolExecutor,
+    workspace: &Path,
+    path: &str,
+) -> Result<WorktreeSession, ToolError> {
     let path_buf = PathBuf::from(path);
+    executor.ensure_read_permission(&path_buf)?;
+    executor.ensure_edit_permission(&path_buf)?;
     if !path_buf.exists() {
         return Err(ToolError::Plugin(format!(
             "enter_worktree: path {path:?} does not exist"

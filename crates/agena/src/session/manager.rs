@@ -2482,6 +2482,14 @@ impl SessionManager {
         }
     }
 
+    pub(crate) async fn resolve_tool_permission_check(
+        &self,
+        session_id: Option<i64>,
+        check: &ToolPermissionCheck,
+    ) -> Result<crate::permission::PermissionResolution, AppError> {
+        self.resolve_permission_decision(session_id, check).await
+    }
+
     async fn resolve_permission_decision(
         &self,
         session_id: Option<i64>,

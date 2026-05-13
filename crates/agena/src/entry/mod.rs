@@ -939,6 +939,16 @@ impl ToolExecutor {
         self.push_path_checks(checks, sdk_path_kind_to_access_kind(kind), &target);
     }
 
+    pub(crate) fn requested_path_permission_check(
+        &self,
+        path: &str,
+        kind: SdkPathKind,
+    ) -> ToolPermissionCheck {
+        let mut checks = Vec::with_capacity(1);
+        self.push_requested_path_checks(&mut checks, path, kind);
+        checks.remove(0)
+    }
+
     fn push_filesystem_effect_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
@@ -1748,6 +1758,15 @@ impl ToolExecutor {
         });
         Ok(())
     }
+
+    pub(crate) fn network_permission_check(
+        &self,
+        target: &str,
+    ) -> Result<ToolPermissionCheck, ToolError> {
+        let mut checks = Vec::with_capacity(1);
+        self.push_network_check(&mut checks, target)?;
+        Ok(checks.remove(0))
+    }
 }
 
 pub(crate) fn normalize_path_for_display(path: &Path) -> String {
@@ -2063,11 +2082,12 @@ mod tests {
     use uuid::Uuid;
 
     use crate::message::{
-        ApplyPatchToolInput, BashToolInput, FileChangeKind, FilesystemAccess, FilesystemEffect,
-        FirstPartyToolInput, FirstPartyToolOutput, GlobToolInput, GrepToolInput, Message,
-        PartContent, ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TimeRange,
-        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation,
-        ToolOutput, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
+        ApplyPatchToolInput, BashToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
+        FileChangeKind, FilesystemAccess, FilesystemEffect, FirstPartyToolInput,
+        FirstPartyToolOutput, GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput,
+        StructuredObject, TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority,
+        TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput,
+        ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -3379,6 +3399,98 @@ mod tests {
             "write".to_string(),
             super::normalize_path_for_display(&workspace.root.join("old.txt")),
         )));
+    }
+
+    #[test]
+    fn collect_permission_checks_for_workflow_plan_uses_dynamic_plugin_paths() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+        let invocation =
+            FirstPartyToolInput::EnterPlanMode(EnterPlanModeToolInput::default()).into_invocation();
+
+        let checks = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect("workflow permission collection should succeed");
+
+        let path_actions = checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } => Some((access_kind.clone(), target_path.clone())),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(path_actions.contains(&(
+            "write".to_string(),
+            super::normalize_path_for_display(&workspace.root.join(".agena/plans")),
+        )));
+    }
+
+    #[test]
+    fn collect_permission_checks_for_workflow_worktree_uses_dynamic_plugin_paths() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+
+        let named_invocation = FirstPartyToolInput::EnterWorktree(EnterWorktreeToolInput {
+            name: Some("demo".to_string()),
+            path: None,
+        })
+        .into_invocation();
+        let named_checks = executor
+            .collect_permission_checks_for_invocation(&named_invocation)
+            .expect("named worktree permission collection should succeed");
+        let named_paths = named_checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } => Some((access_kind.clone(), target_path.clone())),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert!(named_paths.contains(&(
+            "write".to_string(),
+            super::normalize_path_for_display(&workspace.root.join(".agena/worktrees/demo"),),
+        )));
+
+        let outside = workspace.root.with_file_name(format!(
+            "{}-existing-worktree",
+            workspace
+                .root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("agena")
+        ));
+        let existing_invocation = FirstPartyToolInput::EnterWorktree(EnterWorktreeToolInput {
+            name: None,
+            path: Some(outside.to_string_lossy().to_string()),
+        })
+        .into_invocation();
+        let existing_checks = executor
+            .collect_permission_checks_for_invocation(&existing_invocation)
+            .expect("existing worktree permission collection should succeed");
+        let existing_paths = existing_checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } => Some((access_kind.clone(), target_path.clone())),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let outside_display = super::normalize_path_for_display(&outside);
+        assert!(existing_paths.contains(&("read".to_string(), outside_display.clone())));
+        assert!(existing_paths.contains(&("write".to_string(), outside_display)));
     }
 
     #[test]

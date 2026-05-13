@@ -16,8 +16,9 @@ use serde_json::Value;
 use crate::message::{AttachmentItem, ToolResultBlock};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    EntryBehavior as SdkEntryBehavior, HookSubscription, InitContext, InitOutcome, Plugin,
-    PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    EntryBehavior as SdkEntryBehavior, HookSubscription, InitContext, InitOutcome,
+    NetworkAccessSpec, Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult,
+    ToolInvokeInput, ToolInvokeOutput,
 };
 
 pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
@@ -35,8 +36,9 @@ impl McpPlugin {
         &self,
         servers: Vec<String>,
         tools: Vec<(String, ToolDescriptor)>,
+        network_access: BTreeMap<String, NetworkAccessSpec>,
     ) -> PluginManifest {
-        manifest_from_snapshot(servers, tools)
+        manifest_from_snapshot(servers, tools, &network_access)
     }
 }
 
@@ -44,12 +46,13 @@ impl McpPlugin {
 impl Plugin for McpPlugin {
     fn manifest(&self) -> PluginManifest {
         let manager = Arc::clone(&self.manager);
-        let (servers, tools) = block_on(async move {
+        let (servers, tools, network_access) = block_on(async move {
             let servers = manager.server_names().await;
             let tools = manager.all_tools().await;
-            (servers, tools)
+            let network_access = network_access_by_server(&manager).await;
+            (servers, tools, network_access)
         });
-        self.manifest_from_snapshot(servers, tools)
+        self.manifest_from_snapshot(servers, tools, network_access)
     }
 
     async fn init(
@@ -59,9 +62,12 @@ impl Plugin for McpPlugin {
     ) -> SdkResult<InitOutcome> {
         let servers = self.manager.server_names().await;
         let tools = self.manager.all_tools().await;
-        Ok(InitOutcome::ack(
-            self.manifest_from_snapshot(servers, tools),
-        ))
+        let network_access = network_access_by_server(&self.manager).await;
+        Ok(InitOutcome::ack(self.manifest_from_snapshot(
+            servers,
+            tools,
+            network_access,
+        )))
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
@@ -164,13 +170,14 @@ pub(super) fn target_from_entry_name(name: &str) -> Option<McpEntryTarget<'_>> {
 fn manifest_from_snapshot(
     servers: Vec<String>,
     tools: Vec<(String, ToolDescriptor)>,
+    network_access: &BTreeMap<String, NetworkAccessSpec>,
 ) -> PluginManifest {
     let mut entries = tools
         .into_iter()
-        .map(|(server, tool)| tool_entry_decl(server, tool))
+        .map(|(server, tool)| tool_entry_decl(server, tool, network_access))
         .collect::<Vec<_>>();
     for server in servers {
-        entries.extend(resource_and_prompt_entry_decls(server));
+        entries.extend(resource_and_prompt_entry_decls(server, network_access));
     }
     PluginManifest::builder("agena-mcp", env!("CARGO_PKG_VERSION"))
         .description("Agena MCP bridge exposed as first-party plugin entries.")
@@ -179,19 +186,43 @@ fn manifest_from_snapshot(
         .build()
 }
 
-fn tool_entry_decl(server: String, tool: ToolDescriptor) -> PluginEntryDecl {
+async fn network_access_by_server(
+    manager: &McpConnectionManager,
+) -> BTreeMap<String, NetworkAccessSpec> {
+    manager
+        .server_network_targets()
+        .await
+        .into_iter()
+        .map(|(server, target)| (server, NetworkAccessSpec { target }))
+        .collect()
+}
+
+fn tool_entry_decl(
+    server: String,
+    tool: ToolDescriptor,
+    network_access: &BTreeMap<String, NetworkAccessSpec>,
+) -> PluginEntryDecl {
     let name = format!("mcp:{server}:tool:{}", tool.name);
     let schema = tool
         .input_schema
         .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
-    PluginEntryDecl::new(name, schema)
+    let entry = PluginEntryDecl::new(name, schema)
         .description(tool.description.unwrap_or_default())
         .behavior(SdkEntryBehavior::Mutating)
-        .search_terms(["mcp".to_string(), server, "tool".to_string(), tool.name])
+        .search_terms([
+            "mcp".to_string(),
+            server.clone(),
+            "tool".to_string(),
+            tool.name,
+        ]);
+    apply_server_network_access(entry, &server, network_access)
 }
 
-fn resource_and_prompt_entry_decls(server: String) -> Vec<PluginEntryDecl> {
-    vec![
+fn resource_and_prompt_entry_decls(
+    server: String,
+    network_access: &BTreeMap<String, NetworkAccessSpec>,
+) -> Vec<PluginEntryDecl> {
+    let entries = vec![
         PluginEntryDecl::new(
             format!("mcp:{server}:resources:list"),
             empty_object_schema(),
@@ -241,7 +272,22 @@ fn resource_and_prompt_entry_decls(server: String) -> Vec<PluginEntryDecl> {
         .behavior(SdkEntryBehavior::ReadOnly)
         .search_terms(["mcp", server.as_str(), "prompt", "get"])
         .deferred_load(),
-    ]
+    ];
+    entries
+        .into_iter()
+        .map(|entry| apply_server_network_access(entry, &server, network_access))
+        .collect()
+}
+
+fn apply_server_network_access(
+    entry: PluginEntryDecl,
+    server: &str,
+    network_access: &BTreeMap<String, NetworkAccessSpec>,
+) -> PluginEntryDecl {
+    match network_access.get(server) {
+        Some(spec) => entry.network_access(spec.clone()).tag("network"),
+        None => entry,
+    }
 }
 
 fn empty_object_schema() -> Value {
@@ -615,6 +661,7 @@ mod tests {
                     input_schema: None,
                 },
             )],
+            &BTreeMap::new(),
         );
         let names = manifest
             .entries
@@ -628,6 +675,60 @@ mod tests {
         assert!(names.contains("mcp:docs:prompts:list"));
         assert!(names.contains("mcp:docs:prompts:get"));
         assert!(!names.contains("mcp:docs:search"));
+    }
+
+    #[test]
+    fn mcp_manifest_marks_http_server_entries_with_network_access() {
+        let mut network_access = BTreeMap::new();
+        network_access.insert(
+            "remote".to_string(),
+            NetworkAccessSpec {
+                target: "https://mcp.example.com/".to_string(),
+            },
+        );
+        let manifest = manifest_from_snapshot(
+            vec!["local".to_string(), "remote".to_string()],
+            vec![
+                (
+                    "local".to_string(),
+                    ToolDescriptor {
+                        name: "read".to_string(),
+                        description: None,
+                        input_schema: None,
+                    },
+                ),
+                (
+                    "remote".to_string(),
+                    ToolDescriptor {
+                        name: "search".to_string(),
+                        description: None,
+                        input_schema: None,
+                    },
+                ),
+            ],
+            &network_access,
+        );
+
+        let remote_entries = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.name.starts_with("mcp:remote:"))
+            .collect::<Vec<_>>();
+        assert_eq!(remote_entries.len(), 5);
+        for entry in remote_entries {
+            assert_eq!(entry.network_access, vec![network_access["remote"].clone()]);
+            assert!(entry.tags.iter().any(|tag| tag == "network"));
+        }
+
+        let local_entries = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.name.starts_with("mcp:local:"))
+            .collect::<Vec<_>>();
+        assert_eq!(local_entries.len(), 5);
+        for entry in local_entries {
+            assert!(entry.network_access.is_empty());
+        }
     }
 
     #[test]

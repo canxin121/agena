@@ -26,7 +26,10 @@ pub use host::{
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
 pub use logs::{PluginLogEntry, PluginLogStore};
 pub use registry::PluginEntryRegistry;
-pub use sdk::host_api::{HostStatuslineSegment, HostThemePalette};
+pub use sdk::host_api::{
+    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
+    HostStatuslineSegment, HostThemePalette,
+};
 pub use sdk::{
     AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatDirection, ChatHeadersInput,
     ChatHeadersPatch, ChatMessage, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,

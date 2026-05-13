@@ -250,7 +250,10 @@ impl ModelProvider for MultiAdapterProvider {
         Ok(visible)
     }
 
-    async fn complete(&self, mut request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+    async fn complete(
+        &self,
+        mut request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
         let visible_model = request.model.clone();
         let (adapter_id, target_model, _) = self.resolve_route(&visible_model)?;
         let adapter = self.adapter(adapter_id.as_str())?;
@@ -277,11 +280,13 @@ impl ModelProvider for MultiAdapterProvider {
         let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
             Box::pin(stream.map(move |item| {
                 item.map(|event| match event {
-                    CompletionStreamEvent::TextDelta { delta, .. } => CompletionStreamEvent::TextDelta {
-                        provider_id: ProviderId::new(provider_id.clone()),
-                        model: visible_model.clone(),
-                        delta,
-                    },
+                    CompletionStreamEvent::TextDelta { delta, .. } => {
+                        CompletionStreamEvent::TextDelta {
+                            provider_id: ProviderId::new(provider_id.clone()),
+                            model: visible_model.clone(),
+                            delta,
+                        }
+                    }
                     CompletionStreamEvent::ThinkingDelta { delta, .. } => {
                         CompletionStreamEvent::ThinkingDelta {
                             provider_id: ProviderId::new(provider_id.clone()),

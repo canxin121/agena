@@ -3,6 +3,7 @@ use futures_core::Stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::{
     error::AppError,
@@ -11,13 +12,11 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, StreamResumePolicy,
-        auth::{AuthData, AuthStore},
-        prompt_cache, should_retry_credential, sse, utils, wire_message,
+        auth::AuthData, prompt_cache, should_retry_credential, sse, utils, wire_message,
     },
     role::Role,
 };
 
-const PROVIDER_ID_ENTERPRISE: &str = "github-copilot-enterprise";
 const DEFAULT_PUBLIC_BASE_URL: &str = "https://api.githubcopilot.com";
 
 #[derive(Clone)]
@@ -26,8 +25,7 @@ pub struct CopilotProvider {
     client: reqwest::Client,
     bearer_token: ManagedCredential,
     base_url: String,
-    auth_store: Option<Arc<dyn AuthStore>>,
-    auth_provider_id: Option<String>,
+    auth_data: Option<Arc<Mutex<AuthData>>>,
     default_model: ModelId,
     models_url: Option<String>,
 }
@@ -76,35 +74,7 @@ impl CopilotProvider {
             enterprise_url.clone(),
             options,
         )
-    }
-
-    pub fn with_managed_auth(
-        id: &str,
-        client: reqwest::Client,
-        auth_store: Arc<dyn AuthStore>,
-        auth_provider_id: impl Into<String>,
-        options: CopilotProviderOptions,
-    ) -> Result<Self, AppError> {
-        let auth_provider_id = auth_provider_id.into();
-        let enterprise_url = auth_store
-            .get(auth_provider_id.as_str())?
-            .and_then(|auth| auth.enterprise_url().map(ToOwned::to_owned));
-        let mut provider = Self::with_bearer_credential(
-            id,
-            client,
-            ManagedCredential::auth_store(
-                format!("{id} bearer token"),
-                auth_store.clone(),
-                auth_provider_id.clone(),
-                crate::provider::AuthSecretSelector::RefreshOrAccess,
-                crate::provider::AuthRefreshStrategy::ReloadFromStore,
-            ),
-            enterprise_url,
-            options,
-        )?;
-        provider.auth_store = Some(auth_store);
-        provider.auth_provider_id = Some(auth_provider_id);
-        Ok(provider)
+        .map(|provider| provider.with_auth_data(Arc::new(Mutex::new(auth.clone()))))
     }
 
     pub fn with_bearer_credential(
@@ -114,7 +84,7 @@ impl CopilotProvider {
         enterprise_url: Option<String>,
         options: CopilotProviderOptions,
     ) -> Result<Self, AppError> {
-        let default_base = if id == PROVIDER_ID_ENTERPRISE {
+        let default_base = if enterprise_url.is_some() {
             enterprise_url
                 .as_ref()
                 .map(|domain| format!("https://copilot-api.{}", normalize_domain(domain)))
@@ -133,11 +103,15 @@ impl CopilotProvider {
             client,
             bearer_token,
             base_url,
-            auth_store: None,
-            auth_provider_id: None,
+            auth_data: None,
             default_model,
             models_url: options.models_url,
         })
+    }
+
+    pub fn with_auth_data(mut self, auth_data: Arc<Mutex<AuthData>>) -> Self {
+        self.auth_data = Some(auth_data);
+        self
     }
 
     fn configured_public_base_url(&self) -> bool {
@@ -145,26 +119,22 @@ impl CopilotProvider {
     }
 
     fn resolved_base_url(&self) -> Result<String, AppError> {
-        if self.id != PROVIDER_ID_ENTERPRISE {
-            return Ok(self.base_url.clone());
-        }
-
         if !self.configured_public_base_url() {
             return Ok(self.base_url.clone());
         }
 
-        let Some(auth_store) = self.auth_store.as_ref() else {
-            return Ok(self.base_url.clone());
-        };
-        let Some(auth_provider_id) = self.auth_provider_id.as_ref() else {
+        let Some(auth_data) = self.auth_data.as_ref() else {
             return Ok(self.base_url.clone());
         };
 
-        let domain = auth_store
-            .get(auth_provider_id.as_str())?
-            .and_then(|auth| auth.enterprise_url().map(ToOwned::to_owned))
+        let domain = auth_data
+            .try_lock()
+            .ok()
+            .as_deref()
+            .and_then(AuthData::enterprise_url)
+            .map(ToOwned::to_owned)
             .ok_or_else(|| {
-                AppError::Config("enterprise_url missing for github-copilot-enterprise".to_owned())
+                AppError::Config("enterprise_url missing for enterprise copilot auth".to_owned())
             })?;
 
         Ok(format!("https://copilot-api.{}", normalize_domain(&domain)))
@@ -1925,8 +1895,7 @@ mod tests {
                 "test-token",
             ),
             base_url,
-            auth_store: None,
-            auth_provider_id: None,
+            auth_data: None,
             default_model: ModelId::new("gpt-4o-mini"),
             models_url: None,
         }

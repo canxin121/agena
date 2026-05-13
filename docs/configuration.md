@@ -17,8 +17,7 @@ agena config validate
 `config.example.toml` 展示了最小启动面：
 
 - `[tracing]`: 日志过滤。
-- `[auth]`: 凭据存储方式。
-- `[providers.<id>]`: 至少配置一个逻辑 provider，通常由 `auth` + 一个或多个 `adapters` 组成。
+- `[providers.<id>]`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `[runtime]`: 默认 agent。
 - `[agents.<name>]`: 自定义 agent。
 - `[permission]`: 路径、网络、entry 权限。
@@ -83,8 +82,6 @@ agena diagnostics
 通用覆盖：
 
 ```text
-auth.store_path
-auth.store_backend
 tracing.filter
 tracing.database_level
 ui.locale
@@ -137,7 +134,6 @@ agena \
 
 ```text
 AGENA_CONFIG
-AGENA_AUTH_FILE
 AGENA_LOG
 AGENA_DATABASE_LOG
 AGENA_TELEMETRY_ENABLED
@@ -297,21 +293,15 @@ headers = { }
 
 `enabled` 默认 false。`headers` 是发送到 OTLP endpoint 的 header map。Endpoint 也可通过 `AGENA_OTEL_ENDPOINT` 或 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 提供。
 
-## Auth
+## Provider Auth
 
-```toml
-[auth]
-store_backend = "auto"
-store_path = "~/.agena/auth.json"
-```
+provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有：
 
-`store_backend` 可选：
+- `secret`
+- `secret_env`
+- `credential`
 
-- `auto`: 优先 OS keyring，不可用时 fallback 到 file。
-- `keyring`: 使用 OS keyring，不做 file fallback。
-- `file`: 只使用 file store。
-
-默认 auth 文件路径由 `AGENA_AUTH_FILE` 或 `~/.agena/auth.json` 决定。auth store 可保存 API key、OAuth token 和 well-known credential。
+其中 `credential` 用来存储 provider-local API key 或 OAuth token。CLI 登录、REST 登录、token refresh 都会直接回写当前 provider 的 `auth.credential`，不会再经过独立的全局 auth store，也不会跨 provider 共享 credential。
 
 ## Runtime
 
@@ -416,7 +406,7 @@ default_model = "gpt-4.1-mini"
 mode = "secret"
 secret = "..."
 secret_env = "OPENAI_API_KEY"
-credential_provider_id = "openai"
+credential = { type = "api", key = "sk-example" }
 ```
 
 `mode` 可选值：
@@ -432,7 +422,7 @@ sap_ai_core
 字段说明：
 
 - `secret` / `secret_env`: 通用 secret 来源。适用于 OpenAI、Anthropic、Gemini、OpenRouter、GitLab direct token、Vertex 静态 token、Bedrock bearer token 等场景。
-- `credential_provider_id`: auth store 中 credential 的 key。多个 provider 可以共享同一个值。
+- `credential`: provider-local `AuthData`。适用于 inline API key、OAuth token 以及 provider 自己管理的 refresh metadata。
 - `profile`、`access_key_id`、`secret_access_key`、`session_token`: `bedrock_sigv4` 模式使用。
 - `service_key_env`: `sap_ai_core` 模式使用，默认 `AICORE_SERVICE_KEY`。
 
@@ -440,7 +430,8 @@ sap_ai_core
 
 - `api_key` / `api_key_env`
 - `access_token` / `access_token_env`
-- `auth_provider_id`
+- `kind`
+- `stored_credential` / `auth_data`
 
 除 `kind` 和 `default_model` 之外，不同 adapter 还有这些字段：
 
@@ -484,7 +475,7 @@ Credential 解析顺序要按 provider 具体实现理解，但通常是：
 
 1. 配置中的直接 `secret`。
 2. 配置中命名的 `secret_env`。
-3. Auth store 中的 credential，例如 `agena login openai --browser` 写入的 OAuth token。
+3. 配置中的 inline `credential`。
 4. provider 特有 fallback，例如 Google Vertex ADC、Amazon Bedrock SigV4、SAP AI Core service key。
 
 几个重要特殊规则：
@@ -492,12 +483,12 @@ Credential 解析顺序要按 provider 具体实现理解，但通常是：
 - `ollama` 使用 `auth.mode = "none"`，不走 credential。
 - `google_vertex` 如果没有静态 token，可用 `auth.mode = "google_adc"`。
 - `amazon_bedrock` 如果没有 bearer secret，可用 `auth.mode = "bedrock_sigv4"`；`access_key_id` 和 `secret_access_key` 必须成对出现。
-- `copilot` 和 OpenAI `backend = "chatgpt_codex"` 只支持 auth-store credential，不支持直接 `secret` 或 `secret_env`。
-- GitLab 会在构建 registry 时判断当前是否有 direct secret；有的话走 direct token，没有的话走 `credential_provider_id` 指向的 OAuth。
+- `copilot` 和 OpenAI `backend = "chatgpt_codex"` 只支持 provider-local OAuth credential，不支持直接 `secret` 或 `secret_env`。
+- GitLab 会在构建 registry 时判断当前是否有 direct secret；有的话走 direct token，没有的话走 provider-local OAuth credential。
 
-更细的 provider/auth store 关系见 [Provider Auth 与 Credential](provider-credentials.md)。
+更细的 provider auth / credential 关系见 [Provider Auth 与 Credential](provider-credentials.md)。
 
-`openai` adapter 默认使用 `backend = "api"`，`base_url` 默认是 `https://api.openai.com/v1`。如果 `backend = "chatgpt_codex"`，默认 `base_url` 是 `https://chatgpt.com/backend-api/codex`，而默认 `credential_provider_id` 会变成 `openai`。
+`openai` adapter 默认使用 `backend = "api"`，`base_url` 默认是 `https://api.openai.com/v1`。如果 `backend = "chatgpt_codex"`，默认 `base_url` 是 `https://chatgpt.com/backend-api/codex`，并要求当前 provider 配置 provider-local OpenAI OAuth credential。
 
 如果要走 ChatGPT Codex backend，配置成：
 
@@ -506,7 +497,7 @@ Credential 解析顺序要按 provider 具体实现理解，但通常是：
 default_model = "gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
-credential_provider_id = "openai"
+credential = { type = "oauth", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-123" }
 
 [providers.openai_chatgpt.adapters.codex]
 kind = "openai"
@@ -514,7 +505,7 @@ backend = "chatgpt_codex"
 default_model = "gpt-5.3-codex"
 ```
 
-`chatgpt_codex` backend 默认使用 `https://chatgpt.com/backend-api/codex`，并要求 auth store 里有 OpenAI OAuth credential；它不支持直接 `secret`、`secret_env`、`api_mode = "chat"`、`stream_mode = "realtime_websocket"` 或 `realtime_ws_url`。
+`chatgpt_codex` backend 默认使用 `https://chatgpt.com/backend-api/codex`，并要求当前 provider 配置 OpenAI OAuth credential；它不支持直接 `secret`、`secret_env`、`api_mode = "chat"`、`stream_mode = "realtime_websocket"` 或 `realtime_ws_url`。
 
 不要把真实 API key 提交到仓库。优先使用 `secret_env` 或登录命令。
 
@@ -538,7 +529,7 @@ auth_scheme = "Bearer"
 default_model = "fast"
 
 [providers.shared.auth]
-credential_provider_id = "openai"
+credential = { type = "oauth", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-shared" }
 
 [providers.shared.adapters.api]
 kind = "openai"
@@ -560,7 +551,7 @@ target_model = "gpt-5-codex"
 default_model = "claude-sonnet-4-5"
 
 [providers.gitlab.auth]
-credential_provider_id = "gitlab"
+credential = { type = "oauth", refresh = "gitlab-refresh", access = "gitlab-access", expires_at_ms = 4102444800000 }
 
 [providers.gitlab.adapters.duo]
 kind = "gitlab"

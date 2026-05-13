@@ -14,59 +14,12 @@ use crate::{
     config::{ConfigLoader, ConfigResolution, LoadConfigRequest, ProcessEnvironment},
     model::ModelRef,
     plugin::PluginHost,
-    provider::{ProviderRegistry, auth::AuthStore},
+    provider::ProviderRegistry,
     session::{
         ContextGovernor, ContextPolicy, SessionManager, SessionManagerConfig, SessionProcessor,
     },
     tool::ToolExecutor,
 };
-
-#[derive(Clone)]
-pub struct RuntimeAuthStore {
-    inner: Arc<dyn AuthStore>,
-}
-
-impl RuntimeAuthStore {
-    pub fn new(store: impl AuthStore + 'static) -> Self {
-        Self {
-            inner: Arc::new(store),
-        }
-    }
-
-    pub fn inner(&self) -> &Arc<dyn AuthStore> {
-        &self.inner
-    }
-}
-
-impl fmt::Debug for RuntimeAuthStore {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RuntimeAuthStore").finish_non_exhaustive()
-    }
-}
-
-impl AuthStore for RuntimeAuthStore {
-    fn all(
-        &self,
-    ) -> Result<std::collections::HashMap<String, crate::provider::auth::AuthData>, AppError> {
-        self.inner.all()
-    }
-
-    fn get(&self, provider_id: &str) -> Result<Option<crate::provider::auth::AuthData>, AppError> {
-        self.inner.get(provider_id)
-    }
-
-    fn set(
-        &self,
-        provider_id: &str,
-        auth: crate::provider::auth::AuthData,
-    ) -> Result<(), AppError> {
-        self.inner.set(provider_id, auth)
-    }
-
-    fn remove(&self, provider_id: &str) -> Result<(), AppError> {
-        self.inner.remove(provider_id)
-    }
-}
 
 pub struct RuntimeSnapshot {
     generation: u64,
@@ -81,7 +34,6 @@ struct RuntimeServices {
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginHost>,
     agents: crate::agents::SubagentRegistry,
-    auth_store: RuntimeAuthStore,
     session_manager: Option<Arc<SessionManager>>,
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
@@ -128,7 +80,6 @@ impl RuntimeServices {
         providers: Arc<ProviderRegistry>,
         plugins: Arc<PluginHost>,
         agents: crate::agents::SubagentRegistry,
-        auth_store: RuntimeAuthStore,
         session_manager: Option<Arc<SessionManager>>,
         mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
@@ -139,7 +90,6 @@ impl RuntimeServices {
             providers,
             plugins,
             agents,
-            auth_store,
             session_manager,
             mcp_manager,
             lsp_registry,
@@ -271,7 +221,6 @@ impl RuntimeSnapshot {
                 .dispatch_config(crate::plugin::ConfigInput { current: value })
                 .await;
         }
-        let auth_store = RuntimeAuthStore::new(resolution.config.auth_store());
         let agents = crate::agents::SubagentRegistry::discover(
             workspace_root,
             crate::agents::default_user_agents_dir().as_deref(),
@@ -321,7 +270,6 @@ impl RuntimeSnapshot {
             providers,
             plugins,
             agents,
-            auth_store,
             session_manager,
             mcp_manager,
             lsp_registry,
@@ -414,10 +362,6 @@ impl RuntimeSnapshot {
 
     pub fn agents(&self) -> crate::agents::SubagentRegistry {
         self.services.agents.clone()
-    }
-
-    pub fn auth_store(&self) -> RuntimeAuthStore {
-        self.services.auth_store.clone()
     }
 
     pub fn session_manager(&self) -> Option<Arc<SessionManager>> {
@@ -779,7 +723,6 @@ fn build_profile_agent(
 fn collect_watch_paths(resolution: &ConfigResolution) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     push_watch_path(&mut paths, resolution.meta.config_path.clone());
-    push_watch_path(&mut paths, resolution.config.auth.store_path.clone());
 
     let base_dir = resolution
         .meta

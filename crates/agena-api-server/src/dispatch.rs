@@ -427,7 +427,6 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         workspace_root: state.runtime().workspace_root().display().to_string(),
         config_path: resolution.meta.config_path.display().to_string(),
         config_found: resolution.meta.config_found,
-        auth_store_path: resolution.config.auth.store_path.display().to_string(),
         provider_ids,
         plugin_count: snapshot.plugin_manager().plugins().len(),
         session_runtime_available: snapshot.session_manager().is_some(),

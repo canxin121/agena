@@ -1,43 +1,50 @@
 # Provider Auth + Adapters 重构说明
 
-本文说明这次 `provider` / `credential` 重构的目标结构、落地方案和迁移路径。
+本文说明当前 `provider` / `auth` / `adapter` 结构的设计目标，以及为什么 credential 现在必须归属到 provider 自己。
 
 ## 目标
 
-当前问题有两个：
+旧模型里有两个根本问题：
 
-1. `provider` 同时暴露 `base_url`、`api_key`、`api_key_env`、`auth_provider_id`，会让人误以为 `provider` 和 `credential` 是并列概念。
-2. 一个 `credential` 事实上可能被多个 provider 复用，所以“一个 provider 对应一套独立 credential”这个模型也不成立。
+1. `provider` 同时暴露 `base_url`、`api_key`、`api_key_env`、`auth_provider_id`，语义混杂。
+2. credential 通过全局 id 路由，导致“provider 的 credential”其实并不真的属于 provider。
 
-这次重构把语义改成：
+新的结构改成：
 
-- `provider` 表示一个面向业务使用的逻辑入口。
-- `credential` 是 `provider.auth` 的一种来源，而不是和 provider 并列。
-- 一个 `provider` 可以包含多个 `adapter`。
-- 每个 `adapter` 暴露一组模型。
-- 每个模型继续支持 `variants`。
+- `provider` 是逻辑入口。
+- `provider.auth` 是这个逻辑入口自己的认证配置。
+- `provider.adapters` 是这个逻辑入口下的多个真实后端。
+- model routes 挂在 adapter 下，再被扁平化成 provider 的可见模型表。
 
-结构关系变成：
+结构如下：
 
 ```text
 provider
+├── default_model
 ├── auth
-├── adapters
-│   ├── <adapter_id>
-│   │   ├── kind
-│   │   ├── endpoint/options
-│   │   └── models
-│   │       └── <visible_model_id>
-│   │           ├── target_model
-│   │           └── variants / capabilities / metadata patch
-└── default_model
+└── adapters
+    ├── <adapter_id>
+    │   ├── kind
+    │   ├── endpoint/options
+    │   └── models
+    │       └── <visible_model_id>
+    │           ├── target_model
+    │           └── variants / metadata / capabilities
+    └── ...
 ```
 
-## 已实现内容
+## 关键语义
 
-### 1. 新的 provider 解析模型
+- 一个 provider 可以包含多个 adapters。
+- 一个 adapter 可以暴露多个 models。
+- 一个 model 可以有多个 variants。
+- credential 只属于一个 provider。
+- 同一个 provider 下的 adapters 共享该 provider 的 auth。
+- 不同 providers 不再通过 `credential_provider_id` 共享同一条身份。
 
-`ResolvedProviderConfig` 已经从旧的单一 `definition` 结构重构为：
+## 当前配置模型
+
+解析后的 `ResolvedProviderConfig` 现在由这些部分组成：
 
 - `default_model`
 - `auth`
@@ -46,67 +53,48 @@ provider
 
 其中：
 
-- `auth` 是共享认证配置。
-- `adapters` 是 provider 下的多个后端适配器。
-- `models` 是扁平化后的可见模型路由表，记录“这个模型走哪个 adapter，对应哪个上游 model”。
+- `auth` 是 provider-level 认证配置。
+- `adapters` 保存真实后端定义。
+- `models` 是 provider 对外暴露的路由表，记录“这个可见模型该走哪个 adapter，对应哪个上游 model”。
 
-### 2. 新的 auth 模式
+## auth 的位置为什么必须在 provider 上
 
-目前支持这些 provider 级认证模式：
+因为实际运行时需要共享 auth 的不是“全局多个 provider”，而是“同一个 provider 下的多个 adapters”。
 
-- `none`
-- `secret`
-- `bedrock_sigv4`
-- `google_adc`
-- `sap_ai_core`
+典型例子：
 
-其中 `secret` 是最通用的共享认证模式，支持三种来源：
+- 一个 provider 同时暴露 OpenAI API adapter 和 ChatGPT Codex adapter。
+- 它们都属于同一个逻辑入口。
+- 它们应该共享同一份 provider-local credential。
+- 这个 credential 的 refresh、account metadata、enterprise metadata 也应该跟着这个 provider 走。
 
-- 直接 secret
-- 环境变量
-- auth store credential（`credential_provider_id`）
+把 credential 放在 `provider.auth` 下之后：
 
-这就把“直接 API key”和“credential”统一成了 provider 的一种认证配置。
+- 结构上更自然。
+- refresh 生命周期和 provider 实例绑定。
+- prompt-cache scope 可以直接跟 provider auth 对齐。
+- 不再需要把 auth 再映射到一个外部共享 id。
 
-### 3. 新的 adapter 结构
+## 运行时落地
 
-每个 adapter 独立保存自己的：
+运行时现在围绕两层来工作：
 
-- `kind`
-- `base_url` / `instance_url` / `region` 等 endpoint 选项
-- `default_model`
-- `models`
-
-认证字段不再散落在 adapter 本身，而是从 provider 级 `auth` 注入。
-
-### 4. 运行时 MultiAdapterProvider
-
-运行时新增了 `MultiAdapterProvider`：
+### 1. `MultiAdapterProvider`
 
 - 对外仍然暴露一个 provider id。
 - 对内持有多个真实 adapter provider。
-- 负责把可见 model id 路由到对应 adapter 的 `target_model`。
-- 支持单 adapter passthrough。
-- 支持多 adapter 显式模型路由。
+- 根据 model route 把请求转发到对应 adapter。
+- 单 adapter provider 支持 passthrough。
 
-### 5. legacy 配置兼容
+### 2. provider-managed credential
 
-旧配置依然能工作。
+- `ManagedCredential` 可以直接持有 provider-local `AuthData`。
+- token refresh 会更新 provider 自己的那份 `AuthData`。
+- OpenAI / Copilot 这种还要读取 `account_id` / `enterprise_url` 的 provider，不再需要额外查询全局 auth store 元数据。
 
-当前实现会把 legacy provider 配置自动 lower 成新结构：
+## canonical 配置示例
 
-- 原来的单 provider 会变成一个隐式 `default` adapter。
-- 原来的 `api_key` / `api_key_env` / `auth_provider_id` 会被 lower 到 `provider.auth`。
-- 原来的 `[providers.<id>.models]` 会被 lower 到新的 model route 表。
-
-这意味着：
-
-- 新结构已经是内部唯一运行时模型。
-- 旧配置只是一个兼容输入层。
-
-## 新配置示例
-
-### 单 adapter，直接 API key
+### 单 adapter
 
 ```toml
 [providers.openai]
@@ -121,29 +109,14 @@ base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1"
 ```
 
-### 单 adapter，auth store credential
-
-```toml
-[providers.openai]
-default_model = "gpt-4.1"
-
-[providers.openai.auth]
-credential_provider_id = "openai"
-
-[providers.openai.adapters.api]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
-default_model = "gpt-4.1"
-```
-
-### 多 adapter，共享一套 auth
+### 多 adapter，共享同一个 provider-local OAuth
 
 ```toml
 [providers.shared]
 default_model = "fast"
 
 [providers.shared.auth]
-credential_provider_id = "openai"
+credential = { type = "oauth", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-shared" }
 
 [providers.shared.adapters.api]
 kind = "openai"
@@ -162,28 +135,36 @@ default_model = "gpt-5-codex"
 target_model = "gpt-5-codex"
 ```
 
+## 兼容性说明
+
+旧的 flat provider 配置仍然是输入兼容层：
+
+- root-level `kind`
+- `base_url`
+- `api_key` / `api_key_env`
+- `auth_provider_id`
+
+这些字段会被 lower 到新的 `provider.auth + provider.adapters` 结构。
+
+但 canonical 写法已经变了：
+
+- 新配置不要再写 `credential_provider_id`
+- 新配置不要再把 credential 当成 provider 外部的共享对象
+- 新配置应该直接写到 `[providers.<id>.auth]`
+
 ## 约束
 
-为了避免多 adapter 模型名冲突，这次实现加了一个硬约束：
+- 多 adapter provider 必须显式声明每个 adapter 的 `models`。
+- 同一个可见 model id 不能在多个 adapters 下重复声明。
+- `ollama` 只能配 `auth.mode = "none"`。
+- `copilot` 和 OpenAI `backend = "chatgpt_codex"` 只接受 provider-local OAuth credential，不接受直接 `secret` / `secret_env`。
 
-- 多 adapter provider 必须显式声明每个 adapter 下暴露哪些 `models`。
+## 迁移建议
 
-这样路由关系在配置期就是确定的，不需要运行时猜测。
+如果你以前依赖“多个 provider 共用一个 `credential_provider_id`”，迁移时应当先问自己：
 
-## 兼容性策略
+- 这是不是其实应该是一个 provider 下的多个 adapters？
 
-这次重构采用的是“内部彻底重构，外部渐进迁移”：
+如果答案是是，那么把它们折叠成一个 provider，shared auth 放在 `provider.auth`。
 
-1. 新配置结构已经可用。
-2. 旧配置继续兼容。
-3. runtime、REST auth 暴露逻辑、model 路由逻辑都基于新结构执行。
-4. 后续可以逐步把文档、示例配置、UI 编辑器迁移到新结构。
-
-## 后续建议
-
-这次实现已经把核心数据模型和运行时路由落地，但还有几件值得继续推进的工作：
-
-1. 在 `config.full.toml` 和 `docs/configuration.md` 里加入新结构示例。
-2. 给 Studio 增加 `provider.auth` / `provider.adapters` 可视化编辑能力。
-3. 对 legacy flat provider 配置增加 deprecation 提示，逐步推动迁移。
-4. 补一轮针对多 adapter provider 的 API / session 端到端测试。
+如果答案是否，那么就给每个 provider 各自配置自己的 `auth.credential`，不要再共享同一套身份。

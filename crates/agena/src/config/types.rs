@@ -7,8 +7,7 @@ use tracing_subscriber::EnvFilter;
 use crate::provider::{
     ConfiguredModelDefinition, OpenAiApiMode, OpenAiBackend, OpenAiCompatibleStreamMode,
     OpenAiStreamMode, ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
-    ProviderStreamReplayConfig,
-    auth::{ConfiguredAuthStore, FileAuthStore, KeyringAuthStore},
+    ProviderStreamReplayConfig, auth::AuthData,
 };
 
 use super::ConfigError;
@@ -54,7 +53,6 @@ impl ConfigResolution {
 pub struct ResolvedConfig {
     pub tracing: TracingConfig,
     pub telemetry: agena_otel::TelemetryConfig,
-    pub auth: AuthConfig,
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
     #[serde(
@@ -98,19 +96,6 @@ impl ResolvedConfig {
                 max_retries_after_output: self.runtime.stream_replay.max_retries_after_output,
                 max_tracked_events: self.runtime.stream_replay.max_tracked_events,
             },
-        }
-    }
-
-    pub fn auth_store(&self) -> ConfiguredAuthStore {
-        let file = FileAuthStore::new(self.auth.store_path.clone());
-        match self.auth.store_backend {
-            AuthStoreBackend::File => ConfiguredAuthStore::File(file),
-            AuthStoreBackend::Auto => {
-                ConfiguredAuthStore::Keyring(KeyringAuthStore::system(file, true))
-            }
-            AuthStoreBackend::Keyring => {
-                ConfiguredAuthStore::Keyring(KeyringAuthStore::system(file, false))
-            }
         }
     }
 
@@ -164,21 +149,6 @@ impl TracingConfig {
         }
         Ok(filter)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct AuthConfig {
-    pub store_path: PathBuf,
-    pub store_backend: AuthStoreBackend,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthStoreBackend {
-    #[default]
-    Auto,
-    File,
-    Keyring,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -351,7 +321,8 @@ pub enum ProviderAuthConfig {
 pub struct ProviderSecretAuthConfig {
     pub secret: Option<String>,
     pub secret_env: Option<String>,
-    pub credential_provider_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<AuthData>,
 }
 
 impl fmt::Debug for ProviderSecretAuthConfig {
@@ -359,7 +330,13 @@ impl fmt::Debug for ProviderSecretAuthConfig {
         f.debug_struct("ProviderSecretAuthConfig")
             .field("secret", &redacted(self.secret.as_deref()))
             .field("secret_env", &self.secret_env)
-            .field("credential_provider_id", &self.credential_provider_id)
+            .field(
+                "credential",
+                &self
+                    .credential
+                    .as_ref()
+                    .map(|credential| credential_debug_kind(credential)),
+            )
             .finish()
     }
 }
@@ -458,6 +435,14 @@ fn redacted(value: Option<&str>) -> &'static str {
     match value {
         Some(s) if !s.is_empty() => "***redacted***",
         _ => "<none>",
+    }
+}
+
+fn credential_debug_kind(value: &AuthData) -> &'static str {
+    match value {
+        AuthData::Api { .. } => "api",
+        AuthData::OAuth { .. } => "oauth",
+        AuthData::WellKnown { .. } => "well_known",
     }
 }
 

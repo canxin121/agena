@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use crate::{
     error::AppError,
     provider::{
-        auth::{AuthData, AuthStore, refresh_gitlab_token},
+        auth::{AuthData, refresh_gitlab_token},
         utils,
     },
 };
@@ -67,9 +67,9 @@ enum CredentialSource {
         field: &'static str,
         env_key: String,
     },
-    AuthStore {
-        auth_store: Arc<dyn AuthStore>,
+    AuthData {
         provider_id: String,
+        auth: Arc<Mutex<AuthData>>,
         selector: AuthSecretSelector,
         refresh: AuthRefreshStrategy,
     },
@@ -111,18 +111,34 @@ impl ManagedCredential {
         )
     }
 
-    pub fn auth_store(
+    pub fn auth_data(
         label: impl Into<String>,
-        auth_store: Arc<dyn AuthStore>,
         provider_id: impl Into<String>,
+        auth: AuthData,
+        selector: AuthSecretSelector,
+        refresh: AuthRefreshStrategy,
+    ) -> Self {
+        Self::auth_data_shared(
+            label,
+            provider_id,
+            Arc::new(Mutex::new(auth)),
+            selector,
+            refresh,
+        )
+    }
+
+    pub fn auth_data_shared(
+        label: impl Into<String>,
+        provider_id: impl Into<String>,
+        auth: Arc<Mutex<AuthData>>,
         selector: AuthSecretSelector,
         refresh: AuthRefreshStrategy,
     ) -> Self {
         Self::new(
             label.into(),
-            CredentialSource::AuthStore {
-                auth_store,
+            CredentialSource::AuthData {
                 provider_id: provider_id.into(),
+                auth,
                 selector,
                 refresh,
             },
@@ -260,22 +276,21 @@ impl CredentialSource {
                 }
                 scope
             }
-            Self::AuthStore {
-                auth_store,
+            Self::AuthData {
                 provider_id,
+                auth,
                 selector,
                 refresh,
             } => {
                 let mut scope = format!(
-                    "auth_store:{provider_id}:{}:{}",
+                    "auth_data:{provider_id}:{}:{}",
                     auth_secret_selector_key(*selector),
                     auth_refresh_strategy_key(refresh)
                 );
-                if let Some(identity) = auth_store
-                    .get(provider_id.as_str())
+                if let Some(identity) = auth
+                    .try_lock()
                     .ok()
-                    .flatten()
-                    .as_ref()
+                    .as_deref()
                     .and_then(auth_data_prompt_cache_identity)
                 {
                     scope.push(':');
@@ -320,14 +335,14 @@ impl CredentialSource {
                     expires_at_ms: None,
                 })
             }
-            Self::AuthStore {
-                auth_store,
+            Self::AuthData {
                 provider_id,
+                auth,
                 selector,
                 refresh,
             } => {
-                resolve_auth_store_credential(
-                    auth_store.as_ref(),
+                resolve_inline_auth_credential(
+                    auth.as_ref(),
                     provider_id.as_str(),
                     *selector,
                     refresh,
@@ -559,24 +574,19 @@ fn auth_data_prompt_cache_identity(auth: &AuthData) -> Option<String> {
     }
 }
 
-async fn resolve_auth_store_credential(
-    auth_store: &dyn AuthStore,
+async fn resolve_inline_auth_credential(
+    auth: &Mutex<AuthData>,
     provider_id: &str,
     selector: AuthSecretSelector,
     refresh: &AuthRefreshStrategy,
     force_refresh: bool,
 ) -> Result<CachedCredential, AppError> {
-    let auth = auth_store.get(provider_id)?.ok_or_else(|| {
-        AppError::Config(format!(
-            "auth credential `{provider_id}` was not found in the auth store"
-        ))
-    })?;
-
-    let selected = select_auth_secret(&auth, selector, provider_id);
+    let current = auth.lock().await.clone();
+    let selected = select_auth_secret(&current, selector, provider_id);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let should_refresh = match refresh {
         AuthRefreshStrategy::GitlabOAuth { .. } | AuthRefreshStrategy::OpenAiOAuth => {
-            oauth_refresh_token(&auth).is_some()
+            oauth_refresh_token(&current).is_some()
                 && match selected.as_ref() {
                     Ok(selected) => force_refresh || !selected.is_fresh(now_ms),
                     Err(_) => true,
@@ -596,7 +606,7 @@ async fn resolve_auth_store_credential(
                 account_id,
                 enterprise_url,
                 ..
-            } = auth
+            } = current
             else {
                 return selected;
             };
@@ -610,7 +620,7 @@ async fn resolve_auth_store_credential(
                 account_id: refreshed.account_id.or(account_id),
                 enterprise_url,
             };
-            auth_store.set(provider_id, updated.clone())?;
+            *auth.lock().await = updated.clone();
             select_auth_secret(&updated, selector, provider_id)
         }
         AuthRefreshStrategy::GitlabOAuth { instance_url } => {
@@ -619,7 +629,7 @@ async fn resolve_auth_store_credential(
                 account_id,
                 enterprise_url,
                 ..
-            } = auth
+            } = current
             else {
                 return selected;
             };
@@ -633,7 +643,7 @@ async fn resolve_auth_store_credential(
                 account_id,
                 enterprise_url,
             };
-            auth_store.set(provider_id, updated.clone())?;
+            *auth.lock().await = updated.clone();
             select_auth_secret(&updated, selector, provider_id)
         }
         AuthRefreshStrategy::None | AuthRefreshStrategy::ReloadFromStore => selected,
@@ -767,49 +777,7 @@ fn normalize_expires_at_ms(value: i64) -> Option<i64> {
 mod tests {
     static GOOGLE_ADC_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    use std::{collections::HashMap, sync::Mutex};
-
     use super::*;
-
-    #[derive(Default)]
-    struct MemoryStore {
-        values: Mutex<HashMap<String, AuthData>>,
-    }
-
-    impl AuthStore for MemoryStore {
-        fn all(&self) -> Result<HashMap<String, AuthData>, AppError> {
-            Ok(self
-                .values
-                .lock()
-                .map_err(|_| AppError::Internal("memory auth store lock poisoned".to_owned()))?
-                .clone())
-        }
-
-        fn get(&self, provider_id: &str) -> Result<Option<AuthData>, AppError> {
-            Ok(self
-                .values
-                .lock()
-                .map_err(|_| AppError::Internal("memory auth store lock poisoned".to_owned()))?
-                .get(provider_id)
-                .cloned())
-        }
-
-        fn set(&self, provider_id: &str, auth: AuthData) -> Result<(), AppError> {
-            self.values
-                .lock()
-                .map_err(|_| AppError::Internal("memory auth store lock poisoned".to_owned()))?
-                .insert(provider_id.to_owned(), auth);
-            Ok(())
-        }
-
-        fn remove(&self, provider_id: &str) -> Result<(), AppError> {
-            self.values
-                .lock()
-                .map_err(|_| AppError::Internal("memory auth store lock poisoned".to_owned()))?
-                .remove(provider_id);
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn env_credentials_read_latest_value_on_force_refresh() {
@@ -828,136 +796,6 @@ mod tests {
                 .expect("forced env refresh should re-read"),
             "second"
         );
-    }
-
-    #[tokio::test]
-    async fn auth_store_reload_reads_latest_value() {
-        let store = Arc::new(MemoryStore::default());
-        store
-            .set(
-                "github-copilot",
-                AuthData::OAuth {
-                    refresh: "refresh-1".to_owned(),
-                    access: "access-1".to_owned(),
-                    expires_at_ms: 0,
-                    account_id: None,
-                    enterprise_url: None,
-                },
-            )
-            .expect("initial auth");
-
-        let credential = ManagedCredential::auth_store(
-            "copilot",
-            store.clone(),
-            "github-copilot",
-            AuthSecretSelector::RefreshOrAccess,
-            AuthRefreshStrategy::ReloadFromStore,
-        );
-        assert_eq!(
-            credential.resolve().await.expect("copilot credential"),
-            "refresh-1"
-        );
-
-        store
-            .set(
-                "github-copilot",
-                AuthData::OAuth {
-                    refresh: "refresh-2".to_owned(),
-                    access: "access-2".to_owned(),
-                    expires_at_ms: 0,
-                    account_id: None,
-                    enterprise_url: None,
-                },
-            )
-            .expect("updated auth");
-
-        assert_eq!(
-            credential
-                .force_refresh()
-                .await
-                .expect("reload should pick up updated auth"),
-            "refresh-2"
-        );
-    }
-
-    #[test]
-    fn prompt_cache_scope_tracks_auth_store_oauth_identity() {
-        let store = Arc::new(MemoryStore::default());
-        store
-            .set(
-                "openai",
-                AuthData::OAuth {
-                    refresh: "refresh-1".to_owned(),
-                    access: "access-1".to_owned(),
-                    expires_at_ms: 0,
-                    account_id: Some("acct-a".to_owned()),
-                    enterprise_url: Some("https://chatgpt.example.com".to_owned()),
-                },
-            )
-            .expect("initial auth");
-
-        let credential = ManagedCredential::auth_store(
-            "openai oauth",
-            store.clone(),
-            "openai",
-            AuthSecretSelector::RefreshOrAccess,
-            AuthRefreshStrategy::ReloadFromStore,
-        );
-        let first_scope = credential.prompt_cache_scope();
-
-        store
-            .set(
-                "openai",
-                AuthData::OAuth {
-                    refresh: "refresh-2".to_owned(),
-                    access: "access-2".to_owned(),
-                    expires_at_ms: 0,
-                    account_id: Some("acct-b".to_owned()),
-                    enterprise_url: Some("https://chatgpt.example.com".to_owned()),
-                },
-            )
-            .expect("updated auth");
-        let second_scope = credential.prompt_cache_scope();
-
-        assert_ne!(first_scope, second_scope);
-        assert!(first_scope.contains("account_id=acct-a"));
-        assert!(second_scope.contains("account_id=acct-b"));
-    }
-
-    #[test]
-    fn prompt_cache_scope_tracks_auth_store_api_key_fingerprint() {
-        let store = Arc::new(MemoryStore::default());
-        store
-            .set(
-                "openai",
-                AuthData::Api {
-                    key: "sk-first".to_owned(),
-                },
-            )
-            .expect("initial auth");
-
-        let credential = ManagedCredential::auth_store(
-            "openai api",
-            store.clone(),
-            "openai",
-            AuthSecretSelector::AccessOrApiKey,
-            AuthRefreshStrategy::ReloadFromStore,
-        );
-        let first_scope = credential.prompt_cache_scope();
-
-        store
-            .set(
-                "openai",
-                AuthData::Api {
-                    key: "sk-second".to_owned(),
-                },
-            )
-            .expect("updated auth");
-        let second_scope = credential.prompt_cache_scope();
-
-        assert_ne!(first_scope, second_scope);
-        assert!(first_scope.contains("key_sha256="));
-        assert!(second_scope.contains("key_sha256="));
     }
 
     #[test]

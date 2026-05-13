@@ -2,23 +2,19 @@
 //! return the plain JSON resources the current web client already consumes,
 //! while WS/SSE protocol traffic continues to route through `dispatch`.
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    convert::Infallible,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, convert::Infallible, sync::Arc};
 
 use crate::local_api::{
     AuthApiKeyWriteRequest, AuthBrowserStartRequest, AuthBrowserStartResource,
     AuthCopilotDevicePollRequest, AuthCopilotDeviceStartRequest, AuthCredentialType,
     AuthDeviceStartResource, AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest,
     AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
-    AuthProviderResource, HealthResponse, MarketplaceInstallOutcomeResource,
-    MarketplaceInstallRequestBody, MarketplaceInstalledListResponse,
-    MarketplaceInstalledPluginResource, MarketplaceOutdatedListResponse,
-    MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequestBody,
-    MarketplaceSearchRequestBody, MarketplaceSearchResponse, MarketplaceSyncResponse,
-    MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
+    AuthOpenAiDeviceStartRequest, AuthProviderResource, HealthResponse,
+    MarketplaceInstallOutcomeResource, MarketplaceInstallRequestBody,
+    MarketplaceInstalledListResponse, MarketplaceInstalledPluginResource,
+    MarketplaceOutdatedListResponse, MarketplaceOutdatedPluginResource, MarketplacePluginResource,
+    MarketplaceRegistryRequestBody, MarketplaceSearchRequestBody, MarketplaceSearchResponse,
+    MarketplaceSyncResponse, MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
     MarketplaceUninstallResponse, MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
     MarketplaceUpgradeResponse, MessageListQuery, PartLoadMode, PermissionRuleListQuery,
     PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
@@ -29,9 +25,12 @@ use crate::local_api::{
     WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::config::{
-    ProviderAuthConfig, ProviderSecretAuthConfig, ResolvedProviderConfig,
+    ProviderAuthConfig, ProviderConfigCredentialStore, ResolvedProviderConfig, provider_auth_data,
+    provider_gitlab_instance_url, provider_has_gitlab_adapter, provider_supports_api_key_write,
+    provider_supports_copilot_device, provider_supports_openai_oauth,
 };
 use agena::event::{EventStore, StoreRange};
+use agena::provider::auth::{AuthManager, CopilotDeployment};
 use agena_api::queries::{ListEventsParams, Query, QueryResult};
 use async_stream::stream;
 use axum::{
@@ -686,21 +685,11 @@ pub async fn list_auth_providers(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
     let configured_ids = configured_auth_provider_ids(&state);
-    let auth_map = state
-        .runtime()
-        .auth_manager()
-        .all()
-        .map_err(ServerError::Core)?;
-    let provider_ids = public_auth_provider_ids(&configured_ids, &auth_map);
-    let items = provider_ids
+    let items = configured_ids
         .into_iter()
         .map(|provider_id| {
-            let auth = auth_map.get(provider_id.as_str());
-            auth_provider_resource(
-                configured_ids.contains(provider_id.as_str()),
-                provider_id,
-                auth,
-            )
+            let auth = current_auth_provider_data(&state, provider_id.as_str())?;
+            auth_provider_resource(true, provider_id, auth.as_ref())
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(items))
@@ -710,22 +699,10 @@ pub async fn get_auth_provider(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    ensure_public_auth_provider_id(provider_id.as_str())?;
-    let configured = configured_auth_provider_ids(&state);
-    let auth = state
-        .runtime()
-        .auth_manager()
-        .get(provider_id.as_str())
-        .map_err(ServerError::Core)?;
-    if !configured.contains(provider_id.as_str()) && auth.is_none() {
-        return Err(ServerError::NotFound(format!(
-            "auth provider not found: {provider_id}"
-        )));
-    }
-    Ok(Json(auth_provider_resource(
-        configured.contains(provider_id.as_str()),
-        provider_id,
-        auth.as_ref(),
+    auth_provider_config(&state, provider_id.as_str())?;
+    Ok(Json(auth_provider_resource_from_state(
+        &state,
+        provider_id.as_str(),
     )?))
 }
 
@@ -734,33 +711,20 @@ pub async fn set_auth_provider_api_key(
     Path(provider_id): Path<String>,
     Json(request): Json<AuthApiKeyWriteRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    ensure_public_auth_provider_id(provider_id.as_str())?;
-    let configured = configured_auth_provider_ids(&state);
-    let existing = state
-        .runtime()
-        .auth_manager()
-        .get(provider_id.as_str())
-        .map_err(ServerError::Core)?;
-    if !configured.contains(provider_id.as_str()) && existing.is_none() {
-        return Err(ServerError::NotFound(format!(
-            "auth provider not found: {provider_id}"
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    if !provider_supports_api_key_write(&resolved) {
+        return Err(ServerError::BadRequest(format!(
+            "{provider_id} does not support api key login"
         )));
     }
 
-    state
-        .runtime()
-        .auth_manager()
+    auth_manager(&state)
         .set_api_key(provider_id.as_str(), request.api_key)
         .map_err(ServerError::Core)?;
-    let auth = state
-        .runtime()
-        .auth_manager()
-        .get(provider_id.as_str())
-        .map_err(ServerError::Core)?;
-    Ok(Json(auth_provider_resource(
-        configured.contains(provider_id.as_str()),
-        provider_id,
-        auth.as_ref(),
+    reload_runtime_from_config(&state).await?;
+    Ok(Json(auth_provider_resource_from_state(
+        &state,
+        provider_id.as_str(),
     )?))
 }
 
@@ -768,13 +732,22 @@ pub async fn start_openai_browser_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthBrowserStartRequest>,
 ) -> Result<Json<AuthBrowserStartResource>, ServerError> {
-    let start = state
-        .runtime()
-        .auth_manager()
+    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "openai");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
+        BrowserAuthTarget::OpenAi => {}
+        BrowserAuthTarget::Gitlab { .. } => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support openai browser login"
+            )));
+        }
+    }
+
+    let start = auth_manager(&state)
         .start_openai_browser_login(request.redirect_uri)
         .map_err(ServerError::Core)?;
     Ok(Json(AuthBrowserStartResource {
-        provider_id: "openai".to_string(),
+        provider_id,
         instance_url: None,
         authorize_url: start.authorize_url,
         state: start.state,
@@ -786,34 +759,58 @@ pub async fn finish_openai_browser_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthOpenAiBrowserFinishRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let auth = state
-        .runtime()
-        .auth_manager()
-        .finish_openai_browser_login(request.code, request.pkce_verifier, request.redirect_uri)
+    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "openai");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
+        BrowserAuthTarget::OpenAi => {}
+        BrowserAuthTarget::Gitlab { .. } => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support openai browser login"
+            )));
+        }
+    }
+
+    auth_manager(&state)
+        .finish_openai_browser_login(
+            provider_id.as_str(),
+            request.code,
+            request.pkce_verifier,
+            request.redirect_uri,
+        )
         .await
         .map_err(ServerError::Core)?;
-    let configured = configured_auth_provider_ids(&state);
+    reload_runtime_from_config(&state).await?;
     Ok(Json(AuthLoginResultResource {
         completed: true,
-        provider: Some(auth_provider_resource(
-            configured.contains("openai"),
-            "openai".to_string(),
-            Some(&auth),
+        provider: Some(auth_provider_resource_from_state(
+            &state,
+            provider_id.as_str(),
         )?),
     }))
 }
 
 pub async fn start_openai_device_auth(
     State(state): State<AppState>,
+    payload: Option<Json<AuthOpenAiDeviceStartRequest>>,
 ) -> Result<Json<AuthDeviceStartResource>, ServerError> {
-    let start = state
-        .runtime()
-        .auth_manager()
+    let request = payload.map(|Json(request)| request).unwrap_or_default();
+    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "openai");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    match resolve_device_auth_target(provider_id.as_str(), &resolved)? {
+        DeviceAuthTarget::OpenAi => {}
+        DeviceAuthTarget::Copilot => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support openai device login"
+            )));
+        }
+    }
+
+    let start = auth_manager(&state)
         .start_openai_headless_login()
         .await
         .map_err(ServerError::Core)?;
     Ok(Json(AuthDeviceStartResource {
-        provider_id: "openai".to_string(),
+        provider_id,
         enterprise_domain: None,
         verification_url: start.verification_url,
         user_code: start.user_code,
@@ -826,18 +823,28 @@ pub async fn poll_openai_device_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthOpenAiDevicePollRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let auth = state
-        .runtime()
-        .auth_manager()
-        .poll_openai_headless_login(request.device_code, request.user_code)
+    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "openai");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    match resolve_device_auth_target(provider_id.as_str(), &resolved)? {
+        DeviceAuthTarget::OpenAi => {}
+        DeviceAuthTarget::Copilot => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support openai device login"
+            )));
+        }
+    }
+
+    let auth = auth_manager(&state)
+        .poll_openai_headless_login(provider_id.as_str(), request.device_code, request.user_code)
         .await
         .map_err(ServerError::Core)?;
-    let configured = configured_auth_provider_ids(&state);
-    let provider = if let Some(value) = auth.as_ref() {
-        Some(auth_provider_resource(
-            configured.contains("openai"),
-            "openai".to_string(),
-            Some(value),
+    if auth.is_some() {
+        reload_runtime_from_config(&state).await?;
+    }
+    let provider = if auth.is_some() {
+        Some(auth_provider_resource_from_state(
+            &state,
+            provider_id.as_str(),
         )?)
     } else {
         None
@@ -852,14 +859,23 @@ pub async fn start_gitlab_browser_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthGitLabBrowserStartRequest>,
 ) -> Result<Json<AuthBrowserStartResource>, ServerError> {
-    let start = state
-        .runtime()
-        .auth_manager()
-        .start_gitlab_login(request.instance_url.clone(), request.redirect_uri)
+    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "gitlab");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    let instance_url = match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
+        BrowserAuthTarget::Gitlab { instance_url } => instance_url,
+        BrowserAuthTarget::OpenAi => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support gitlab browser login"
+            )));
+        }
+    };
+
+    let start = auth_manager(&state)
+        .start_gitlab_login(instance_url.clone(), request.redirect_uri)
         .map_err(ServerError::Core)?;
     Ok(Json(AuthBrowserStartResource {
-        provider_id: "gitlab".to_string(),
-        instance_url: Some(request.instance_url),
+        provider_id,
+        instance_url: Some(instance_url),
         authorize_url: start.authorize_url,
         state: start.state,
         pkce_verifier: start.pkce_verifier,
@@ -870,24 +886,33 @@ pub async fn finish_gitlab_browser_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthGitLabBrowserFinishRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let auth = state
-        .runtime()
-        .auth_manager()
+    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "gitlab");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    let instance_url = match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
+        BrowserAuthTarget::Gitlab { instance_url } => instance_url,
+        BrowserAuthTarget::OpenAi => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support gitlab browser login"
+            )));
+        }
+    };
+
+    auth_manager(&state)
         .finish_gitlab_login(
-            request.instance_url,
+            provider_id.as_str(),
+            instance_url,
             request.code,
             request.pkce_verifier,
             request.redirect_uri,
         )
         .await
         .map_err(ServerError::Core)?;
-    let configured = configured_auth_provider_ids(&state);
+    reload_runtime_from_config(&state).await?;
     Ok(Json(AuthLoginResultResource {
         completed: true,
-        provider: Some(auth_provider_resource(
-            configured.contains("gitlab"),
-            "gitlab".to_string(),
-            Some(&auth),
+        provider: Some(auth_provider_resource_from_state(
+            &state,
+            provider_id.as_str(),
         )?),
     }))
 }
@@ -896,21 +921,25 @@ pub async fn start_copilot_device_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthCopilotDeviceStartRequest>,
 ) -> Result<Json<AuthDeviceStartResource>, ServerError> {
-    let deployment = if let Some(domain) = request.enterprise_domain.as_deref() {
-        agena::provider::auth::CopilotDeployment::Enterprise {
-            domain: domain.trim().to_string(),
+    let provider_id =
+        normalize_requested_provider_id(request.provider_id.as_deref(), "github-copilot");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    match resolve_device_auth_target(provider_id.as_str(), &resolved)? {
+        DeviceAuthTarget::Copilot => {}
+        DeviceAuthTarget::OpenAi => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support copilot device login"
+            )));
         }
-    } else {
-        agena::provider::auth::CopilotDeployment::GitHubCom
-    };
-    let start = state
-        .runtime()
-        .auth_manager()
+    }
+
+    let deployment = copilot_deployment(request.enterprise_domain.as_deref());
+    let start = auth_manager(&state)
         .start_copilot_login(deployment)
         .await
         .map_err(ServerError::Core)?;
     Ok(Json(AuthDeviceStartResource {
-        provider_id: "github-copilot".to_string(),
+        provider_id,
         enterprise_domain: request.enterprise_domain,
         verification_url: start.verification_url,
         user_code: start.user_code,
@@ -923,30 +952,30 @@ pub async fn poll_copilot_device_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthCopilotDevicePollRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let deployment = if let Some(domain) = request.enterprise_domain.as_deref() {
-        agena::provider::auth::CopilotDeployment::Enterprise {
-            domain: domain.trim().to_string(),
+    let provider_id =
+        normalize_requested_provider_id(request.provider_id.as_deref(), "github-copilot");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    match resolve_device_auth_target(provider_id.as_str(), &resolved)? {
+        DeviceAuthTarget::Copilot => {}
+        DeviceAuthTarget::OpenAi => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support copilot device login"
+            )));
         }
-    } else {
-        agena::provider::auth::CopilotDeployment::GitHubCom
-    };
-    let provider_id = if request.enterprise_domain.is_some() {
-        "github-copilot-enterprise"
-    } else {
-        "github-copilot"
-    };
-    let auth = state
-        .runtime()
-        .auth_manager()
-        .poll_copilot_login(request.device_code, deployment)
+    }
+
+    let deployment = copilot_deployment(request.enterprise_domain.as_deref());
+    let auth = auth_manager(&state)
+        .poll_copilot_login(provider_id.as_str(), request.device_code, deployment)
         .await
         .map_err(ServerError::Core)?;
-    let configured = configured_auth_provider_ids(&state);
-    let provider = if let Some(value) = auth.as_ref() {
-        Some(auth_provider_resource(
-            configured.contains(provider_id),
-            provider_id.to_string(),
-            Some(value),
+    if auth.is_some() {
+        reload_runtime_from_config(&state).await?;
+    }
+    let provider = if auth.is_some() {
+        Some(auth_provider_resource_from_state(
+            &state,
+            provider_id.as_str(),
         )?)
     } else {
         None
@@ -961,35 +990,15 @@ pub async fn delete_auth_provider(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    ensure_public_auth_provider_id(provider_id.as_str())?;
-    let configured = configured_auth_provider_ids(&state);
-    let auth = state
-        .runtime()
-        .auth_manager()
-        .get(provider_id.as_str())
-        .map_err(ServerError::Core)?;
-    if !configured.contains(provider_id.as_str()) && auth.is_none() {
-        return Err(ServerError::NotFound(format!(
-            "auth provider not found: {provider_id}"
-        )));
-    }
+    auth_provider_config(&state, provider_id.as_str())?;
 
-    state
-        .runtime()
-        .auth_manager()
+    auth_manager(&state)
         .remove(provider_id.as_str())
         .map_err(ServerError::Core)?;
-    if provider_id == "gitlab" {
-        state
-            .runtime()
-            .auth_manager()
-            .remove("gitlab-instance")
-            .map_err(ServerError::Core)?;
-    }
-    Ok(Json(auth_provider_resource(
-        configured.contains(provider_id.as_str()),
-        provider_id,
-        None,
+    reload_runtime_from_config(&state).await?;
+    Ok(Json(auth_provider_resource_from_state(
+        &state,
+        provider_id.as_str(),
     )?))
 }
 
@@ -997,43 +1006,26 @@ pub async fn refresh_auth_provider(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    ensure_public_auth_provider_id(provider_id.as_str())?;
-    let configured = configured_auth_provider_ids(&state);
-    let existing = state
-        .runtime()
-        .auth_manager()
-        .get(provider_id.as_str())
-        .map_err(ServerError::Core)?;
-    if !configured.contains(provider_id.as_str()) && existing.is_none() {
-        return Err(ServerError::NotFound(format!(
-            "auth provider not found: {provider_id}"
-        )));
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    match resolve_refresh_auth_target(provider_id.as_str(), &resolved)? {
+        RefreshAuthTarget::OpenAi => {
+            auth_manager(&state)
+                .refresh_openai_login(provider_id.as_str())
+                .await
+                .map_err(ServerError::Core)?;
+        }
+        RefreshAuthTarget::Gitlab { instance_url } => {
+            auth_manager(&state)
+                .refresh_gitlab_login(provider_id.as_str(), instance_url)
+                .await
+                .map_err(ServerError::Core)?;
+        }
     }
 
-    let auth = match provider_id.as_str() {
-        "openai" => state
-            .runtime()
-            .auth_manager()
-            .refresh_openai_login()
-            .await
-            .map_err(ServerError::Core)?,
-        "gitlab" => state
-            .runtime()
-            .auth_manager()
-            .refresh_gitlab_login()
-            .await
-            .map_err(ServerError::Core)?,
-        _ => {
-            return Err(ServerError::BadRequest(format!(
-                "credential refresh is not supported for provider '{provider_id}'"
-            )));
-        }
-    };
-
-    Ok(Json(auth_provider_resource(
-        configured.contains(provider_id.as_str()),
-        provider_id,
-        Some(&auth),
+    reload_runtime_from_config(&state).await?;
+    Ok(Json(auth_provider_resource_from_state(
+        &state,
+        provider_id.as_str(),
     )?))
 }
 
@@ -2058,72 +2050,167 @@ fn configured_auth_provider_id(
         ProviderAuthConfig::None
         | ProviderAuthConfig::GoogleAdc
         | ProviderAuthConfig::BedrockSigv4(_) => None,
-        ProviderAuthConfig::Secret(secret) => Some(configured_secret_provider_id(
-            provider_id,
-            secret,
-        )),
-        ProviderAuthConfig::SapAiCore(config) => Some(configured_secret_provider_id(
-            provider_id,
-            &config.secret,
-        )),
+        ProviderAuthConfig::Secret(_) | ProviderAuthConfig::SapAiCore(_) => {
+            Some(provider_id.to_owned())
+        }
     }
 }
 
-fn configured_secret_provider_id(
+fn auth_manager(state: &AppState) -> AuthManager<ProviderConfigCredentialStore> {
+    let resolution = state.runtime().config_resolution();
+    AuthManager::new(ProviderConfigCredentialStore::new(
+        resolution.meta.config_path.clone(),
+    ))
+}
+
+async fn reload_runtime_from_config(state: &AppState) -> Result<(), ServerError> {
+    state.runtime().reload().await.map_err(ServerError::Core)?;
+    Ok(())
+}
+
+fn current_auth_provider_data(
+    state: &AppState,
     provider_id: &str,
-    secret: &ProviderSecretAuthConfig,
-) -> String {
-    if secret
-        .secret
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-        || secret
-            .secret_env
-            .as_deref()
-            .is_some_and(has_present_env_var)
-    {
-        provider_id.to_owned()
-    } else {
-        secret
-            .credential_provider_id
-            .clone()
-            .unwrap_or_else(|| provider_id.to_owned())
-    }
+) -> Result<Option<agena::provider::auth::AuthData>, ServerError> {
+    let snapshot = state.runtime().current_snapshot();
+    let resolved = snapshot
+        .config_resolution()
+        .config
+        .providers
+        .get(provider_id)
+        .ok_or_else(|| ServerError::NotFound(format!("auth provider not found: {provider_id}")))?;
+    Ok(provider_auth_data(resolved))
 }
 
-fn has_present_env_var(key: &str) -> bool {
-    std::env::var(key)
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty())
+fn auth_provider_resource_from_state(
+    state: &AppState,
+    provider_id: &str,
+) -> Result<AuthProviderResource, ServerError> {
+    let auth = current_auth_provider_data(state, provider_id)?;
+    auth_provider_resource(true, provider_id.to_owned(), auth.as_ref())
 }
 
-fn public_auth_provider_ids(
-    configured_ids: &BTreeSet<String>,
-    auth_map: &HashMap<String, agena::provider::auth::AuthData>,
-) -> BTreeSet<String> {
-    configured_ids
-        .iter()
+fn auth_provider_config(
+    state: &AppState,
+    provider_id: &str,
+) -> Result<ResolvedProviderConfig, ServerError> {
+    let snapshot = state.runtime().current_snapshot();
+    let resolved = snapshot
+        .config_resolution()
+        .config
+        .providers
+        .get(provider_id)
         .cloned()
-        .chain(
-            auth_map
-                .keys()
-                .filter(|provider_id| !is_internal_auth_provider_id(provider_id.as_str()))
-                .cloned(),
-        )
-        .collect()
-}
-
-fn ensure_public_auth_provider_id(provider_id: &str) -> Result<(), ServerError> {
-    if is_internal_auth_provider_id(provider_id) {
+        .ok_or_else(|| ServerError::NotFound(format!("auth provider not found: {provider_id}")))?;
+    if configured_auth_provider_id(provider_id, &resolved).is_none() {
         return Err(ServerError::NotFound(format!(
             "auth provider not found: {provider_id}"
         )));
     }
-    Ok(())
+    Ok(resolved)
 }
 
-fn is_internal_auth_provider_id(provider_id: &str) -> bool {
-    provider_id == "gitlab-instance"
+fn normalize_requested_provider_id(requested: Option<&str>, default: &str) -> String {
+    requested
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default)
+        .to_owned()
+}
+
+fn normalize_optional_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn copilot_deployment(enterprise_domain: Option<&str>) -> CopilotDeployment {
+    match normalize_optional_text(enterprise_domain) {
+        Some(domain) => CopilotDeployment::Enterprise { domain },
+        None => CopilotDeployment::GitHubCom,
+    }
+}
+
+enum BrowserAuthTarget {
+    OpenAi,
+    Gitlab { instance_url: String },
+}
+
+enum DeviceAuthTarget {
+    OpenAi,
+    Copilot,
+}
+
+enum RefreshAuthTarget {
+    OpenAi,
+    Gitlab { instance_url: String },
+}
+
+fn resolve_browser_auth_target(
+    provider_id: &str,
+    resolved: &ResolvedProviderConfig,
+) -> Result<BrowserAuthTarget, ServerError> {
+    let openai = provider_supports_openai_oauth(resolved);
+    let gitlab = provider_has_gitlab_adapter(resolved);
+    match (openai, gitlab) {
+        (true, false) => Ok(BrowserAuthTarget::OpenAi),
+        (false, true) => provider_gitlab_instance_url(resolved)
+            .map(|instance_url| BrowserAuthTarget::Gitlab { instance_url })
+            .ok_or_else(|| {
+                ServerError::BadRequest(format!(
+                    "{provider_id} has ambiguous gitlab browser auth adapters"
+                ))
+            }),
+        (true, true) => Err(ServerError::BadRequest(format!(
+            "{provider_id} has ambiguous browser auth providers"
+        ))),
+        (false, false) => Err(ServerError::BadRequest(format!(
+            "{provider_id} does not support browser login"
+        ))),
+    }
+}
+
+fn resolve_device_auth_target(
+    provider_id: &str,
+    resolved: &ResolvedProviderConfig,
+) -> Result<DeviceAuthTarget, ServerError> {
+    let openai = provider_supports_openai_oauth(resolved);
+    let copilot = provider_supports_copilot_device(resolved);
+    match (openai, copilot) {
+        (true, false) => Ok(DeviceAuthTarget::OpenAi),
+        (false, true) => Ok(DeviceAuthTarget::Copilot),
+        (true, true) => Err(ServerError::BadRequest(format!(
+            "{provider_id} has ambiguous device auth providers"
+        ))),
+        (false, false) => Err(ServerError::BadRequest(format!(
+            "{provider_id} does not support device login"
+        ))),
+    }
+}
+
+fn resolve_refresh_auth_target(
+    provider_id: &str,
+    resolved: &ResolvedProviderConfig,
+) -> Result<RefreshAuthTarget, ServerError> {
+    let openai = provider_supports_openai_oauth(resolved);
+    let gitlab = provider_has_gitlab_adapter(resolved);
+    match (openai, gitlab) {
+        (true, false) => Ok(RefreshAuthTarget::OpenAi),
+        (false, true) => provider_gitlab_instance_url(resolved)
+            .map(|instance_url| RefreshAuthTarget::Gitlab { instance_url })
+            .ok_or_else(|| {
+                ServerError::BadRequest(format!(
+                    "{provider_id} has ambiguous gitlab refresh adapters"
+                ))
+            }),
+        (true, true) => Err(ServerError::BadRequest(format!(
+            "{provider_id} has ambiguous credential refresh handlers"
+        ))),
+        (false, false) => Err(ServerError::BadRequest(format!(
+            "credential refresh is not supported for provider '{provider_id}'"
+        ))),
+    }
 }
 
 fn auth_provider_resource(
@@ -2217,45 +2304,54 @@ mod tests {
 
     #[test]
     fn configured_auth_provider_id_uses_openai_for_chatgpt_codex_backend() {
-        let provider = resolved_provider_with_auth(ProviderAuthConfig::Secret(
-            ProviderSecretAuthConfig {
+        let provider =
+            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: None,
                 secret_env: None,
-                credential_provider_id: Some("openai".to_owned()),
-            },
-        ));
+                credential: Some(agena::provider::auth::AuthData::OAuth {
+                    refresh: "refresh-token".to_owned(),
+                    access: "access-token".to_owned(),
+                    expires_at_ms: 4_102_444_800_000,
+                    account_id: Some("acct-openai".to_owned()),
+                    enterprise_url: None,
+                }),
+            }));
 
         assert_eq!(
             configured_auth_provider_id("openai_chatgpt", &provider).as_deref(),
-            Some("openai")
+            Some("openai_chatgpt")
         );
     }
 
     #[test]
     fn configured_auth_provider_id_prefers_gitlab_auth_provider_when_no_api_key_is_set() {
-        let provider = resolved_provider_with_auth(ProviderAuthConfig::Secret(
-            ProviderSecretAuthConfig {
+        let provider =
+            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: None,
                 secret_env: None,
-                credential_provider_id: Some("gitlab".to_owned()),
-            },
-        ));
+                credential: Some(agena::provider::auth::AuthData::OAuth {
+                    refresh: "refresh-token".to_owned(),
+                    access: "access-token".to_owned(),
+                    expires_at_ms: 4_102_444_800_000,
+                    account_id: None,
+                    enterprise_url: None,
+                }),
+            }));
 
         assert_eq!(
             configured_auth_provider_id("gitlab-duo", &provider).as_deref(),
-            Some("gitlab")
+            Some("gitlab-duo")
         );
     }
 
     #[test]
     fn configured_auth_provider_id_uses_provider_id_for_direct_gitlab_api_key() {
-        let provider = resolved_provider_with_auth(ProviderAuthConfig::Secret(
-            ProviderSecretAuthConfig {
+        let provider =
+            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: Some("glpat-test".to_owned()),
                 secret_env: None,
-                credential_provider_id: Some("gitlab".to_owned()),
-            },
-        ));
+                credential: None,
+            }));
 
         assert_eq!(
             configured_auth_provider_id("gitlab-self", &provider).as_deref(),
@@ -2265,13 +2361,18 @@ mod tests {
 
     #[test]
     fn configured_auth_provider_id_ignores_empty_gitlab_api_key_overrides() {
-        let provider = resolved_provider_with_auth(ProviderAuthConfig::Secret(
-            ProviderSecretAuthConfig {
+        let provider =
+            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: Some("   ".to_owned()),
                 secret_env: Some("GITLAB_TOKEN".to_owned()),
-                credential_provider_id: Some("gitlab".to_owned()),
-            },
-        ));
+                credential: Some(agena::provider::auth::AuthData::OAuth {
+                    refresh: "refresh-token".to_owned(),
+                    access: "access-token".to_owned(),
+                    expires_at_ms: 4_102_444_800_000,
+                    account_id: None,
+                    enterprise_url: None,
+                }),
+            }));
 
         assert_eq!(
             configured_auth_provider_id("gitlab", &provider).as_deref(),
@@ -2281,13 +2382,14 @@ mod tests {
 
     #[test]
     fn configured_auth_provider_id_keeps_direct_http_provider_ids() {
-        let provider = resolved_provider_with_auth(ProviderAuthConfig::Secret(
-            ProviderSecretAuthConfig {
+        let provider =
+            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: Some("sk-test".to_owned()),
                 secret_env: None,
-                credential_provider_id: Some("openai".to_owned()),
-            },
-        ));
+                credential: Some(agena::provider::auth::AuthData::Api {
+                    key: "sk-inline".to_owned(),
+                }),
+            }));
 
         assert_eq!(
             configured_auth_provider_id("openai", &provider).as_deref(),
@@ -2297,29 +2399,33 @@ mod tests {
 
     #[test]
     fn configured_auth_provider_id_uses_configured_copilot_auth_provider() {
-        let provider = resolved_provider_with_auth(ProviderAuthConfig::Secret(
-            ProviderSecretAuthConfig {
+        let provider =
+            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: None,
                 secret_env: None,
-                credential_provider_id: Some("github-copilot-enterprise".to_owned()),
-            },
-        ));
+                credential: Some(agena::provider::auth::AuthData::OAuth {
+                    refresh: "refresh-token".to_owned(),
+                    access: "access-token".to_owned(),
+                    expires_at_ms: 4_102_444_800_000,
+                    account_id: None,
+                    enterprise_url: Some("github.example.com".to_owned()),
+                }),
+            }));
 
         assert_eq!(
             configured_auth_provider_id("copilot-enterprise", &provider).as_deref(),
-            Some("github-copilot-enterprise")
+            Some("copilot-enterprise")
         );
     }
 
     #[test]
     fn configured_auth_provider_id_keeps_cloudflare_gateway_provider_id() {
-        let provider = resolved_provider_with_auth(ProviderAuthConfig::Secret(
-            ProviderSecretAuthConfig {
+        let provider =
+            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: Some("cf-test".to_owned()),
                 secret_env: None,
-                credential_provider_id: None,
-            },
-        ));
+                credential: None,
+            }));
 
         assert_eq!(
             configured_auth_provider_id("cloudflare-ai-gateway", &provider).as_deref(),
@@ -2330,14 +2436,13 @@ mod tests {
     #[test]
     fn configured_auth_provider_id_skips_google_adc_and_sigv4_auth() {
         let google = resolved_provider_with_auth(ProviderAuthConfig::GoogleAdc);
-        let bedrock = resolved_provider_with_auth(ProviderAuthConfig::BedrockSigv4(
-            BedrockSigv4AuthConfig {
+        let bedrock =
+            resolved_provider_with_auth(ProviderAuthConfig::BedrockSigv4(BedrockSigv4AuthConfig {
                 profile: None,
                 access_key_id: None,
                 secret_access_key: None,
                 session_token: None,
-            },
-        ));
+            }));
 
         assert_eq!(configured_auth_provider_id("vertex", &google), None);
         assert_eq!(configured_auth_provider_id("bedrock", &bedrock), None);
@@ -2350,7 +2455,9 @@ mod tests {
                 secret: ProviderSecretAuthConfig {
                     secret: None,
                     secret_env: None,
-                    credential_provider_id: Some("sap-shared".to_owned()),
+                    credential: Some(agena::provider::auth::AuthData::Api {
+                        key: "sap-inline".to_owned(),
+                    }),
                 },
                 service_key_env: "AICORE_SERVICE_KEY".to_owned(),
             },
@@ -2358,7 +2465,7 @@ mod tests {
 
         assert_eq!(
             configured_auth_provider_id("sap-ai-core", &provider).as_deref(),
-            Some("sap-shared")
+            Some("sap-ai-core")
         );
     }
 }

@@ -1,25 +1,31 @@
 # Provider Auth 与 Credential 关系说明
 
-本文说明 Agena 里 provider、adapter、credential、auth store 之间的关系。当前的 canonical 配置结构是 `provider.auth + provider.adapters`；旧的 flat provider 字段仍兼容，但只是输入兼容层。
+本文说明 Agena 当前的 canonical provider auth 结构。
+
+核心结论只有一条：
+
+- credential 属于某一个 provider 的 `auth`。
+- credential 不再是一个可被多个 provider 共享的独立全局主键。
+- provider 可以包含多个 adapters；这些 adapters 共享同一个 provider-level auth。
 
 相关实现主要位于：
 
 - `crates/agena/src/config/raw.rs`
 - `crates/agena/src/config/types.rs`
 - `crates/agena/src/config/registry.rs`
-- `crates/agena/src/provider/auth/{types,store,manager}.rs`
+- `crates/agena/src/provider/credential.rs`
+- `crates/agena/src/provider/openai.rs`
+- `crates/agena/src/provider/copilot.rs`
 - `crates/agena-api-server/src/rest.rs`
 
-结构设计和迁移背景见 [Provider Auth + Adapters 重构说明](provider-auth-adapters.md)，字段列表见 [配置说明](configuration.md)。
+## 1. 四个概念
 
-## 1. 先分清四个概念
+- provider：一个逻辑模型入口，对应 `[providers.<provider_id>]`。
+- adapter：provider 下的某个真实后端，例如 OpenAI API、ChatGPT Codex、GitLab Duo、Copilot。
+- auth：provider 级认证策略，对应 `[providers.<provider_id>.auth]`。
+- credential：认证材料本身，直接挂在 provider 的 `auth` 里，或来自 `secret` / `secret_env`。
 
-- provider：一个逻辑模型入口，来自 `[providers.<provider_id>]`。
-- adapter：provider 下的一个真实后端，例如 OpenAI API、ChatGPT Codex、GitLab Duo、Vertex。
-- auth：provider 级认证策略，定义在 `[providers.<provider_id>.auth]`，供同一个 provider 下的 adapters 共享。
-- credential：认证材料本身，可能来自 inline secret、环境变量、auth store，或者 provider 特有 fallback。
-
-关系大致如下：
+结构关系现在是：
 
 ```text
 config.toml
@@ -27,153 +33,118 @@ config.toml
         ├── default_model
         ├── auth
         └── adapters.<adapter_id>
-              └── kind / endpoint / model routes
-
-auth store
-  └── <credential_provider_id> -> AuthData
-        └── Api | OAuth | WellKnown
+              └── kind / endpoint / models
 
 运行时：
-  provider 决定“对外暴露哪个逻辑入口”
-  adapter 决定“连哪个后端”
-  auth / credential 决定“拿什么身份去连”
+  provider 决定逻辑入口
+  adapter 决定真实后端
+  provider.auth 决定这整个 provider 用什么 credential
 ```
 
-## 2. 三个常见 id
+最重要的语义变化：
 
-### 2.1 `provider_id`
+- `provider_id` 是公开主键。
+- `adapter_id` 只是 provider 内部路由名。
+- 不再有 canonical 的 `credential_provider_id`。
+- REST / Studio 对外也以 `provider_id` 作为 auth 对象，而不是再映射到共享 credential id。
 
-`provider_id` 是 `[providers.<id>]` 的 `<id>`。它会出现在：
+## 2. `provider.auth` 支持哪些模式
 
-- model ref，例如 `openai/gpt-4.1-mini`
-- CLI 命令，例如 `agena provider models openai`
-- HTTP API，例如 `/api/v1/providers/openai/models`
-- Studio 的 provider 列表
+| mode | 主要字段 | 典型用途 |
+| --- | --- | --- |
+| `none` | 无 | `ollama` |
+| `secret` | `secret`、`secret_env`、`credential` | OpenAI、Anthropic、Gemini、GitLab direct token、Copilot OAuth、ChatGPT Codex OAuth |
+| `bedrock_sigv4` | `profile`、`access_key_id`、`secret_access_key`、`session_token` | AWS SigV4 |
+| `google_adc` | 无 | Google ADC |
+| `sap_ai_core` | `secret.*`、`credential`、`service_key_env` | SAP AI Core |
 
-`provider_id` 只是逻辑名字，不等于 `kind`。
+其中最常见的是 `secret` 模式。它不是只表示“API key 明文”，而是统一表示“这个 provider 用 secret-like credential 认证”，来源可以是：
 
-### 2.2 `adapter_id`
+1. `secret`
+2. `secret_env`
+3. `credential`
+4. provider-specific fallback
 
-`adapter_id` 是 `[providers.<id>.adapters.<adapter_id>]` 的 `<adapter_id>`。它只在 provider 内部用来区分不同后端，不会成为公开的 provider 主键。
+## 3. `secret` 模式里的 `credential`
 
-典型例子：
+`credential` 的类型是 `AuthData`。它直接内嵌在 provider 配置里，不再单独引用全局 credential id。
 
-- `api`
-- `codex`
-- `duo`
-- `aws`
+常见形态：
 
-### 2.3 `credential_provider_id`
-
-`credential_provider_id` 表示 runtime 去 auth store 里读哪一个 credential。
-
-在旧配置里，这个概念常叫 `auth_provider_id`。现在 canonical 字段名是：
+### 3.1 API key
 
 ```toml
 [providers.openai.auth]
-credential_provider_id = "openai"
+credential = { type = "api", key = "sk-example" }
 ```
 
-多个 provider 完全可以共享同一个 `credential_provider_id`。
+### 3.2 OAuth
 
-## 3. `provider.auth` 支持哪些模式
+```toml
+[providers.openai_chatgpt.auth]
+credential = { type = "oauth", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-123" }
+```
 
-| mode | 主要字段 | 典型用途 | 是否依赖 auth store |
-| --- | --- | --- | --- |
-| `none` | 无 | `ollama` | 否 |
-| `secret` | `secret`、`secret_env`、`credential_provider_id` | OpenAI、Anthropic、Gemini、OpenRouter、GitLab direct token、Vertex 静态 token、Bedrock bearer token | 可选 |
-| `bedrock_sigv4` | `profile`、`access_key_id`、`secret_access_key`、`session_token` | AWS SigV4 | 否 |
-| `google_adc` | 无 | Google ADC | 否 |
-| `sap_ai_core` | `secret.*`、`credential_provider_id`、`service_key_env` | SAP AI Core | 可选 |
+### 3.3 Copilot Enterprise OAuth
 
-实现层面的约束：
+```toml
+[providers.copilot.auth]
+credential = { type = "oauth", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, enterprise_url = "github.example.com" }
+```
 
-- `none` 只支持 `ollama` adapters。
-- `google_adc` 只支持 `google_vertex` adapters。
-- `bedrock_sigv4` 只支持 `amazon_bedrock` adapters。
-- `sap_ai_core` 只支持 `sap_ai_core` adapters。
-- `secret` 不支持 `ollama`。
-- `copilot` 和 OpenAI `backend = "chatgpt_codex"` 虽然也走 `secret` 模式，但只允许 auth-store credential，不允许直接 `secret` / `secret_env`。
+`OAuth` payload 里两个 metadata 很重要：
 
-## 4. `secret` 模式怎么找 credential
+- `account_id`：OpenAI ChatGPT Codex 请求头和 prompt-cache scope 会用到。
+- `enterprise_url`：Copilot enterprise base URL 解析和 prompt-cache scope 会用到。
 
-多数 provider 可以按下面顺序理解：
+## 4. 运行时怎么解析 credential
 
-1. 直接写在配置里的 `secret`
-2. 配置里声明的 `secret_env`
-3. auth store 中 `credential_provider_id` 对应的 credential
-4. provider 特有 fallback
+多数 provider 的解析顺序如下：
 
-几个重要细节：
+1. 配置里的 `secret`
+2. 配置里的 `secret_env`
+3. 配置里的 inline `credential`
+4. provider-specific fallback
 
-- 对大部分 HTTP provider 来说，如果只配置了 `secret_env`，即使当前进程启动时环境变量还没值，provider registry 也可能先构建成功，真正发请求时再报缺少环境变量。
-- GitLab 不一样。它会在构建 registry 时判断“当前是否有 direct secret”。如果 `secret` 非空，或者 `secret_env` 指向的环境变量此刻非空，就走 direct token；否则改走 auth store OAuth。
-- `copilot` 和 `chatgpt_codex` 只接受 auth store credential，不接受 direct secret。
-- `google_vertex` 没有静态 token时可以走 ADC。
-- `amazon_bedrock` 没有 bearer secret时可以走 SigV4。
-- `sap_ai_core` 在 direct secret 和 auth store 之外，还可以用 `service_key_env` 指向的 service key。
+几个特殊规则：
 
-## 5. auth store 里到底存什么
+- `ollama` 必须用 `mode = "none"`。
+- `google_vertex` 没有静态 token 时可用 `mode = "google_adc"`。
+- `amazon_bedrock` 没有 bearer secret 时可用 `mode = "bedrock_sigv4"`。
+- `sap_ai_core` 在 direct secret 和 inline credential 之外，还能走 `service_key_env`。
+- `copilot` 只接受 provider-local OAuth credential，不接受直接 `secret` / `secret_env`。
+- OpenAI `backend = "chatgpt_codex"` 只接受 provider-local OAuth credential，不接受直接 `secret` / `secret_env`。
+- GitLab 如果此刻存在 direct secret，会走 direct token；否则走 provider-local OAuth credential。
 
-auth store 里的 credential 统一建模为 `AuthData`，当前主要有三类：
+## 5. 刷新和缓存由谁负责
 
-| 类型 | 结构 | 典型用途 |
-| --- | --- | --- |
-| `Api` | `{ key }` | 普通 API key / bearer token |
-| `OAuth` | `{ refresh, access, expires_at_ms, account_id?, enterprise_url? }` | OpenAI、GitLab、GitHub Copilot 登录 |
-| `WellKnown` | `{ key, token }` | 内部辅助状态 |
+现在 credential 的刷新、缓存 scope 和 provider metadata 由 provider 自己处理：
 
-最重要的内部 `WellKnown` 条目是 `gitlab-instance`：
+- `ManagedCredential::auth_data_shared(...)` 持有 provider 内部的 `AuthData`。
+- token refresh 会直接更新这份 provider-local `AuthData`。
+- OpenAI / Copilot 不再额外依赖全局 auth store 元数据；这些字段直接跟着 provider-local credential 走。
 
-- GitLab 浏览器登录成功后，runtime 会保存 `gitlab` 对应的 OAuth token。
-- 同时会额外保存 `gitlab-instance`，用来记住实例地址。
-- `gitlab-instance` 不会暴露给公开的 auth provider API。
+这意味着：
 
-auth store 后端仍由 `[auth]` 控制：
+- 一个 provider 的 OAuth refresh 生命周期天然绑定在这个 provider 上。
+- 同一个 provider 下多个 adapters 可以共享这份 credential。
+- 不同 providers 不再通过 `credential_provider_id` 共享一套身份。
 
-- `file`
-- `keyring`
-- `auto`
+## 6. REST / Studio 对外暴露哪个 auth id
 
-默认 `auto` 优先 OS keyring，不可用时回退到 `~/.agena/auth.json`。
+现在对外暴露的 auth id 就是 `provider_id` 本身。
 
-## 6. REST / Studio 对外暴露哪个 auth provider id
+例如：
 
-Studio 和 REST auth API 需要决定“对外显示哪些 auth providers”。现在这件事是从解析后的 `provider.auth` 推导出来的，不再直接依赖旧的 flat `auth_provider_id` 字段。
+- `openai_chatgpt` 的登录对象是 `openai_chatgpt`
+- `gitlab-self` 的登录对象是 `gitlab-self`
+- `copilot-enterprise` 的登录对象是 `copilot-enterprise`
 
-规则是：
+不会再出现“两个不同 provider 对外都映射到同一个共享 credential id”这种 canonical 语义。
 
-1. 如果 provider 当前配置了 direct `secret`，或者 `secret_env` 指向的环境变量此刻有值，那么对外 auth provider id 使用 `provider_id` 自己。
-2. 否则如果配置了 `credential_provider_id`，就对外暴露那个 id。
-3. 否则回退到 `provider_id`。
-4. `google_adc`、`bedrock_sigv4`、`none` 这类不读 auth store 的模式，不会暴露为 auth provider。
-5. 内部条目例如 `gitlab-instance` 仍然会被隐藏。
+## 7. 常见配置示例
 
-这个规则解释了几个常见现象：
-
-- 一个共享 credential 的多 provider 配置，只要都写 `credential_provider_id = "openai"`，UI / REST 里就会围绕 `openai` 这套 credential 工作。
-- `gitlab-self` 如果配置了 direct `secret_env = "GITLAB_TOKEN"`，UI 里看到的 auth provider id 会是 `gitlab-self`，因为它现在不再依赖共享的 OAuth。
-- `gitlab-self` 如果没有 direct secret，但配置了 `credential_provider_id = "gitlab"`，UI 里会复用 `gitlab` 这套 OAuth。
-
-## 7. 各 adapter kind 的常见 auth 方式
-
-| adapter kind | 常见 auth mode | 备注 |
-| --- | --- | --- |
-| `openai` | `secret` | `backend = "api"` 常用 direct API key；`backend = "chatgpt_codex"` 只支持 auth-store OpenAI OAuth |
-| `openai_compatible` | `secret` | OpenRouter、LM Studio、vLLM、Groq 等通常都在这里 |
-| `anthropic` | `secret` | 默认 header 是 `x-api-key` |
-| `gemini` | `secret` | 常见是 API key；运行时会按 Gemini 规则放到请求里 |
-| `gitlab` | `secret` | 既支持 direct token，也支持 OAuth；浏览器登录会额外写 `gitlab-instance` |
-| `copilot` | `secret` | 但只支持 auth-store OAuth / refresh-access credential |
-| `amazon_bedrock` | `secret` 或 `bedrock_sigv4` | bearer 和 SigV4 二选一 |
-| `google_vertex` | `secret` 或 `google_adc` | 静态 token 或 ADC 二选一 |
-| `sap_ai_core` | `sap_ai_core` | direct secret、auth store、service key 都可能参与 |
-| `cloudflare_ai_gateway` | `secret` | model id 通常是 `provider/model` |
-| `ollama` | `none` | 本地 endpoint，无 credential |
-
-## 8. 配置示例
-
-### 8.1 单 adapter，直接 API key / env
+### 7.1 单 adapter，直接 env secret
 
 ```toml
 [providers.openai]
@@ -188,40 +159,14 @@ base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1"
 ```
 
-### 8.2 多个 provider 共享一套 OpenAI credential
-
-```toml
-[providers.primary]
-default_model = "gpt-4.1"
-
-[providers.primary.auth]
-credential_provider_id = "shared-openai"
-
-[providers.primary.adapters.api]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
-default_model = "gpt-4.1"
-
-[providers.secondary]
-default_model = "gpt-4.1-mini"
-
-[providers.secondary.auth]
-credential_provider_id = "shared-openai"
-
-[providers.secondary.adapters.api]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
-default_model = "gpt-4.1-mini"
-```
-
-### 8.3 一个 provider 共享 OpenAI credential，同时路由 API 和 ChatGPT Codex
+### 7.2 一个 provider 共享一套 OAuth，同时路由 API 和 ChatGPT Codex
 
 ```toml
 [providers.shared]
 default_model = "fast"
 
 [providers.shared.auth]
-credential_provider_id = "openai"
+credential = { type = "oauth", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-shared" }
 
 [providers.shared.adapters.api]
 kind = "openai"
@@ -240,14 +185,40 @@ default_model = "gpt-5-codex"
 target_model = "gpt-5-codex"
 ```
 
-### 8.4 GitLab 复用默认 OAuth
+### 7.3 两个 provider 各自持有独立 credential
+
+```toml
+[providers.primary]
+default_model = "gpt-4.1"
+
+[providers.primary.auth]
+credential = { type = "api", key = "sk-primary" }
+
+[providers.primary.adapters.api]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1"
+
+[providers.secondary]
+default_model = "gpt-4.1-mini"
+
+[providers.secondary.auth]
+credential = { type = "api", key = "sk-secondary" }
+
+[providers.secondary.adapters.api]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+```
+
+### 7.4 GitLab OAuth
 
 ```toml
 [providers.gitlab]
 default_model = "claude-sonnet-4-5"
 
 [providers.gitlab.auth]
-credential_provider_id = "gitlab"
+credential = { type = "oauth", refresh = "gitlab-refresh", access = "gitlab-access", expires_at_ms = 4102444800000 }
 
 [providers.gitlab.adapters.duo]
 kind = "gitlab"
@@ -256,65 +227,18 @@ ai_gateway_url = "https://cloud.gitlab.com"
 default_model = "claude-sonnet-4-5"
 ```
 
-### 8.5 GitLab 自定义 provider id，但复用同一套 OAuth
+## 8. 迁移建议
 
-```toml
-[providers.gitlab-self]
-default_model = "claude-sonnet-4-5"
+如果你之前依赖这些旧字段：
 
-[providers.gitlab-self.auth]
-credential_provider_id = "gitlab"
+- `credential_provider_id`
+- root-level `auth_provider_id`
+- 多个 provider 共享同一条外部 credential
 
-[providers.gitlab-self.adapters.duo]
-kind = "gitlab"
-instance_url = "https://gitlab.example.com"
-ai_gateway_url = "https://cloud.gitlab.com"
-default_model = "claude-sonnet-4-5"
-```
+现在应当迁移为：
 
-### 8.6 Bedrock SigV4
+- 每个 provider 把自己的 credential 写到 `[providers.<id>.auth]`
+- 同一个 provider 下需要共享 credential 时，只共享给它自己的 adapters
+- 不再把 credential 作为 provider 之外的独立路由层
 
-```toml
-[providers.bedrock]
-default_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
-
-[providers.bedrock.auth]
-mode = "bedrock_sigv4"
-profile = "prod"
-
-[providers.bedrock.adapters.aws]
-kind = "amazon_bedrock"
-base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
-default_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
-region = "us-east-1"
-```
-
-### 8.7 Vertex ADC
-
-```toml
-[providers.vertex]
-default_model = "google/gemini-2.5-flash"
-
-[providers.vertex.auth]
-mode = "google_adc"
-
-[providers.vertex.adapters.api]
-kind = "google_vertex"
-base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
-default_model = "google/gemini-2.5-flash"
-```
-
-## 9. 兼容性与迁移
-
-旧的 flat provider 配置仍然兼容：
-
-- 根节点的 `kind`、`base_url`、`api_key`、`api_key_env`、`auth_provider_id` 会被 lower 到新的 `provider.auth` 或隐式 `default` adapter。
-- 根节点的 `[providers.<id>.models]` 会被 lower 到新的 routed model 表。
-
-但一旦你开始使用 `providers.<id>.adapters`，就必须把这些 legacy 字段一起迁移进去，不要在同一个 provider 里混用两套结构。
-
-如果你只想记一句话：
-
-- `provider_id` 决定“这个逻辑入口叫什么”
-- `adapter` 决定“真正连哪个后端”
-- `credential_provider_id` 决定“去 auth store 的哪一格拿身份”
+旧的 flat provider 字段仍然只是输入兼容层；新的配置和新的运行时模型都应以 provider-local `auth.credential` 为准。

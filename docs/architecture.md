@@ -142,7 +142,6 @@ Runtime construction starts with `AgenaRuntime::builder()` in `crates/agena/src/
 - `ProviderRegistry`
 - `PluginHost`
 - `SubagentRegistry`
-- `RuntimeAuthStore`
 - optional `SessionManager`
 - optional `McpConnectionManager`
 - optional `LspRegistry`
@@ -175,7 +174,6 @@ RuntimeSnapshot services
 
 The resolved config builds:
 
-- auth store.
 - provider registry.
 - plugin host.
 - MCP/LSP static plugin options and runtime registries.
@@ -294,7 +292,7 @@ Provider registry responsibilities:
 - expose model metadata/capabilities.
 - apply runtime retry policy.
 - handle streaming replay behavior.
-- use managed credentials from env/auth store/provider-specific auth.
+- use managed credentials from env/provider-local auth/provider-specific auth.
 
 Plugins can patch provider list through the `provider.list` hook, allowing plugin-provided model backends to appear in runtime status and selection flows.
 

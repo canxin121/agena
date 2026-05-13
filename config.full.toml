@@ -7,11 +7,6 @@ enabled = false
 service_name = "agena"
 # otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
 
-[auth]
-# auto prefers the OS keyring and falls back to store_path when keyring is unavailable.
-store_backend = "auto"
-# store_path = "~/.agena/auth.json"
-
 [runtime]
 # Primary agent for new root sessions.
 default_agent = "build"
@@ -330,7 +325,7 @@ stream_mode = "sse"
 # default_model = "gpt-4o-mini"
 #
 # [providers."github-copilot".auth]
-# credential_provider_id = "github-copilot"
+# credential = { type = "oauth", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 #
 # [providers."github-copilot".adapters.api]
 # kind = "copilot"
@@ -353,7 +348,7 @@ stream_mode = "sse"
 default_model = "gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
-credential_provider_id = "openai"
+credential = { type = "oauth", refresh = "openai-refresh-token", access = "openai-access-token", expires_at_ms = 4102444800000, account_id = "acct-example" }
 
 [providers.openai_chatgpt.adapters.codex]
 kind = "openai"
@@ -364,7 +359,7 @@ default_model = "gpt-5.3-codex"
 default_model = "gpt-4o-mini"
 
 [providers."github-copilot".auth]
-credential_provider_id = "github-copilot"
+credential = { type = "oauth", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 
 [providers."github-copilot".adapters.api]
 kind = "copilot"
@@ -382,7 +377,7 @@ default_model = "qwen3:14b"
 default_model = "claude-sonnet-4-5"
 
 [providers.gitlab.auth]
-credential_provider_id = "gitlab"
+credential = { type = "oauth", refresh = "gitlab-refresh-token", access = "gitlab-access-token", expires_at_ms = 4102444800000 }
 
 [providers.gitlab.adapters.duo]
 kind = "gitlab"

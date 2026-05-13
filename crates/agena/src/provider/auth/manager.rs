@@ -71,6 +71,7 @@ impl<S: AuthStore> AuthManager<S> {
 
     pub async fn finish_openai_browser_login(
         &self,
+        provider_id: &str,
         code: impl Into<String>,
         pkce_verifier: impl Into<String>,
         redirect_uri: impl Into<String>,
@@ -85,19 +86,20 @@ impl<S: AuthStore> AuthManager<S> {
         )
         .await?;
         let auth = oauth_auth_data(
-            "openai",
+            provider_id,
             token.refresh,
             token.access,
             token.expires_at_ms,
             token.account_id,
             None,
         )?;
-        self.store.set("openai", auth.clone())?;
+        self.store.set(provider_id, auth.clone())?;
         Ok(auth)
     }
 
     pub async fn openai_browser_login_auto(
         &self,
+        provider_id: &str,
         port: u16,
         timeout: Duration,
     ) -> Result<(String, AuthData), AppError> {
@@ -105,7 +107,12 @@ impl<S: AuthStore> AuthManager<S> {
         let start = self.start_openai_browser_login(redirect_uri.clone())?;
         let callback = wait_for_oauth_callback(port, start.state.as_str(), timeout)?;
         let auth = self
-            .finish_openai_browser_login(callback.code, start.pkce_verifier, redirect_uri)
+            .finish_openai_browser_login(
+                provider_id,
+                callback.code,
+                start.pkce_verifier,
+                redirect_uri,
+            )
             .await?;
         Ok((start.authorize_url, auth))
     }
@@ -116,6 +123,7 @@ impl<S: AuthStore> AuthManager<S> {
 
     pub async fn poll_openai_headless_login(
         &self,
+        provider_id: &str,
         device_code: impl Into<String>,
         user_code: impl Into<String>,
     ) -> Result<Option<AuthData>, AppError> {
@@ -128,39 +136,39 @@ impl<S: AuthStore> AuthManager<S> {
         };
 
         let auth = oauth_auth_data(
-            "openai",
+            provider_id,
             token.refresh,
             token.access,
             token.expires_at_ms,
             token.account_id,
             None,
         )?;
-        self.store.set("openai", auth.clone())?;
+        self.store.set(provider_id, auth.clone())?;
         Ok(Some(auth))
     }
 
-    pub async fn refresh_openai_login(&self) -> Result<AuthData, AppError> {
+    pub async fn refresh_openai_login(&self, provider_id: &str) -> Result<AuthData, AppError> {
         let Some(AuthData::OAuth {
             refresh,
             enterprise_url,
             ..
-        }) = self.store.get("openai")?
+        }) = self.store.get(provider_id)?
         else {
-            return Err(AppError::Config(
-                "openai oauth credential not found".to_owned(),
-            ));
+            return Err(AppError::Config(format!(
+                "{provider_id} oauth credential not found"
+            )));
         };
 
         let token = refresh_openai_token(refresh.as_str()).await?;
         let auth = oauth_auth_data(
-            "openai",
+            provider_id,
             token.refresh,
             token.access,
             token.expires_at_ms,
             token.account_id,
             enterprise_url,
         )?;
-        self.store.set("openai", auth.clone())?;
+        self.store.set(provider_id, auth.clone())?;
         Ok(auth)
     }
 
@@ -177,21 +185,16 @@ impl<S: AuthStore> AuthManager<S> {
 
     pub async fn poll_copilot_login(
         &self,
+        provider_id: &str,
         device_code: impl Into<String>,
         deployment: CopilotDeployment,
     ) -> Result<Option<AuthData>, AppError> {
         let device_code = device_code.into();
-        let (domain, provider_id, enterprise_url) = match deployment {
-            CopilotDeployment::GitHubCom => {
-                ("github.com".to_owned(), "github-copilot".to_owned(), None)
-            }
+        let (domain, enterprise_url) = match deployment {
+            CopilotDeployment::GitHubCom => ("github.com".to_owned(), None),
             CopilotDeployment::Enterprise { domain } => {
                 let normalized = normalize_domain(domain.as_str());
-                (
-                    normalized.clone(),
-                    "github-copilot-enterprise".to_owned(),
-                    Some(normalized),
-                )
+                (normalized.clone(), Some(normalized))
             }
         };
 
@@ -201,14 +204,14 @@ impl<S: AuthStore> AuthManager<S> {
         };
 
         let auth = oauth_auth_data(
-            provider_id.as_str(),
+            provider_id,
             token.refresh,
             token.access,
             token.expires_at_ms,
             None,
             enterprise_url,
         )?;
-        self.store.set(provider_id.as_str(), auth.clone())?;
+        self.store.set(provider_id, auth.clone())?;
         Ok(Some(auth))
     }
 
@@ -222,6 +225,7 @@ impl<S: AuthStore> AuthManager<S> {
 
     pub async fn finish_gitlab_login(
         &self,
+        provider_id: &str,
         instance_url: impl Into<String>,
         code: impl Into<String>,
         pkce_verifier: impl Into<String>,
@@ -240,58 +244,52 @@ impl<S: AuthStore> AuthManager<S> {
         .await?;
 
         let auth = oauth_auth_data(
-            "gitlab",
+            provider_id,
             token.refresh,
             token.access,
             token.expires_at_ms,
             None,
             None,
         )?;
-        self.store.set("gitlab", auth.clone())?;
-        self.store.set(
-            "gitlab-instance",
-            AuthData::WellKnown {
-                key: instance,
-                token: String::new(),
-            },
-        )?;
+        let _ = instance;
+        self.store.set(provider_id, auth.clone())?;
         Ok(auth)
     }
 
-    pub async fn refresh_gitlab_login(&self) -> Result<AuthData, AppError> {
+    pub async fn refresh_gitlab_login(
+        &self,
+        provider_id: &str,
+        instance_url: impl Into<String>,
+    ) -> Result<AuthData, AppError> {
         let Some(AuthData::OAuth {
             refresh,
             account_id,
             ..
-        }) = self.store.get("gitlab")?
+        }) = self.store.get(provider_id)?
         else {
-            return Err(AppError::Config(
-                "gitlab oauth credential not found".to_owned(),
-            ));
+            return Err(AppError::Config(format!(
+                "{provider_id} oauth credential not found"
+            )));
         };
 
-        let instance_url = self
-            .store
-            .get("gitlab-instance")?
-            .and_then(|auth| auth.api_key().map(ToOwned::to_owned))
-            .or_else(|| std::env::var("GITLAB_INSTANCE_URL").ok())
-            .unwrap_or_else(|| "https://gitlab.com".to_owned());
+        let instance_url = instance_url.into();
 
         let token = refresh_gitlab_token(instance_url.as_str(), refresh.as_str()).await?;
         let auth = oauth_auth_data(
-            "gitlab",
+            provider_id,
             token.refresh,
             token.access,
             token.expires_at_ms,
             account_id,
             None,
         )?;
-        self.store.set("gitlab", auth.clone())?;
+        self.store.set(provider_id, auth.clone())?;
         Ok(auth)
     }
 
     pub async fn gitlab_browser_login_auto(
         &self,
+        provider_id: &str,
         instance_url: impl Into<String>,
         port: u16,
         timeout: Duration,
@@ -302,6 +300,7 @@ impl<S: AuthStore> AuthManager<S> {
         let callback = wait_for_oauth_callback(port, start.state.as_str(), timeout)?;
         let auth = self
             .finish_gitlab_login(
+                provider_id,
                 instance_url,
                 callback.code,
                 start.pkce_verifier,
@@ -497,7 +496,7 @@ mod tests {
     async fn refresh_gitlab_login_requires_oauth_credential() {
         let manager = AuthManager::new(MemoryStore::default());
         let err = manager
-            .refresh_gitlab_login()
+            .refresh_gitlab_login("gitlab", "https://gitlab.com")
             .await
             .expect_err("missing gitlab oauth should fail");
         assert!(matches!(err, AppError::Config(_)));

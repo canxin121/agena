@@ -11,4 +11,4 @@ pub use builder::{AgenaRuntime, AgenaRuntimeBuilder, TracingFilterReloadHandle};
 pub use event_bridge::spawn_event_bridge;
 pub use host_client::{host_client_for, noop_host_client};
 pub use reload::{RuntimeReloadCause, RuntimeReloadReport};
-pub use snapshot::{RuntimeAuthStore, RuntimeSnapshot};
+pub use snapshot::RuntimeSnapshot;

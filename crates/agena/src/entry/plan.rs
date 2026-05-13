@@ -53,12 +53,14 @@ pub(super) fn execute_enter(
 
     let slug = generate_slug(session_id);
     let plans_dir = executor.workspace_root().join(".agena").join("plans");
+    executor.ensure_edit_permission(&plans_dir)?;
     if let Err(e) = std::fs::create_dir_all(&plans_dir) {
         return Err(ToolError::Plugin(format!(
             "enter_plan_mode: failed to create plans dir {plans_dir:?}: {e}"
         )));
     }
     let file_path: PathBuf = plans_dir.join(format!("{slug}.md"));
+    executor.ensure_edit_permission(&file_path)?;
     if !file_path.exists()
         && let Err(e) = std::fs::write(&file_path, "# Plan\n\n_(write your plan here)_\n")
     {

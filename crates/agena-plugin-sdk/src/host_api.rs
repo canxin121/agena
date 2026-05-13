@@ -14,7 +14,7 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
-use crate::manifest::PluginEntryDecl;
+use crate::manifest::{PathKind, PluginEntryDecl};
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
@@ -30,6 +30,37 @@ pub trait HostClient: Send + Sync + 'static {
     }
 
     async fn ask_permission(&self, req: PermissionAskInput) -> Result<PermissionDecision>;
+
+    /// Evaluate the current path permission policy for a plugin-internal path
+    /// access. The host returns `Prompt` when the same access would require an
+    /// interactive permission request in the normal entry flow; plugins should
+    /// only proceed on `Allow`.
+    async fn check_path_permission(
+        &self,
+        _req: HostPathPermissionCheckRequest,
+    ) -> Result<HostPermissionCheckResponse> {
+        Err(unavailable())
+    }
+
+    /// Evaluate the current network permission policy for a plugin-internal
+    /// outbound connection target. Plugins should only proceed on `Allow`.
+    async fn check_network_permission(
+        &self,
+        _req: HostNetworkPermissionCheckRequest,
+    ) -> Result<HostPermissionCheckResponse> {
+        Err(unavailable())
+    }
+
+    async fn ensure_path_permission(&self, req: HostPathPermissionCheckRequest) -> Result<()> {
+        self.check_path_permission(req).await?.ensure_allowed()
+    }
+
+    async fn ensure_network_permission(
+        &self,
+        req: HostNetworkPermissionCheckRequest,
+    ) -> Result<()> {
+        self.check_network_permission(req).await?.ensure_allowed()
+    }
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value>;
 
@@ -373,6 +404,79 @@ where
 
 pub fn current_host_callback_context() -> Option<HostCallbackContext> {
     HOST_CALLBACK_CONTEXT.try_with(Clone::clone).ok()
+}
+
+// ---------------- permission checks ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostPathPermissionCheckRequest {
+    pub path: String,
+    pub kind: PathKind,
+}
+
+impl HostPathPermissionCheckRequest {
+    pub fn read(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            kind: PathKind::Read,
+        }
+    }
+
+    pub fn write(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            kind: PathKind::Write,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostNetworkPermissionCheckRequest {
+    pub target: String,
+}
+
+impl HostNetworkPermissionCheckRequest {
+    pub fn connect(target: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostPermissionCheckResponse {
+    pub decision: PermissionDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub explanation: String,
+}
+
+impl HostPermissionCheckResponse {
+    pub fn allowed() -> Self {
+        Self {
+            decision: PermissionDecision::Allow,
+            reason: None,
+            explanation: String::new(),
+        }
+    }
+
+    pub fn is_allowed(&self) -> bool {
+        self.decision == PermissionDecision::Allow
+    }
+
+    pub fn ensure_allowed(&self) -> Result<()> {
+        if self.is_allowed() {
+            return Ok(());
+        }
+        let reason = self
+            .reason
+            .as_deref()
+            .filter(|reason| !reason.trim().is_empty())
+            .or_else(|| (!self.explanation.trim().is_empty()).then_some(self.explanation.as_str()))
+            .unwrap_or("permission check did not allow the requested access");
+        Err(PluginError::new(reason.to_string()))
+    }
 }
 
 // ---------------- ask_user ----------------
@@ -1255,6 +1359,20 @@ impl HostClient for NoopHostClient {
     }
 
     async fn ask_permission(&self, _: PermissionAskInput) -> Result<PermissionDecision> {
+        Err(unavailable())
+    }
+
+    async fn check_path_permission(
+        &self,
+        _: HostPathPermissionCheckRequest,
+    ) -> Result<HostPermissionCheckResponse> {
+        Err(unavailable())
+    }
+
+    async fn check_network_permission(
+        &self,
+        _: HostNetworkPermissionCheckRequest,
+    ) -> Result<HostPermissionCheckResponse> {
         Err(unavailable())
     }
 

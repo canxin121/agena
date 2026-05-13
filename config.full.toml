@@ -63,8 +63,13 @@ loopback = "deny"
 
 [permission.network.rules]
 "github.com:443" = "allow"
-"*.corp.local:443" = "ask"
-"10.0.0.0/8:*" = "deny"
+"api.github.com" = "allow"
+"*.corp.local" = "ask"
+"*.corp.local:8443" = "allow"
+"10.0.0.0/8" = "deny"
+"172.16.0.0/12:*" = "ask"
+"fd00::/8" = "deny"
+"[::1]:3000" = "ask"
 
 [permission.entries.tags]
 filesystem_read = "allow"

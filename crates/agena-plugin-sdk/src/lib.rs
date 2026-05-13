@@ -21,7 +21,10 @@ pub mod drivers;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use error::{PluginError, PluginErrorCode, Result};
 pub use hooks::*;
-pub use host_api::{HostClient, NoopHostClient};
+pub use host_api::{
+    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
+    HostPermissionCheckResponse, NoopHostClient,
+};
 pub use manifest::{
     EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,
     InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathKind, PlanModePolicy, PluginEntryDecl,

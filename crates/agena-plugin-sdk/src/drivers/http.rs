@@ -12,7 +12,10 @@ use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeInput,
     ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
 };
-use crate::host_api::{EventSubscription, HostClient, LogLevel};
+use crate::host_api::{
+    EventSubscription, HostClient, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, LogLevel,
+};
 use crate::plugin::{InitContext, Plugin};
 use crate::rpc::{
     ErrorObject, JsonRpcVersion, Request, RequestId, Response, ResponsePayload, codes, method,
@@ -160,6 +163,28 @@ impl HostClient for HttpCallbackHostClient {
                 serde_json::to_value(req)
                     .map_err(|e| PluginError::invalid_params(e.to_string()))?,
             ),
+        )
+        .await
+    }
+
+    async fn check_path_permission(
+        &self,
+        req: HostPathPermissionCheckRequest,
+    ) -> crate::error::Result<HostPermissionCheckResponse> {
+        self.call(
+            method::HOST_PERMISSION_CHECK_PATH,
+            with_current_context(serde_json::json!({ "request": req })),
+        )
+        .await
+    }
+
+    async fn check_network_permission(
+        &self,
+        req: HostNetworkPermissionCheckRequest,
+    ) -> crate::error::Result<HostPermissionCheckResponse> {
+        self.call(
+            method::HOST_PERMISSION_CHECK_NETWORK,
+            with_current_context(serde_json::json!({ "request": req })),
         )
         .await
     }

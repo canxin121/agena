@@ -58,7 +58,7 @@ private = "deny"
 loopback = "deny"
 
 [permission.network.rules]
-"github.com:443" = "allow"
+"github.com" = "allow"
 
 [permission.entries.tags]
 filesystem_read = "allow"

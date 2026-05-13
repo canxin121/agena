@@ -29,6 +29,7 @@ use crate::sdk::host_api::{
     HostExitWorktreeRequest, HostHookEntry, HostHookListResponse, HostLspListDiagnosticsRequest,
     HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
     HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
+    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
     HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
     HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
@@ -2316,6 +2317,38 @@ impl HostHandle {
                         serde_json::to_value(d)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
+                    method::HOST_PERMISSION_CHECK_PATH => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::PermissionCheck,
+                        )
+                        .await?;
+                        let p: HostPermissionCheckPathParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.check_path_permission(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_PERMISSION_CHECK_NETWORK => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::PermissionCheck,
+                        )
+                        .await?;
+                        let p: HostPermissionCheckNetworkParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.check_network_permission(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
                     method::HOST_UI_PERMISSION_SET_HANDLER => {
                         let plugin_id = plugin_id.ok_or_else(|| {
                             host_unavailable("ui.permission.set_handler requires plugin id")
@@ -3291,6 +3324,20 @@ struct HostUnsubscribeParams {
 }
 
 #[derive(serde::Deserialize)]
+struct HostPermissionCheckPathParams {
+    request: HostPathPermissionCheckRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostPermissionCheckNetworkParams {
+    request: HostNetworkPermissionCheckRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
 struct HostConfigReadParams {
     #[serde(default)]
     path: Option<String>,
@@ -3709,6 +3756,33 @@ impl HostClient for ScopedHostClient {
     ) -> crate::sdk::Result<PermissionDecision> {
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.ask_permission(req)).await
+    }
+
+    async fn check_path_permission(
+        &self,
+        req: HostPathPermissionCheckRequest,
+    ) -> crate::sdk::Result<HostPermissionCheckResponse> {
+        self.require_capability(
+            method::HOST_PERMISSION_CHECK_PATH,
+            HostCapability::PermissionCheck,
+        )
+        .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.check_path_permission(req)).await
+    }
+
+    async fn check_network_permission(
+        &self,
+        req: HostNetworkPermissionCheckRequest,
+    ) -> crate::sdk::Result<HostPermissionCheckResponse> {
+        self.require_capability(
+            method::HOST_PERMISSION_CHECK_NETWORK,
+            HostCapability::PermissionCheck,
+        )
+        .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.check_network_permission(req))
+            .await
     }
 
     async fn read_config(&self, path: Option<String>) -> crate::sdk::Result<serde_json::Value> {

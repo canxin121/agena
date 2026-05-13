@@ -449,6 +449,7 @@ Plugin 调用 host callback 前必须在 manifest 中声明对应 capability。H
 | `Theme` | 注册 UI theme palette |
 | `PermissionUi` | 接管 permission UI render |
 | `PermissionDecision` | 在 permission hook 中返回最终决策 |
+| `PermissionCheck` | 让 plugin 主动请求 host 按当前 path/network policy 做权限判断 |
 
 Capability 可以写在 entry 上，也可以写在 manifest 的 `plugin_capabilities` 上。Entry-level capability 更适合多 entry plugin，因为它可以把敏感能力限定到需要的 entry。
 
@@ -461,6 +462,52 @@ Plugin entry 调用会经过同一套 permission system：
 3. Permission runtime 检查 path/network/entry policy。
 4. `permission.ask` hooks 可以给出建议；拥有 `PermissionDecision` capability 的 plugin 可以返回最终决策。
 5. 需要用户确认时，session 状态和 UI/API 会产生 pending permission request。
+
+Manifest 中的权限声明适合 entry 调用前就能知道的资源：
+
+```rust
+PluginEntryDecl::new("download", schema)
+    .input_path(InputPathSpec {
+        jsonpath: "$.output_path".to_string(),
+        kind: PathKind::Write,
+        optional: false,
+    })
+    .input_network(InputNetworkSpec {
+        jsonpath: "$.url".to_string(),
+        optional: false,
+    })
+    .network_access(NetworkAccessSpec {
+        target: "https://api.example.com".to_string(),
+    })
+    .tag("network");
+```
+
+如果路径或网络目标要先解析输入、读取 plugin 状态、展开 workspace 信息后才能知道，plugin 可以实现：
+
+```rust
+async fn permission_paths(
+    &self,
+    tool_name: &str,
+    input: &serde_json::Value,
+) -> Result<Vec<PathRequest>>;
+
+async fn permission_networks(
+    &self,
+    tool_name: &str,
+    input: &serde_json::Value,
+) -> Result<Vec<NetworkRequest>>;
+```
+
+这些声明和动态返回项都会在 entry body 执行前进入同一套 path/network policy。
+
+Plugin 内部发起的额外文件或网络操作不能由 host 做强沙箱隔离。需要在 plugin 内部配合权限系统时，manifest 要声明 `PermissionCheck` capability，然后通过 host callback 主动检查：
+
+```rust
+host.ensure_path_permission(HostPathPermissionCheckRequest::write(path)).await?;
+host.ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url)).await?;
+```
+
+也可以使用 `check_path_permission` / `check_network_permission` 拿到 `allow`、`prompt`、`deny` 结果自行处理。Host 会按当前 session、agent、persisted rule、permission hook 和静态 policy 解析该检查。
 
 Entry 权限配置分为 tag、entry name 和 entry-specific rules：
 

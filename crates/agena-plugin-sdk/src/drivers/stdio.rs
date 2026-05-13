@@ -28,7 +28,8 @@ use crate::host_api::{
     HostEntryUpdateRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostHookListResponse,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
     HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse,
+    HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
+    HostPermissionCheckResponse, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse,
     HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
     HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
@@ -372,6 +373,34 @@ impl HostClient for StdioHostClient {
         self.call(
             method::HOST_PERMISSION_ASK,
             serde_json::to_value(req).map_err(|e| PluginError::invalid_params(e.to_string()))?,
+        )
+        .await
+    }
+
+    async fn check_path_permission(
+        &self,
+        req: HostPathPermissionCheckRequest,
+    ) -> crate::error::Result<HostPermissionCheckResponse> {
+        self.call(
+            method::HOST_PERMISSION_CHECK_PATH,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn check_network_permission(
+        &self,
+        req: HostNetworkPermissionCheckRequest,
+    ) -> crate::error::Result<HostPermissionCheckResponse> {
+        self.call(
+            method::HOST_PERMISSION_CHECK_NETWORK,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
         )
         .await
     }

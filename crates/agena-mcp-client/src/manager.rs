@@ -59,6 +59,7 @@ pub struct ConnectedServer {
     pub name: String,
     pub client: Arc<McpClient>,
     pub tools: Vec<ToolDescriptor>,
+    pub network_target: Option<String>,
 }
 
 #[derive(Default)]
@@ -99,7 +100,7 @@ impl McpConnectionManager {
 
     /// Spawn a new server, perform `initialize`, and pre-load its tool list.
     pub async fn add_server(&self, name: &str, spec: ServerSpec) -> McpResult<()> {
-        let client = match spec {
+        let (client, network_target) = match spec {
             ServerSpec::Stdio {
                 command,
                 args,
@@ -107,7 +108,7 @@ impl McpConnectionManager {
                 cwd,
             } => {
                 let t = StdioTransport::spawn(&command, &args, &env, cwd.as_ref()).await?;
-                McpClient::new(Arc::new(t))
+                (McpClient::new(Arc::new(t)), None)
             }
             ServerSpec::Http {
                 url,
@@ -115,11 +116,12 @@ impl McpConnectionManager {
                 mut headers,
                 auth,
             } => {
+                let network_target = Some(url.to_string());
                 if let Some(auth) = auth {
                     apply_http_auth(name, auth, &mut headers, self.token_store.as_deref());
                 }
                 let t = HttpTransport::connect(url, mode, headers).await?;
-                McpClient::new(Arc::new(t))
+                (McpClient::new(Arc::new(t)), network_target)
             }
         };
         // Wire shared sampling handler if installed.
@@ -163,6 +165,7 @@ impl McpConnectionManager {
                         name: existing.name.clone(),
                         client: existing.client.clone(),
                         tools,
+                        network_target: existing.network_target.clone(),
                     });
                     *existing = new_server;
                     tracing::debug!(
@@ -191,6 +194,7 @@ impl McpConnectionManager {
             name: name.to_string(),
             client,
             tools,
+            network_target,
         });
         let mut g = self.inner.write().await;
         g.servers.insert(name.to_string(), connected);
@@ -219,6 +223,19 @@ impl McpConnectionManager {
             .collect()
     }
 
+    pub async fn server_network_targets(&self) -> BTreeMap<String, String> {
+        let g = self.inner.read().await;
+        g.servers
+            .iter()
+            .filter_map(|(name, server)| {
+                server
+                    .network_target
+                    .clone()
+                    .map(|target| (name.clone(), target))
+            })
+            .collect()
+    }
+
     pub async fn refresh_tools(&self, name: &str) -> McpResult<Vec<ToolDescriptor>> {
         let server = self.get(name).await?;
         let tools = server.client.list_tools().await?.tools;
@@ -228,6 +245,7 @@ impl McpConnectionManager {
                 name: existing.name.clone(),
                 client: existing.client.clone(),
                 tools: tools.clone(),
+                network_target: existing.network_target.clone(),
             });
             *existing = new_server;
         }

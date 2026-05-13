@@ -26,6 +26,20 @@ impl HostClient for FakeHostClient {
         Ok(PermissionDecision::Prompt)
     }
 
+    async fn check_path_permission(
+        &self,
+        _req: HostPathPermissionCheckRequest,
+    ) -> Result<HostPermissionCheckResponse> {
+        Ok(HostPermissionCheckResponse::allowed())
+    }
+
+    async fn check_network_permission(
+        &self,
+        _req: HostNetworkPermissionCheckRequest,
+    ) -> Result<HostPermissionCheckResponse> {
+        Ok(HostPermissionCheckResponse::allowed())
+    }
+
     async fn read_config(&self, _path: Option<String>) -> Result<serde_json::Value> {
         Ok(json!({ "ok": true }))
     }
@@ -786,6 +800,87 @@ async fn hook_and_mcp_calls_require_capability() {
         .await
         .expect_err("mcp.list_servers should require McpRegistry");
     assert!(mcp_err.message.contains("McpRegistry"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn permission_check_calls_require_capability() {
+    let host = host_with_capability_plugin(Vec::new()).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let path_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PERMISSION_CHECK_PATH,
+            json!({
+                "request": {
+                    "path": "Cargo.toml",
+                    "kind": "read"
+                }
+            }),
+        )
+        .await
+        .expect_err("permission.check_path should require PermissionCheck");
+    assert!(path_err.message.contains("PermissionCheck"));
+
+    let network_err = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PERMISSION_CHECK_NETWORK,
+            json!({
+                "request": {
+                    "target": "https://example.com"
+                }
+            }),
+        )
+        .await
+        .expect_err("permission.check_network should require PermissionCheck");
+    assert!(network_err.message.contains("PermissionCheck"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn permission_check_capability_unlocks_dispatch() {
+    let host = host_with_capability_plugin(vec![HostCapability::PermissionCheck]).await;
+    host.host_handle()
+        .install_client(Arc::new(FakeHostClient))
+        .await;
+
+    let path = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PERMISSION_CHECK_PATH,
+            json!({
+                "request": {
+                    "path": "Cargo.toml",
+                    "kind": "read"
+                }
+            }),
+        )
+        .await
+        .expect("permission.check_path should be allowed");
+    assert_eq!(path.get("decision").and_then(|v| v.as_str()), Some("allow"));
+
+    let network = host
+        .host_handle()
+        .handle_call_for_plugin(
+            "capability-plugin",
+            agena_plugin_sdk::rpc::method::HOST_PERMISSION_CHECK_NETWORK,
+            json!({
+                "request": {
+                    "target": "https://example.com"
+                }
+            }),
+        )
+        .await
+        .expect("permission.check_network should be allowed");
+    assert_eq!(
+        network.get("decision").and_then(|v| v.as_str()),
+        Some("allow")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

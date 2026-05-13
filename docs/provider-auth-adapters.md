@@ -6,7 +6,7 @@
 
 旧模型里有两个根本问题：
 
-1. `provider` 同时暴露 `base_url`、`api_key`、`api_key_env`、`auth_provider_id`，语义混杂。
+1. `provider` 同时暴露 `base_url`、`api_key`、`api_key_env` 等认证与路由字段，语义混杂。
 2. credential 通过全局 id 路由，导致“provider 的 credential”其实并不真的属于 provider。
 
 新的结构改成：
@@ -142,7 +142,6 @@ target_model = "gpt-5-codex"
 - root-level `kind`
 - `base_url`
 - `api_key` / `api_key_env`
-- `auth_provider_id`
 
 这些字段会被 lower 到新的 `provider.auth + provider.adapters` 结构。
 

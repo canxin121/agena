@@ -285,7 +285,6 @@ impl RawConfig {
                     provider.api_mode = Some(OpenAiApiModeConfig::from_str(value.as_str())?)
                 }
                 "REALTIME_WS_URL" => provider.realtime_ws_url = Some(value),
-                "AUTH_PROVIDER_ID" => provider.auth_provider_id = Some(value),
                 "INSTANCE_URL" => provider.instance_url = Some(value),
                 "AI_GATEWAY_URL" => provider.ai_gateway_url = Some(value),
                 "MODELS_URL" => provider.models_url = Some(value),
@@ -1004,7 +1003,6 @@ pub(crate) struct RawProviderConfig {
     pub(crate) adapters: BTreeMap<String, RawProviderAdapterConfig>,
     pub(crate) kind: Option<ProviderKind>,
     pub(crate) backend: Option<super::OpenAiBackendConfig>,
-    pub(crate) auth_provider_id: Option<String>,
     pub(crate) default_model: Option<String>,
     pub(crate) base_url: Option<String>,
     pub(crate) api_key: Option<String>,
@@ -1037,7 +1035,6 @@ impl Merge for RawProviderConfig {
         self.adapters.extend(overlay.adapters);
         merge_option(&mut self.kind, overlay.kind);
         merge_option(&mut self.backend, overlay.backend);
-        merge_option(&mut self.auth_provider_id, overlay.auth_provider_id);
         merge_option(&mut self.default_model, overlay.default_model);
         merge_option(&mut self.base_url, overlay.base_url);
         merge_option(&mut self.api_key, overlay.api_key);
@@ -1212,7 +1209,6 @@ fn ensure_no_legacy_provider_fields(
 ) -> Result<(), ConfigError> {
     let has_legacy_fields = provider.kind.is_some()
         || provider.backend.is_some()
-        || provider.auth_provider_id.is_some()
         || provider.base_url.is_some()
         || provider.api_key.is_some()
         || provider.api_key_env.is_some()

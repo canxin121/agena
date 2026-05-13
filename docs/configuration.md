@@ -193,7 +193,6 @@ AUTH_SCHEME
 STREAM_MODE
 API_MODE
 REALTIME_WS_URL
-AUTH_PROVIDER_ID
 INSTANCE_URL
 AI_GATEWAY_URL
 MODELS_URL
@@ -374,7 +373,7 @@ default_model = "claude-sonnet-4-6"
 - `providers.<id>.adapters.<adapter_id>`: 一个真实后端 adapter，负责 `kind`、endpoint 和 provider-specific 选项。
 - `providers.<id>.adapters.<adapter_id>.default_model`: 该 adapter 的上游默认模型。
 
-一旦声明了 `adapters`，就不要继续把 `kind`、`base_url`、`api_key_env`、`auth_provider_id` 这类 legacy flat 字段留在 provider 根节点；这种混用会被拒绝。旧的 flat provider 配置仍然兼容，但只作为输入兼容层，内部会被自动 lower 到新的 `auth + adapters` 结构。
+一旦声明了 `adapters`，就不要继续把 `kind`、`base_url`、`api_key_env` 这类 legacy flat 字段留在 provider 根节点；这种混用会被拒绝。旧的 flat provider 配置仍然兼容，但只作为输入兼容层，内部会被自动 lower 到新的 `auth + adapters` 结构。
 
 Adapter `kind`：
 
@@ -597,7 +596,7 @@ default_model = "gemini-1.5-pro"
 
 旧的 flat provider 配置仍然能工作：
 
-- 根节点的 `kind` / `base_url` / `api_key_env` / `auth_provider_id` 会被 lower 到新的 `auth` 或隐式 `default` adapter。
+- 根节点的 `kind` / `base_url` / `api_key_env` 会被 lower 到新的 `auth` 或隐式 `default` adapter。
 - 根节点的 `[providers.<id>.models]` 会被 lower 到新的 model route 表。
 
 但一旦你开始使用 `adapters`，就必须把旧字段一起迁移进去，不要混用两套写法。

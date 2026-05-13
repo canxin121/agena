@@ -120,17 +120,7 @@ export type RuntimeStatus = {
         max_output_tokens?: number | null
         steps?: number | null
         allowed_tools: string[]
-        permission?: {
-          default_read?: 'allow' | 'ask' | 'deny'
-          default_write?: 'allow' | 'ask' | 'deny'
-          default_external_directory?: 'allow' | 'ask' | 'deny'
-          execution_mode?: 'auto' | 'ask'
-          tools?: Record<string, 'allow' | 'ask' | 'deny'>
-          read?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
-          write?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
-          external_directory?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
-          tool_rules?: Record<string, 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>>
-        }
+        permission?: AgentPermissionConfig
         model?: string | null
         aliases: string[]
         scope: 'project' | 'user' | 'first_party'
@@ -297,6 +287,54 @@ export type WorkspaceResource = {
 
 export type PermissionMode = 'allow' | 'ask' | 'deny'
 
+export type PermissionInheritance =
+  | boolean
+  | {
+      path?: boolean
+      network?: boolean
+      tools?: boolean
+      plugin_tools?: boolean
+    }
+
+export type PathAccessModes = {
+  read?: PermissionMode
+  write?: PermissionMode
+}
+
+export type PathAccessRule = PathAccessModes | string
+
+export type PathPermissionConfig = {
+  workspace?: PathAccessModes
+  external?: PathAccessModes
+  rules?: Record<string, PathAccessRule>
+}
+
+export type NetworkPermissionConfig = {
+  internet?: PermissionMode
+  private?: PermissionMode
+  loopback?: PermissionMode
+  rules?: Record<string, PermissionMode>
+}
+
+export type ToolPermissionRules = PermissionMode | Record<string, PermissionMode>
+
+export type ToolPermissionConfig = {
+  tags?: Record<string, PermissionMode>
+  first_party?: Record<string, PermissionMode>
+  plugin?: Record<string, PermissionMode>
+  rules?: Record<string, ToolPermissionRules>
+}
+
+export type PermissionConfig = {
+  path?: PathPermissionConfig
+  network?: NetworkPermissionConfig
+  tools?: ToolPermissionConfig
+}
+
+export type AgentPermissionConfig = PermissionConfig & {
+  inherit?: PermissionInheritance
+}
+
 export type PermissionRuleResource = {
   id: number
   action_key: string
@@ -306,6 +344,9 @@ export type PermissionRuleResource = {
   path_access_kind?: string | null
   workspace_root?: string | null
   target_path?: string | null
+  network_target?: string | null
+  network_host?: string | null
+  network_port?: number | null
   mode: PermissionMode
   scope: string
   session_id?: number | null
@@ -453,17 +494,7 @@ export type SessionExecutionContextResource = {
   active_skill_name?: string | null
   system_prompt_override?: string | null
   allowed_tools: string[]
-  agent_permission?: {
-    default_read?: 'allow' | 'ask' | 'deny'
-    default_write?: 'allow' | 'ask' | 'deny'
-    default_external_directory?: 'allow' | 'ask' | 'deny'
-    execution_mode?: 'auto' | 'ask'
-    tools?: Record<string, 'allow' | 'ask' | 'deny'>
-    read?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
-    write?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
-    external_directory?: 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
-    tool_rules?: Record<string, 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>>
-  }
+  agent_permission?: PermissionConfig
   model_provider_id?: string | null
   model_id?: string | null
   model_variant?: string | null

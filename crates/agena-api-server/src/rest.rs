@@ -684,7 +684,7 @@ pub async fn upgrade_marketplace_plugins(
 pub async fn list_auth_providers(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let configured_ids = configured_auth_provider_ids(&state);
+    let configured_ids = configured_provider_auth_ids(&state);
     let items = configured_ids
         .into_iter()
         .map(|provider_id| {
@@ -2031,18 +2031,18 @@ async fn plugin_rpc_response(
     }
 }
 
-fn configured_auth_provider_ids(state: &AppState) -> BTreeSet<String> {
+fn configured_provider_auth_ids(state: &AppState) -> BTreeSet<String> {
     let snapshot = state.runtime().current_snapshot();
     snapshot
         .config_resolution()
         .config
         .providers
         .iter()
-        .filter_map(|(provider_id, resolved)| configured_auth_provider_id(provider_id, resolved))
+        .filter_map(|(provider_id, resolved)| configured_provider_auth_id(provider_id, resolved))
         .collect()
 }
 
-fn configured_auth_provider_id(
+fn configured_provider_auth_id(
     provider_id: &str,
     resolved: &ResolvedProviderConfig,
 ) -> Option<String> {
@@ -2102,7 +2102,7 @@ fn auth_provider_config(
         .get(provider_id)
         .cloned()
         .ok_or_else(|| ServerError::NotFound(format!("auth provider not found: {provider_id}")))?;
-    if configured_auth_provider_id(provider_id, &resolved).is_none() {
+    if configured_provider_auth_id(provider_id, &resolved).is_none() {
         return Err(ServerError::NotFound(format!(
             "auth provider not found: {provider_id}"
         )));
@@ -2303,7 +2303,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_auth_provider_id_uses_openai_for_chatgpt_codex_backend() {
+    fn configured_provider_auth_id_uses_openai_for_chatgpt_codex_backend() {
         let provider =
             resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: None,
@@ -2318,13 +2318,13 @@ mod tests {
             }));
 
         assert_eq!(
-            configured_auth_provider_id("openai_chatgpt", &provider).as_deref(),
+            configured_provider_auth_id("openai_chatgpt", &provider).as_deref(),
             Some("openai_chatgpt")
         );
     }
 
     #[test]
-    fn configured_auth_provider_id_prefers_gitlab_auth_provider_when_no_api_key_is_set() {
+    fn configured_provider_auth_id_prefers_gitlab_auth_provider_when_no_api_key_is_set() {
         let provider =
             resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: None,
@@ -2339,13 +2339,13 @@ mod tests {
             }));
 
         assert_eq!(
-            configured_auth_provider_id("gitlab-duo", &provider).as_deref(),
+            configured_provider_auth_id("gitlab-duo", &provider).as_deref(),
             Some("gitlab-duo")
         );
     }
 
     #[test]
-    fn configured_auth_provider_id_uses_provider_id_for_direct_gitlab_api_key() {
+    fn configured_provider_auth_id_uses_provider_id_for_direct_gitlab_api_key() {
         let provider =
             resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: Some("glpat-test".to_owned()),
@@ -2354,13 +2354,13 @@ mod tests {
             }));
 
         assert_eq!(
-            configured_auth_provider_id("gitlab-self", &provider).as_deref(),
+            configured_provider_auth_id("gitlab-self", &provider).as_deref(),
             Some("gitlab-self")
         );
     }
 
     #[test]
-    fn configured_auth_provider_id_ignores_empty_gitlab_api_key_overrides() {
+    fn configured_provider_auth_id_ignores_empty_gitlab_api_key_overrides() {
         let provider =
             resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: Some("   ".to_owned()),
@@ -2375,13 +2375,13 @@ mod tests {
             }));
 
         assert_eq!(
-            configured_auth_provider_id("gitlab", &provider).as_deref(),
+            configured_provider_auth_id("gitlab", &provider).as_deref(),
             Some("gitlab")
         );
     }
 
     #[test]
-    fn configured_auth_provider_id_keeps_direct_http_provider_ids() {
+    fn configured_provider_auth_id_keeps_direct_http_provider_ids() {
         let provider =
             resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: Some("sk-test".to_owned()),
@@ -2392,13 +2392,13 @@ mod tests {
             }));
 
         assert_eq!(
-            configured_auth_provider_id("openai", &provider).as_deref(),
+            configured_provider_auth_id("openai", &provider).as_deref(),
             Some("openai")
         );
     }
 
     #[test]
-    fn configured_auth_provider_id_uses_configured_copilot_auth_provider() {
+    fn configured_provider_auth_id_uses_configured_copilot_auth_provider() {
         let provider =
             resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: None,
@@ -2413,13 +2413,13 @@ mod tests {
             }));
 
         assert_eq!(
-            configured_auth_provider_id("copilot-enterprise", &provider).as_deref(),
+            configured_provider_auth_id("copilot-enterprise", &provider).as_deref(),
             Some("copilot-enterprise")
         );
     }
 
     #[test]
-    fn configured_auth_provider_id_keeps_cloudflare_gateway_provider_id() {
+    fn configured_provider_auth_id_keeps_cloudflare_gateway_provider_id() {
         let provider =
             resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
                 secret: Some("cf-test".to_owned()),
@@ -2428,13 +2428,13 @@ mod tests {
             }));
 
         assert_eq!(
-            configured_auth_provider_id("cloudflare-ai-gateway", &provider).as_deref(),
+            configured_provider_auth_id("cloudflare-ai-gateway", &provider).as_deref(),
             Some("cloudflare-ai-gateway")
         );
     }
 
     #[test]
-    fn configured_auth_provider_id_skips_google_adc_and_sigv4_auth() {
+    fn configured_provider_auth_id_skips_google_adc_and_sigv4_auth() {
         let google = resolved_provider_with_auth(ProviderAuthConfig::GoogleAdc);
         let bedrock =
             resolved_provider_with_auth(ProviderAuthConfig::BedrockSigv4(BedrockSigv4AuthConfig {
@@ -2444,12 +2444,12 @@ mod tests {
                 session_token: None,
             }));
 
-        assert_eq!(configured_auth_provider_id("vertex", &google), None);
-        assert_eq!(configured_auth_provider_id("bedrock", &bedrock), None);
+        assert_eq!(configured_provider_auth_id("vertex", &google), None);
+        assert_eq!(configured_provider_auth_id("bedrock", &bedrock), None);
     }
 
     #[test]
-    fn configured_auth_provider_id_uses_sap_ai_core_secret_routing() {
+    fn configured_provider_auth_id_uses_sap_ai_core_secret_routing() {
         let provider = resolved_provider_with_auth(ProviderAuthConfig::SapAiCore(
             ProviderSapAiCoreAuthConfig {
                 secret: ProviderSecretAuthConfig {
@@ -2464,7 +2464,7 @@ mod tests {
         ));
 
         assert_eq!(
-            configured_auth_provider_id("sap-ai-core", &provider).as_deref(),
+            configured_provider_auth_id("sap-ai-core", &provider).as_deref(),
             Some("sap-ai-core")
         );
     }

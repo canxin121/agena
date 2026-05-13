@@ -232,7 +232,6 @@ default_model = "claude-sonnet-4-5"
 如果你之前依赖这些旧字段：
 
 - `credential_provider_id`
-- root-level `auth_provider_id`
 - 多个 provider 共享同一条外部 credential
 
 现在应当迁移为：

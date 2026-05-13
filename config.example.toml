@@ -17,25 +17,41 @@ filter = "info"
 store_backend = "auto"
 
 # At least one provider must be configured. Pick the LLM endpoint you
-# have credentials for and remove the others.
+# have credentials for and remove the others. These examples use the
+# preferred `provider + auth + adapters` layout.
 
 [providers.anthropic]
+default_model = "claude-sonnet-4-6"
+
+[providers.anthropic.auth]
+secret_env = "ANTHROPIC_API_KEY"
+
+[providers.anthropic.adapters.api]
 kind = "anthropic"
 base_url = "https://api.anthropic.com/v1"
 default_model = "claude-sonnet-4-6"
-api_key_env = "ANTHROPIC_API_KEY"
 
 # [providers.openai]
+# default_model = "gpt-4o"
+#
+# [providers.openai.auth]
+# secret_env = "OPENAI_API_KEY"
+#
+# [providers.openai.adapters.api]
 # kind = "openai"
 # base_url = "https://api.openai.com/v1"
 # default_model = "gpt-4o"
-# api_key_env = "OPENAI_API_KEY"
 
 # [providers.gemini]
+# default_model = "gemini-2.5-pro"
+#
+# [providers.gemini.auth]
+# secret_env = "GEMINI_API_KEY"
+#
+# [providers.gemini.adapters.api]
 # kind = "gemini"
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
 # default_model = "gemini-2.5-pro"
-# api_key_env = "GEMINI_API_KEY"
 
 [runtime]
 # Set `default_agent` explicitly when you want a different primary persona for

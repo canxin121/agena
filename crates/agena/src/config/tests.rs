@@ -474,6 +474,60 @@ target_model = "gpt-5-codex"
 }
 
 #[test]
+fn multiple_providers_can_share_one_credential_provider_id() {
+    let path = write_temp_config(
+        r#"
+[providers.primary]
+default_model = "gpt-4.1"
+
+[providers.primary.auth]
+credential_provider_id = "shared-openai"
+
+[providers.primary.adapters.api]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1"
+
+[providers.secondary]
+default_model = "gpt-4.1-mini"
+
+[providers.secondary.auth]
+credential_provider_id = "shared-openai"
+
+[providers.secondary.adapters.api]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    for provider_id in ["primary", "secondary"] {
+        let provider = resolution
+            .config
+            .providers
+            .get(provider_id)
+            .expect("provider should exist");
+        match &provider.auth {
+            ProviderAuthConfig::Secret(secret) => {
+                assert_eq!(
+                    secret.credential_provider_id.as_deref(),
+                    Some("shared-openai")
+                );
+            }
+            other => panic!("expected secret auth, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn loader_rejects_agena_mode_env() {
     let loader = ConfigLoader::new(TestEnvironment {
         vars: BTreeMap::from([("AGENA_MODE".to_owned(), "prod".to_owned())]),

@@ -390,6 +390,9 @@ default_model = "gpt-4.1"
 [providers.shared.adapters.api.models.fast]
 target_model = "gpt-4.1-mini"
 
+[providers.shared.adapters.api.models.fast.variants.deep]
+thinking = { type = "effort", effort = "high" }
+
 [providers.shared.adapters.codex]
 kind = "openai"
 backend = "chatgpt_codex"
@@ -429,6 +432,13 @@ target_model = "gpt-5-codex"
     assert_eq!(
         provider.models.get("fast").map(|model| model.target_model.as_str()),
         Some("gpt-4.1-mini")
+    );
+    assert!(
+        provider
+            .models
+            .get("fast")
+            .and_then(|model| model.definition.variants.get("deep"))
+            .is_some()
     );
     assert_eq!(
         provider.models.get("coder").map(|model| model.adapter.as_str()),

@@ -2055,8 +2055,14 @@ fn configured_auth_provider_id(
     definition: &ProviderDefinition,
 ) -> Option<String> {
     match definition {
-        ProviderDefinition::OpenAi(_)
-        | ProviderDefinition::Anthropic(_)
+        ProviderDefinition::OpenAi(config) => {
+            if has_direct_http_api_key(config.api_key.as_ref(), config.api_key_env.as_deref()) {
+                Some(provider_id.to_owned())
+            } else {
+                Some(config.options.auth_provider_id.clone())
+            }
+        }
+        ProviderDefinition::Anthropic(_)
         | ProviderDefinition::Gemini(_)
         | ProviderDefinition::OpenAiCompatible(_)
         | ProviderDefinition::SapAiCore(_)
@@ -2064,7 +2070,6 @@ fn configured_auth_provider_id(
         | ProviderDefinition::GoogleVertex(_)
         | ProviderDefinition::AmazonBedrock(_)
         | ProviderDefinition::Ollama(_) => Some(provider_id.to_owned()),
-        ProviderDefinition::Codex(config) => Some(config.auth_provider_id.clone()),
         ProviderDefinition::Gitlab(config) => {
             if has_gitlab_direct_api_key(config)
                 || config
@@ -2079,6 +2084,13 @@ fn configured_auth_provider_id(
         }
         ProviderDefinition::Copilot(config) => Some(config.auth_provider_id.clone()),
     }
+}
+
+fn has_direct_http_api_key(api_key: Option<&String>, api_key_env: Option<&str>) -> bool {
+    api_key
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || api_key_env.is_some_and(has_present_env_var)
 }
 
 fn has_gitlab_direct_api_key(config: &agena::config::GitlabProviderOptions) -> bool {
@@ -2198,20 +2210,30 @@ fn secret_preview(secret: &str) -> Option<String> {
 mod tests {
     use super::*;
     use agena::config::{
-        CloudflareAiGatewayProviderOptions, CodexProviderOptions, CopilotProviderOptions,
-        GitlabProviderOptions, HttpProviderConfig, OpenAiApiModeConfig, OpenAiProviderOptions,
+        CloudflareAiGatewayProviderOptions, CopilotProviderOptions, GitlabProviderOptions,
+        HttpProviderConfig, OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions,
         StreamTransportMode,
     };
 
     #[test]
-    fn configured_auth_provider_id_uses_openai_for_codex_alias() {
-        let provider = ProviderDefinition::Codex(CodexProviderOptions {
+    fn configured_auth_provider_id_uses_openai_for_chatgpt_codex_backend() {
+        let provider = ProviderDefinition::OpenAi(HttpProviderConfig {
+            base_url: "https://chatgpt.com/backend-api/codex".to_owned(),
             default_model: "gpt-5-codex".to_owned(),
-            auth_provider_id: "openai".to_owned(),
+            api_key: None,
+            api_key_env: None,
+            extra_headers: Default::default(),
+            options: OpenAiProviderOptions {
+                backend: OpenAiBackendConfig::ChatgptCodex,
+                auth_provider_id: "openai".to_owned(),
+                api_mode: OpenAiApiModeConfig::Responses,
+                stream_mode: StreamTransportMode::Sse,
+                realtime_ws_url: None,
+            },
         });
 
         assert_eq!(
-            configured_auth_provider_id("codex", &provider).as_deref(),
+            configured_auth_provider_id("openai_chatgpt", &provider).as_deref(),
             Some("openai")
         );
     }
@@ -2282,6 +2304,8 @@ mod tests {
             api_key_env: None,
             extra_headers: Default::default(),
             options: OpenAiProviderOptions {
+                backend: OpenAiBackendConfig::Api,
+                auth_provider_id: "openai".to_owned(),
                 api_mode: OpenAiApiModeConfig::Responses,
                 stream_mode: StreamTransportMode::Sse,
                 realtime_ws_url: None,

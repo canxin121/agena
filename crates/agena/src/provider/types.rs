@@ -14,8 +14,12 @@ use crate::{
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThinkingRequest {
     #[serde(rename = "budget", alias = "enabled")]
-    Budget { budget_tokens: u32 },
-    Effort { effort: ReasoningEffort },
+    Budget {
+        budget_tokens: u32,
+    },
+    Effort {
+        effort: ReasoningEffort,
+    },
     Disabled,
 }
 

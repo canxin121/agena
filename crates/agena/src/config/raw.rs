@@ -17,7 +17,7 @@ use super::{
     AgentConfig, AuthConfig, AuthStoreBackend, ConfigEnvironment, ConfigError, McpConfig,
     MemoryConfig, OpenAiApiModeConfig, PluginConfig, ProjectInstructionsConfig, ProviderDefinition,
     ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, StreamTransportMode, TelemetryConfig,
-    TracingConfig, UiConfig, WebToolsConfig, provider_presets,
+    TracingConfig, UiConfig, WebToolsConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -281,6 +281,9 @@ impl RawConfig {
             match field {
                 "ENABLED" => provider.enabled = Some(parse_bool(key.as_str(), value.as_str())?),
                 "KIND" => provider.kind = Some(ProviderKind::from_str(value.as_str())?),
+                "BACKEND" => {
+                    provider.backend = Some(super::OpenAiBackendConfig::from_str(value.as_str())?)
+                }
                 "DEFAULT_MODEL" => provider.default_model = Some(value),
                 "BASE_URL" => provider.base_url = Some(value),
                 "API_KEY" => provider.api_key = Some(value),
@@ -885,8 +888,6 @@ impl Merge for RawSessionCacheConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ProviderKind {
-    #[serde(rename = "preset")]
-    Preset,
     #[serde(rename = "ollama")]
     Ollama,
     #[serde(rename = "openai", alias = "open_ai")]
@@ -899,8 +900,6 @@ pub(crate) enum ProviderKind {
     Anthropic,
     #[serde(rename = "gemini")]
     Gemini,
-    #[serde(rename = "codex")]
-    Codex,
     #[serde(rename = "gitlab")]
     Gitlab,
     #[serde(rename = "copilot")]
@@ -918,14 +917,12 @@ impl std::str::FromStr for ProviderKind {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim() {
-            "preset" => Ok(Self::Preset),
             "ollama" => Ok(Self::Ollama),
             "openai" => Ok(Self::OpenAi),
             "openai_compatible" => Ok(Self::OpenAiCompatible),
             "sap_ai_core" => Ok(Self::SapAiCore),
             "anthropic" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
-            "codex" => Ok(Self::Codex),
             "gitlab" => Ok(Self::Gitlab),
             "copilot" => Ok(Self::Copilot),
             "amazon_bedrock" => Ok(Self::AmazonBedrock),
@@ -943,6 +940,7 @@ impl std::str::FromStr for ProviderKind {
 pub(crate) struct RawProviderConfig {
     pub(crate) enabled: Option<bool>,
     pub(crate) kind: Option<ProviderKind>,
+    pub(crate) backend: Option<super::OpenAiBackendConfig>,
     pub(crate) auth_provider_id: Option<String>,
     pub(crate) default_model: Option<String>,
     pub(crate) base_url: Option<String>,
@@ -973,6 +971,7 @@ impl Merge for RawProviderConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.enabled, overlay.enabled);
         merge_option(&mut self.kind, overlay.kind);
+        merge_option(&mut self.backend, overlay.backend);
         merge_option(&mut self.auth_provider_id, overlay.auth_provider_id);
         merge_option(&mut self.default_model, overlay.default_model);
         merge_option(&mut self.base_url, overlay.base_url);
@@ -1004,12 +1003,8 @@ impl RawProviderConfig {
     fn resolve(
         mut self,
         provider_id: String,
-        env: &dyn ConfigEnvironment,
+        _env: &dyn ConfigEnvironment,
     ) -> Result<(String, ResolvedProviderConfig), ConfigError> {
-        if matches!(self.kind, Some(ProviderKind::Preset)) {
-            self = provider_presets::apply_provider_preset(provider_id.as_str(), self, env)?;
-        }
-
         let kind = self.kind.ok_or_else(|| ConfigError::MissingProviderKind {
             provider_id: provider_id.clone(),
         })?;
@@ -1021,13 +1016,6 @@ impl RawProviderConfig {
         let models = self.models.clone();
 
         let definition = match kind {
-            ProviderKind::Preset => {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id,
-                    message: "preset provider must be resolved before building concrete definition"
-                        .to_owned(),
-                });
-            }
             ProviderKind::Ollama => ProviderDefinition::Ollama(super::OllamaProviderOptions {
                 base_url: self
                     .base_url
@@ -1038,22 +1026,68 @@ impl RawProviderConfig {
                     self.default_model,
                 )?,
             }),
-            ProviderKind::OpenAi => ProviderDefinition::OpenAi(super::HttpProviderConfig {
-                base_url: required_string(provider_id.as_str(), "base_url", self.base_url)?,
-                default_model: required_string(
-                    provider_id.as_str(),
-                    "default_model",
-                    self.default_model,
-                )?,
-                api_key: normalize_optional(self.api_key),
-                api_key_env: normalize_optional(self.api_key_env),
-                extra_headers: self.extra_headers,
-                options: super::OpenAiProviderOptions {
-                    api_mode: self.api_mode.unwrap_or(OpenAiApiModeConfig::Responses),
-                    stream_mode: self.stream_mode.unwrap_or(StreamTransportMode::Sse),
-                    realtime_ws_url: normalize_optional(self.realtime_ws_url),
-                },
-            }),
+            ProviderKind::OpenAi => {
+                let backend = self.backend.unwrap_or_default();
+                let api_mode = self.api_mode.unwrap_or(OpenAiApiModeConfig::Responses);
+                let stream_mode = self.stream_mode.unwrap_or(StreamTransportMode::Sse);
+                let realtime_ws_url = normalize_optional(self.realtime_ws_url);
+                let api_key = normalize_optional(self.api_key);
+                let api_key_env = normalize_optional(self.api_key_env);
+
+                if matches!(backend, super::OpenAiBackendConfig::ChatgptCodex) {
+                    if api_key.is_some() || api_key_env.is_some() {
+                        return Err(ConfigError::InvalidProviderConfig {
+                            provider_id: provider_id.clone(),
+                            message: "openai backend `chatgpt_codex` uses auth-store OAuth; do not set `api_key` or `api_key_env`".to_owned(),
+                        });
+                    }
+
+                    if api_mode != OpenAiApiModeConfig::Responses {
+                        return Err(ConfigError::InvalidProviderConfig {
+                            provider_id: provider_id.clone(),
+                            message: "openai backend `chatgpt_codex` only supports `api_mode = \"responses\"`".to_owned(),
+                        });
+                    }
+
+                    if stream_mode != StreamTransportMode::Sse {
+                        return Err(ConfigError::InvalidProviderConfig {
+                            provider_id: provider_id.clone(),
+                            message: "openai backend `chatgpt_codex` only supports `stream_mode = \"sse\"`".to_owned(),
+                        });
+                    }
+
+                    if realtime_ws_url.is_some() {
+                        return Err(ConfigError::InvalidProviderConfig {
+                            provider_id: provider_id.clone(),
+                            message:
+                                "openai backend `chatgpt_codex` does not support `realtime_ws_url`"
+                                    .to_owned(),
+                        });
+                    }
+                }
+
+                ProviderDefinition::OpenAi(super::HttpProviderConfig {
+                    base_url: normalize_optional(self.base_url)
+                        .unwrap_or_else(|| default_openai_base_url(backend).to_owned()),
+                    default_model: required_string(
+                        provider_id.as_str(),
+                        "default_model",
+                        self.default_model,
+                    )?,
+                    api_key,
+                    api_key_env,
+                    extra_headers: self.extra_headers,
+                    options: super::OpenAiProviderOptions {
+                        backend,
+                        auth_provider_id: self.auth_provider_id.unwrap_or_else(|| {
+                            default_openai_auth_provider_id(provider_id.as_str(), backend)
+                        }),
+                        api_mode,
+                        stream_mode,
+                        realtime_ws_url,
+                    },
+                })
+            }
             ProviderKind::OpenAiCompatible => {
                 ProviderDefinition::OpenAiCompatible(super::HttpProviderConfig {
                     base_url: required_string(provider_id.as_str(), "base_url", self.base_url)?,
@@ -1122,14 +1156,6 @@ impl RawProviderConfig {
                 api_key_env: normalize_optional(self.api_key_env),
                 extra_headers: self.extra_headers,
                 options: super::SimpleHttpProviderOptions,
-            }),
-            ProviderKind::Codex => ProviderDefinition::Codex(super::CodexProviderOptions {
-                default_model: required_string(
-                    provider_id.as_str(),
-                    "default_model",
-                    self.default_model,
-                )?,
-                auth_provider_id: self.auth_provider_id.unwrap_or_else(|| "openai".to_owned()),
             }),
             ProviderKind::Gitlab => ProviderDefinition::Gitlab(super::GitlabProviderOptions {
                 instance_url: self
@@ -1353,6 +1379,23 @@ fn required_string(
         provider_id: provider_id.to_owned(),
         field,
     })
+}
+
+fn default_openai_base_url(backend: super::OpenAiBackendConfig) -> &'static str {
+    match backend {
+        super::OpenAiBackendConfig::Api => "https://api.openai.com/v1",
+        super::OpenAiBackendConfig::ChatgptCodex => "https://chatgpt.com/backend-api/codex",
+    }
+}
+
+fn default_openai_auth_provider_id(
+    provider_id: &str,
+    backend: super::OpenAiBackendConfig,
+) -> String {
+    match backend {
+        super::OpenAiBackendConfig::Api => provider_id.to_owned(),
+        super::OpenAiBackendConfig::ChatgptCodex => "openai".to_owned(),
+    }
 }
 
 fn normalize_env_provider_id(raw: &str) -> String {

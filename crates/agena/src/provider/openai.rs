@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     error::AppError,
@@ -12,6 +12,7 @@ use crate::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
         StreamResumePolicy,
+        auth::{AuthData, AuthStore},
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
@@ -21,6 +22,9 @@ use crate::{
     role::Role,
 };
 
+const CHATGPT_CODEX_ORIGINATOR: &str = "agena";
+const CHATGPT_CODEX_USER_AGENT: &str = concat!("agena/", env!("CARGO_PKG_VERSION"));
+
 #[derive(Clone)]
 pub struct OpenAiProvider {
     id: String,
@@ -28,6 +32,9 @@ pub struct OpenAiProvider {
     api_key: ManagedCredential,
     base_url: String,
     default_model: ModelId,
+    backend: OpenAiBackend,
+    auth_provider_id: String,
+    auth_store: Option<Arc<dyn AuthStore>>,
     api_mode: OpenAiApiMode,
     extra_headers: HashMap<String, String>,
     stream_mode: OpenAiStreamMode,
@@ -39,6 +46,12 @@ pub enum OpenAiApiMode {
     Responses,
     Chat,
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiBackend {
+    Api,
+    ChatgptCodex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,12 +107,16 @@ impl OpenAiProvider {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        let id = id.into();
         Self {
-            id: id.into(),
+            auth_provider_id: id.clone(),
+            id,
             client,
             api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
+            backend: OpenAiBackend::Api,
+            auth_store: None,
             api_mode: OpenAiApiMode::Responses,
             extra_headers: HashMap::new(),
             stream_mode: OpenAiStreamMode::Sse,
@@ -109,6 +126,21 @@ impl OpenAiProvider {
 
     pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.extra_headers = headers;
+        self
+    }
+
+    pub fn with_backend(mut self, backend: OpenAiBackend) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    pub fn with_auth_provider_id(mut self, auth_provider_id: impl Into<String>) -> Self {
+        self.auth_provider_id = auth_provider_id.into();
+        self
+    }
+
+    pub fn with_auth_store(mut self, auth_store: Arc<dyn AuthStore>) -> Self {
+        self.auth_store = Some(auth_store);
         self
     }
 
@@ -137,6 +169,28 @@ impl OpenAiProvider {
 
     fn chat_endpoint(&self) -> String {
         format!("{}/chat/completions", self.base_url)
+    }
+
+    fn backend_key(&self) -> &'static str {
+        match self.backend {
+            OpenAiBackend::Api => "api",
+            OpenAiBackend::ChatgptCodex => "chatgpt_codex",
+        }
+    }
+
+    fn can_fallback_to_chat(&self) -> bool {
+        matches!(self.backend, OpenAiBackend::Api)
+    }
+
+    fn chatgpt_account_id(&self) -> Option<String> {
+        self.auth_store
+            .as_ref()
+            .and_then(|store| store.get(self.auth_provider_id.as_str()).ok().flatten())
+            .and_then(|auth| match auth {
+                AuthData::OAuth { account_id, .. } => account_id,
+                AuthData::Api { .. } | AuthData::WellKnown { .. } => None,
+            })
+            .and_then(|value| utils::normalize_optional_text(Some(value)))
     }
 
     fn realtime_ws_endpoint(&self, model: &str) -> Result<url::Url, AppError> {
@@ -239,6 +293,10 @@ impl OpenAiProvider {
     }
 
     fn should_use_responses(&self, model: &str) -> bool {
+        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+            return true;
+        }
+
         match self.api_mode {
             OpenAiApiMode::Responses => true,
             OpenAiApiMode::Chat => false,
@@ -305,6 +363,7 @@ impl OpenAiProvider {
                     .post(self.chat_endpoint())
                     .bearer_auth(api_key)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                RequestHeaderContext::none(),
             )
             .json(&body)
         })
@@ -354,6 +413,7 @@ impl OpenAiProvider {
                     .post(self.chat_endpoint())
                     .bearer_auth(api_key)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                RequestHeaderContext::none(),
             )
             .json(&body)
         })
@@ -1228,6 +1288,8 @@ impl OpenAiProvider {
         &self,
         endpoint: String,
         body: Option<&impl Serialize>,
+        prompt_window_generation: Option<u64>,
+        prompt_cache_key: Option<&str>,
     ) -> Result<R, AppError>
     where
         R: for<'de> Deserialize<'de>,
@@ -1238,6 +1300,7 @@ impl OpenAiProvider {
                     .post(endpoint.clone())
                     .bearer_auth(api_key)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                RequestHeaderContext::from_cache(prompt_cache_key, prompt_window_generation),
             );
 
             if let Some(body) = body {
@@ -1250,13 +1313,68 @@ impl OpenAiProvider {
         utils::parse_json_response(self.id.as_str(), response).await
     }
 
-    fn apply_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        utils::apply_request_headers(self.id.as_str(), req, &self.extra_headers)
+    fn apply_headers(
+        &self,
+        req: reqwest::RequestBuilder,
+        context: RequestHeaderContext<'_>,
+    ) -> reqwest::RequestBuilder {
+        let mut headers = self.extra_headers.clone();
+
+        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+            headers
+                .entry("originator".to_owned())
+                .or_insert_with(|| CHATGPT_CODEX_ORIGINATOR.to_owned());
+            headers
+                .entry(reqwest::header::USER_AGENT.as_str().to_owned())
+                .or_insert_with(|| CHATGPT_CODEX_USER_AGENT.to_owned());
+
+            if let Some(account_id) = self.chatgpt_account_id() {
+                headers.insert("ChatGPT-Account-Id".to_owned(), account_id);
+            }
+
+            if let Some(window_id) = context.window_id_header() {
+                headers.insert("x-codex-window-id".to_owned(), window_id);
+            }
+        }
+
+        utils::apply_request_headers(self.id.as_str(), req, &headers)
     }
 }
 
 fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
     utils::response_id_metadata(response_id)
+}
+
+#[derive(Clone, Copy, Default)]
+struct RequestHeaderContext<'a> {
+    prompt_cache_key: Option<&'a str>,
+    prompt_window_generation: Option<u64>,
+}
+
+impl<'a> RequestHeaderContext<'a> {
+    fn from_cache(
+        prompt_cache_key: Option<&'a str>,
+        prompt_window_generation: Option<u64>,
+    ) -> Self {
+        Self {
+            prompt_cache_key,
+            prompt_window_generation,
+        }
+    }
+
+    fn none() -> Self {
+        Self::default()
+    }
+
+    fn window_id_header(&self) -> Option<String> {
+        self.prompt_cache_key.map(|prompt_cache_key| {
+            format!(
+                "{}:{}",
+                prompt_cache_key,
+                self.prompt_window_generation.unwrap_or_default()
+            )
+        })
+    }
 }
 
 #[async_trait]
@@ -1286,9 +1404,12 @@ impl ModelProvider for OpenAiProvider {
         Some(
             crate::provider::PromptCacheShape::new(self.id.as_str())
                 .with_string("auth_scope", self.api_key.prompt_cache_scope())
+                .with_string("backend", self.backend_key())
                 .with_string("base_url", self.base_url.as_str())
                 .with_string("api_mode", self.api_mode_key())
                 .with_string("stream_mode", self.stream_mode_key())
+                .with_string("auth_provider_id", self.auth_provider_id.as_str())
+                .with_optional_string("auth_account_id", self.chatgpt_account_id())
                 .with_bool("uses_responses", self.should_use_responses(model.as_str()))
                 .with_optional_string("realtime_ws_url", self.realtime_ws_url.as_deref())
                 .with_json(
@@ -1299,8 +1420,19 @@ impl ModelProvider for OpenAiProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+            return Ok(vec![
+                ProviderModel::new(self.id.as_str(), self.default_model.clone())
+                    .with_display_name("ChatGPT Codex model")
+                    .with_capabilities(self.model_capabilities(&self.default_model)),
+            ]);
+        }
+
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            self.apply_headers(self.client.get(self.model_endpoint()).bearer_auth(api_key))
+            self.apply_headers(
+                self.client.get(self.model_endpoint()).bearer_auth(api_key),
+                RequestHeaderContext::none(),
+            )
         })
         .await?;
 
@@ -1341,6 +1473,7 @@ impl ModelProvider for OpenAiProvider {
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
+            prompt_window_generation: request.prompt_window_generation,
             stream: false,
             stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
             top_p: request.top_p,
@@ -1352,18 +1485,25 @@ impl ModelProvider for OpenAiProvider {
             ),
         };
 
-        let response: OpenAiResponsesResponse =
-            match self.send_json(self.responses_endpoint(), Some(&body)).await {
-                Ok(payload) => payload,
-                Err(AppError::HttpStatus { status, .. })
-                    if Self::responses_endpoint_unsupported(status) =>
-                {
-                    return self
-                        .complete_with_chat_api(&request, model.to_string())
-                        .await;
-                }
-                Err(err) => return Err(err),
-            };
+        let response: OpenAiResponsesResponse = match self
+            .send_json(
+                self.responses_endpoint(),
+                Some(&body),
+                body.prompt_window_generation,
+                body.prompt_cache_key.as_deref(),
+            )
+            .await
+        {
+            Ok(payload) => payload,
+            Err(AppError::HttpStatus { status, .. })
+                if self.can_fallback_to_chat() && Self::responses_endpoint_unsupported(status) =>
+            {
+                return self
+                    .complete_with_chat_api(&request, model.to_string())
+                    .await;
+            }
+            Err(err) => return Err(err),
+        };
 
         let response_model =
             ModelId::new(response.model.clone().unwrap_or_else(|| model.to_string()));
@@ -1426,6 +1566,7 @@ impl ModelProvider for OpenAiProvider {
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
+            prompt_window_generation: request.prompt_window_generation,
             stream: true,
             stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
             top_p: request.top_p,
@@ -1443,13 +1584,19 @@ impl ModelProvider for OpenAiProvider {
                     .post(self.responses_endpoint())
                     .bearer_auth(api_key)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
+                RequestHeaderContext::from_cache(
+                    body.prompt_cache_key.as_deref(),
+                    body.prompt_window_generation,
+                ),
             )
             .json(&body)
         })
         .await?;
 
         if !response.status().is_success() {
-            if Self::responses_endpoint_unsupported(response.status()) {
+            if self.can_fallback_to_chat()
+                && Self::responses_endpoint_unsupported(response.status())
+            {
                 return self
                     .complete_stream_with_chat_api(&request, model.to_string())
                     .await;
@@ -1671,6 +1818,8 @@ struct OpenAiResponsesRequest {
     prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_response_id: Option<String>,
+    #[serde(skip)]
+    prompt_window_generation: Option<u64>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<Vec<String>>,
@@ -1682,6 +1831,19 @@ struct OpenAiResponsesRequest {
     response_format: Option<chat_wire::ChatResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
+}
+
+impl OpenAiResponsesRequest {
+    #[cfg(test)]
+    fn window_id_header(&self) -> Option<String> {
+        self.prompt_cache_key.as_ref().map(|prompt_cache_key| {
+            format!(
+                "{}:{}",
+                prompt_cache_key,
+                self.prompt_window_generation.unwrap_or_default()
+            )
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1892,6 +2054,53 @@ mod tests {
     };
     use crate::model::ModelId;
     use crate::tool::{EntryBehavior, EntryDefinition};
+
+    #[derive(Default)]
+    struct MemoryAuthStore {
+        values: Mutex<HashMap<String, crate::provider::auth::AuthData>>,
+    }
+
+    impl crate::provider::auth::AuthStore for MemoryAuthStore {
+        fn all(&self) -> Result<HashMap<String, crate::provider::auth::AuthData>, AppError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("auth store lock should succeed")
+                .clone())
+        }
+
+        fn get(
+            &self,
+            provider_id: &str,
+        ) -> Result<Option<crate::provider::auth::AuthData>, AppError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("auth store lock should succeed")
+                .get(provider_id)
+                .cloned())
+        }
+
+        fn set(
+            &self,
+            provider_id: &str,
+            auth: crate::provider::auth::AuthData,
+        ) -> Result<(), AppError> {
+            self.values
+                .lock()
+                .expect("auth store lock should succeed")
+                .insert(provider_id.to_owned(), auth);
+            Ok(())
+        }
+
+        fn remove(&self, provider_id: &str) -> Result<(), AppError> {
+            self.values
+                .lock()
+                .expect("auth store lock should succeed")
+                .remove(provider_id);
+            Ok(())
+        }
+    }
 
     fn sample_tool_definition() -> EntryDefinition {
         EntryDefinition::plugin(
@@ -2264,6 +2473,115 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("resp_next")
         );
+    }
+
+    #[test]
+    fn responses_request_builds_window_id_header() {
+        let request = OpenAiResponsesRequest {
+            model: "gpt-5.3-codex".to_owned(),
+            input: Vec::new(),
+            tools: vec![OpenAiResponsesTool {
+                kind: "function",
+                name: "project_search".to_owned(),
+                description: "Search project files.".to_owned(),
+                parameters: serde_json::json!({"type":"object"}),
+                strict: false,
+            }],
+            max_output_tokens: Some(128),
+            temperature: Some(0.2),
+            prompt_cache_key: Some("session-42".to_owned()),
+            previous_response_id: Some("resp_prev".to_owned()),
+            prompt_window_generation: Some(4),
+            stream: true,
+            stop: None,
+            top_p: None,
+            seed: None,
+            response_format: None,
+            reasoning_effort: None,
+        };
+
+        let json = serde_json::to_value(&request).expect("request should serialize");
+        assert_eq!(json["prompt_cache_key"], "session-42");
+        assert_eq!(json["previous_response_id"], "resp_prev");
+        assert_eq!(request.window_id_header().as_deref(), Some("session-42:4"));
+    }
+
+    #[tokio::test]
+    async fn complete_chatgpt_codex_backend_sends_account_and_window_headers() {
+        let auth_store = Arc::new(MemoryAuthStore::default());
+        auth_store
+            .set(
+                "openai",
+                crate::provider::auth::AuthData::OAuth {
+                    refresh: "refresh-token".to_owned(),
+                    access: "access-token".to_owned(),
+                    expires_at_ms: 4_102_444_800_000,
+                    account_id: Some("acct-123".to_owned()),
+                    enterprise_url: None,
+                },
+            )
+            .expect("auth store should accept oauth token");
+
+        let mut server = mockito::Server::new_async().await;
+        let _responses = server
+            .mock("POST", "/responses")
+            .expect(1)
+            .match_header("chatgpt-account-id", "acct-123")
+            .match_header("x-codex-window-id", "session-42:7")
+            .match_header("originator", CHATGPT_CODEX_ORIGINATOR)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "id": "resp_next",
+                    "model": "gpt-5.3-codex",
+                    "output_text": "ok",
+                    "stop_reason": "stop"
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiProvider::new_managed_with_id(
+            "openai_chatgpt",
+            reqwest::Client::new(),
+            crate::provider::ManagedCredential::auth_store(
+                "openai_chatgpt api key",
+                auth_store.clone(),
+                "openai",
+                crate::provider::AuthSecretSelector::AccessOrApiKey,
+                crate::provider::AuthRefreshStrategy::OpenAiOAuth,
+            ),
+            server.url(),
+            "gpt-5.3-codex",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex)
+        .with_auth_provider_id("openai")
+        .with_auth_store(auth_store);
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("gpt-5.3-codex"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: Some("session-42".to_owned()),
+                previous_response_id: Some("resp_prev".to_owned()),
+                prompt_window_generation: Some(7),
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
+            })
+            .await
+            .expect("chatgpt codex completion should succeed");
+
+        assert_eq!(response.text, "ok");
     }
 
     #[tokio::test]
@@ -2940,6 +3258,78 @@ mod tests {
             .expect("shape should exist");
         let shape_b = provider_b
             .prompt_cache_shape(&ModelId::new("gpt-5"))
+            .expect("shape should exist");
+
+        assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());
+    }
+
+    #[test]
+    fn prompt_cache_shape_changes_when_chatgpt_account_id_changes() {
+        let auth_store_a = Arc::new(MemoryAuthStore::default());
+        auth_store_a
+            .set(
+                "openai",
+                crate::provider::auth::AuthData::OAuth {
+                    refresh: "refresh-a".to_owned(),
+                    access: "access-a".to_owned(),
+                    expires_at_ms: 0,
+                    account_id: Some("acct-a".to_owned()),
+                    enterprise_url: None,
+                },
+            )
+            .expect("auth store should accept oauth token");
+        let provider_a = OpenAiProvider::new_managed_with_id(
+            "openai_chatgpt",
+            reqwest::Client::new(),
+            crate::provider::ManagedCredential::auth_store(
+                "openai_chatgpt api key",
+                auth_store_a.clone(),
+                "openai",
+                crate::provider::AuthSecretSelector::AccessOrApiKey,
+                crate::provider::AuthRefreshStrategy::OpenAiOAuth,
+            ),
+            "https://chatgpt.com/backend-api/codex",
+            "gpt-5.3-codex",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex)
+        .with_auth_provider_id("openai")
+        .with_auth_store(auth_store_a);
+
+        let auth_store_b = Arc::new(MemoryAuthStore::default());
+        auth_store_b
+            .set(
+                "openai",
+                crate::provider::auth::AuthData::OAuth {
+                    refresh: "refresh-b".to_owned(),
+                    access: "access-b".to_owned(),
+                    expires_at_ms: 0,
+                    account_id: Some("acct-b".to_owned()),
+                    enterprise_url: None,
+                },
+            )
+            .expect("auth store should accept oauth token");
+        let provider_b = OpenAiProvider::new_managed_with_id(
+            "openai_chatgpt",
+            reqwest::Client::new(),
+            crate::provider::ManagedCredential::auth_store(
+                "openai_chatgpt api key",
+                auth_store_b.clone(),
+                "openai",
+                crate::provider::AuthSecretSelector::AccessOrApiKey,
+                crate::provider::AuthRefreshStrategy::OpenAiOAuth,
+            ),
+            "https://chatgpt.com/backend-api/codex",
+            "gpt-5.3-codex",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex)
+        .with_auth_provider_id("openai")
+        .with_auth_store(auth_store_b);
+
+        let shape_a = provider_a
+            .prompt_cache_shape(&ModelId::new("gpt-5.3-codex"))
+            .expect("shape should exist");
+        let shape_b = provider_b
+            .prompt_cache_shape(&ModelId::new("gpt-5.3-codex"))
             .expect("shape should exist");
 
         assert_ne!(shape_a.fingerprint(), shape_b.fingerprint());

@@ -1,7 +1,6 @@
 mod error;
 mod loader;
 mod overrides;
-mod provider_presets;
 mod raw;
 mod registry;
 mod types;
@@ -15,12 +14,12 @@ pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvi
 pub use overrides::ConfigOverride;
 pub use types::{
     AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, AuthConfig,
-    AuthStoreBackend, BedrockAuthConfig, CloudflareAiGatewayProviderOptions, CodexProviderOptions,
-    ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta, ConfigSource,
-    CopilotProviderOptions, GitlabProviderOptions, GoogleVertexAuthConfig,
-    GoogleVertexProviderOptions, HttpProviderConfig, LspConfig, LspServerConfig, McpConfig,
-    McpHttpAuthConfig, McpHttpMode, McpServerConfig, MemoryConfig, OllamaProviderOptions,
-    OpenAiApiModeConfig, OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PluginConfig,
+    AuthStoreBackend, BedrockAuthConfig, CloudflareAiGatewayProviderOptions, ConfigOutputFormat,
+    ConfigResolution, ConfigResolutionMeta, ConfigSource, CopilotProviderOptions,
+    GitlabProviderOptions, GoogleVertexAuthConfig, GoogleVertexProviderOptions, HttpProviderConfig,
+    LspConfig, LspServerConfig, McpConfig, McpHttpAuthConfig, McpHttpMode, McpServerConfig,
+    MemoryConfig, OllamaProviderOptions, OpenAiApiModeConfig, OpenAiBackendConfig,
+    OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PluginConfig,
     ProjectInstructionsConfig, ProviderDefinition, ProviderHttpConfig, RequestRetryConfig,
     ResolvedConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeJanitorConfig,
     RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions, StreamReplayConfig,

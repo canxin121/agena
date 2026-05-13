@@ -7,7 +7,7 @@ use crate::{
     plugin::{PluginHost, PluginHostBuilder},
     provider::{
         AmazonBedrockProvider, AnthropicProvider, AuthRefreshStrategy, AuthSecretSelector,
-        CloudflareAiGatewayProvider, CodexProvider, ConfiguredModelsProvider, CopilotProvider,
+        CloudflareAiGatewayProvider, ConfiguredModelsProvider, CopilotProvider,
         CopilotProviderOptions as RuntimeCopilotProviderOptions, GeminiProvider, GitlabProvider,
         GitlabProviderConfig, GoogleVertexProvider, ManagedCredential, ModelProvider,
         NamedProvider, OllamaProvider, OpenAiCompatibleProvider, OpenAiProvider, OpencodeProvider,
@@ -196,28 +196,53 @@ fn build_provider(
                 config.default_model.clone(),
             ),
         ),
-        ProviderDefinition::OpenAi(config) => register_provider(
-            provider_id,
-            OpenAiProvider::new_managed(
-                client,
-                resolved_or_deferred_managed_secret(
-                    provider_id,
-                    "api_key",
-                    config.api_key.as_ref(),
-                    config.api_key_env.as_ref(),
+        ProviderDefinition::OpenAi(config) => {
+            let credential = match config.options.backend {
+                super::OpenAiBackendConfig::Api => {
+                    resolved_or_deferred_managed_secret_with_auth_provider(
+                        provider_id,
+                        &config.options.auth_provider_id,
+                        "api_key",
+                        config.api_key.as_ref(),
+                        config.api_key_env.as_ref(),
+                        auth_store.clone(),
+                        AuthSecretSelector::AccessOrApiKey,
+                        AuthRefreshStrategy::OpenAiOAuth,
+                        env,
+                    )?
+                }
+                super::OpenAiBackendConfig::ChatgptCodex => ManagedCredential::auth_store(
+                    format!("{provider_id} api_key"),
                     auth_store.clone(),
+                    config.options.auth_provider_id.clone(),
                     AuthSecretSelector::AccessOrApiKey,
                     AuthRefreshStrategy::OpenAiOAuth,
-                    env,
-                )?,
+                ),
+            };
+
+            let mut provider = OpenAiProvider::new_managed_with_id(
+                provider_id,
+                client,
+                credential,
                 config.base_url.clone(),
                 config.default_model.clone(),
             )
+            .with_backend(config.options.backend.into())
+            .with_auth_provider_id(config.options.auth_provider_id.clone())
             .with_extra_headers(to_hash_map(&config.extra_headers))
             .with_api_mode(config.options.api_mode.into())
             .with_stream_mode(config.options.stream_mode.into())
-            .with_realtime_ws_url(config.options.realtime_ws_url.clone()),
-        ),
+            .with_realtime_ws_url(config.options.realtime_ws_url.clone());
+
+            if matches!(
+                config.options.backend,
+                super::OpenAiBackendConfig::ChatgptCodex
+            ) {
+                provider = provider.with_auth_store(auth_store.clone());
+            }
+
+            register_provider(provider_id, provider)
+        }
         ProviderDefinition::OpenAiCompatible(config) => {
             let credential = resolved_or_deferred_managed_secret(
                 provider_id,
@@ -311,15 +336,6 @@ fn build_provider(
                 config.default_model.clone(),
             )
             .with_extra_headers(to_hash_map(&config.extra_headers)),
-        ),
-        ProviderDefinition::Codex(config) => register_provider(
-            provider_id,
-            CodexProvider::from_auth_store_with_options(
-                client,
-                auth_store,
-                config.default_model.clone(),
-                config.auth_provider_id.clone(),
-            )?,
         ),
         ProviderDefinition::Gitlab(config) => {
             let runtime_config = GitlabProviderConfig {
@@ -740,6 +756,72 @@ fn resolved_or_deferred_managed_secret(
     })
 }
 
+fn resolved_or_deferred_managed_secret_with_auth_provider(
+    provider_id: &str,
+    auth_provider_id: &str,
+    field: &'static str,
+    direct: Option<&String>,
+    env_key: Option<&String>,
+    auth_store: Arc<dyn AuthStore>,
+    selector: AuthSecretSelector,
+    refresh: AuthRefreshStrategy,
+    env: &dyn ConfigEnvironment,
+) -> Result<ManagedCredential, ConfigError> {
+    if let Some(value) = direct.and_then(|value| normalize_text(value)) {
+        return Ok(ManagedCredential::static_value(
+            format!("{provider_id} {field}"),
+            value,
+        ));
+    }
+
+    let env_key = env_key.and_then(|value| normalize_text(value));
+
+    if let Some(env_key) = env_key.as_ref() {
+        if env
+            .var(env_key.as_str())
+            .and_then(|value| normalize_text(&value))
+            .is_some()
+        {
+            return Ok(ManagedCredential::environment(
+                format!("{provider_id} {field}"),
+                provider_id.to_owned(),
+                field,
+                env_key.clone(),
+            ));
+        }
+    }
+
+    let auth = auth_store
+        .get(auth_provider_id)
+        .map_err(ConfigError::from)?;
+    if auth
+        .as_ref()
+        .is_some_and(|auth| auth_supports_selector(auth, selector))
+    {
+        return Ok(ManagedCredential::auth_store(
+            format!("{provider_id} {field}"),
+            auth_store,
+            auth_provider_id.to_owned(),
+            selector,
+            refresh,
+        ));
+    }
+
+    if let Some(env_key) = env_key {
+        return Ok(ManagedCredential::environment(
+            format!("{provider_id} {field}"),
+            provider_id.to_owned(),
+            field,
+            env_key,
+        ));
+    }
+
+    Err(ConfigError::MissingProviderField {
+        provider_id: provider_id.to_owned(),
+        field,
+    })
+}
+
 fn static_bedrock_credentials(
     access_key_id: Option<String>,
     secret_access_key: Option<String>,
@@ -1079,14 +1161,15 @@ api_key_env = "GITLAB_TOKEN"
     }
 
     #[test]
-    fn registry_builder_registers_codex_without_existing_auth() {
+    fn registry_builder_registers_chatgpt_codex_backend_without_existing_auth() {
         let path = write_temp_file(
             r#"
 [auth]
 store_backend = "file"
 
-[providers.codex]
-kind = "codex"
+[providers.openai_chatgpt]
+kind = "openai"
+backend = "chatgpt_codex"
 default_model = "gpt-5.3-codex"
 auth_provider_id = "openai"
 "#,
@@ -1106,10 +1189,10 @@ auth_provider_id = "openai"
         let registry = resolution
             .config
             .build_provider_registry_with_env(&env)
-            .expect("registry should build without codex auth");
+            .expect("registry should build without chatgpt codex auth");
 
         let ids = registry.provider_ids();
-        assert!(ids.iter().any(|id| id == "codex"));
+        assert!(ids.iter().any(|id| id == "openai_chatgpt"));
     }
 
     #[test]
@@ -1238,7 +1321,7 @@ access_token_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 
         let ids = registry.provider_ids();
         assert!(ids.iter().any(|id| id == "openai"));
-        assert!(ids.iter().any(|id| id == "codex"));
+        assert!(ids.iter().any(|id| id == "openai_chatgpt"));
         assert!(ids.iter().any(|id| id == "github-copilot"));
         assert!(ids.iter().any(|id| id == "gitlab"));
         assert!(ids.iter().any(|id| id == "google-vertex"));

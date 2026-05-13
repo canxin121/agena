@@ -6,7 +6,6 @@ mod anthropic;
 mod capabilities;
 mod chat_wire;
 mod cloudflare_ai_gateway;
-mod codex;
 mod configured_models;
 mod copilot;
 mod core;
@@ -35,7 +34,6 @@ pub use amazon_bedrock::AmazonBedrockProvider;
 pub use anthropic::AnthropicProvider;
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
 pub use cloudflare_ai_gateway::CloudflareAiGatewayProvider;
-pub use codex::CodexProvider;
 pub use configured_models::{
     ConfiguredModelDefinition, ConfiguredModelVariant, ConfiguredModelsProvider,
     ModelCapabilityFeature, ModelCapabilityPatch,
@@ -51,7 +49,7 @@ pub use gitlab::{GitlabProvider, GitlabProviderConfig};
 pub use google_vertex::GoogleVertexProvider;
 pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
 pub use ollama::OllamaProvider;
-pub use openai::{OpenAiApiMode, OpenAiProvider, OpenAiStreamMode};
+pub use openai::{OpenAiApiMode, OpenAiBackend, OpenAiProvider, OpenAiStreamMode};
 pub use openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleStreamMode};
 pub use opencode::OpencodeProvider;
 pub use prompt_cache_shape::{PromptCacheShape, PromptCacheShapeChange, PromptCacheShapeDiff};

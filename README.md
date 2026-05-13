@@ -2,7 +2,7 @@
 
 Agena 是一个本地优先的 LLM agent runtime。仓库同时包含命令行、终端 UI、Studio Web/桌面界面、后端 API、插件系统、通过 plugin 暴露的 MCP/LSP 能力、会话存储、权限系统和多 provider 模型运行层。
 
-当前文档以代码实现为准，主要入口如下：
+文档入口如下：
 
 - [配置说明](docs/configuration.md): `config.toml`、环境变量、CLI 覆盖、provider、权限、插件和运行时默认值。
 - [架构说明](docs/architecture.md): workspace 布局、核心 crate/app/package 的职责、运行时快照、会话、事件、插件、Studio 与桌面关系。

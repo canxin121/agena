@@ -12,7 +12,7 @@ Agena 的扩展能力统一通过 plugin host 接入。模型可见的 entries�
 
 ## 总览
 
-Runtime build 会构建一个 `PluginHost`。这个 host 同时加载 runtime 注册的 static plugin，以及用户在 `[plugins.list.<id>]` 中声明的 plugin。
+Runtime build 会构建一个 `PluginHost`。这个 host 加载 runtime 注册的 static plugin，以及用户在 `[plugins.list.<id>]` 中声明的 plugin。
 
 ```text
 config.toml
@@ -25,7 +25,7 @@ config.toml
 RuntimeConfigRegistry        PluginHostBuilder
        |                           |
        +-- register static plugins |
-       +-- inject agena.mcp -------+
+       +-- configure agena.* ------+
                                    |
                                    v
                              PluginHost
@@ -83,7 +83,7 @@ Entry 的模型可见名称由 entry registry 决定：
 
 Runtime 会注册一组 first-party static plugins。这些 plugin 和外部 plugin 使用同一个 host、manifest、entry registry、hook dispatch 和 permission 路径。
 
-当前 runtime build 会注册：
+Runtime build 注册：
 
 | Plugin id | 作用 |
 | --- | --- |
@@ -98,7 +98,7 @@ Runtime 会注册一组 first-party static plugins。这些 plugin 和外部 plu
 | `agena.hooks` | 用户配置的 shell/HTTP hooks |
 | `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt entries |
 
-`agena.mcp` 只在配置了 MCP manager 时注册。它会读取当前 MCP server snapshot，并把每个 MCP capability 包装成 plugin entries，例如：
+`agena.mcp` 读取 MCP server snapshot，并把每个 MCP capability 包装成 plugin entries，例如：
 
 ```text
 mcp:<server>:tool:<tool>
@@ -200,7 +200,7 @@ options = { }
 timeouts = { tool_invoke = "45s" }
 ```
 
-`PluginHostBuilder::register_static` 会自动把已注册 static plugin 加入 load list。只有需要给 static plugin 覆盖 `options` 或 `timeouts` 时，才需要显式写对应 `[plugins.list.<id>]`。
+`PluginHostBuilder::register_static` 会把已注册 static plugin 加入 load list。需要给 static plugin 设置 `options` 或 `timeouts` 时，显式写对应 `[plugins.list.<id>]`。
 
 ## `[plugins]` 字段
 
@@ -221,7 +221,7 @@ Timeout 字段：
 | --- | --- |
 | `init` | `init` / manifest 初始化。 |
 | `tool_hook` | tool before/after/failure hooks。 |
-| `tool_invoke` | plugin entry 调用。 |
+| `tool_invoke` | plugin entry invoke timeout。 |
 | `permission_ask` | permission hook。 |
 | `chat` | chat message/params/headers/system transform。 |
 | `fast` | shell env、command hooks、config hooks 等快速路径。 |
@@ -393,6 +393,7 @@ async fn main() -> std::io::Result<()> {
 ## Hooks
 
 Plugin 可以通过 manifest 的 `hooks` 订阅 runtime 生命周期和调用链事件。Host 只会向订阅了对应 hook 的 plugin 分发事件。
+Hook 名称遵循 plugin SDK 协议命名；`tool.*` hook 作用于 plugin entry 调用链。
 
 主要 hook 组：
 
@@ -416,7 +417,7 @@ Plugin 可以通过 manifest 的 `hooks` 订阅 runtime 生命周期和调用链
 - 在 `chat.system.transform` 中改写 system prompt。
 - 在 `permission.ask` 中为组织策略提供建议或决策。
 - 在 `shell.env` 中注入 shell 环境变量。
-- 在 `tool.execute.before/after` 中改写工具入参或输出。
+- 在 `tool.execute.before/after` 中改写 entry 调用入参或输出。
 - 在 `tool.definition` 中调整 entry definition。
 
 ## Host Capabilities
@@ -429,7 +430,7 @@ Plugin 调用 host callback 前必须在 manifest 中声明对应 capability。H
 | --- | --- |
 | `AskUser` | 向用户询问输入 |
 | `SpawnSubtask` | 启动 subtask/subagent |
-| `ListTools` | 列出当前可用 entries |
+| `ListTools` | 列出可用 entries |
 | `InvokeTool` | 调用其他 entry |
 | `ReadConfig` | 读取配置 |
 | `PublishEvent` / `SubscribeEvents` | 发布或订阅事件 |

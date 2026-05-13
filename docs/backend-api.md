@@ -83,7 +83,7 @@ Studio UI 鉴权是 Studio server 层的 middleware，不是 `agena-api` wire pr
 
 ### `GET /auth/session`
 
-检查当前 UI session。
+检查 UI session。
 
 响应示例：
 
@@ -138,7 +138,7 @@ Authorization: Bearer <token>
 
 也接受 `agena_ui_session` cookie。跨站 cookie 场景下，unsafe methods 会检查 `Origin` 是否允许。
 
-WebSocket 浏览器场景通常不能设置自定义 Authorization header。代码中保留了 query token fallback，但当前只对 `/api/global/ws` 做了特殊判断；主 API WS 路径是 `/api/v1/ws`，前端当前主要使用 REST + session SSE。
+WebSocket 使用同一套 UI auth middleware。浏览器客户端通常通过 REST 和 session SSE 访问 Studio；需要 WebSocket 时使用 `/api/v1/ws`。
 
 ## CORS
 
@@ -200,14 +200,14 @@ readiness probe。runtime snapshot generation 大于 0 时返回 `200 ready`，�
 
 ### `GET /metrics`
 
-Prometheus-style text metrics。当前包括：
+Prometheus-style text metrics，包括：
 
 - runtime generation。
 - runtime reload count。
 - HTTP request count。
 - HTTP duration histogram。
 - provider call/error/stream counters。
-- tool execution/error counters。
+- entry execution/error counters。
 - active session gauge。
 - process uptime。
 - build info。
@@ -317,7 +317,7 @@ If-Match: <session.version>
 | GET | `/api/v1/health` | API server health，返回 status、generation、loaded_at、database_connected |
 | GET | `/api/v1/runtime` | runtime status、config path、providers、plugins、reload/janitor、operator 信息 |
 | POST | `/api/v1/runtime/reload` | 手动 reload runtime config |
-| GET | `/api/v1/git/status` | 当前 workspace 的 git/gh 状态 |
+| GET | `/api/v1/git/status` | workspace 的 git/gh 状态 |
 
 `GET /api/v1/runtime` 响应包含：
 
@@ -595,6 +595,8 @@ Submit turn:
 }
 ```
 
+`execution.allowed_tools` 是 API wire 字段名，内容对应该 session 可用的 entries。
+
 Permission reply:
 
 ```json
@@ -639,7 +641,7 @@ User input cancel:
   "reply": {
     "request_id": "...",
     "kind": "cancel",
-    "reason": "not needed"
+    "reason": "cancelled"
   }
 }
 ```
@@ -653,7 +655,7 @@ Fork:
 }
 ```
 
-`at_event_seq` is no longer supported for fork and returns 400 unless `at_message_id` is provided.
+Fork starts from the selected message id.
 
 Rewind/unrewind:
 
@@ -753,7 +755,7 @@ Revoke:
 
 ```json
 {
-  "reason": "no longer needed"
+  "reason": "revoked"
 }
 ```
 
@@ -997,7 +999,7 @@ Server replies with `pong`.
 }
 ```
 
-Binary frames are not supported.
+WebSocket frames use text JSON messages.
 
 ## JSON-RPC app-server
 

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 use crate::provider::{
-    ConfiguredModelDefinition, OpenAiApiMode, OpenAiCompatibleStreamMode, OpenAiStreamMode,
-    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+    ConfiguredModelDefinition, OpenAiApiMode, OpenAiBackend, OpenAiCompatibleStreamMode,
+    OpenAiStreamMode, ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
     ProviderStreamReplayConfig,
     auth::{ConfiguredAuthStore, FileAuthStore, KeyringAuthStore},
 };
@@ -345,7 +345,6 @@ pub enum ProviderDefinition {
     SapAiCore(HttpProviderConfig<OpenAiCompatibleProviderOptions>),
     Anthropic(HttpProviderConfig<AnthropicProviderOptions>),
     Gemini(HttpProviderConfig<SimpleHttpProviderOptions>),
-    Codex(CodexProviderOptions),
     Gitlab(GitlabProviderOptions),
     Copilot(CopilotProviderOptions),
     AmazonBedrock(AmazonBedrockProviderOptions),
@@ -391,6 +390,8 @@ fn redacted(value: Option<&str>) -> &'static str {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OpenAiProviderOptions {
+    pub backend: OpenAiBackendConfig,
+    pub auth_provider_id: String,
     pub api_mode: OpenAiApiModeConfig,
     pub stream_mode: StreamTransportMode,
     pub realtime_ws_url: Option<String>,
@@ -412,12 +413,6 @@ pub struct AnthropicProviderOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SimpleHttpProviderOptions;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CodexProviderOptions {
-    pub default_model: String,
-    pub auth_provider_id: String,
-}
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GitlabProviderOptions {
@@ -615,6 +610,37 @@ impl From<OpenAiApiModeConfig> for OpenAiApiMode {
             OpenAiApiModeConfig::Responses => Self::Responses,
             OpenAiApiModeConfig::Chat => Self::Chat,
             OpenAiApiModeConfig::Auto => Self::Auto,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiBackendConfig {
+    #[default]
+    Api,
+    ChatgptCodex,
+}
+
+impl FromStr for OpenAiBackendConfig {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim() {
+            "api" => Ok(Self::Api),
+            "chatgpt_codex" => Ok(Self::ChatgptCodex),
+            _ => Err(ConfigError::InvalidOverride(format!(
+                "unknown openai backend `{value}`"
+            ))),
+        }
+    }
+}
+
+impl From<OpenAiBackendConfig> for OpenAiBackend {
+    fn from(value: OpenAiBackendConfig) -> Self {
+        match value {
+            OpenAiBackendConfig::Api => Self::Api,
+            OpenAiBackendConfig::ChatgptCodex => Self::ChatgptCodex,
         }
     }
 }

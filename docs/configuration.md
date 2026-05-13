@@ -246,19 +246,16 @@ AGENA_TUI_LOG_STDERR
 AGENA_TUI_CONFIG
 ```
 
-### 插件、marketplace、provider preset
+### 插件、marketplace
 
 ```text
 AGENA_PLUGIN_STORAGE_DIR
 AGENA_MARKETPLACE_DIR
-AGENA_PROVIDER_PRESETS_PATH
 ```
 
 `AGENA_PLUGIN_STORAGE_DIR` 覆盖插件存储根目录。默认是 `~/.agena/plugin-storage`。
 
 `AGENA_MARKETPLACE_DIR` 覆盖 marketplace cache。默认是 `~/.agena/marketplace`。
-
-`AGENA_PROVIDER_PRESETS_PATH` 覆盖 provider preset cache 文件路径。`kind = "preset"` 会使用这个 cache 或从 models.dev 获取 provider 元数据，并额外注入一些内置 preset。
 
 ## Tracing
 
@@ -376,14 +373,12 @@ api_key_env = "ANTHROPIC_API_KEY"
 Provider `kind`：
 
 ```text
-preset
 ollama
 openai
 openai_compatible
 sap_ai_core
 anthropic
 gemini
-codex
 gitlab
 copilot
 amazon_bedrock
@@ -396,10 +391,12 @@ cloudflare_ai_gateway
 ```toml
 enabled = true
 kind = "openai"
+backend = "api"
 base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1-mini"
 api_key = "..."
 api_key_env = "OPENAI_API_KEY"
+auth_provider_id = "openai"
 extra_headers = { }
 api_mode = "responses"
 stream_mode = "sse"
@@ -411,17 +408,23 @@ realtime_ws_url = "wss://..."
 | kind | 配置字段 |
 | --- | --- |
 | `ollama` | `base_url`、`default_model` |
-| `openai` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers`、`api_mode`、`stream_mode`、`realtime_ws_url` |
+| `openai` | `backend`、`base_url`、`default_model`、`api_key`、`api_key_env`、`auth_provider_id`、`extra_headers`、`api_mode`、`stream_mode`、`realtime_ws_url` |
 | `openai_compatible` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers`、`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url` |
 | `sap_ai_core` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers`、`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url` |
 | `anthropic` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers`、`auth_header`、`auth_scheme` |
 | `gemini` | `base_url`、`default_model`、`api_key`、`api_key_env`、`extra_headers` |
-| `codex` | `default_model`、`auth_provider_id` |
 | `gitlab` | `instance_url`、`ai_gateway_url`、`default_model`、`auth_provider_id`、`api_key`、`api_key_env`、`ai_gateway_headers`、`feature_flags` |
 | `copilot` | `base_url`、`models_url`、`default_model`、`auth_provider_id` |
 | `amazon_bedrock` | `base_url`、`default_model`、`region`、`api_key`、`api_key_env`、`profile`、`access_key_id`、`secret_access_key`、`session_token` |
 | `google_vertex` | `base_url`、`default_model`、`access_token`、`access_token_env` |
 | `cloudflare_ai_gateway` | `base_url`、`default_model`、`api_key`、`api_key_env` |
+
+OpenAI 的 `backend`：
+
+```text
+api
+chatgpt_codex
+```
 
 OpenAI 的 `api_mode`：
 
@@ -443,6 +446,20 @@ Credential 解析顺序要按 provider 具体实现理解，但通常是：
 1. 配置中的直接 secret，例如 `api_key`、`access_token`。
 2. 配置中命名的 env，例如 `api_key_env`、`access_token_env`。
 3. Auth store 中的 credential，例如 `agena login openai --browser` 写入的 OAuth token。
+
+`openai` provider 默认使用 `backend = "api"`，`base_url` 默认是 `https://api.openai.com/v1`，`auth_provider_id` 默认是当前 provider id。
+
+如果要走 ChatGPT Codex backend，配置成：
+
+```toml
+[providers.openai_chatgpt]
+kind = "openai"
+backend = "chatgpt_codex"
+default_model = "gpt-5.3-codex"
+auth_provider_id = "openai"
+```
+
+`chatgpt_codex` backend 默认使用 `https://chatgpt.com/backend-api/codex`，并要求 auth store 里有 OpenAI OAuth credential；它不支持 `api_key`、`api_key_env`、`api_mode = "chat"`、`stream_mode = "realtime_websocket"` 或 `realtime_ws_url`。
 4. provider 特有 fallback，例如 Google Vertex ADC、Amazon Bedrock SigV4。
 
 不要把真实 API key 提交到仓库。优先使用 `api_key_env` 或登录命令。
@@ -482,21 +499,6 @@ access_token_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 ```
 
 Amazon Bedrock 配置 `api_key` 或 `api_key_env` 时使用 bearer credential；否则使用 SigV4，`profile`、`access_key_id`、`secret_access_key`、`session_token` 参与 SigV4 credential 解析，其中 `access_key_id` 和 `secret_access_key` 要成对配置。Google Vertex 配置 `access_token` 或 `access_token_env` 时使用静态 token；不配置 token 时使用 ADC。
-
-### Preset provider
-
-`kind = "preset"` 会按 provider id 加载 provider preset。preset 数据来自 `AGENA_PROVIDER_PRESETS_PATH` 指定的 cache 或 models.dev；代码还内置了一些常见 preset，例如 `ollama`、`lmstudio`、`openrouter`、`deepseek`、`xai`、`groq`、`mistral`。
-
-示例：
-
-```toml
-[providers.ollama]
-kind = "preset"
-default_model = "qwen3:14b"
-
-[providers.openrouter]
-kind = "preset"
-```
 
 ### Model metadata 和 variants
 
@@ -1296,7 +1298,6 @@ none
 - Raw schema、env overlay、merge、validation: `crates/agena/src/config/raw.rs`
 - Resolved schema 和默认值: `crates/agena/src/config/types.rs`
 - CLI override parser: `crates/agena/src/config/overrides.rs`
-- Provider preset: `crates/agena/src/config/provider_presets.rs`
 - Provider registry materialization: `crates/agena/src/config/registry.rs`
 - Auth store: `crates/agena/src/provider/auth/store.rs`
 - Runtime builder/snapshot/reload: `crates/agena/src/runtime/`

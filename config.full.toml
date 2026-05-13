@@ -278,39 +278,41 @@ stream_mode = "sse"
 # display_name = "Deep"
 # thinking = { type = "budget", budget_tokens = 30000 }
 
-# Built-in / models.dev preset examples:
+# Common explicit provider examples:
 #
 # [providers.ollama]
-# kind = "preset"
+# kind = "ollama"
+# base_url = "http://localhost:11434"
 # default_model = "qwen3:14b"
 #
 # [providers.lmstudio]
-# kind = "preset"
+# kind = "openai_compatible"
+# base_url = "http://localhost:1234/v1"
 # default_model = "local-model"
+# api_key = "local"
 #
 # [providers.openrouter]
-# kind = "preset"
-#
-# [providers.deepseek]
-# kind = "preset"
-#
-# [providers.xai]
-# kind = "preset"
-#
-# [providers.groq]
-# kind = "preset"
-#
-# [providers.mistral]
-# kind = "preset"
+# kind = "openai_compatible"
+# base_url = "https://openrouter.ai/api/v1"
+# default_model = "openai/gpt-4o-mini"
+# api_key_env = "OPENROUTER_API_KEY"
 #
 # [providers."github-copilot"]
-# kind = "preset"
+# kind = "copilot"
+# base_url = "https://api.githubcopilot.com"
+# models_url = "https://api.githubcopilot.com/models"
+# default_model = "gpt-4o-mini"
+# auth_provider_id = "github-copilot"
 #
 # [providers."google-vertex"]
-# kind = "preset"
+# kind = "google_vertex"
+# base_url = "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/endpoints/openapi"
+# default_model = "gemini-2.5-pro"
+# access_token_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 
-[providers.codex]
-kind = "codex"
+[providers.openai_chatgpt]
+kind = "openai"
+backend = "chatgpt_codex"
 default_model = "gpt-5.3-codex"
 auth_provider_id = "openai"
 

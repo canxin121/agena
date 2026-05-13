@@ -4,7 +4,7 @@
 
 ## 总览
 
-Agena 的核心是 `crates/agena`。它负责加载配置、构建 runtime snapshot、管理 provider、插件、agent、会话、事件、权限、数据库和工具执行。不同用户界面和传输层都围绕同一个核心 runtime 工作：
+Agena 的核心是 `crates/agena`。它负责加载配置、构建 runtime snapshot、管理 provider、插件、agent、会话、事件、权限、数据库和 entry 执行。不同用户界面和传输层都围绕同一个核心 runtime 工作：
 
 ```text
 CLI / TUI / Studio Web / Desktop / API clients
@@ -28,7 +28,7 @@ CLI / TUI / Studio Web / Desktop / API clients
 - Studio Web 通过 REST 和 session SSE 与 Studio server 通信。
 - TUI 和 CLI 直接使用 `agena` core，不需要 HTTP server。
 - Desktop app 是 Tauri shell，启动并连接 bundled `agena-studio` sidecar。
-- 插件通过 `agena-plugin-host` 接入，既可以贡献工具，也可以通过 hook 影响 prompt、provider、权限、shell env、事件、状态栏等。
+- 插件通过 `agena-plugin-host` 接入，既可以贡献 entries，也可以通过 hook 影响 prompt、provider、权限、shell env、事件、状态栏等。
 
 ## Workspace 结构
 
@@ -115,13 +115,13 @@ Vue 前端。主要通过 `packages/agena-studio-web/src/agena/lib/agenaApi.ts` 
 - `event`: event bus、publisher、store、filter、envelope。
 - `db`: SeaORM entities、migration、CRUD。
 - `provider`: model providers、credential、auth、runtime retry、streaming。
-- `permission`: path/network/tool permission、persisted rule、runtime request/reply。
+- `permission`: path/network/entry permission、persisted rule、runtime request/reply。
 - `agent` / `agents`: first-party agent policy、disk/runtime subagent registry。
-- `entry` / `plugins/bundled`: first-party tools implemented as plugin entries.
+- `entry` / `plugins/bundled`: first-party entries and bundled static plugins.
 - `hooks`: user-configurable shell/HTTP hooks, exposed as a static plugin.
 - `memory`: project instructions and memory plugin.
 - `storage`: database URL/path resolution.
-- `tracing` / `metrics`: logging, DB tracing, process/provider/tool/session counters.
+- `tracing` / `metrics`: logging, DB tracing, process/provider/entry/session counters.
 
 ## Runtime lifecycle
 
@@ -177,8 +177,8 @@ The resolved config builds:
 - auth store.
 - provider registry.
 - plugin host.
-- MCP/LSP registries.
-- web search backend.
+- MCP/LSP static plugin options and runtime registries.
+- web static plugin options.
 - session manager config.
 - agent permission defaults.
 
@@ -191,8 +191,8 @@ The resolved config builds:
 - `SessionStore`: 数据库存储和 history/event projection。
 - `EventPublisher`: 发布 domain events。
 - `EventBus`: live broadcast。
-- `SessionProcessor`: provider 调用、tool call loop、prompt window。
-- `ToolExecutor`: first-party/plugin tool 执行。
+- `SessionProcessor`: provider 调用、entry call loop、prompt window。
+- `ToolExecutor`: first-party/plugin entry 执行。
 - `CompactionWorker`: 上下文压缩。
 - `TurnRegistry`: active turn control/cancel。
 - session cache。
@@ -231,7 +231,7 @@ provider complete/complete_stream
   |
   +--> text deltas/messages
   |
-  +--> tool calls
+  +--> entry calls
          |
          v
       ToolExecutor
@@ -239,7 +239,7 @@ provider complete/complete_stream
          +--> first-party plugin entries
          +--> configured plugins
          +--> permission runtime
-         +--> path/network/tool policies
+         +--> path/network/entry policies
   |
   v
 store history events + publish domain events
@@ -314,7 +314,7 @@ Plugin manifest defines:
 - schema/version/name/authors.
 - supported transports.
 - hook subscriptions.
-- tool entries.
+- entries.
 - execution behavior category.
 - input path/network declarations.
 - tags/search terms.
@@ -323,10 +323,10 @@ Plugin manifest defines:
 
 Core registers first-party static plugins during runtime build, including:
 
-- filesystem tools.
-- shell tools.
-- web tools.
-- workflow tools.
+- filesystem entries.
+- shell entries.
+- web entries.
+- workflow entries.
 - skills filesystem.
 - LSP.
 - cron/scheduler.
@@ -336,8 +336,8 @@ Core registers first-party static plugins during runtime build, including:
 
 Plugin host can invoke hooks for:
 
-- tool before/after/failure.
-- tool invoke and streaming tool invoke.
+- entry before/after/failure.
+- entry invoke and streaming entry invoke.
 - chat message/params/headers/system transform.
 - auth and provider list.
 - permission ask.
@@ -349,7 +349,7 @@ Plugin host can invoke hooks for:
 - pre_turn/post_turn.
 - notification.
 
-Host callbacks allow plugins to ask user input, spawn subagents, list/invoke tools, read config, publish/subscribe events, use scheduler, manage worktrees, access LSP/MCP registries, store plugin data/secrets, register entries/agents/hooks/themes/statusline segments, and more.
+Host callbacks allow plugins to ask user input, spawn subagents, list/invoke entries, read config, publish/subscribe events, use scheduler, manage worktrees, access LSP/MCP registries, store plugin data/secrets, register entries/agents/hooks/themes/statusline segments, and more.
 
 ## Permission architecture
 
@@ -357,7 +357,7 @@ Permission policy has three major surfaces:
 
 - path access: workspace/external defaults and path pattern rules.
 - network access: internet/private/loopback defaults and target rules.
-- tool access: tags, first-party tool names, plugin tool names, tool-specific rules.
+- entry access: tags, entry names, and entry-specific rules.
 
 Static config produces base policy. During runtime:
 
@@ -488,8 +488,8 @@ interval_secs = 30
 Use these extension points depending on what you need:
 
 - New model backend: add provider implementation under `crates/agena/src/provider/` and materialize it in `config/registry.rs`, or provide a plugin provider through `provider.list`.
-- New first-party tool: implement plugin entry under `crates/agena/src/plugins/bundled/` or an `entry` module and register it in plugin host build.
-- External tool/plugin: use `agena-plugin-sdk` and configure `[plugins.list.<id>]`.
+- New first-party entry: implement plugin entry under `crates/agena/src/plugins/bundled/` or an `entry` module and register it in plugin host build.
+- External plugin entry/plugin: use `agena-plugin-sdk` and configure `[plugins.list.<id>]`.
 - New API operation: add type to `crates/agena-api`, map it in `crates/agena-api-server/src/dispatch.rs`, and expose REST route if Studio/Web needs direct HTTP.
 - New Studio UI feature: add API wrapper in `packages/agena-studio-web/src/agena/lib/agenaApi.ts`, then page/state/component code.
 - New config field: add raw type, merge behavior, env/override if needed, resolved type, validation, example config, and `config_examples` test coverage.

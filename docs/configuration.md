@@ -34,7 +34,7 @@ agena config validate
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
 - provider model metadata 和 model variants。
 
-这两个示例文件有解析测试，测试位置为 `crates/agena/tests/config_examples.rs`。修改配置 schema 时应同步更新示例。
+这两个示例文件有解析测试，测试位置为 `crates/agena/tests/config_examples.rs`。
 
 ## 加载路径与优先级
 
@@ -53,11 +53,7 @@ agena config validate
 3. 环境变量 overlay。
 4. CLI 全局 `--set key=value` 覆盖。
 
-配置始终解析为单个生效快照。以下字段和环境变量不属于当前配置模型，会被拒绝：
-
-- 环境变量 `AGENA_MODE`。
-- TOML 顶层字段 `mode`。
-- TOML 顶层字段 `modes`。
+配置始终解析为单个生效快照。
 
 ## 查看与验证配置
 
@@ -84,7 +80,7 @@ agena diagnostics
 
 `agena` 主 CLI 支持全局 `--set key=value`，解析逻辑在 `crates/agena/src/config/overrides.rs`。
 
-支持的通用覆盖：
+通用覆盖：
 
 ```text
 auth.store_path
@@ -101,7 +97,7 @@ runtime.stream_replay.max_retries_after_output
 runtime.stream_replay.max_tracked_events
 ```
 
-支持的 provider 覆盖：
+Provider 覆盖：
 
 ```text
 providers.<id>.default_model
@@ -203,7 +199,7 @@ SESSION_TOKEN
 
 ### 数据库、Studio、TUI
 
-数据库配置不属于 TOML `RawConfig`，由 `StorageConfig` 从 CLI/env 读取：
+数据库路径由 `StorageConfig` 从 CLI/env 读取：
 
 ```text
 AGENA_DATABASE_URL
@@ -266,7 +262,7 @@ database_level = "error"
 - `filter = "info"`
 - `database_level = "error"`
 
-`database_level` 只接受：
+`database_level` 可选：
 
 ```text
 off
@@ -366,7 +362,7 @@ default_model = "claude-sonnet-4-6"
 api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-支持的 `kind`：
+Provider `kind`：
 
 ```text
 preset
@@ -399,7 +395,7 @@ stream_mode = "sse"
 realtime_ws_url = "wss://..."
 ```
 
-OpenAI 的 `api_mode` 可选：
+OpenAI 的 `api_mode`：
 
 ```text
 responses
@@ -407,7 +403,7 @@ chat
 auto
 ```
 
-Stream transport 可选：
+Stream transport：
 
 ```text
 sse
@@ -457,7 +453,7 @@ display_name = "Light"
 thinking = { type = "effort", effort = "low" }
 ```
 
-Model variant 配置写在具体 model id 下。
+每个 model id 可以定义自己的 variants。
 
 ## Agents
 
@@ -638,7 +634,7 @@ include_global = true
 
 ## Hooks
 
-Hooks 用 `agena.hooks` static plugin options 配置，当前支持本地 command 或 HTTP URL：
+Hooks 用 `agena.hooks` static plugin options 配置。每个 hook 可以运行本地 command 或调用 HTTP URL：
 
 ```toml
 [plugins.list."agena.hooks"]
@@ -713,7 +709,7 @@ options = { uppercase = true }
 - `quotas`
 - `trusted_keys`
 
-插件 entry kind：
+Plugin transport kind：
 
 - `static`: 编译期注册的 first-party/static 插件。
 - `cdylib`: 本地动态库。

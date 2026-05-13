@@ -1,11 +1,12 @@
 # Agena
 
-Agena 是一个本地优先的 LLM agent runtime。仓库同时包含命令行、终端 UI、Studio Web/桌面界面、后端 API、插件系统、MCP/LSP 集成、会话存储、权限系统和多 provider 模型运行层。
+Agena 是一个本地优先的 LLM agent runtime。仓库同时包含命令行、终端 UI、Studio Web/桌面界面、后端 API、插件系统、通过 plugin 暴露的 MCP/LSP 能力、会话存储、权限系统和多 provider 模型运行层。
 
 当前文档以代码实现为准，主要入口如下：
 
 - [配置说明](docs/configuration.md): `config.toml`、环境变量、CLI 覆盖、provider、权限、插件和运行时默认值。
 - [架构说明](docs/architecture.md): workspace 布局、核心 crate/app/package 的职责、运行时快照、会话、事件、插件、Studio 与桌面关系。
+- [Plugin 体系](docs/plugin.md): plugin host、static/dynamic plugins、entry registry、MCP bridge、hooks、host callbacks、权限、存储和 marketplace。
 - [后端 API](docs/backend-api.md): Studio 服务、`/api/v1` REST、SSE、WebSocket、app-server JSON-RPC、鉴权和错误格式。
 
 ## 仓库布局
@@ -18,15 +19,15 @@ apps/
   agena-studio-desktop/      # Tauri 桌面封装，启动内置 Studio sidecar
 
 crates/
-  agena/                     # 核心 runtime、配置、会话、权限、provider、事件、数据库、内置工具
+  agena/                     # 核心 runtime、配置、会话、权限、provider、事件、数据库、first-party plugin entries
   agena-api/                 # API wire type，不绑定具体传输
   agena-api-server/          # HTTP/REST、SSE、WebSocket、IPC、JSON-RPC transport
   agena-client/              # Rust client SDK
   agena-plugin-host/         # 插件 host、transport、manifest、状态、日志、quota
   agena-plugin-sdk/          # 插件侧 SDK 和 hook/host API 类型
-  agena-mcp-client/          # MCP client manager
-  agena-lsp/                 # LSP registry/client
-  agena-skills/              # skill 发现和内置 skill
+  agena-mcp-client/          # MCP client manager，供 agena.mcp plugin bridge 使用
+  agena-lsp/                 # LSP registry/client，供 agena.lsp plugin 使用
+  agena-skills/              # skill 发现，供 agena.skills_fs plugin 使用
 
 packages/
   agena-studio-web/          # Vue Studio 前端

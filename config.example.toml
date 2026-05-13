@@ -2,7 +2,7 @@
 # runtime against a single provider.
 #
 # For the full feature surface (hooks, telemetry, plugin registries,
-# permission rules, MCP servers, web search backends, …) see
+# permission rules, MCP plugin options, web search backends, ...) see
 # `config.full.toml` in the repo root.
 
 [tracing]
@@ -38,14 +38,14 @@ api_key_env = "ANTHROPIC_API_KEY"
 # api_key_env = "GEMINI_API_KEY"
 
 [runtime]
-# Agena now defaults to the built-in `build` agent. Set `default_agent`
-# explicitly when you want a different primary persona for new root sessions.
+# Set `default_agent` explicitly when you want a different primary persona for
+# new root sessions.
 default_agent = "build"
 
 [agents.plan]
 description = "Read-only planning agent"
 prompt = "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable."
-allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
+allowed_entries = ["read", "view_file", "glob", "grep", "bash", "todo_write", "enter_plan_mode", "exit_plan_mode"]
 mode = "all"
 
 [permission.path]
@@ -60,7 +60,7 @@ loopback = "deny"
 [permission.network.rules]
 "github.com:443" = "allow"
 
-[permission.tools.tags]
+[permission.entries.tags]
 filesystem_read = "allow"
 filesystem_write = "ask"
 network = "ask"
@@ -72,7 +72,7 @@ shell = "ask"
 workspace = { read = "allow", write = "deny" }
 external = { read = "ask", write = "ask" }
 
-[agents.plan.permission.tools.first_party]
+[agents.plan.permission.entries.names]
 enter_plan_mode = "allow"
 exit_plan_mode = "allow"
 todo_write = "allow"

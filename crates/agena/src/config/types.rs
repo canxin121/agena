@@ -66,12 +66,16 @@ pub struct ResolvedConfig {
     pub agents: BTreeMap<String, AgentConfig>,
     pub plugins: PluginConfig,
     pub plugin_storage: PluginStorageConfig,
+    #[serde(skip_serializing)]
     pub memory: MemoryConfig,
+    #[serde(skip_serializing)]
     pub mcp: McpConfig,
+    #[serde(skip_serializing)]
     pub lsp: LspConfig,
+    #[serde(skip_serializing)]
     pub web: WebToolsConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
-    #[serde(default, skip_serializing_if = "crate::hooks::HooksConfig::is_empty")]
+    #[serde(skip_serializing)]
     pub hooks: crate::hooks::HooksConfig,
 }
 
@@ -261,6 +265,7 @@ pub struct SessionCacheConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
@@ -278,7 +283,11 @@ pub struct AgentConfig {
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<usize>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "allowed_entries",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_tools: Vec<String>,
     #[serde(
         default,

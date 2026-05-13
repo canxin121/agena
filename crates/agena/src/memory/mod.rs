@@ -5,7 +5,7 @@ pub(crate) mod prompt;
 pub mod store;
 
 pub use paths::MemoryDir;
-pub use plugin::MemoryPlugin;
+pub use plugin::{MEMORY_PLUGIN_ID, MemoryPlugin};
 pub use project_instructions::{
     ProjectInstructionLayer, discover, discover_global, render_section,
 };
@@ -14,4 +14,8 @@ pub use store::{MemoryEntry, MemoryError, MemoryFrontmatter, MemoryStore, Memory
 
 pub fn new_memory_plugin(config: crate::config::MemoryConfig) -> impl crate::plugin::sdk::Plugin {
     MemoryPlugin::new(config)
+}
+
+pub fn memory_plugin_id() -> &'static str {
+    MEMORY_PLUGIN_ID
 }

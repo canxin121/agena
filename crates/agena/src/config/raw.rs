@@ -71,6 +71,13 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
     if table.contains_key("modes") {
         return Err(ConfigError::UnsupportedModeConfig { field: "modes" });
     }
+    for field in ["memory", "mcp", "lsp", "web", "hooks"] {
+        if table.contains_key(field) {
+            return Err(ConfigError::Validation(format!(
+                "`{field}` must be configured as first-party plugin options under `[plugins.list.\"agena.{field}\".options]`"
+            )));
+        }
+    }
     if let Some(providers) = table.get("providers").and_then(Value::as_table) {
         for (provider_id, provider) in providers {
             let Some(provider) = provider.as_table() else {
@@ -358,10 +365,13 @@ impl RawConfig {
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
         let permission = self.permission.unwrap_or_default();
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
-        let memory: MemoryConfig = self.memory.unwrap_or_default();
-        let mcp: McpConfig = self.mcp.unwrap_or_default();
-        let lsp: crate::config::types::LspConfig = self.lsp.unwrap_or_default();
-        let web: WebToolsConfig = self.web.unwrap_or_default();
+        let plugin_options = PluginRuntimeOptions::from_plugins(&plugins)?;
+        let memory: MemoryConfig = plugin_options.memory.or(self.memory).unwrap_or_default();
+        let mcp: McpConfig = plugin_options.mcp.or(self.mcp).unwrap_or_default();
+        let lsp: crate::config::types::LspConfig =
+            plugin_options.lsp.or(self.lsp).unwrap_or_default();
+        let web: WebToolsConfig = plugin_options.web.or(self.web).unwrap_or_default();
+        let hooks = plugin_options.hooks.unwrap_or(self.hooks);
 
         let providers = self
             .providers
@@ -393,9 +403,90 @@ impl RawConfig {
             lsp,
             web,
             providers,
-            hooks: crate::hooks::HooksConfig::new(self.hooks),
+            hooks: crate::hooks::HooksConfig::new(hooks),
         })
     }
+}
+
+#[derive(Debug, Default)]
+struct PluginRuntimeOptions {
+    memory: Option<MemoryConfig>,
+    hooks: Option<Vec<crate::hooks::HookEntry>>,
+    mcp: Option<McpConfig>,
+    lsp: Option<crate::config::types::LspConfig>,
+    web: Option<WebToolsConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct HooksPluginOptions {
+    hooks: Vec<crate::hooks::HookEntry>,
+}
+
+impl Default for HooksPluginOptions {
+    fn default() -> Self {
+        Self { hooks: Vec::new() }
+    }
+}
+
+impl PluginRuntimeOptions {
+    fn from_plugins(plugins: &PluginConfig) -> Result<Self, ConfigError> {
+        let mut out = Self::default();
+        for (plugin_id, entry) in &plugins.list {
+            if matches!(
+                plugin_id.as_str(),
+                "agena.memory" | "agena.hooks" | "agena.mcp" | "agena.lsp" | "agena.web"
+            ) {
+                ensure_first_party_static_plugin(plugin_id, entry)?;
+            }
+            let options = entry.options();
+            if options.is_null() {
+                continue;
+            }
+            match plugin_id.as_str() {
+                "agena.memory" => {
+                    out.memory = Some(parse_plugin_options(plugin_id, options.clone())?);
+                }
+                "agena.hooks" => {
+                    let parsed: HooksPluginOptions =
+                        parse_plugin_options(plugin_id, options.clone())?;
+                    out.hooks = Some(parsed.hooks);
+                }
+                "agena.mcp" => {
+                    out.mcp = Some(parse_plugin_options(plugin_id, options.clone())?);
+                }
+                "agena.lsp" => {
+                    out.lsp = Some(parse_plugin_options(plugin_id, options.clone())?);
+                }
+                "agena.web" => {
+                    out.web = Some(parse_plugin_options(plugin_id, options.clone())?);
+                }
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn ensure_first_party_static_plugin(
+    plugin_id: &str,
+    entry: &agena_plugin_host::PluginEntry,
+) -> Result<(), ConfigError> {
+    if matches!(entry, agena_plugin_host::PluginEntry::Static { .. }) {
+        Ok(())
+    } else {
+        Err(ConfigError::Validation(format!(
+            "plugins.list.{plugin_id} is registered by the runtime and must use `kind = \"static\"`"
+        )))
+    }
+}
+
+fn parse_plugin_options<T>(plugin_id: &str, value: serde_json::Value) -> Result<T, ConfigError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(value)
+        .map_err(|err| ConfigError::Validation(format!("plugins.list.{plugin_id}.options: {err}")))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

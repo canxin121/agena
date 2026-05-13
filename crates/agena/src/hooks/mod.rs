@@ -1,9 +1,9 @@
 //! Config-driven shell hook plugin.
 //!
 //! Lets users wire shell commands to plugin hook events via `agena.toml`
-//! without authoring a Rust plugin — the shape Claude Code's `settings.json`
-//! hooks expose. Each `[[hooks]]` entry pairs an `event` name with a `command`
-//! to run; an optional `match.tool` glob narrows the scope for tool hooks.
+//! without authoring a Rust plugin. Each `agena.hooks` plugin option entry
+//! pairs an `event` name with a `command` to run; an optional `match.tool`
+//! glob narrows the scope for tool hooks.
 //!
 //! Supported events (see `HookEvent`): `user_prompt_submit`, `pre_tool_use`,
 //! `post_tool_use`, `post_tool_use_failure`, `stop`, `session_start`,
@@ -34,7 +34,7 @@ use crate::plugin::sdk::{
     UserPromptSubmitPatch,
 };
 
-const SHELL_HOOK_PLUGIN_ID: &str = "agena-shell-hooks";
+const SHELL_HOOK_PLUGIN_ID: &str = "agena.hooks";
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -65,8 +65,8 @@ pub struct HookMatcher {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookEntry {
     pub event: HookEvent,
-    /// Shell command (the legacy / default form). Mutually exclusive with
-    /// `url`; if both are set, `url` wins and a warning is logged.
+    /// Shell command. Mutually exclusive with `url`; if both are set, `url`
+    /// wins and a warning is logged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// HTTP endpoint. When set, the hook POSTs the input as JSON to this

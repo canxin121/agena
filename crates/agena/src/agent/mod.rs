@@ -65,7 +65,11 @@ pub struct PermissionConfig {
     pub path: PathPermissionConfig,
     #[serde(default, skip_serializing_if = "NetworkPermissionConfig::is_empty")]
     pub network: NetworkPermissionConfig,
-    #[serde(default, skip_serializing_if = "ToolPermissionConfig::is_empty")]
+    #[serde(
+        default,
+        rename = "entries",
+        skip_serializing_if = "ToolPermissionConfig::is_empty"
+    )]
     pub tools: ToolPermissionConfig,
 }
 
@@ -112,7 +116,7 @@ pub struct AgentPermissionConfig {
     pub path: Option<PathPermissionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<NetworkPermissionConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "entries", skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolPermissionConfig>,
 }
 
@@ -235,9 +239,9 @@ pub struct PermissionInheritanceSections {
     pub path: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "entries", skip_serializing_if = "Option::is_none")]
     pub tools: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip)]
     pub plugin_tools: Option<bool>,
 }
 
@@ -447,9 +451,9 @@ impl NetworkPermissionConfig {
 pub struct ToolPermissionConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tags: BTreeMap<String, PermissionMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, rename = "names", skip_serializing_if = "BTreeMap::is_empty")]
     pub first_party: BTreeMap<String, PermissionMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, skip)]
     pub plugin: BTreeMap<String, PermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rules: BTreeMap<String, ToolPermissionRules>,

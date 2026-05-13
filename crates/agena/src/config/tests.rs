@@ -253,13 +253,24 @@ default_model = "gpt-5"
         .get("api")
         .expect("api provider should exist");
 
-    match &provider.definition {
-        ProviderDefinition::OpenAi(config) => {
+    assert_eq!(provider.default_model, "gpt-5");
+    match &provider.auth {
+        ProviderAuthConfig::Secret(secret) => {
+            assert_eq!(secret.credential_provider_id.as_deref(), Some("api"));
+        }
+        other => panic!("expected secret auth, got {other:?}"),
+    }
+    match provider
+        .adapters
+        .get("default")
+        .expect("default adapter should exist")
+        .definition
+    {
+        ProviderAdapterDefinition::OpenAi(ref config) => {
             assert_eq!(config.base_url, "https://api.openai.com/v1");
             assert_eq!(config.options.backend, OpenAiBackendConfig::Api);
-            assert_eq!(config.options.auth_provider_id, "api");
         }
-        other => panic!("expected openai provider, got {other:?}"),
+        ref other => panic!("expected openai adapter, got {other:?}"),
     }
 }
 
@@ -288,15 +299,26 @@ default_model = "gpt-5.3-codex"
         .get("chatgpt")
         .expect("chatgpt provider should exist");
 
-    match &provider.definition {
-        ProviderDefinition::OpenAi(config) => {
+    assert_eq!(provider.default_model, "gpt-5.3-codex");
+    match &provider.auth {
+        ProviderAuthConfig::Secret(secret) => {
+            assert_eq!(secret.credential_provider_id.as_deref(), Some("openai"));
+        }
+        other => panic!("expected secret auth, got {other:?}"),
+    }
+    match provider
+        .adapters
+        .get("default")
+        .expect("default adapter should exist")
+        .definition
+    {
+        ProviderAdapterDefinition::OpenAi(ref config) => {
             assert_eq!(config.base_url, "https://chatgpt.com/backend-api/codex");
             assert_eq!(config.options.backend, OpenAiBackendConfig::ChatgptCodex);
-            assert_eq!(config.options.auth_provider_id, "openai");
             assert_eq!(config.options.api_mode, OpenAiApiModeConfig::Responses);
             assert_eq!(config.options.stream_mode, StreamTransportMode::Sse);
         }
-        other => panic!("expected openai provider, got {other:?}"),
+        ref other => panic!("expected openai adapter, got {other:?}"),
     }
 }
 
@@ -347,6 +369,107 @@ api_mode = "chat"
     assert!(matches!(
         err,
         ConfigError::InvalidProviderConfig { provider_id, .. } if provider_id == "chatgpt"
+    ));
+}
+
+#[test]
+fn multi_adapter_provider_loads_shared_auth_and_routes_models() {
+    let path = write_temp_config(
+        r#"
+[providers.shared]
+default_model = "fast"
+
+[providers.shared.auth]
+credential_provider_id = "openai"
+
+[providers.shared.adapters.api]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1"
+
+[providers.shared.adapters.api.models.fast]
+target_model = "gpt-4.1-mini"
+
+[providers.shared.adapters.codex]
+kind = "openai"
+backend = "chatgpt_codex"
+default_model = "gpt-5-codex"
+
+[providers.shared.adapters.codex.models.coder]
+target_model = "gpt-5-codex"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("shared")
+        .expect("shared provider should exist");
+
+    assert_eq!(provider.default_model, "fast");
+    match &provider.auth {
+        ProviderAuthConfig::Secret(secret) => {
+            assert_eq!(secret.credential_provider_id.as_deref(), Some("openai"));
+        }
+        other => panic!("expected shared secret auth, got {other:?}"),
+    }
+    assert_eq!(provider.adapters.len(), 2);
+    assert_eq!(
+        provider.models.get("fast").map(|model| model.adapter.as_str()),
+        Some("api")
+    );
+    assert_eq!(
+        provider.models.get("fast").map(|model| model.target_model.as_str()),
+        Some("gpt-4.1-mini")
+    );
+    assert_eq!(
+        provider.models.get("coder").map(|model| model.adapter.as_str()),
+        Some("codex")
+    );
+}
+
+#[test]
+fn multi_adapter_provider_requires_explicit_models() {
+    let path = write_temp_config(
+        r#"
+[providers.shared]
+default_model = "fast"
+
+[providers.shared.adapters.api]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1"
+
+[providers.shared.adapters.codex]
+kind = "openai"
+backend = "chatgpt_codex"
+default_model = "gpt-5-codex"
+
+[providers.shared.adapters.codex.models.coder]
+target_model = "gpt-5-codex"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("multi-adapter provider should require explicit models per adapter");
+
+    assert!(matches!(
+        err,
+        ConfigError::InvalidProviderConfig { provider_id, message }
+            if provider_id == "shared" && message.contains("multi-adapter provider requires explicit models")
     ));
 }
 
@@ -828,7 +951,7 @@ input = { unsupported = ["image"] }
         .get("gpt-4.1-mini")
         .expect("configured model should exist");
     assert_eq!(
-        model.capabilities.image_input,
+        model.definition.capabilities.image_input,
         Some(crate::provider::CapabilitySupport::Unsupported)
     );
 }
@@ -855,7 +978,7 @@ default_model = "gpt-4.1-mini"
         .expect_err("invalid override should fail validation");
 
     assert!(
-        matches!(err, ConfigError::Validation(message) if message.contains("model `gpt-4.1-mini` must set at least one field"))
+        matches!(err, ConfigError::Validation(message) if message.contains("model `gpt-4.1-mini` must set at least one field or target_model"))
     );
 }
 

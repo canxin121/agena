@@ -330,21 +330,93 @@ impl Default for ProjectInstructionsConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderConfig {
     pub enabled: bool,
+    pub default_model: String,
+    pub auth: ProviderAuthConfig,
+    pub adapters: BTreeMap<String, ResolvedProviderAdapterConfig>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub models: BTreeMap<String, ConfiguredModelDefinition>,
+    pub models: BTreeMap<String, ResolvedProviderModelConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum ProviderAuthConfig {
+    None,
+    Secret(ProviderSecretAuthConfig),
+    BedrockSigv4(BedrockSigv4AuthConfig),
+    GoogleAdc,
+    SapAiCore(ProviderSapAiCoreAuthConfig),
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Default)]
+pub struct ProviderSecretAuthConfig {
+    pub secret: Option<String>,
+    pub secret_env: Option<String>,
+    pub credential_provider_id: Option<String>,
+}
+
+impl fmt::Debug for ProviderSecretAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderSecretAuthConfig")
+            .field("secret", &redacted(self.secret.as_deref()))
+            .field("secret_env", &self.secret_env)
+            .field("credential_provider_id", &self.credential_provider_id)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct BedrockSigv4AuthConfig {
+    pub profile: Option<String>,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    pub session_token: Option<String>,
+}
+
+impl fmt::Debug for BedrockSigv4AuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BedrockSigv4AuthConfig")
+            .field("profile", &self.profile)
+            .field("access_key_id", &redacted(self.access_key_id.as_deref()))
+            .field(
+                "secret_access_key",
+                &redacted(self.secret_access_key.as_deref()),
+            )
+            .field("session_token", &redacted(self.session_token.as_deref()))
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderSapAiCoreAuthConfig {
+    pub secret: ProviderSecretAuthConfig,
+    pub service_key_env: String,
+}
+
+impl fmt::Debug for ProviderSapAiCoreAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderSapAiCoreAuthConfig")
+            .field("secret", &self.secret)
+            .field("service_key_env", &self.service_key_env)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResolvedProviderAdapterConfig {
+    pub default_model: String,
     #[serde(flatten)]
-    pub definition: ProviderDefinition,
+    pub definition: ProviderAdapterDefinition,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ProviderDefinition {
+pub enum ProviderAdapterDefinition {
     Ollama(OllamaProviderOptions),
-    OpenAi(HttpProviderConfig<OpenAiProviderOptions>),
-    OpenAiCompatible(HttpProviderConfig<OpenAiCompatibleProviderOptions>),
-    SapAiCore(HttpProviderConfig<OpenAiCompatibleProviderOptions>),
-    Anthropic(HttpProviderConfig<AnthropicProviderOptions>),
-    Gemini(HttpProviderConfig<SimpleHttpProviderOptions>),
+    OpenAi(HttpProviderAdapterConfig<OpenAiProviderOptions>),
+    OpenAiCompatible(HttpProviderAdapterConfig<OpenAiCompatibleProviderOptions>),
+    SapAiCore(HttpProviderAdapterConfig<OpenAiCompatibleProviderOptions>),
+    Anthropic(HttpProviderAdapterConfig<AnthropicProviderOptions>),
+    Gemini(HttpProviderAdapterConfig<SimpleHttpProviderOptions>),
     Gitlab(GitlabProviderOptions),
     Copilot(CopilotProviderOptions),
     AmazonBedrock(AmazonBedrockProviderOptions),
@@ -353,28 +425,29 @@ pub enum ProviderDefinition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResolvedProviderModelConfig {
+    pub adapter: String,
+    pub target_model: String,
+    #[serde(flatten)]
+    pub definition: ConfiguredModelDefinition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OllamaProviderOptions {
     pub base_url: String,
-    pub default_model: String,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
-pub struct HttpProviderConfig<T> {
+pub struct HttpProviderAdapterConfig<T> {
     pub base_url: String,
-    pub default_model: String,
-    pub api_key: Option<String>,
-    pub api_key_env: Option<String>,
     pub extra_headers: BTreeMap<String, String>,
     pub options: T,
 }
 
-impl<T: fmt::Debug> fmt::Debug for HttpProviderConfig<T> {
+impl<T: fmt::Debug> fmt::Debug for HttpProviderAdapterConfig<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HttpProviderConfig")
+        f.debug_struct("HttpProviderAdapterConfig")
             .field("base_url", &self.base_url)
-            .field("default_model", &self.default_model)
-            .field("api_key", &redacted(self.api_key.as_deref()))
-            .field("api_key_env", &self.api_key_env)
             .field("extra_headers", &self.extra_headers)
             .field("options", &self.options)
             .finish()
@@ -391,7 +464,6 @@ fn redacted(value: Option<&str>) -> &'static str {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OpenAiProviderOptions {
     pub backend: OpenAiBackendConfig,
-    pub auth_provider_id: String,
     pub api_mode: OpenAiApiModeConfig,
     pub stream_mode: StreamTransportMode,
     pub realtime_ws_url: Option<String>,
@@ -418,10 +490,6 @@ pub struct SimpleHttpProviderOptions;
 pub struct GitlabProviderOptions {
     pub instance_url: String,
     pub ai_gateway_url: String,
-    pub default_model: String,
-    pub auth_provider_id: String,
-    pub api_key: Option<String>,
-    pub api_key_env: Option<String>,
     pub ai_gateway_headers: BTreeMap<String, String>,
     pub feature_flags: BTreeMap<String, bool>,
 }
@@ -431,10 +499,6 @@ impl fmt::Debug for GitlabProviderOptions {
         f.debug_struct("GitlabProviderOptions")
             .field("instance_url", &self.instance_url)
             .field("ai_gateway_url", &self.ai_gateway_url)
-            .field("default_model", &self.default_model)
-            .field("auth_provider_id", &self.auth_provider_id)
-            .field("api_key", &redacted(self.api_key.as_deref()))
-            .field("api_key_env", &self.api_key_env)
             .field("ai_gateway_headers", &self.ai_gateway_headers)
             .field("feature_flags", &self.feature_flags)
             .finish()
@@ -443,94 +507,30 @@ impl fmt::Debug for GitlabProviderOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CopilotProviderOptions {
-    pub default_model: String,
     pub base_url: String,
     pub models_url: Option<String>,
-    pub auth_provider_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AmazonBedrockProviderOptions {
     pub base_url: String,
-    pub default_model: String,
     pub region: String,
-    pub auth: BedrockAuthConfig,
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-pub enum BedrockAuthConfig {
-    Bearer {
-        api_key: Option<String>,
-        api_key_env: Option<String>,
-    },
-    Sigv4 {
-        profile: Option<String>,
-        access_key_id: Option<String>,
-        secret_access_key: Option<String>,
-        session_token: Option<String>,
-    },
-}
-
-impl fmt::Debug for BedrockAuthConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Bearer {
-                api_key,
-                api_key_env,
-            } => f
-                .debug_struct("Bearer")
-                .field("api_key", &redacted(api_key.as_deref()))
-                .field("api_key_env", api_key_env)
-                .finish(),
-            Self::Sigv4 {
-                profile,
-                access_key_id,
-                secret_access_key,
-                session_token,
-            } => f
-                .debug_struct("Sigv4")
-                .field("profile", profile)
-                .field("access_key_id", &redacted(access_key_id.as_deref()))
-                .field("secret_access_key", &redacted(secret_access_key.as_deref()))
-                .field("session_token", &redacted(session_token.as_deref()))
-                .finish(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GoogleVertexProviderOptions {
     pub base_url: String,
-    pub default_model: String,
-    pub auth: GoogleVertexAuthConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-pub enum GoogleVertexAuthConfig {
-    StaticToken {
-        access_token: Option<String>,
-        access_token_env: Option<String>,
-    },
-    Adc,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct CloudflareAiGatewayProviderOptions {
     pub base_url: String,
-    pub default_model: String,
-    pub api_key: Option<String>,
-    pub api_key_env: Option<String>,
 }
 
 impl fmt::Debug for CloudflareAiGatewayProviderOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CloudflareAiGatewayProviderOptions")
             .field("base_url", &self.base_url)
-            .field("default_model", &self.default_model)
-            .field("api_key", &redacted(self.api_key.as_deref()))
-            .field("api_key_env", &self.api_key_env)
             .finish()
     }
 }

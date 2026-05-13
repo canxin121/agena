@@ -592,7 +592,7 @@ deprecated
 `thinking` 写法：
 
 ```toml
-thinking = { type = "enabled", budget_tokens = 4096 }
+thinking = { type = "budget", budget_tokens = 4096 }
 thinking = { type = "effort", effort = "medium" }
 thinking = { type = "disabled" }
 ```

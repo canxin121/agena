@@ -1262,10 +1262,10 @@ default_model = "gpt-5.4"
 api_key = "dummy"
 
 [providers.openai.models."gpt-5.4".variants.light]
-thinking = { type = "enabled", budget_tokens = 3000 }
+thinking = { type = "budget", budget_tokens = 3000 }
 
 [providers.openai.models."gpt-5.4".variants.deep]
-thinking = { type = "enabled", budget_tokens = 30000 }
+thinking = { type = "budget", budget_tokens = 30000 }
 "#,
             "model-variant",
         )
@@ -1288,7 +1288,7 @@ thinking = { type = "enabled", budget_tokens = 30000 }
         assert_eq!(core.variant.as_deref(), Some("deep"));
         assert_eq!(
             core.thinking,
-            Some(agena::provider::ThinkingRequest::Enabled {
+            Some(agena::provider::ThinkingRequest::Budget {
                 budget_tokens: 30000
             })
         );
@@ -1305,7 +1305,7 @@ default_model = "gpt-5.4"
 api_key = "dummy"
 
 [providers.openai.models."gpt-5.4".variants.light]
-thinking = { type = "enabled", budget_tokens = 3000 }
+thinking = { type = "budget", budget_tokens = 3000 }
 "#,
             "unknown-model-variant",
         )

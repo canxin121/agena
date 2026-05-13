@@ -461,7 +461,7 @@ impl ConfiguredModelVariant {
             && !self.disabled
     }
 
-    fn apply_to_variant(&self, base: Option<&ModelVariant>) -> Option<ModelVariant> {
+    pub(crate) fn apply_to_variant(&self, base: Option<&ModelVariant>) -> Option<ModelVariant> {
         if self.disabled {
             return None;
         }
@@ -531,7 +531,7 @@ impl ConfiguredModelDefinition {
         metadata
     }
 
-    fn apply_to_model(
+    pub(crate) fn apply_to_model(
         &self,
         mut model: Model,
         capability_fallback: &ModelCapabilities,

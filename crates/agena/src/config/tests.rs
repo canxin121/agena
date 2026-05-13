@@ -1231,9 +1231,7 @@ loopback = "deny"
 "github.com:443" = "allow"
 
 [permission.tools.tags]
-read_only = "allow"
 network = "ask"
-mutating = "ask"
 
 [permission.tools.first_party]
 bash = "ask"

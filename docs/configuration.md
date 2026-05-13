@@ -517,11 +517,9 @@ private = "deny"
 loopback = "deny"
 
 [permission.tools.tags]
-read_only = "allow"
 filesystem_read = "allow"
 filesystem_write = "ask"
 network = "ask"
-mutating = "ask"
 shell = "ask"
 ```
 
@@ -571,7 +569,6 @@ ask
 deny
 none
 read
-read_only
 ro
 write
 write_only
@@ -611,7 +608,6 @@ loopback = "deny"
 
 ```toml
 [permission.tools.tags]
-read_only = "allow"
 filesystem_read = "allow"
 filesystem_write = "ask"
 network = "ask"

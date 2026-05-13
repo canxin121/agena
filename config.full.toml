@@ -68,12 +68,10 @@ loopback = "deny"
 "10.0.0.0/8:*" = "deny"
 
 [permission.tools.tags]
-read_only = "allow"
 filesystem_read = "allow"
 filesystem_write = "ask"
 network = "ask"
 internet = "ask"
-mutating = "ask"
 task = "ask"
 shell = "ask"
 

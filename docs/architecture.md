@@ -315,7 +315,7 @@ Plugin manifest defines:
 - supported transports.
 - hook subscriptions.
 - tool entries.
-- entry behavior (`read_only`、`mutating`、`task`)。
+- execution behavior category.
 - input path/network declarations.
 - tags/search terms.
 - host capabilities.

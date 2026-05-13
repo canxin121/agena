@@ -21,16 +21,16 @@ agena config validate
 - `[providers.<id>]`: 至少配置一个模型 provider。
 - `[runtime]`: 默认 agent。
 - `[agents.<name>]`: 自定义 agent。
-- `[permission]`: 路径、网络、工具权限。
+- `[permission]`: 路径、网络、entry 权限。
 
 `config.full.toml` 展示了更完整的功能面：
 
 - telemetry。
 - provider HTTP timeout、retry、stream replay。
 - runtime reload、janitor、session cache。
-- permission path/network/tool rules。
-- memory project instructions。
-- shell/HTTP hooks。
+- permission path/network/entry rules。
+- `agena.memory` project instructions。
+- `agena.hooks` shell/HTTP hooks。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
 - provider model metadata 和 model variants。
 
@@ -127,10 +127,9 @@ agena \
 - 顶层可选 struct 通常按字段合并。
 - map 通常按 key 合并。
 - provider config 按字段合并，`extra_headers`、`ai_gateway_headers`、`feature_flags`、`models` 会按 key 扩展或覆盖。
-- MCP/LSP server map 按 server 名称合并。
-- `web` config 是小结构，overlay 会整体替换。
-- `hooks` 在 overlay 中非空时会替换上一层 hook 列表。
 - `plugins` 的 `enabled` 和 `timeouts` 会被 overlay 替换；非空 plugin list 会替换嵌套 plugin entries。
+- MCP、LSP、web、memory 和 hooks 都作为 first-party static plugin 的 `options` 解析。
+- static plugin options 的合并语义跟随对应 plugin 的配置结构，例如 server map 按名称合并，web options 整体替换。
 
 这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
 
@@ -158,7 +157,7 @@ AGENA_PROVIDER_STREAM_REPLAY_MAX_RETRIES
 AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS
 ```
 
-`AGENA_PLUGIN_PATHS` 不再支持。插件需要通过 `[plugins.list.<id>]` 显式配置。
+插件通过 `[plugins.list.<id>]` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
 
 ### Provider-specific overlay
 
@@ -458,7 +457,7 @@ display_name = "Light"
 thinking = { type = "effort", effort = "low" }
 ```
 
-Provider-level `variants` 已不支持，会被配置加载器拒绝。
+Model variant 配置写在具体 model id 下。
 
 ## Agents
 
@@ -470,7 +469,7 @@ TOML 示例：
 [agents.plan]
 description = "Read-only planning agent"
 prompt = "You are a planning agent..."
-allowed_tools = ["read", "view_file", "glob", "grep", "bash", "todo_write"]
+allowed_entries = ["read", "view_file", "glob", "grep", "bash", "todo_write"]
 mode = "all"
 model = "anthropic/claude-sonnet-4-6"
 aliases = ["planner"]
@@ -486,13 +485,13 @@ aliases = ["planner"]
 - `temperature`
 - `max_output_tokens`
 - `steps`
-- `allowed_tools`
+- `allowed_entries`
 - `permission`
 - `model`
 - `aliases`
 - `disabled`
 
-`allowed_tools` 会收窄 agent 能调用的工具集合，同时保留已有 bash pattern 规则。
+`allowed_entries` 会收窄 agent 能调用的 entries 集合，同时保留已有 bash pattern 规则。
 
 ## Permissions
 
@@ -516,7 +515,7 @@ internet = "ask"
 private = "deny"
 loopback = "deny"
 
-[permission.tools.tags]
+[permission.entries.tags]
 filesystem_read = "allow"
 filesystem_write = "ask"
 network = "ask"
@@ -530,7 +529,7 @@ Agent 也可以有自己的权限：
 workspace = { read = "allow", write = "deny" }
 external = { read = "ask", write = "ask" }
 
-[agents.plan.permission.tools.first_party]
+[agents.plan.permission.entries.names]
 enter_plan_mode = "allow"
 exit_plan_mode = "allow"
 todo_write = "allow"
@@ -542,8 +541,7 @@ Agent permission 默认继承顶层 permission。可用 `inherit` 控制：
 [agents.plan.permission.inherit]
 path = true
 network = true
-tools = true
-plugin_tools = true
+entries = true
 ```
 
 也可以写成 `inherit = false` 完全不继承。
@@ -604,50 +602,54 @@ loopback = "deny"
 
 规则可以匹配 host、通配 host、CIDR 和端口。后写规则优先。
 
-### Tool permission
+### Entry permission
 
 ```toml
-[permission.tools.tags]
+[permission.entries.tags]
 filesystem_read = "allow"
 filesystem_write = "ask"
 network = "ask"
 
-[permission.tools.first_party]
+[permission.entries.names]
 bash = "ask"
 apply_patch = "ask"
+"my-plugin.echo" = "ask"
 
-[permission.tools.plugin]
-"my-plugin.tool" = "ask"
-
-[permission.tools.rules.bash]
+[permission.entries.rules.bash]
 "git status" = "allow"
 "git push *" = "deny"
 "*" = "ask"
 ```
 
-`tags` 用于工具没有精确规则时的默认策略。`first_party` 和 `plugin` 都是按工具名匹配。`rules.bash` 支持命令 pattern 覆盖。
+`tags` 用于 entry 没有精确规则时的默认策略。`names` 按 entry 名匹配；first-party static plugin entries 和外部 plugin entries 使用同一个名字表。`rules.bash` 支持命令 pattern 覆盖。
 
 ## Memory
 
 ```toml
-[memory.project_instructions]
+[plugins.list."agena.memory"]
+kind = "static"
+
+[plugins.list."agena.memory".options.project_instructions]
 enabled = true
 include_global = true
 ```
 
-默认两项都为 true。该配置会影响项目指令/记忆是否进入上下文。
+默认两项都为 true。该配置会影响项目指令/记忆是否进入上下文。Memory 配置属于 `agena.memory` static plugin options。
 
 ## Hooks
 
-Hooks 用 `[[hooks]]` 配置，当前支持本地 command 或 HTTP URL：
+Hooks 用 `agena.hooks` static plugin options 配置，当前支持本地 command 或 HTTP URL：
 
 ```toml
-[[hooks]]
+[plugins.list."agena.hooks"]
+kind = "static"
+
+[[plugins.list."agena.hooks".options.hooks]]
 event = "user_prompt_submit"
 command = "python3 .agena/hooks/enrich_prompt.py"
 timeout_ms = 3000
 
-[[hooks]]
+[[plugins.list."agena.hooks".options.hooks]]
 event = "post_tool_use"
 url = "http://127.0.0.1:8080/agena-hook"
 timeout_ms = 2000
@@ -685,6 +687,8 @@ AGENA_CWD
 如果同一个 hook 同时配置 `url` 和 `command`，实现会优先走 HTTP URL。
 
 ## Plugins
+
+Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力、LSP、skills、memory、hooks 等都会通过 plugin 或 plugin entry 接入 runtime。完整体系说明见 [Plugin 体系](plugin.md)。
 
 ```toml
 [plugins]
@@ -742,18 +746,22 @@ auth = { kind = "bearer", token_env = "PLUGIN_TOKEN" }
 auth = { kind = "basic", username = "user", password_env = "PLUGIN_PASSWORD" }
 ```
 
-First-party static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、hooks、MCP 等。
+First-party static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、hooks、MCP 等。它们和外部 plugin 一样进入 plugin host 与 entry registry。
 
-插件存储目前没有 TOML `[plugins.storage]` 配置。默认目录是 `~/.agena/plugin-storage`，只能通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
+插件存储默认目录是 `~/.agena/plugin-storage`，可通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
 
 ## MCP
 
-MCP server 配置在 `[mcp.servers.<name>]`。
+MCP server 配置在 `agena.mcp` static plugin options。
+Runtime 会把配置后的 MCP servers 通过 `agena.mcp` static plugin 暴露成 plugin entries，并统一进入 plugin host 和 entry registry。
 
 Stdio:
 
 ```toml
-[mcp.servers.filesystem]
+[plugins.list."agena.mcp"]
+kind = "static"
+
+[plugins.list."agena.mcp".options.servers.filesystem]
 transport = "stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
@@ -764,7 +772,7 @@ cwd = "."
 HTTP:
 
 ```toml
-[mcp.servers.remote]
+[plugins.list."agena.mcp".options.servers.remote]
 transport = "http"
 url = "https://mcp.example.com"
 mode = "streamable_http"
@@ -788,10 +796,13 @@ HTTP auth:
 
 ## LSP
 
-LSP server 配置在 `[lsp.servers.<name>]`：
+LSP server 配置在 `agena.lsp` static plugin options：
 
 ```toml
-[lsp.servers.rust]
+[plugins.list."agena.lsp"]
+kind = "static"
+
+[plugins.list."agena.lsp".options.servers.rust]
 command = "rust-analyzer"
 args = []
 env = {}
@@ -800,15 +811,18 @@ root_markers = ["Cargo.toml"]
 initialization_options = {}
 ```
 
-LSP registry 是 lazy-spawn 的。工具首次触及匹配文件时才会启动对应 server。
+LSP registry 是 lazy-spawn 的。相关 entry 首次触及匹配文件时才会启动对应 server。
 
-## Web tools
+## Web Plugin
 
 ```toml
-[web]
+[plugins.list."agena.web"]
+kind = "static"
+
+[plugins.list."agena.web".options]
 fetch_enabled = true
 
-[web.search]
+[plugins.list."agena.web".options.search]
 backend = "duck_duck_go_html"
 tavily_api_key = "..."
 exa_api_key = "..."

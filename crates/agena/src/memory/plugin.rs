@@ -12,6 +12,8 @@ use crate::plugin::{ChatSystemTransformInput, ChatSystemTransformPatch};
 
 use super::prompt::build_memory_prompt_section;
 
+pub const MEMORY_PLUGIN_ID: &str = "agena.memory";
+
 pub struct MemoryPlugin {
     config: MemoryConfig,
     workspace_root: std::sync::OnceLock<PathBuf>,
@@ -29,7 +31,7 @@ impl MemoryPlugin {
 #[async_trait]
 impl Plugin for MemoryPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena-memory", env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder(MEMORY_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Persistent file-based memory injected into every conversation.")
             .hooks(HookSubscription::INIT | HookSubscription::CHAT_SYSTEM_TRANSFORM)
             .build()

@@ -1,11 +1,12 @@
-# `echo_plus` Sample Plugin
+# `echo` Sample Plugin
 
 这是一个最小但完整的 Agena dynamic plugin 示例，覆盖了四类能力：
 
-- 自定义 tool：`echo_plus`
-- `before_tool` hook：重写输入并覆盖 pending title
-- `after_tool` hook：修改 title / output / payload metadata
+- 自定义 entry：`echo`
+- `tool.execute.before` hook：重写输入并覆盖 pending title
+- `tool.execute.after` hook：修改 output / payload metadata
 - `shell_env` hook：为 `bash` 注入环境变量
+- `provider.list` hook：注入一个示例 provider descriptor
 
 ## 构建
 
@@ -23,39 +24,54 @@ cargo build --release
 
 ## 加载
 
-可以把 `target/release/` 目录直接配置到 Agena：
+在 `config.toml` 中显式声明 cdylib plugin：
 
 ```toml
-[plugins]
-paths = ["examples/echo_plugin/target/release"]
+[plugins.list.echo]
+kind = "cdylib"
+path = "examples/echo_plugin/target/release/libagena_echo_plugin.so"
+options = { uppercase = false }
 ```
 
-也可以显式指向某个动态库文件：
+macOS 和 Windows 的动态库文件名分别是：
+
+- macOS: `examples/echo_plugin/target/release/libagena_echo_plugin.dylib`
+- Windows: `examples/echo_plugin/target/release/agena_echo_plugin.dll`
+
+`path` 相对 config 文件所在目录解析。配置后可以检查加载状态：
+
+```bash
+agena config validate
+agena plugin status
+agena plugin inspect echo
+```
+
+如果要在 debug 构建下测试，把 `path` 指向 `target/debug` 下的动态库：
 
 ```toml
-[plugins]
-paths = ["examples/echo_plugin/target/release/libagena_echo_plugin.so"]
+[plugins.list.echo]
+kind = "cdylib"
+path = "examples/echo_plugin/target/debug/libagena_echo_plugin.so"
+options = { uppercase = true }
 ```
-
-`paths` 是相对配置文件目录解析的。
 
 ## 示例行为
 
-`echo_plus` 的输入 schema：
+`echo` 的输入 schema：
 
 ```json
 {
-  "message": "hello",
-  "uppercase": false,
-  "tags": ["demo", "sample"]
+  "text": "hello"
 }
 ```
 
 执行顺序：
 
-1. `before_tool` 会把 `message` 改成 `"[prepared] hello"`，并把 pending title 改成 `Echo Plus (prepared)`。
-2. `invoke_tool` 会生成文本输出和结构化 payload。
-3. `after_tool` 会继续修改 title / output_text / payload，并写入元数据。
+1. `tool.execute.before` 会把 `text` 改成 `"[prepared] hello"`，并把 pending title 改成 `Echo (prepared)`。
+2. `tool.invoke` 会生成文本输出和结构化 payload。
+3. `tool.execute.after` 会继续修改 output_text，并写入元数据。
 4. 任意 `bash` 调用会收到：
-   - `AGENA_SAMPLE_PLUGIN=echo_plus`
-   - `AGENA_SAMPLE_PLUGIN_CWD=<当前 cwd>`
+   - `AGENA_ECHO=1`
+   - `AGENA_ECHO_CWD=<当前 cwd>`
+
+如果 `options.uppercase = true`，`tool.invoke` 会把输出转成大写。

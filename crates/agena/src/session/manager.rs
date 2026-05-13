@@ -6254,7 +6254,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("reviewer.md"),
-            "---\ndescription: reviewer\nmode: all\nallowed_tools:\n  - read\n  - grep\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted/scripted-model\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
+            "---\ndescription: reviewer\nmode: all\nallowed_entries:\n  - read\n  - grep\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted/scripted-model\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
         )
         .expect("write reviewer profile");
         let service = build_manager(
@@ -6352,7 +6352,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("planner.md"),
-            "---\ndescription: planner\nallowed_tools:\n  - read\n  - grep\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  tools:\n    first_party:\n      bash: ask\n    rules:\n      bash:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted/scripted-model\naliases: [\"plan\"]\n---\nYou are a precise planner.",
+            "---\ndescription: planner\nallowed_entries:\n  - read\n  - grep\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  entries:\n    names:\n      bash: ask\n    rules:\n      bash:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted/scripted-model\naliases: [\"plan\"]\n---\nYou are a precise planner.",
         )
         .expect("write planner profile");
         let service = build_manager(

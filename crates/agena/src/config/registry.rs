@@ -124,14 +124,14 @@ impl super::ConfigResolution {
         let agena_version = env!("CARGO_PKG_VERSION").to_string();
         let mut plugin_config = self.config.plugins.clone();
         if mcp_manager.is_some() {
-            plugin_config.list.insert(
-                crate::tool::mcp_plugin_id().to_string(),
-                crate::plugin::PluginEntry::Static {
+            plugin_config
+                .list
+                .entry(crate::tool::mcp_plugin_id().to_string())
+                .or_insert_with(|| crate::plugin::PluginEntry::Static {
                     options: serde_json::to_value(&self.config.mcp)
                         .unwrap_or(serde_json::Value::Null),
                     timeouts: Default::default(),
-                },
-            );
+                });
         }
         let mut builder = PluginHostBuilder::new(workspace_root, agena_version)
             .with_config(plugin_config)
@@ -151,7 +151,7 @@ impl super::ConfigResolution {
                 crate::tool::new_workflow_plugin(),
             )
             .register_static(
-                "agena-memory",
+                crate::memory::memory_plugin_id(),
                 crate::memory::new_memory_plugin(self.config.memory.clone()),
             )
             .register_static(

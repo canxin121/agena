@@ -13,7 +13,7 @@
 //! ```markdown
 //! ---
 //! description: "Read-only repo explorer"
-//! allowed_tools: ["read", "glob", "grep", "view_file"]
+//! allowed_entries: ["read", "glob", "grep", "view_file"]
 //! model: "claude-haiku-4-5"
 //! aliases: ["scout"]
 //! ---
@@ -48,6 +48,7 @@ impl AgentScope {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentFrontmatter {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
@@ -63,7 +64,11 @@ pub struct AgentFrontmatter {
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<usize>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "allowed_entries",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_tools: Vec<String>,
     #[serde(
         default,
@@ -649,7 +654,7 @@ mod tests {
 
     #[test]
     fn parses_frontmatter_and_body() {
-        let raw = "---\ndescription: explorer\nallowed_tools:\n  - read\n  - grep\nmodel: gpt-5\n---\nYou explore the repo.";
+        let raw = "---\ndescription: explorer\nallowed_entries:\n  - read\n  - grep\nmodel: gpt-5\n---\nYou explore the repo.";
         let profile = AgentProfile::from_raw(raw, "explorer", AgentScope::Project).unwrap();
         assert_eq!(profile.name, "explorer");
         assert_eq!(profile.frontmatter.description, "explorer");

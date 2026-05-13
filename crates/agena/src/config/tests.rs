@@ -328,7 +328,10 @@ store_backend = "file"
 fn memory_project_instruction_config_loads() {
     let path = write_temp_config(
         r#"
-[memory.project_instructions]
+[plugins.list."agena.memory"]
+kind = "static"
+
+[plugins.list."agena.memory".options.project_instructions]
 enabled = false
 include_global = false
 "#,
@@ -390,18 +393,21 @@ fn loader_uses_provider_runtime_retry_defaults() {
 fn hooks_parse_from_root_config() {
     let path = write_temp_config(
         r#"
-[[hooks]]
+[plugins.list."agena.hooks"]
+kind = "static"
+
+[[plugins.list."agena.hooks".options.hooks]]
 event = "user_prompt_submit"
 command = "python3 .agena/hooks/enrich.py"
 timeout_ms = 3000
 
-[[hooks]]
+[[plugins.list."agena.hooks".options.hooks]]
 event = "pre_tool_use"
 command = "python3 .agena/hooks/check_tool.py"
 timeout_ms = 5000
 matcher = { tool = "bash" }
 
-[[hooks]]
+[[plugins.list."agena.hooks".options.hooks]]
 event = "post_tool_use"
 url = "http://127.0.0.1:8080/agena-hook"
 "#,
@@ -437,7 +443,10 @@ url = "http://127.0.0.1:8080/agena-hook"
 fn legacy_hook_event_names_still_parse() {
     let path = write_temp_config(
         r#"
-[[hooks]]
+[plugins.list."agena.hooks"]
+kind = "static"
+
+[[plugins.list."agena.hooks".options.hooks]]
 event = "tool_before"
 command = "legacy-hook"
 "#,
@@ -457,6 +466,185 @@ command = "legacy-hook"
         hooks[0].event,
         crate::hooks::HookEvent::ToolBefore
     ));
+}
+
+#[test]
+fn top_level_plugin_backed_config_is_rejected() {
+    for (label, raw) in [
+        (
+            "memory",
+            r#"
+[memory.project_instructions]
+enabled = false
+"#,
+        ),
+        (
+            "hooks",
+            r#"
+[[hooks]]
+event = "user_prompt_submit"
+command = "echo"
+"#,
+        ),
+        (
+            "mcp",
+            r#"
+[mcp.servers.docs]
+transport = "stdio"
+command = "mcp-docs"
+"#,
+        ),
+        (
+            "lsp",
+            r#"
+[lsp.servers.rust]
+command = "rust-analyzer"
+"#,
+        ),
+        (
+            "web",
+            r#"
+[web.search]
+backend = "duckduckgo_html"
+"#,
+        ),
+    ] {
+        let path = write_temp_config(raw);
+        let loader = ConfigLoader::new(TestEnvironment::default());
+        let err = match loader.load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        }) {
+            Ok(_) => panic!("{label} top-level config should fail"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, ConfigError::Validation(_)),
+            "{label} should fail validation, got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn plugin_options_load_mcp_lsp_and_web_config() {
+    let path = write_temp_config(
+        r#"
+[plugins.list."agena.mcp"]
+kind = "static"
+
+[plugins.list."agena.mcp".options.servers.docs]
+transport = "stdio"
+command = "mcp-docs"
+args = ["--repo", "."]
+
+[plugins.list."agena.lsp"]
+kind = "static"
+
+[plugins.list."agena.lsp".options.servers.rust]
+command = "rust-analyzer"
+file_extensions = ["rs"]
+root_markers = ["Cargo.toml"]
+
+[plugins.list."agena.web"]
+kind = "static"
+
+[plugins.list."agena.web".options.search]
+backend = "brave"
+brave_api_key = "secret"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("plugin-backed config should load");
+
+    assert!(resolution.config.mcp.servers.contains_key("docs"));
+    assert_eq!(
+        resolution
+            .config
+            .lsp
+            .servers
+            .get("rust")
+            .map(|server| server.command.as_str()),
+        Some("rust-analyzer")
+    );
+    assert_eq!(
+        resolution.config.web.search.backend,
+        crate::config::WebSearchBackendKind::Brave
+    );
+}
+
+#[test]
+fn first_party_plugin_config_requires_static_kind() {
+    let path = write_temp_config(
+        r#"
+[plugins.list."agena.web"]
+kind = "stdio"
+command = "web-plugin"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("runtime-owned plugin ids should require static kind");
+    assert!(
+        matches!(err, ConfigError::Validation(message) if message.contains("must use `kind = \"static\"`"))
+    );
+}
+
+#[test]
+fn resolved_config_serializes_plugin_backed_options_under_plugins() {
+    let path = write_temp_config(
+        r#"
+[plugins.list."agena.memory"]
+kind = "static"
+
+[plugins.list."agena.memory".options.project_instructions]
+enabled = false
+include_global = false
+
+[plugins.list."agena.mcp"]
+kind = "static"
+
+[plugins.list."agena.mcp".options.servers.docs]
+transport = "stdio"
+command = "mcp-docs"
+
+[plugins.list."agena.web"]
+kind = "static"
+
+[plugins.list."agena.web".options.search]
+backend = "duck_duck_go_html"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("plugin-backed config should load");
+    let serialized = resolution
+        .render(ConfigOutputFormat::Toml)
+        .expect("resolved config should serialize");
+
+    assert!(serialized.contains("[config.plugins.list.\"agena.memory\""));
+    assert!(serialized.contains("[config.plugins.list.\"agena.mcp\""));
+    assert!(serialized.contains("[config.plugins.list.\"agena.web\""));
+    assert!(!serialized.contains("[config.memory"));
+    assert!(!serialized.contains("[config.mcp"));
+    assert!(!serialized.contains("[config.lsp"));
+    assert!(!serialized.contains("[config.web"));
+    assert!(!serialized.contains("[[config.hooks"));
 }
 
 #[test]
@@ -770,11 +958,14 @@ kind = "preset"
 fn hook_entries_load_from_toml() {
     let path = write_temp_config(
         r#"
-[[hooks]]
+[plugins.list."agena.hooks"]
+kind = "static"
+
+[[plugins.list."agena.hooks".options.hooks]]
 event = "user_prompt_submit"
 command = "echo $AGENA_PROMPT"
 
-[[hooks]]
+[[plugins.list."agena.hooks".options.hooks]]
 event = "tool_before"
 command = "/usr/local/bin/audit"
 matcher = { tool = "bash" }
@@ -831,7 +1022,7 @@ pattern = "rm -rf /*"
 fn loader_rejects_removed_execution_mode_permission_field() {
     let path = write_temp_config(
         r#"
-[permission.tools]
+[permission.entries]
 execution_mode = "ask"
 "#,
     );
@@ -850,7 +1041,7 @@ execution_mode = "ask"
 fn loader_rejects_removed_tool_default_permission_fields() {
     let path = write_temp_config(
         r#"
-[permission.tools]
+[permission.entries]
 read_only_default = "allow"
 mutating_default = "ask"
 "#,
@@ -1121,7 +1312,7 @@ default_model = "gpt-4.1-mini"
         .expect("plugin host should build");
     assert_eq!(host.plugins().len(), 9);
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
-    assert!(ids.contains(&"agena-memory"));
+    assert!(ids.contains(&crate::memory::memory_plugin_id()));
     assert!(ids.contains(&crate::hooks::ShellHookPlugin::id()));
     assert!(ids.contains(&crate::tool::skills_fs_plugin_id()));
     assert!(ids.contains(&crate::tool::lsp_plugin_id()));
@@ -1167,7 +1358,7 @@ default_model = "gpt-4.1-mini"
     // plugins plus runtime support plugins remain.
     assert_eq!(host.plugins().len(), 9);
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
-    assert!(ids.contains(&"agena-memory"));
+    assert!(ids.contains(&crate::memory::memory_plugin_id()));
     assert!(ids.contains(&crate::hooks::ShellHookPlugin::id()));
     assert!(ids.contains(&crate::tool::skills_fs_plugin_id()));
     assert!(ids.contains(&crate::tool::lsp_plugin_id()));
@@ -1230,24 +1421,23 @@ loopback = "deny"
 [permission.network.rules]
 "github.com:443" = "allow"
 
-[permission.tools.tags]
+[permission.entries.tags]
 network = "ask"
 
-[permission.tools.first_party]
+[permission.entries.names]
 bash = "ask"
 
 [agents.planner]
 description = "Planning agent"
 prompt = "You are a planner."
-allowed_tools = ["read", "grep"]
+allowed_entries = ["read", "grep"]
 model = "openai/gpt-5"
 aliases = ["plan"]
 
 [agents.planner.permission.inherit]
 path = true
 network = true
-tools = true
-plugin_tools = true
+entries = true
 
 [agents.planner.permission.path]
 workspace = { read = "allow", write = "deny" }
@@ -1255,10 +1445,10 @@ workspace = { read = "allow", write = "deny" }
 [agents.planner.permission.path.rules]
 "<cwd>/docs/**" = { read = "allow", write = "ask" }
 
-[agents.planner.permission.tools.first_party]
+[agents.planner.permission.entries.names]
 todo_write = "allow"
 
-[agents.planner.permission.tools.rules.bash]
+[agents.planner.permission.entries.rules.bash]
 "git push *" = "deny"
 "git *" = "allow"
 "*" = "ask"

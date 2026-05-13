@@ -299,7 +299,7 @@ Plugins can patch provider list through the `provider.list` hook, allowing plugi
 
 ## Plugin architecture
 
-Plugin config is parsed by `agena-plugin-host`. `PluginHost` owns loaded plugins, entry registry, status registry, log store, transport runtime and host callback handle.
+Plugin config is parsed by `agena-plugin-host`. `PluginHost` owns loaded plugins, entry registry, status registry, log store, transport runtime and host callback handle. Model-visible capabilities flow through plugin entries; filesystem/shell/web/workflow/skills/LSP/MCP are all represented inside the plugin host. For the full plugin surface and configuration details, see [Plugin 体系](plugin.md).
 
 Transport kinds:
 

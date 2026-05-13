@@ -5,6 +5,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::provider::auth::AuthData;
+
 use super::*;
 
 #[derive(Default)]
@@ -230,7 +232,7 @@ fn cli_override_parser_rejects_preset_provider_kind() {
 }
 
 #[test]
-fn openai_provider_defaults_api_backend_base_url_and_auth_provider_id() {
+fn openai_provider_defaults_api_backend_base_url_and_empty_inline_credential() {
     let path = write_temp_config(
         r#"
 [providers.api]
@@ -256,7 +258,7 @@ default_model = "gpt-5"
     assert_eq!(provider.default_model, "gpt-5");
     match &provider.auth {
         ProviderAuthConfig::Secret(secret) => {
-            assert_eq!(secret.credential_provider_id.as_deref(), Some("api"));
+            assert!(secret.credential.is_none());
         }
         other => panic!("expected secret auth, got {other:?}"),
     }
@@ -275,7 +277,7 @@ default_model = "gpt-5"
 }
 
 #[test]
-fn openai_chatgpt_codex_backend_defaults_base_url_and_auth_provider_id() {
+fn openai_chatgpt_codex_backend_defaults_base_url_and_empty_inline_credential() {
     let path = write_temp_config(
         r#"
 [providers.chatgpt]
@@ -302,7 +304,7 @@ default_model = "gpt-5.3-codex"
     assert_eq!(provider.default_model, "gpt-5.3-codex");
     match &provider.auth {
         ProviderAuthConfig::Secret(secret) => {
-            assert_eq!(secret.credential_provider_id.as_deref(), Some("openai"));
+            assert!(secret.credential.is_none());
         }
         other => panic!("expected secret auth, got {other:?}"),
     }
@@ -380,7 +382,7 @@ fn multi_adapter_provider_loads_shared_auth_and_routes_models() {
 default_model = "fast"
 
 [providers.shared.auth]
-credential_provider_id = "openai"
+credential = { type = "oauth", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-shared" }
 
 [providers.shared.adapters.api]
 kind = "openai"
@@ -420,17 +422,29 @@ target_model = "gpt-5-codex"
     assert_eq!(provider.default_model, "fast");
     match &provider.auth {
         ProviderAuthConfig::Secret(secret) => {
-            assert_eq!(secret.credential_provider_id.as_deref(), Some("openai"));
+            assert!(matches!(
+                secret.credential.as_ref(),
+                Some(crate::provider::auth::AuthData::OAuth {
+                    account_id: Some(account_id),
+                    ..
+                }) if account_id == "acct-shared"
+            ));
         }
         other => panic!("expected shared secret auth, got {other:?}"),
     }
     assert_eq!(provider.adapters.len(), 2);
     assert_eq!(
-        provider.models.get("fast").map(|model| model.adapter.as_str()),
+        provider
+            .models
+            .get("fast")
+            .map(|model| model.adapter.as_str()),
         Some("api")
     );
     assert_eq!(
-        provider.models.get("fast").map(|model| model.target_model.as_str()),
+        provider
+            .models
+            .get("fast")
+            .map(|model| model.target_model.as_str()),
         Some("gpt-4.1-mini")
     );
     assert!(
@@ -441,7 +455,10 @@ target_model = "gpt-5-codex"
             .is_some()
     );
     assert_eq!(
-        provider.models.get("coder").map(|model| model.adapter.as_str()),
+        provider
+            .models
+            .get("coder")
+            .map(|model| model.adapter.as_str()),
         Some("codex")
     );
 }
@@ -484,14 +501,14 @@ target_model = "gpt-5-codex"
 }
 
 #[test]
-fn multiple_providers_can_share_one_credential_provider_id() {
+fn multiple_providers_keep_distinct_inline_credentials() {
     let path = write_temp_config(
         r#"
 [providers.primary]
 default_model = "gpt-4.1"
 
 [providers.primary.auth]
-credential_provider_id = "shared-openai"
+credential = { type = "api", key = "sk-primary" }
 
 [providers.primary.adapters.api]
 kind = "openai"
@@ -502,7 +519,7 @@ default_model = "gpt-4.1"
 default_model = "gpt-4.1-mini"
 
 [providers.secondary.auth]
-credential_provider_id = "shared-openai"
+credential = { type = "api", key = "sk-secondary" }
 
 [providers.secondary.adapters.api]
 kind = "openai"
@@ -519,21 +536,35 @@ default_model = "gpt-4.1-mini"
         })
         .expect("config should load");
 
-    for provider_id in ["primary", "secondary"] {
-        let provider = resolution
-            .config
-            .providers
-            .get(provider_id)
-            .expect("provider should exist");
-        match &provider.auth {
-            ProviderAuthConfig::Secret(secret) => {
-                assert_eq!(
-                    secret.credential_provider_id.as_deref(),
-                    Some("shared-openai")
-                );
-            }
-            other => panic!("expected secret auth, got {other:?}"),
+    let primary = resolution
+        .config
+        .providers
+        .get("primary")
+        .expect("primary provider should exist");
+    let secondary = resolution
+        .config
+        .providers
+        .get("secondary")
+        .expect("secondary provider should exist");
+
+    match &primary.auth {
+        ProviderAuthConfig::Secret(secret) => {
+            assert!(matches!(
+                secret.credential.as_ref(),
+                Some(crate::provider::auth::AuthData::Api { key }) if key == "sk-primary"
+            ));
         }
+        other => panic!("expected secret auth, got {other:?}"),
+    }
+
+    match &secondary.auth {
+        ProviderAuthConfig::Secret(secret) => {
+            assert!(matches!(
+                secret.credential.as_ref(),
+                Some(crate::provider::auth::AuthData::Api { key }) if key == "sk-secondary"
+            ));
+        }
+        other => panic!("expected secret auth, got {other:?}"),
     }
 }
 
@@ -640,11 +671,16 @@ fn example_config_parses_successfully() {
 }
 
 #[test]
-fn auth_store_backend_config_loads() {
+fn provider_auth_credential_inline_config_loads() {
     let path = write_temp_config(
         r#"
-[auth]
-store_backend = "file"
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4.1-mini"
+
+[providers.openai.auth]
+credential = { type = "api", key = "sk-inline" }
 "#,
     );
 
@@ -654,9 +690,24 @@ store_backend = "file"
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect("auth config should load");
+        .expect("provider auth config should load");
 
-    assert_eq!(resolution.config.auth.store_backend, AuthStoreBackend::File);
+    let provider = resolution
+        .config
+        .providers
+        .get("openai")
+        .expect("openai provider should exist");
+    match &provider.auth {
+        ProviderAuthConfig::Secret(secret) => {
+            assert_eq!(
+                secret.credential,
+                Some(AuthData::Api {
+                    key: "sk-inline".to_owned(),
+                })
+            );
+        }
+        other => panic!("unexpected auth config: {other:?}"),
+    }
 }
 
 #[test]

@@ -14,13 +14,12 @@ use crate::{
         ConfigLoader, ConfigResolution, LoadConfigRequest, ProcessEnvironment, TracingConfig,
     },
     db::init_schema,
-    provider::auth::AuthManager,
     session::SessionManager,
     tracing as tracing_config,
 };
 
 use super::{
-    RuntimeAuthStore, RuntimeReloadCause, RuntimeReloadReport, RuntimeSnapshot, janitor, reload,
+    RuntimeReloadCause, RuntimeReloadReport, RuntimeSnapshot, janitor, reload,
     store::{RuntimeSnapshotStore, TaskControl},
 };
 
@@ -202,14 +201,6 @@ impl AgenaRuntime {
 
     pub fn session_manager(&self) -> Option<Arc<SessionManager>> {
         self.current_snapshot().session_manager()
-    }
-
-    pub fn auth_store(&self) -> RuntimeAuthStore {
-        self.current_snapshot().auth_store()
-    }
-
-    pub fn auth_manager(&self) -> AuthManager<RuntimeAuthStore> {
-        AuthManager::new(self.auth_store())
     }
 
     pub fn workspace_root(&self) -> &Path {

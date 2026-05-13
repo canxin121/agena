@@ -5,7 +5,7 @@ Agena 是一个本地优先的 LLM agent runtime。仓库同时包含命令行�
 文档入口如下：
 
 - [配置说明](docs/configuration.md): `config.toml`、环境变量、CLI 覆盖、provider、权限、插件和运行时默认值。
-- [Provider Auth 与 Credential](docs/provider-credentials.md): 新的 `provider.auth + provider.adapters` 结构、credential 复用方式和 auth store 映射规则。
+- [Provider Auth 与 Credential](docs/provider-credentials.md): 新的 `provider.auth + provider.adapters` 结构、provider-local credential 语义和运行时刷新规则。
 - [Provider Auth + Adapters 重构说明](docs/provider-auth-adapters.md): 这次 provider/auth/adapter 重构的目标结构、兼容策略和迁移路径。
 - [架构说明](docs/architecture.md): workspace 布局、核心 crate/app/package 的职责、运行时快照、会话、事件、插件、Studio 与桌面关系。
 - [Plugin 体系](docs/plugin.md): plugin host、static/dynamic plugins、entry registry、MCP bridge、hooks、host callbacks、权限、存储和 marketplace。
@@ -218,7 +218,7 @@ cargo test -p agena-client
 
 - 主配置: `~/.agena/config.toml`，可用 `AGENA_CONFIG` 或 `--config` 改写。
 - 数据库: 默认 `~/.agena/agena.db`，可用 `AGENA_DATABASE_URL` 或 `AGENA_DATABASE_PATH` 改写。
-- 凭据文件 fallback: 默认 `~/.agena/auth.json`，可用 `AGENA_AUTH_FILE` 改写。
+- Provider 凭据: 保存在主配置的 `[providers.<id>.auth]` 下，登录和 refresh 会直接回写该 provider。
 - 插件存储: 默认 `~/.agena/plugin-storage`，可用 `AGENA_PLUGIN_STORAGE_DIR` 改写。
 - Marketplace cache: 默认 `~/.agena/marketplace`，可用 `AGENA_MARKETPLACE_DIR` 改写。
 

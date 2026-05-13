@@ -1,15 +1,12 @@
-use std::{path::PathBuf, str::FromStr};
+use std::str::FromStr;
 
 use super::{
-    AuthStoreBackend, ConfigError, RawAuthConfig, RawConfig, RawProviderHttpConfig,
-    RawRequestRetryConfig, RawRuntimeConfig, RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
-    parse_numeric,
+    ConfigError, RawConfig, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
+    RawStreamReplayConfig, RawTracingConfig, RawUiConfig, parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigOverride {
-    AuthStorePath(PathBuf),
-    AuthStoreBackend(AuthStoreBackend),
     TracingFilter(String),
     TracingDatabaseLevel(String),
     UiLocale(String),
@@ -39,10 +36,6 @@ impl FromStr for ConfigOverride {
 
         match key {
             "mode" => Err(ConfigError::UnsupportedModeConfig { field: "mode" }),
-            "auth.store_path" => Ok(Self::AuthStorePath(PathBuf::from(raw_value))),
-            "auth.store_backend" => {
-                Ok(Self::AuthStoreBackend(parse_auth_store_backend(raw_value)?))
-            }
             "tracing.filter" => Ok(Self::TracingFilter(raw_value.to_owned())),
             "tracing.database_level" => Ok(Self::TracingDatabaseLevel(raw_value.to_owned())),
             "ui.locale" => Ok(Self::UiLocale(raw_value.to_owned())),
@@ -75,18 +68,6 @@ impl FromStr for ConfigOverride {
 impl ConfigOverride {
     pub(crate) fn apply_to(&self, config: &mut RawConfig) {
         match self {
-            Self::AuthStorePath(path) => {
-                config
-                    .auth
-                    .get_or_insert_with(RawAuthConfig::default)
-                    .store_path = Some(path.clone());
-            }
-            Self::AuthStoreBackend(backend) => {
-                config
-                    .auth
-                    .get_or_insert_with(RawAuthConfig::default)
-                    .store_backend = Some(*backend);
-            }
             Self::TracingFilter(filter) => {
                 config
                     .tracing
@@ -197,17 +178,6 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
             value: parse_bool(key, raw_value)?,
         }),
         _ => Err(ConfigError::InvalidOverride(key.to_owned())),
-    }
-}
-
-fn parse_auth_store_backend(value: &str) -> Result<AuthStoreBackend, ConfigError> {
-    match value.trim() {
-        "auto" => Ok(AuthStoreBackend::Auto),
-        "file" => Ok(AuthStoreBackend::File),
-        "keyring" => Ok(AuthStoreBackend::Keyring),
-        _ => Err(ConfigError::InvalidOverride(format!(
-            "auth.store_backend expects auto, file, or keyring, got `{value}`"
-        ))),
     }
 }
 

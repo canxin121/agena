@@ -181,7 +181,6 @@ pub struct RuntimeStatusResponse {
     pub workspace_root: String,
     pub config_path: String,
     pub config_found: bool,
-    pub auth_store_path: String,
     pub provider_ids: Vec<String>,
     pub plugin_count: usize,
     pub session_runtime_available: bool,

@@ -326,7 +326,6 @@ If-Match: <session.version>
 - `workspace_root`
 - `config_path`
 - `config_found`
-- `auth_store_path`
 - `provider_ids`
 - `plugin_count`
 - `session_runtime_available`

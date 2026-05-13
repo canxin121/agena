@@ -29,7 +29,9 @@ use crate::{
     agent::Agent,
     config::{
         ConfigEnvironment, ConfigLoader, ConfigOutputFormat, ConfigOverride, LoadConfigRequest,
-        ProcessEnvironment, TracingConfig,
+        ProcessEnvironment, ProviderConfigCredentialStore, TracingConfig,
+        provider_gitlab_instance_url, provider_has_gitlab_adapter, provider_supports_api_key_write,
+        provider_supports_copilot_device, provider_supports_openai_oauth,
     },
     db::{
         crud::{permission_rule as permission_rule_crud, workspace as workspace_crud},
@@ -47,9 +49,7 @@ use crate::{
     },
     provider::{
         ModelCapabilities, ModelMetadata, ProviderModel,
-        auth::{
-            AuthData, AuthManager, ConfiguredAuthStore, CopilotDeployment, wait_for_oauth_callback,
-        },
+        auth::{AuthData, AuthManager, CopilotDeployment, wait_for_oauth_callback},
     },
     role::Role,
     runtime::{AgenaRuntime, TracingFilterReloadHandle},
@@ -1464,8 +1464,16 @@ impl AgenaCli {
         loader: ConfigLoader<ProcessEnvironment>,
         args: LoginArgs,
     ) -> Result<(), AppError> {
-        let manager = self.auth_manager(&loader)?;
+        let resolution = loader.load(&self.load_request())?;
+        let manager = AuthManager::new(ProviderConfigCredentialStore::new(
+            resolution.meta.config_path.clone(),
+        ));
         let provider_id = normalize_login_provider(args.provider_id.as_str());
+        let resolved = resolution
+            .config
+            .providers
+            .get(provider_id.as_str())
+            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
         let method_count = usize::from(args.api_key.is_some())
             + usize::from(args.browser)
             + usize::from(args.device);
@@ -1476,14 +1484,22 @@ impl AgenaCli {
         }
 
         if let Some(api_key) = args.api_key {
+            if !provider_supports_api_key_write(resolved) {
+                return Err(AppError::Config(format!(
+                    "{provider_id} does not support api key login"
+                )));
+            }
             manager.set_api_key(provider_id.as_str(), api_key)?;
             println!("logged in: {provider_id}");
             return Ok(());
         }
 
         if args.browser {
-            match provider_id.as_str() {
-                "openai" => {
+            let openai_browser = provider_supports_openai_oauth(resolved);
+            let gitlab_browser = provider_has_gitlab_adapter(resolved);
+            let gitlab_instance_url = provider_gitlab_instance_url(resolved);
+            match (openai_browser, gitlab_browser) {
+                (true, false) => {
                     let redirect_uri = format!("http://localhost:{}/auth/callback", args.port);
                     let start = manager.start_openai_browser_login(redirect_uri.clone())?;
                     println!("open this URL to continue: {}", start.authorize_url);
@@ -1495,16 +1511,22 @@ impl AgenaCli {
                     )?;
                     manager
                         .finish_openai_browser_login(
+                            provider_id.as_str(),
                             callback.code,
                             start.pkce_verifier,
                             redirect_uri,
                         )
                         .await?;
                 }
-                "gitlab" => {
+                (false, true) => {
+                    let instance_url = gitlab_instance_url.ok_or_else(|| {
+                        AppError::Config(format!(
+                            "{provider_id} has ambiguous gitlab browser auth adapters"
+                        ))
+                    })?;
                     let redirect_uri = format!("http://localhost:{}/auth/callback", args.port);
-                    let start = manager
-                        .start_gitlab_login(args.instance_url.clone(), redirect_uri.clone())?;
+                    let start =
+                        manager.start_gitlab_login(instance_url.clone(), redirect_uri.clone())?;
                     println!("open this URL to continue: {}", start.authorize_url);
                     io::stdout().flush()?;
                     let callback = wait_for_oauth_callback(
@@ -1514,14 +1536,20 @@ impl AgenaCli {
                     )?;
                     manager
                         .finish_gitlab_login(
-                            args.instance_url,
+                            provider_id.as_str(),
+                            instance_url,
                             callback.code,
                             start.pkce_verifier,
                             redirect_uri,
                         )
                         .await?;
                 }
-                _ => {
+                (true, true) => {
+                    return Err(AppError::Config(format!(
+                        "{provider_id} has ambiguous browser auth providers"
+                    )));
+                }
+                (false, false) => {
                     return Err(AppError::Config(format!(
                         "{provider_id} does not support browser login"
                     )));
@@ -1532,8 +1560,10 @@ impl AgenaCli {
         }
 
         if args.device {
-            match provider_id.as_str() {
-                "openai" => {
+            let openai_device = provider_supports_openai_oauth(resolved);
+            let copilot_device = provider_supports_copilot_device(resolved);
+            match (openai_device, copilot_device) {
+                (true, false) => {
                     let start = manager.start_openai_headless_login().await?;
                     println!("open this URL: {}", start.verification_url);
                     println!("enter code: {}", start.user_code);
@@ -1543,6 +1573,7 @@ impl AgenaCli {
                         Duration::from_secs(start.interval_seconds.max(1)),
                         || {
                             manager.poll_openai_headless_login(
+                                provider_id.as_str(),
                                 start.device_code.clone(),
                                 start.user_code.clone(),
                             )
@@ -1553,17 +1584,17 @@ impl AgenaCli {
                         return Err(AppError::Config("openai device login timed out".to_owned()));
                     }
                 }
-                "github-copilot" | "github-copilot-enterprise" => {
-                    let deployment = if provider_id == "github-copilot-enterprise" {
-                        let domain = args.enterprise_domain.ok_or_else(|| {
-                            AppError::Config(
-                                "github-copilot-enterprise login requires --enterprise-domain"
-                                    .to_owned(),
-                            )
-                        })?;
-                        CopilotDeployment::Enterprise { domain }
-                    } else {
-                        CopilotDeployment::GitHubCom
+                (false, true) => {
+                    let deployment = match args
+                        .enterprise_domain
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        Some(domain) => CopilotDeployment::Enterprise {
+                            domain: domain.to_owned(),
+                        },
+                        None => CopilotDeployment::GitHubCom,
                     };
                     let start = manager.start_copilot_login(deployment.clone()).await?;
                     println!("open this URL: {}", start.verification_url);
@@ -1573,8 +1604,11 @@ impl AgenaCli {
                         Duration::from_secs(args.timeout_secs),
                         Duration::from_secs(start.interval_seconds.max(1)),
                         || {
-                            manager
-                                .poll_copilot_login(start.device_code.clone(), deployment.clone())
+                            manager.poll_copilot_login(
+                                provider_id.as_str(),
+                                start.device_code.clone(),
+                                deployment.clone(),
+                            )
                         },
                     )
                     .await?;
@@ -1584,7 +1618,12 @@ impl AgenaCli {
                         ));
                     }
                 }
-                _ => {
+                (true, true) => {
+                    return Err(AppError::Config(format!(
+                        "{provider_id} has ambiguous device auth providers"
+                    )));
+                }
+                (false, false) => {
                     return Err(AppError::Config(format!(
                         "{provider_id} does not support device login"
                     )));
@@ -1601,7 +1640,10 @@ impl AgenaCli {
         loader: ConfigLoader<ProcessEnvironment>,
         args: LogoutArgs,
     ) -> Result<(), AppError> {
-        let manager = self.auth_manager(&loader)?;
+        let resolution = loader.load(&self.load_request())?;
+        let manager = AuthManager::new(ProviderConfigCredentialStore::new(
+            resolution.meta.config_path,
+        ));
         let provider_id = normalize_login_provider(args.provider_id.as_str());
         manager.remove(provider_id.as_str())?;
         println!("logged out: {provider_id}");
@@ -2630,12 +2672,14 @@ impl AgenaCli {
     fn auth_manager<E>(
         &self,
         loader: &ConfigLoader<E>,
-    ) -> Result<AuthManager<ConfiguredAuthStore>, AppError>
+    ) -> Result<AuthManager<ProviderConfigCredentialStore>, AppError>
     where
         E: ConfigEnvironment,
     {
         let resolution = loader.load(&self.load_request())?;
-        Ok(AuthManager::new(resolution.config.auth_store()))
+        Ok(AuthManager::new(ProviderConfigCredentialStore::new(
+            resolution.meta.config_path,
+        )))
     }
 
     async fn render_provider_command<E>(
@@ -3913,23 +3957,12 @@ mod tests {
 
     #[tokio::test]
     async fn login_api_key_then_auth_list_redacts_secret() {
-        let auth_path = std::env::temp_dir().join(format!(
-            "agena-cli-auth-{}.json",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time should move forward")
-                .as_nanos()
-        ));
         let path = write_temp_config(
-            format!(
-                r#"
-[auth]
-store_backend = "file"
-store_path = "{}"
+            r#"
+[providers.openai]
+kind = "openai"
+default_model = "gpt-4.1-mini"
 "#,
-                auth_path.display()
-            )
-            .as_str(),
         );
         let cli = AgenaCli {
             config: Some(path.clone()),
@@ -3976,23 +4009,12 @@ store_path = "{}"
 
     #[tokio::test]
     async fn logout_removes_cli_credential() {
-        let auth_path = std::env::temp_dir().join(format!(
-            "agena-cli-auth-{}.json",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time should move forward")
-                .as_nanos()
-        ));
         let path = write_temp_config(
-            format!(
-                r#"
-[auth]
-store_backend = "file"
-store_path = "{}"
+            r#"
+[providers.openai]
+kind = "openai"
+default_model = "gpt-4.1-mini"
 "#,
-                auth_path.display()
-            )
-            .as_str(),
         );
         let cli = AgenaCli {
             config: Some(path),

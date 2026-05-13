@@ -10,7 +10,7 @@ pub use oauth::{
     refresh_openai_token, start_copilot_device_code, start_gitlab_oauth,
     start_openai_browser_oauth, start_openai_headless_device_code, wait_for_oauth_callback,
 };
-pub use store::{AuthStore, ConfiguredAuthStore, FileAuthStore, KeyringAuthStore};
+pub use store::AuthStore;
 pub use types::{
     AuthData, CopilotDeployment, DeviceCodeStart, OAuthAuthorizeStart, OAuthTokenResponse,
 };

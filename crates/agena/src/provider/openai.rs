@@ -3,6 +3,7 @@ use futures_core::Stream;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
 
 use crate::{
     error::AppError,
@@ -12,7 +13,7 @@ use crate::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
         StreamResumePolicy,
-        auth::{AuthData, AuthStore},
+        auth::AuthData,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
@@ -33,8 +34,7 @@ pub struct OpenAiProvider {
     base_url: String,
     default_model: ModelId,
     backend: OpenAiBackend,
-    auth_provider_id: String,
-    auth_store: Option<Arc<dyn AuthStore>>,
+    auth_data: Option<Arc<Mutex<AuthData>>>,
     api_mode: OpenAiApiMode,
     extra_headers: HashMap<String, String>,
     stream_mode: OpenAiStreamMode,
@@ -109,14 +109,13 @@ impl OpenAiProvider {
     ) -> Self {
         let id = id.into();
         Self {
-            auth_provider_id: id.clone(),
             id,
             client,
             api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
             backend: OpenAiBackend::Api,
-            auth_store: None,
+            auth_data: None,
             api_mode: OpenAiApiMode::Responses,
             extra_headers: HashMap::new(),
             stream_mode: OpenAiStreamMode::Sse,
@@ -134,13 +133,8 @@ impl OpenAiProvider {
         self
     }
 
-    pub fn with_auth_provider_id(mut self, auth_provider_id: impl Into<String>) -> Self {
-        self.auth_provider_id = auth_provider_id.into();
-        self
-    }
-
-    pub fn with_auth_store(mut self, auth_store: Arc<dyn AuthStore>) -> Self {
-        self.auth_store = Some(auth_store);
+    pub fn with_auth_data(mut self, auth_data: Arc<Mutex<AuthData>>) -> Self {
+        self.auth_data = Some(auth_data);
         self
     }
 
@@ -183,13 +177,12 @@ impl OpenAiProvider {
     }
 
     fn chatgpt_account_id(&self) -> Option<String> {
-        self.auth_store
+        self.auth_data
             .as_ref()
-            .and_then(|store| store.get(self.auth_provider_id.as_str()).ok().flatten())
-            .and_then(|auth| match auth {
-                AuthData::OAuth { account_id, .. } => account_id,
-                AuthData::Api { .. } | AuthData::WellKnown { .. } => None,
-            })
+            .and_then(|auth| auth.try_lock().ok())
+            .as_deref()
+            .and_then(AuthData::account_id)
+            .map(ToOwned::to_owned)
             .and_then(|value| utils::normalize_optional_text(Some(value)))
     }
 
@@ -1408,7 +1401,6 @@ impl ModelProvider for OpenAiProvider {
                 .with_string("base_url", self.base_url.as_str())
                 .with_string("api_mode", self.api_mode_key())
                 .with_string("stream_mode", self.stream_mode_key())
-                .with_string("auth_provider_id", self.auth_provider_id.as_str())
                 .with_optional_string("auth_account_id", self.chatgpt_account_id())
                 .with_bool("uses_responses", self.should_use_responses(model.as_str()))
                 .with_optional_string("realtime_ws_url", self.realtime_ws_url.as_deref())
@@ -2055,53 +2047,6 @@ mod tests {
     use crate::model::ModelId;
     use crate::tool::{EntryBehavior, EntryDefinition};
 
-    #[derive(Default)]
-    struct MemoryAuthStore {
-        values: Mutex<HashMap<String, crate::provider::auth::AuthData>>,
-    }
-
-    impl crate::provider::auth::AuthStore for MemoryAuthStore {
-        fn all(&self) -> Result<HashMap<String, crate::provider::auth::AuthData>, AppError> {
-            Ok(self
-                .values
-                .lock()
-                .expect("auth store lock should succeed")
-                .clone())
-        }
-
-        fn get(
-            &self,
-            provider_id: &str,
-        ) -> Result<Option<crate::provider::auth::AuthData>, AppError> {
-            Ok(self
-                .values
-                .lock()
-                .expect("auth store lock should succeed")
-                .get(provider_id)
-                .cloned())
-        }
-
-        fn set(
-            &self,
-            provider_id: &str,
-            auth: crate::provider::auth::AuthData,
-        ) -> Result<(), AppError> {
-            self.values
-                .lock()
-                .expect("auth store lock should succeed")
-                .insert(provider_id.to_owned(), auth);
-            Ok(())
-        }
-
-        fn remove(&self, provider_id: &str) -> Result<(), AppError> {
-            self.values
-                .lock()
-                .expect("auth store lock should succeed")
-                .remove(provider_id);
-            Ok(())
-        }
-    }
-
     fn sample_tool_definition() -> EntryDefinition {
         EntryDefinition::plugin(
             "project_search",
@@ -2508,19 +2453,15 @@ mod tests {
 
     #[tokio::test]
     async fn complete_chatgpt_codex_backend_sends_account_and_window_headers() {
-        let auth_store = Arc::new(MemoryAuthStore::default());
-        auth_store
-            .set(
-                "openai",
-                crate::provider::auth::AuthData::OAuth {
-                    refresh: "refresh-token".to_owned(),
-                    access: "access-token".to_owned(),
-                    expires_at_ms: 4_102_444_800_000,
-                    account_id: Some("acct-123".to_owned()),
-                    enterprise_url: None,
-                },
-            )
-            .expect("auth store should accept oauth token");
+        let auth_data = Arc::new(tokio::sync::Mutex::new(
+            crate::provider::auth::AuthData::OAuth {
+                refresh: "refresh-token".to_owned(),
+                access: "access-token".to_owned(),
+                expires_at_ms: 4_102_444_800_000,
+                account_id: Some("acct-123".to_owned()),
+                enterprise_url: None,
+            },
+        ));
 
         let mut server = mockito::Server::new_async().await;
         let _responses = server
@@ -2546,10 +2487,10 @@ mod tests {
         let provider = OpenAiProvider::new_managed_with_id(
             "openai_chatgpt",
             reqwest::Client::new(),
-            crate::provider::ManagedCredential::auth_store(
+            crate::provider::ManagedCredential::auth_data_shared(
                 "openai_chatgpt api key",
-                auth_store.clone(),
-                "openai",
+                "openai_chatgpt",
+                auth_data.clone(),
                 crate::provider::AuthSecretSelector::AccessOrApiKey,
                 crate::provider::AuthRefreshStrategy::OpenAiOAuth,
             ),
@@ -2557,8 +2498,7 @@ mod tests {
             "gpt-5.3-codex",
         )
         .with_backend(OpenAiBackend::ChatgptCodex)
-        .with_auth_provider_id("openai")
-        .with_auth_store(auth_store);
+        .with_auth_data(auth_data);
 
         let response = provider
             .complete(CompletionRequest {
@@ -3265,26 +3205,22 @@ mod tests {
 
     #[test]
     fn prompt_cache_shape_changes_when_chatgpt_account_id_changes() {
-        let auth_store_a = Arc::new(MemoryAuthStore::default());
-        auth_store_a
-            .set(
-                "openai",
-                crate::provider::auth::AuthData::OAuth {
-                    refresh: "refresh-a".to_owned(),
-                    access: "access-a".to_owned(),
-                    expires_at_ms: 0,
-                    account_id: Some("acct-a".to_owned()),
-                    enterprise_url: None,
-                },
-            )
-            .expect("auth store should accept oauth token");
+        let auth_data_a = Arc::new(tokio::sync::Mutex::new(
+            crate::provider::auth::AuthData::OAuth {
+                refresh: "refresh-a".to_owned(),
+                access: "access-a".to_owned(),
+                expires_at_ms: 0,
+                account_id: Some("acct-a".to_owned()),
+                enterprise_url: None,
+            },
+        ));
         let provider_a = OpenAiProvider::new_managed_with_id(
             "openai_chatgpt",
             reqwest::Client::new(),
-            crate::provider::ManagedCredential::auth_store(
+            crate::provider::ManagedCredential::auth_data_shared(
                 "openai_chatgpt api key",
-                auth_store_a.clone(),
-                "openai",
+                "openai_chatgpt",
+                auth_data_a.clone(),
                 crate::provider::AuthSecretSelector::AccessOrApiKey,
                 crate::provider::AuthRefreshStrategy::OpenAiOAuth,
             ),
@@ -3292,29 +3228,24 @@ mod tests {
             "gpt-5.3-codex",
         )
         .with_backend(OpenAiBackend::ChatgptCodex)
-        .with_auth_provider_id("openai")
-        .with_auth_store(auth_store_a);
+        .with_auth_data(auth_data_a);
 
-        let auth_store_b = Arc::new(MemoryAuthStore::default());
-        auth_store_b
-            .set(
-                "openai",
-                crate::provider::auth::AuthData::OAuth {
-                    refresh: "refresh-b".to_owned(),
-                    access: "access-b".to_owned(),
-                    expires_at_ms: 0,
-                    account_id: Some("acct-b".to_owned()),
-                    enterprise_url: None,
-                },
-            )
-            .expect("auth store should accept oauth token");
+        let auth_data_b = Arc::new(tokio::sync::Mutex::new(
+            crate::provider::auth::AuthData::OAuth {
+                refresh: "refresh-b".to_owned(),
+                access: "access-b".to_owned(),
+                expires_at_ms: 0,
+                account_id: Some("acct-b".to_owned()),
+                enterprise_url: None,
+            },
+        ));
         let provider_b = OpenAiProvider::new_managed_with_id(
             "openai_chatgpt",
             reqwest::Client::new(),
-            crate::provider::ManagedCredential::auth_store(
+            crate::provider::ManagedCredential::auth_data_shared(
                 "openai_chatgpt api key",
-                auth_store_b.clone(),
-                "openai",
+                "openai_chatgpt",
+                auth_data_b.clone(),
                 crate::provider::AuthSecretSelector::AccessOrApiKey,
                 crate::provider::AuthRefreshStrategy::OpenAiOAuth,
             ),
@@ -3322,8 +3253,7 @@ mod tests {
             "gpt-5.3-codex",
         )
         .with_backend(OpenAiBackend::ChatgptCodex)
-        .with_auth_provider_id("openai")
-        .with_auth_store(auth_store_b);
+        .with_auth_data(auth_data_b);
 
         let shape_a = provider_a
             .prompt_cache_shape(&ModelId::new("gpt-5.3-codex"))

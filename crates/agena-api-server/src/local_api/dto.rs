@@ -97,7 +97,6 @@ pub struct RuntimeStatusResponse {
     pub workspace_root: String,
     pub config_path: String,
     pub config_found: bool,
-    pub auth_store_path: String,
     pub provider_ids: Vec<String>,
     pub plugin_count: usize,
     pub session_runtime_available: bool,
@@ -424,11 +423,15 @@ pub struct AuthApiKeyWriteRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthBrowserStartRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub redirect_uri: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthOpenAiBrowserFinishRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub code: String,
     pub pkce_verifier: String,
     pub redirect_uri: String,
@@ -436,20 +439,30 @@ pub struct AuthOpenAiBrowserFinishRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthGitLabBrowserStartRequest {
-    pub instance_url: String,
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub redirect_uri: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthGitLabBrowserFinishRequest {
-    pub instance_url: String,
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub code: String,
     pub pkce_verifier: String,
     pub redirect_uri: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AuthOpenAiDeviceStartRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthOpenAiDevicePollRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub device_code: String,
     pub user_code: String,
 }
@@ -457,11 +470,15 @@ pub struct AuthOpenAiDevicePollRequest {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct AuthCopilotDeviceStartRequest {
     #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
     pub enterprise_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthCopilotDevicePollRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub device_code: String,
     #[serde(default)]
     pub enterprise_domain: Option<String>,

@@ -178,7 +178,7 @@ fn write_temp_config(content: &str) -> tempfile::NamedTempFile {
     file
 }
 
-fn live_config_text(auth_path: &Path) -> String {
+fn live_config_text() -> String {
     let request_retry_max_retries = live_request_retry_max_retries();
     let request_retry_base_delay_ms = live_request_retry_base_delay_ms();
     let request_retry_max_delay_ms = live_request_retry_max_delay_ms();
@@ -187,10 +187,6 @@ fn live_config_text(auth_path: &Path) -> String {
 
     format!(
         r#"
-[auth]
-store_backend = "file"
-store_path = "{auth_path}"
-
 [runtime.request_retry]
 max_retries = {request_retry_max_retries}
 base_delay_ms = {request_retry_base_delay_ms}
@@ -228,7 +224,6 @@ base_url = "{base_url}/api/provider/google/v1beta"
 default_model = "{model}"
 api_key_env = "{key_env}"
 "#,
-        auth_path = auth_path.display(),
         base_url = LIVE_BASE_URL,
         model = LIVE_MODEL,
         key_env = LIVE_KEY_ENV,
@@ -241,9 +236,7 @@ api_key_env = "{key_env}"
 }
 
 fn load_live_registry() -> ProviderRegistry {
-    let auth_dir = tempfile::tempdir().expect("create auth tempdir");
-    let auth_path = auth_dir.path().join("auth.json");
-    let config = live_config_text(&auth_path);
+    let config = live_config_text();
     let file = write_temp_config(config.as_str());
     let loader = ConfigLoader::new(required_test_env());
     let resolution = loader
@@ -1213,9 +1206,7 @@ async fn cliproxy_live_registry_lists_models_for_all_protocols() {
 
 #[test]
 fn cliproxy_live_test_config_uses_real_proxy_endpoint() {
-    let auth_dir = tempfile::tempdir().expect("create auth tempdir");
-    let auth_path = auth_dir.path().join("auth.json");
-    let config = live_config_text(&auth_path);
+    let config = live_config_text();
     let file = write_temp_config(config.as_str());
     let loader = ConfigLoader::new(placeholder_test_env());
     let resolution = loader

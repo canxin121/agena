@@ -39,6 +39,13 @@ impl AuthData {
         }
     }
 
+    pub fn account_id(&self) -> Option<&str> {
+        match self {
+            Self::OAuth { account_id, .. } => account_id.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn enterprise_url(&self) -> Option<&str> {
         match self {
             Self::OAuth { enterprise_url, .. } => enterprise_url.as_deref(),

@@ -1,26 +1,20 @@
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::{collections::BTreeMap, fs, path::Path, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use toml::Value;
 
 use crate::provider::{
     ConfiguredModelDefinition, ConfiguredModelVariant, ProviderRequestRetryConfig,
-    ProviderStreamReplayConfig, auth::FileAuthStore,
+    ProviderStreamReplayConfig, auth::AuthData,
 };
 
 use super::{
-    AgentConfig, AuthConfig, AuthStoreBackend, BedrockSigv4AuthConfig, ConfigEnvironment,
-    ConfigError, HttpProviderAdapterConfig, McpConfig, MemoryConfig, OpenAiApiModeConfig,
-    PluginConfig, ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderAuthConfig,
-    ProviderSapAiCoreAuthConfig, ProviderSecretAuthConfig, ResolvedConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
-    RuntimeConfig, StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig,
-    WebToolsConfig,
+    AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError, HttpProviderAdapterConfig,
+    McpConfig, MemoryConfig, OpenAiApiModeConfig, PluginConfig, ProjectInstructionsConfig,
+    ProviderAdapterDefinition, ProviderAuthConfig, ProviderSapAiCoreAuthConfig,
+    ProviderSecretAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, ResolvedProviderModelConfig, RuntimeConfig, StreamTransportMode,
+    TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -101,7 +95,6 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
 pub(crate) struct RawConfig {
     pub(crate) tracing: Option<RawTracingConfig>,
     pub(crate) telemetry: Option<RawTelemetryConfig>,
-    pub(crate) auth: Option<RawAuthConfig>,
     pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) permission: Option<crate::agent::PermissionConfig>,
@@ -120,7 +113,6 @@ impl RawConfig {
     pub(crate) fn merge_from(&mut self, overlay: Self) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.telemetry, overlay.telemetry);
-        merge_option_struct(&mut self.auth, overlay.auth);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.permission, overlay.permission);
@@ -139,7 +131,6 @@ impl RawConfig {
     pub(crate) fn is_empty(&self) -> bool {
         self.tracing.is_none()
             && self.telemetry.is_none()
-            && self.auth.is_none()
             && self.ui.is_none()
             && self.runtime.is_none()
             && self.permission.is_none()
@@ -160,12 +151,6 @@ impl RawConfig {
     pub(crate) fn from_env(env: &dyn ConfigEnvironment) -> Result<Self, ConfigError> {
         let mut config = Self::default();
 
-        if let Some(path) = env.var("AGENA_AUTH_FILE") {
-            config
-                .auth
-                .get_or_insert_with(RawAuthConfig::default)
-                .store_path = Some(PathBuf::from(path));
-        }
         if let Some(filter) = env.var("AGENA_LOG") {
             config
                 .tracing
@@ -353,13 +338,6 @@ impl RawConfig {
             headers: raw_telemetry.headers,
         };
 
-        let raw_auth = self.auth.unwrap_or_default();
-        let auth = AuthConfig {
-            store_path: raw_auth
-                .store_path
-                .unwrap_or_else(FileAuthStore::default_path),
-            store_backend: raw_auth.store_backend.unwrap_or_default(),
-        };
         let ui = UiConfig {
             locale: self
                 .ui
@@ -397,7 +375,6 @@ impl RawConfig {
         Ok(ResolvedConfig {
             tracing,
             telemetry,
-            auth,
             ui,
             runtime,
             permission,
@@ -594,20 +571,6 @@ impl Merge for RawTelemetryConfig {
         merge_option(&mut self.service_name, overlay.service_name);
         merge_option(&mut self.otlp_endpoint, overlay.otlp_endpoint);
         self.headers.extend(overlay.headers);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub(crate) struct RawAuthConfig {
-    pub(crate) store_path: Option<PathBuf>,
-    pub(crate) store_backend: Option<AuthStoreBackend>,
-}
-
-impl Merge for RawAuthConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.store_path, overlay.store_path);
-        merge_option(&mut self.store_backend, overlay.store_backend);
     }
 }
 
@@ -899,7 +862,7 @@ pub(crate) enum ProviderKind {
     OpenAiCompatible,
     #[serde(rename = "sap_ai_core")]
     SapAiCore,
-    #[serde(rename = "anthropic")]
+    #[serde(rename = "anthropic", alias = "claude")]
     Anthropic,
     #[serde(rename = "gemini")]
     Gemini,
@@ -924,7 +887,7 @@ impl std::str::FromStr for ProviderKind {
             "openai" => Ok(Self::OpenAi),
             "openai_compatible" => Ok(Self::OpenAiCompatible),
             "sap_ai_core" => Ok(Self::SapAiCore),
-            "anthropic" => Ok(Self::Anthropic),
+            "anthropic" | "claude" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
             "gitlab" => Ok(Self::Gitlab),
             "copilot" => Ok(Self::Copilot),
@@ -950,6 +913,7 @@ pub(crate) struct RawProviderModelConfig {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProviderAuthMode {
     None,
+    #[serde(alias = "credential", alias = "custom")]
     Secret,
     BedrockSigv4,
     GoogleAdc,
@@ -959,13 +923,14 @@ pub(crate) enum ProviderAuthMode {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct RawProviderAuthConfig {
+    #[serde(alias = "kind")]
     pub(crate) mode: Option<ProviderAuthMode>,
     #[serde(alias = "api_key", alias = "access_token")]
     pub(crate) secret: Option<String>,
     #[serde(alias = "api_key_env", alias = "access_token_env")]
     pub(crate) secret_env: Option<String>,
-    #[serde(alias = "auth_provider_id")]
-    pub(crate) credential_provider_id: Option<String>,
+    #[serde(default, alias = "stored_credential", alias = "auth_data")]
+    pub(crate) credential: Option<AuthData>,
     pub(crate) profile: Option<String>,
     pub(crate) access_key_id: Option<String>,
     pub(crate) secret_access_key: Option<String>,
@@ -978,10 +943,7 @@ impl Merge for RawProviderAuthConfig {
         merge_option(&mut self.mode, overlay.mode);
         merge_option(&mut self.secret, overlay.secret);
         merge_option(&mut self.secret_env, overlay.secret_env);
-        merge_option(
-            &mut self.credential_provider_id,
-            overlay.credential_provider_id,
-        );
+        merge_option(&mut self.credential, overlay.credential);
         merge_option(&mut self.profile, overlay.profile);
         merge_option(&mut self.access_key_id, overlay.access_key_id);
         merge_option(&mut self.secret_access_key, overlay.secret_access_key);
@@ -1111,7 +1073,15 @@ impl RawProviderConfig {
         let enabled = self.enabled.unwrap_or(true);
         if self.adapters.is_empty() {
             let (adapter_id, adapter) = resolve_legacy_adapter(provider_id.as_str(), &self)?;
-            let auth = resolve_legacy_auth(provider_id.as_str(), &self, &adapter.definition)?;
+            let auth = if self.auth.is_some() {
+                resolve_provider_auth(
+                    provider_id.as_str(),
+                    self.auth.clone(),
+                    std::iter::once(&adapter),
+                )?
+            } else {
+                resolve_legacy_auth(provider_id.as_str(), &self, &adapter.definition)?
+            };
             validate_provider_auth(provider_id.as_str(), &auth, std::iter::once(&adapter))?;
             normalize_model_configs(&mut self.models);
             validate_configured_models(provider_id.as_str(), "provider", &self.models)?;
@@ -1130,8 +1100,8 @@ impl RawProviderConfig {
                     ))
                 })
                 .collect::<Result<BTreeMap<_, _>, ConfigError>>()?;
-            let default_model =
-                normalize_optional(self.default_model).unwrap_or_else(|| adapter.default_model.clone());
+            let default_model = normalize_optional(self.default_model)
+                .unwrap_or_else(|| adapter.default_model.clone());
             return Ok((
                 provider_id,
                 ResolvedProviderConfig {
@@ -1280,9 +1250,11 @@ fn resolve_legacy_adapter(
     provider_id: &str,
     provider: &RawProviderConfig,
 ) -> Result<(String, ResolvedProviderAdapterConfig), ConfigError> {
-    let kind = provider.kind.ok_or_else(|| ConfigError::MissingProviderKind {
-        provider_id: provider_id.to_owned(),
-    })?;
+    let kind = provider
+        .kind
+        .ok_or_else(|| ConfigError::MissingProviderKind {
+            provider_id: provider_id.to_owned(),
+        })?;
     Ok((
         DEFAULT_ADAPTER_ID.to_owned(),
         resolve_adapter_config(
@@ -1389,11 +1361,7 @@ fn resolve_adapter_config(
 
     let (default_model, definition) = match kind {
         ProviderKind::Ollama => (
-            required_string(
-                field_provider_id.as_str(),
-                "default_model",
-                default_model,
-            )?,
+            required_string(field_provider_id.as_str(), "default_model", default_model)?,
             ProviderAdapterDefinition::Ollama(super::OllamaProviderOptions {
                 base_url: base_url.unwrap_or_else(|| "http://localhost:11434".to_owned()),
             }),
@@ -1409,7 +1377,7 @@ fn resolve_adapter_config(
                 {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
-                        message: "openai backend `chatgpt_codex` uses auth-store OAuth; do not set `api_key` or `api_key_env`".to_owned(),
+                        message: "openai backend `chatgpt_codex` uses provider credential OAuth; do not set `api_key` or `api_key_env`".to_owned(),
                     });
                 }
                 if api_mode != OpenAiApiModeConfig::Responses {
@@ -1421,7 +1389,9 @@ fn resolve_adapter_config(
                 if stream_mode != StreamTransportMode::Sse {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
-                        message: "openai backend `chatgpt_codex` only supports `stream_mode = \"sse\"`".to_owned(),
+                        message:
+                            "openai backend `chatgpt_codex` only supports `stream_mode = \"sse\"`"
+                                .to_owned(),
                     });
                 }
                 if realtime_ws_url.is_some() {
@@ -1434,11 +1404,7 @@ fn resolve_adapter_config(
                 }
             }
             (
-                required_string(
-                    field_provider_id.as_str(),
-                    "default_model",
-                    default_model,
-                )?,
+                required_string(field_provider_id.as_str(), "default_model", default_model)?,
                 ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
                     base_url: normalize_optional(base_url)
                         .unwrap_or_else(|| default_openai_base_url(backend).to_owned()),
@@ -1453,11 +1419,7 @@ fn resolve_adapter_config(
             )
         }
         ProviderKind::OpenAiCompatible => (
-            required_string(
-                field_provider_id.as_str(),
-                "default_model",
-                default_model,
-            )?,
+            required_string(field_provider_id.as_str(), "default_model", default_model)?,
             ProviderAdapterDefinition::OpenAiCompatible(HttpProviderAdapterConfig {
                 base_url: required_string(field_provider_id.as_str(), "base_url", base_url)?,
                 extra_headers,
@@ -1471,11 +1433,7 @@ fn resolve_adapter_config(
             }),
         ),
         ProviderKind::SapAiCore => (
-            required_string(
-                field_provider_id.as_str(),
-                "default_model",
-                default_model,
-            )?,
+            required_string(field_provider_id.as_str(), "default_model", default_model)?,
             ProviderAdapterDefinition::SapAiCore(HttpProviderAdapterConfig {
                 base_url: required_string(field_provider_id.as_str(), "base_url", base_url)?,
                 extra_headers,
@@ -1489,11 +1447,7 @@ fn resolve_adapter_config(
             }),
         ),
         ProviderKind::Anthropic => (
-            required_string(
-                field_provider_id.as_str(),
-                "default_model",
-                default_model,
-            )?,
+            required_string(field_provider_id.as_str(), "default_model", default_model)?,
             ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
                 base_url: required_string(field_provider_id.as_str(), "base_url", base_url)?,
                 extra_headers,
@@ -1504,11 +1458,7 @@ fn resolve_adapter_config(
             }),
         ),
         ProviderKind::Gemini => (
-            required_string(
-                field_provider_id.as_str(),
-                "default_model",
-                default_model,
-            )?,
+            required_string(field_provider_id.as_str(), "default_model", default_model)?,
             ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
                 base_url: required_string(field_provider_id.as_str(), "base_url", base_url)?,
                 extra_headers,
@@ -1528,38 +1478,25 @@ fn resolve_adapter_config(
         ProviderKind::Copilot => (
             default_model.unwrap_or_else(|| "gpt-4o-mini".to_owned()),
             ProviderAdapterDefinition::Copilot(super::CopilotProviderOptions {
-                base_url: base_url
-                    .unwrap_or_else(|| "https://api.githubcopilot.com".to_owned()),
+                base_url: base_url.unwrap_or_else(|| "https://api.githubcopilot.com".to_owned()),
                 models_url: normalize_optional(models_url),
             }),
         ),
         ProviderKind::AmazonBedrock => (
-            required_string(
-                field_provider_id.as_str(),
-                "default_model",
-                default_model,
-            )?,
+            required_string(field_provider_id.as_str(), "default_model", default_model)?,
             ProviderAdapterDefinition::AmazonBedrock(super::AmazonBedrockProviderOptions {
                 base_url: required_string(field_provider_id.as_str(), "base_url", base_url)?,
                 region: required_string(field_provider_id.as_str(), "region", region)?,
             }),
         ),
         ProviderKind::GoogleVertex => (
-            required_string(
-                field_provider_id.as_str(),
-                "default_model",
-                default_model,
-            )?,
+            required_string(field_provider_id.as_str(), "default_model", default_model)?,
             ProviderAdapterDefinition::GoogleVertex(super::GoogleVertexProviderOptions {
                 base_url: required_string(field_provider_id.as_str(), "base_url", base_url)?,
             }),
         ),
         ProviderKind::CloudflareAiGateway => (
-            required_string(
-                field_provider_id.as_str(),
-                "default_model",
-                default_model,
-            )?,
+            required_string(field_provider_id.as_str(), "default_model", default_model)?,
             ProviderAdapterDefinition::CloudflareAiGateway(
                 super::CloudflareAiGatewayProviderOptions {
                     base_url: required_string(field_provider_id.as_str(), "base_url", base_url)?,
@@ -1584,15 +1521,11 @@ fn resolve_legacy_auth(
             mode: Some(ProviderAuthMode::None),
             ..Default::default()
         },
-        ProviderAdapterDefinition::OpenAi(config) => RawProviderAuthConfig {
+        ProviderAdapterDefinition::OpenAi(_config) => RawProviderAuthConfig {
             mode: Some(ProviderAuthMode::Secret),
             secret: raw.api_key.clone(),
             secret_env: raw.api_key_env.clone(),
-            credential_provider_id: Some(
-                raw.auth_provider_id.clone().unwrap_or_else(|| {
-                    default_openai_auth_provider_id(provider_id, config.options.backend)
-                }),
-            ),
+            credential: None,
             ..Default::default()
         },
         ProviderAdapterDefinition::OpenAiCompatible(_)
@@ -1602,14 +1535,14 @@ fn resolve_legacy_auth(
             mode: Some(ProviderAuthMode::Secret),
             secret: raw.api_key.clone(),
             secret_env: raw.api_key_env.clone(),
-            credential_provider_id: raw.auth_provider_id.clone(),
+            credential: None,
             ..Default::default()
         },
         ProviderAdapterDefinition::SapAiCore(_) => RawProviderAuthConfig {
             mode: Some(ProviderAuthMode::SapAiCore),
             secret: raw.api_key.clone(),
             secret_env: raw.api_key_env.clone(),
-            credential_provider_id: raw.auth_provider_id.clone(),
+            credential: None,
             service_key_env: Some(DEFAULT_SAP_AI_CORE_SERVICE_KEY_ENV.to_owned()),
             ..Default::default()
         },
@@ -1617,20 +1550,12 @@ fn resolve_legacy_auth(
             mode: Some(ProviderAuthMode::Secret),
             secret: raw.api_key.clone(),
             secret_env: raw.api_key_env.clone(),
-            credential_provider_id: Some(
-                raw.auth_provider_id
-                    .clone()
-                    .unwrap_or_else(|| "gitlab".to_owned()),
-            ),
+            credential: None,
             ..Default::default()
         },
         ProviderAdapterDefinition::Copilot(_) => RawProviderAuthConfig {
             mode: Some(ProviderAuthMode::Secret),
-            credential_provider_id: Some(
-                raw.auth_provider_id
-                    .clone()
-                    .unwrap_or_else(|| provider_id.to_owned()),
-            ),
+            credential: None,
             ..Default::default()
         },
         ProviderAdapterDefinition::AmazonBedrock(_) => {
@@ -1639,7 +1564,7 @@ fn resolve_legacy_auth(
                     mode: Some(ProviderAuthMode::Secret),
                     secret: raw.api_key.clone(),
                     secret_env: raw.api_key_env.clone(),
-                    credential_provider_id: raw.auth_provider_id.clone(),
+                    credential: None,
                     ..Default::default()
                 }
             } else {
@@ -1659,7 +1584,7 @@ fn resolve_legacy_auth(
                     mode: Some(ProviderAuthMode::Secret),
                     secret: raw.access_token.clone(),
                     secret_env: raw.access_token_env.clone(),
-                    credential_provider_id: raw.auth_provider_id.clone(),
+                    credential: None,
                     ..Default::default()
                 }
             } else {
@@ -1685,13 +1610,15 @@ fn resolve_provider_auth<'a>(
 ) -> Result<ProviderAuthConfig, ConfigError> {
     let adapters = adapters.into_iter().collect::<Vec<_>>();
     let raw_auth = raw_auth.unwrap_or_default();
-    let mode = raw_auth.mode.unwrap_or_else(|| infer_provider_auth_mode(&raw_auth, &adapters));
+    let mode = raw_auth
+        .mode
+        .unwrap_or_else(|| infer_provider_auth_mode(&raw_auth, &adapters));
     match mode {
         ProviderAuthMode::None => Ok(ProviderAuthConfig::None),
         ProviderAuthMode::Secret => Ok(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
             secret: normalize_optional(raw_auth.secret),
             secret_env: normalize_optional(raw_auth.secret_env),
-            credential_provider_id: normalize_optional(raw_auth.credential_provider_id),
+            credential: raw_auth.credential,
         })),
         ProviderAuthMode::BedrockSigv4 => {
             let access_key_id = normalize_optional(raw_auth.access_key_id);
@@ -1699,8 +1626,7 @@ fn resolve_provider_auth<'a>(
             if access_key_id.is_some() ^ secret_access_key.is_some() {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message: "access_key_id and secret_access_key must be set together"
-                        .to_owned(),
+                    message: "access_key_id and secret_access_key must be set together".to_owned(),
                 });
             }
             Ok(ProviderAuthConfig::BedrockSigv4(BedrockSigv4AuthConfig {
@@ -1711,17 +1637,17 @@ fn resolve_provider_auth<'a>(
             }))
         }
         ProviderAuthMode::GoogleAdc => Ok(ProviderAuthConfig::GoogleAdc),
-        ProviderAuthMode::SapAiCore => Ok(ProviderAuthConfig::SapAiCore(
-            ProviderSapAiCoreAuthConfig {
+        ProviderAuthMode::SapAiCore => {
+            Ok(ProviderAuthConfig::SapAiCore(ProviderSapAiCoreAuthConfig {
                 secret: ProviderSecretAuthConfig {
                     secret: normalize_optional(raw_auth.secret),
                     secret_env: normalize_optional(raw_auth.secret_env),
-                    credential_provider_id: normalize_optional(raw_auth.credential_provider_id),
+                    credential: raw_auth.credential,
                 },
                 service_key_env: normalize_optional(raw_auth.service_key_env)
                     .unwrap_or_else(|| DEFAULT_SAP_AI_CORE_SERVICE_KEY_ENV.to_owned()),
-            },
-        )),
+            }))
+        }
     }
 }
 
@@ -1729,10 +1655,7 @@ fn infer_provider_auth_mode(
     raw_auth: &RawProviderAuthConfig,
     adapters: &[&ResolvedProviderAdapterConfig],
 ) -> ProviderAuthMode {
-    if raw_auth.secret.is_some()
-        || raw_auth.secret_env.is_some()
-        || raw_auth.credential_provider_id.is_some()
-    {
+    if raw_auth.secret.is_some() || raw_auth.secret_env.is_some() || raw_auth.credential.is_some() {
         return ProviderAuthMode::Secret;
     }
     if raw_auth.access_key_id.is_some()
@@ -1798,8 +1721,7 @@ fn validate_provider_auth<'a>(
                         .to_owned(),
                 });
             }
-            (ProviderAuthConfig::BedrockSigv4(_), ProviderAdapterDefinition::AmazonBedrock(_)) => {
-            }
+            (ProviderAuthConfig::BedrockSigv4(_), ProviderAdapterDefinition::AmazonBedrock(_)) => {}
             (ProviderAuthConfig::BedrockSigv4(_), _) => {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
@@ -1821,28 +1743,24 @@ fn validate_provider_auth<'a>(
                     message: "secret auth is not supported by `ollama` adapters".to_owned(),
                 });
             }
-            (
-                ProviderAuthConfig::Secret(secret),
-                ProviderAdapterDefinition::Copilot(_),
-            ) if secret.secret.is_some() || secret.secret_env.is_some() => {
+            (ProviderAuthConfig::Secret(secret), ProviderAdapterDefinition::Copilot(_))
+                if secret.secret.is_some() || secret.secret_env.is_some() =>
+            {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message: "`copilot` adapter only supports auth-store credential auth"
-                        .to_owned(),
+                    message: "`copilot` adapter only supports provider credential auth".to_owned(),
                 });
             }
-            (
-                ProviderAuthConfig::Secret(secret),
-                ProviderAdapterDefinition::OpenAi(config),
-            ) if matches!(
-                config.options.backend,
-                super::OpenAiBackendConfig::ChatgptCodex
-            ) && (secret.secret.is_some() || secret.secret_env.is_some()) =>
+            (ProviderAuthConfig::Secret(secret), ProviderAdapterDefinition::OpenAi(config))
+                if matches!(
+                    config.options.backend,
+                    super::OpenAiBackendConfig::ChatgptCodex
+                ) && (secret.secret.is_some() || secret.secret_env.is_some()) =>
             {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message:
-                        "openai backend `chatgpt_codex` only supports auth-store credential auth"
+                        "openai backend `chatgpt_codex` only supports provider credential auth"
                             .to_owned(),
                 });
             }
@@ -1919,7 +1837,8 @@ fn validate_configured_models(
                 "provider `{provider_id}` {scope} model id cannot be empty"
             )));
         }
-        if configured.definition.is_empty() && normalize_optional(configured.target_model.clone()).is_none()
+        if configured.definition.is_empty()
+            && normalize_optional(configured.target_model.clone()).is_none()
         {
             return Err(ConfigError::Validation(format!(
                 "provider `{provider_id}` {scope} model `{model_id}` must set at least one field or target_model"
@@ -1974,16 +1893,6 @@ fn default_openai_base_url(backend: super::OpenAiBackendConfig) -> &'static str 
     match backend {
         super::OpenAiBackendConfig::Api => "https://api.openai.com/v1",
         super::OpenAiBackendConfig::ChatgptCodex => "https://chatgpt.com/backend-api/codex",
-    }
-}
-
-fn default_openai_auth_provider_id(
-    provider_id: &str,
-    backend: super::OpenAiBackendConfig,
-) -> String {
-    match backend {
-        super::OpenAiBackendConfig::Api => provider_id.to_owned(),
-        super::OpenAiBackendConfig::ChatgptCodex => "openai".to_owned(),
     }
 }
 

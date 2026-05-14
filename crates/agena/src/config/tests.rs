@@ -53,6 +53,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
     );
 
@@ -142,6 +143,7 @@ mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
     );
 
@@ -170,6 +172,7 @@ mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [modes.prod.permission]
 default_write = "ask"
@@ -201,6 +204,7 @@ mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [providers.openai.variants.deep]
 thinking = { type = "effort", effort = "high" }
@@ -259,6 +263,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
 [providers.api.adapters.openai]
+enabled = true
 "#,
     );
 
@@ -310,6 +315,7 @@ mode = "credential"
 issuer = "openai_chatgpt"
 
 [providers.chatgpt.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 "#,
     );
@@ -367,6 +373,7 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.chatgpt.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 "#,
     );
@@ -396,6 +403,7 @@ mode = "credential"
 issuer = "openai_chatgpt"
 
 [providers.chatgpt.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 api_mode = "chat"
 "#,
@@ -426,6 +434,7 @@ mode = "credential"
 issuer = "github_copilot"
 
 [providers."github-copilot".adapters.openai]
+enabled = true
 "#,
     );
 
@@ -477,6 +486,7 @@ mode = "credential"
 issuer = "github_copilot"
 
 [providers.bad.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 "#,
     );
@@ -506,6 +516,7 @@ mode = "credential"
 issuer = "github_copilot"
 
 [providers."github-copilot-claude".adapters.anthropic]
+enabled = true
 "#,
     );
 
@@ -555,6 +566,7 @@ mode = "credential"
 issuer = "openai_chatgpt"
 
 [providers.bad.adapters.anthropic]
+enabled = true
 "#,
     );
 
@@ -583,6 +595,7 @@ mode = "credential"
 issuer = "github_copilot"
 
 [providers.bad.adapters.gemini]
+enabled = true
 "#,
     );
 
@@ -613,11 +626,13 @@ base_url = "https://gateway.example.com/v1"
 api_key_env = "SHARED_GATEWAY_API_KEY"
 
 [providers.shared.adapters.openai]
+enabled = true
 
 [providers.shared.adapters.openai.models."gpt-4.1-mini".variants.deep]
 thinking = { type = "effort", effort = "high" }
 
 [providers.shared.adapters.anthropic]
+enabled = true
 
 [providers.shared.adapters.anthropic.models."claude-sonnet-4"]
 "#,
@@ -647,7 +662,10 @@ thinking = { type = "effort", effort = "high" }
     }
     assert_eq!(provider.adapters.len(), 2);
     assert_eq!(
-        provider.models.get("openai/gpt-4.1-mini").map(|model| model.enabled),
+        provider
+            .models
+            .get("openai/gpt-4.1-mini")
+            .map(|model| model.enabled),
         Some(true)
     );
     assert!(
@@ -673,8 +691,10 @@ base_url = "https://gateway.example.com/v1"
 api_key_env = "SHARED_GATEWAY_API_KEY"
 
 [providers.shared.adapters.openai]
+enabled = true
 
 [providers.shared.adapters.anthropic]
+enabled = true
 
 [providers.shared.adapters.anthropic.models."claude-sonnet-4"]
 "#,
@@ -710,6 +730,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-primary"
 
 [providers.primary.adapters.openai]
+enabled = true
 
 [providers.secondary]
 default_model = "openai/gpt-4.1-mini"
@@ -720,6 +741,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-secondary"
 
 [providers.secondary.adapters.openai]
+enabled = true
 "#,
     );
 
@@ -804,7 +826,9 @@ fn env_provider_id_normalization_matches_hyphenated_names() {
         )]),
     };
     let err = RawConfig::from_env(&env).expect_err("legacy provider env overrides should fail");
-    assert!(matches!(err, ConfigError::Validation(message) if message.contains("AGENA_PROVIDER__GOOGLE_VERTEX__KIND is no longer supported")));
+    assert!(
+        matches!(err, ConfigError::Validation(message) if message.contains("AGENA_PROVIDER__GOOGLE_VERTEX__KIND is no longer supported"))
+    );
 }
 
 #[test]
@@ -867,6 +891,7 @@ fn provider_auth_credential_inline_config_loads() {
 default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.adapters.openai]
+enabled = true
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
@@ -894,6 +919,64 @@ api_key = "sk-inline"
         }
         other => panic!("unexpected auth config: {other:?}"),
     }
+}
+
+#[test]
+fn provider_adapter_and_model_enable_defaults_are_canonical() {
+    let path = write_temp_config(
+        r#"
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-test"
+
+[providers.openai.adapters.openai]
+enabled = true
+
+[providers.openai.adapters.anthropic]
+
+[providers.openai.adapters.anthropic.models."claude-sonnet-4"]
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("openai")
+        .expect("openai provider should exist");
+    assert!(provider.enabled);
+    assert!(
+        provider
+            .adapters
+            .get("openai")
+            .expect("openai adapter should exist")
+            .enabled
+    );
+    assert!(
+        !provider
+            .adapters
+            .get("anthropic")
+            .expect("anthropic adapter should exist")
+            .enabled
+    );
+    assert_eq!(
+        provider
+            .models
+            .get("anthropic/claude-sonnet-4")
+            .map(|model| model.enabled),
+        Some(true)
+    );
 }
 
 #[test]
@@ -1231,6 +1314,9 @@ mode = "api"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
+[providers.openai.adapters.openai]
+enabled = true
+
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 input = { unsupported = ["image"] }
 "#,
@@ -1272,6 +1358,9 @@ mode = "api"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
+[providers.openai.adapters.openai]
+enabled = true
+
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 "#,
     );
@@ -1304,6 +1393,9 @@ mode = "api"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
+[providers.openai.adapters.openai]
+enabled = true
+
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 input = { supported = ["image"], unsupported = ["image"] }
 "#,
@@ -1334,6 +1426,9 @@ mode = "api"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
+[providers.openai.adapters.openai]
+enabled = true
+
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 input = { unsupported = ["image"] }
 features = ["tool_calling"]
@@ -1352,11 +1447,11 @@ features = ["tool_calling"]
         .render(ConfigOutputFormat::Toml)
         .expect("resolved config should serialize");
 
-    assert!(serialized.contains(
-        "[config.providers.openai.models.\"openai/gpt-4.1-mini\".definition.capabilities.input]"
-    ) || serialized.contains(
-        "[config.providers.openai.models.\"openai/gpt-4.1-mini\".input]"
-    ));
+    assert!(
+        serialized.contains(
+            "[config.providers.openai.models.\"openai/gpt-4.1-mini\".definition.capabilities.input]"
+        ) || serialized.contains("[config.providers.openai.models.\"openai/gpt-4.1-mini\".input]")
+    );
     assert!(serialized.contains("unsupported = [\"image\"]"));
     assert!(serialized.contains("features = [\"tool_calling\"]"));
     assert!(!serialized.contains("image_input = \"unsupported\""));
@@ -1513,6 +1608,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 "#,
     )
@@ -1563,6 +1659,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
     )
     .expect("config should be written");
@@ -1787,6 +1884,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
     );
 
@@ -1870,6 +1968,7 @@ base_url = "https://gateway.example.com/v1"
 api_key = "secret"
 
 [providers.gateway.adapters.openai]
+enabled = true
 capability_family = "openai_compatible"
 "#,
     );
@@ -1897,6 +1996,9 @@ mode = "api"
 base_url = "https://gateway.example.com/v1"
 api_key = "secret"
 
+[providers.gateway.adapters.openai]
+enabled = true
+
 [providers.gateway.adapters.openai.models."gpt-4.1-mini"]
 target_model = "gpt-4.1-mini"
 "#,
@@ -1910,7 +2012,9 @@ target_model = "gpt-4.1-mini"
         })
         .expect_err("legacy model fields should be rejected");
 
-    assert!(matches!(err, ConfigError::Validation(message) if message.contains("does not support `target_model`")));
+    assert!(
+        matches!(err, ConfigError::Validation(message) if message.contains("does not support `target_model`"))
+    );
 }
 
 #[test]
@@ -1927,6 +2031,7 @@ region = "us-east-1"
 profile = "prod"
 
 [providers.bedrock.adapters.amazon_bedrock]
+enabled = true
 "#,
     );
 

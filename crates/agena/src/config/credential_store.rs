@@ -357,6 +357,7 @@ mod tests {
 default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         )
         .expect("config should be written");
@@ -392,6 +393,7 @@ issuer = "openai_chatgpt"
 credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "refresh", access = "access", expires_at_ms = 123 }
 
 [providers.openai_chatgpt.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 "#,
         )
@@ -422,6 +424,7 @@ backend = "chatgpt_codex"
 default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [providers.openai.auth]
 mode = "api"

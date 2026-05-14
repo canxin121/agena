@@ -205,6 +205,7 @@ base_url = "{base_url}/api/provider/openai/v1"
 api_key_env = "{key_env}"
 
 [providers.openai_live.adapters.openai]
+enabled = true
 
 [providers.compat_live]
 default_model = "openai/{model}"
@@ -215,6 +216,7 @@ base_url = "{base_url}/api/provider/openai/v1"
 api_key_env = "{key_env}"
 
 [providers.compat_live.adapters.openai]
+enabled = true
 auth_header = "authorization"
 auth_scheme = "Bearer"
 api_mode = "chat"
@@ -228,6 +230,7 @@ base_url = "{base_url}/api/provider/anthropic/v1"
 api_key_env = "{key_env}"
 
 [providers.anthropic_live.adapters.anthropic]
+enabled = true
 auth_header = "authorization"
 auth_scheme = "Bearer"
 
@@ -240,6 +243,7 @@ base_url = "{base_url}/api/provider/google/v1beta"
 api_key_env = "{key_env}"
 
 [providers.gemini_live.adapters.gemini]
+enabled = true
 "#,
         base_url = LIVE_BASE_URL,
         model = LIVE_MODEL,

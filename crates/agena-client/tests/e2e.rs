@@ -334,7 +334,7 @@ async fn spawn_permission_server() -> (String, String, Arc<SessionManager>) {
     let config_path = write_temp_config(
         r#"
 [providers."permission-test"]
-default_model = "permission-test-model"
+default_model = "anthropic/permission-test-model"
 
 [providers."permission-test".auth]
 mode = "api"
@@ -342,7 +342,7 @@ base_url = "https://example.invalid/v1"
 api_key = "test"
 
 [providers."permission-test".adapters.anthropic]
-default_model = "permission-test-model"
+enabled = true
 "#,
     );
     let plugins = agena::tool::first_party_plugin_host(workspace_root.clone())

@@ -610,6 +610,41 @@ impl SessionManager {
         self.store.list_workspace_session_ids().await
     }
 
+    pub async fn list_projected_messages(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<Message>, AppError> {
+        self.store
+            .list_projected_messages(session_id, include_full_parts)
+            .await
+    }
+
+    pub async fn find_projected_message(
+        &self,
+        session_id: i64,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Option<Message>, AppError> {
+        self.store
+            .find_projected_message(session_id, message_id, include_full_parts)
+            .await
+    }
+
+    pub async fn list_projected_parts(
+        &self,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<MessagePart>, AppError> {
+        self.store
+            .list_projected_parts(message_id, include_full_parts)
+            .await
+    }
+
+    pub async fn find_projected_part(&self, part_id: i64) -> Result<Option<MessagePart>, AppError> {
+        self.store.find_projected_part(part_id).await
+    }
+
     pub async fn broadcast_session_end(
         &self,
         session_id: i64,

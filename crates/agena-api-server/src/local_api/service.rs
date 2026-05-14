@@ -534,8 +534,9 @@ impl ApiService {
         query: MessageListQuery,
     ) -> ApiResult<PaginatedResponse<MessageResource>> {
         self.ensure_session_exists(session_id).await?;
-        let session = manager
-            .get_session(session_id)
+        let include_full_parts = query.parts == PartLoadMode::Full;
+        let messages = manager
+            .list_projected_messages(session_id, include_full_parts)
             .await
             .map_err(api_error_from_app)?;
 
@@ -548,7 +549,7 @@ impl ApiService {
 
         // Project messages newest-first to match the original SQL ordering,
         // then apply cursor + limit.
-        let mut all: Vec<&Message> = session.messages.iter().collect();
+        let mut all: Vec<&Message> = messages.iter().collect();
         all.sort_by(|a, b| {
             (b.created_at.timestamp_millis(), b.id).cmp(&(a.created_at.timestamp_millis(), a.id))
         });
@@ -569,7 +570,7 @@ impl ApiService {
 
         let items: Vec<MessageResource> = slice
             .iter()
-            .map(|m| message_resource_from_message(session.id, m, query.parts))
+            .map(|m| message_resource_from_message(session_id, m, query.parts))
             .collect();
 
         build_page(items, has_more, next_cursor, PageOrder::Asc, limit)
@@ -588,14 +589,13 @@ impl ApiService {
         else {
             return Ok(None);
         };
-        let session = manager
-            .get_session(session_id)
+        let include_full_parts = parts == PartLoadMode::Full;
+        let message = manager
+            .find_projected_message(session_id, message_id, include_full_parts)
             .await
             .map_err(api_error_from_app)?;
-        Ok(session
-            .messages
-            .iter()
-            .find(|m| m.id == message_id)
+        Ok(message
+            .as_ref()
             .map(|m| message_resource_from_message(session_id, m, parts)))
     }
 
@@ -608,7 +608,7 @@ impl ApiService {
         if mode == PartLoadMode::None {
             return Ok(Vec::new());
         }
-        let Some(session_id) = manager
+        let Some(_) = manager
             .find_session_id_for_message(message_id)
             .await
             .map_err(api_error_from_app)?
@@ -617,16 +617,11 @@ impl ApiService {
                 "message not found: {message_id}"
             )));
         };
-        let session = manager
-            .get_session(session_id)
+        let include_full_parts = mode == PartLoadMode::Full;
+        let parts = manager
+            .list_projected_parts(message_id, include_full_parts)
             .await
             .map_err(api_error_from_app)?;
-        let parts = session
-            .messages
-            .iter()
-            .find(|m| m.id == message_id)
-            .map(|m| m.parts.clone())
-            .unwrap_or_default();
         Ok(parts.into_iter().map(|p| project_part(p, mode)).collect())
     }
 
@@ -635,23 +630,17 @@ impl ApiService {
         manager: &SessionManager,
         part_id: i64,
     ) -> ApiResult<Option<MessagePart>> {
-        let Some(session_id) = manager
+        let Some(_) = manager
             .find_session_id_for_part(part_id)
             .await
             .map_err(api_error_from_app)?
         else {
             return Ok(None);
         };
-        let session = manager
-            .get_session(session_id)
+        Ok(manager
+            .find_projected_part(part_id)
             .await
-            .map_err(api_error_from_app)?;
-        Ok(session
-            .messages
-            .iter()
-            .flat_map(|m| m.parts.iter())
-            .find(|p| p.id == part_id)
-            .cloned())
+            .map_err(api_error_from_app)?)
     }
 
     pub async fn list_permission_rules(

@@ -1304,6 +1304,7 @@ impl SessionStore {
         use crate::event::{EventFilter, Scope, StoreRange};
         let filter = EventFilter::new(Scope::Global);
         let mut max_message_id: i64 = 0;
+        let mut max_part_id: i64 = 0;
         let mut cursor: i64 = 0;
         loop {
             let chunk = self
@@ -1330,10 +1331,15 @@ impl SessionStore {
                         max_message_id = id;
                     }
                 });
+                visit_event_part_ids(&event.kind, |id| {
+                    if id > max_part_id {
+                        max_part_id = id;
+                    }
+                });
             }
         }
         let next_message_id = max_message_id + 1;
-        let next_part_id: i64 = 1;
+        let next_part_id = max_part_id + 1;
 
         if !allocator.initialized {
             allocator.initialized = true;
@@ -1624,6 +1630,44 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
     }
 }
 
+fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
+    match kind {
+        EventKind::UserMessageAppended(p) => {
+            for part in &p.parts {
+                visit(part.id);
+            }
+        }
+        EventKind::AssistantMessageCompleted(p) => {
+            for part in &p.parts {
+                visit(part.id);
+            }
+        }
+        EventKind::MessagePartUpdated(p) => {
+            visit(p.part.id);
+        }
+        EventKind::RunStarted(_)
+        | EventKind::RunFailed(_)
+        | EventKind::StreamError(_)
+        | EventKind::MessagePartDelta(_)
+        | EventKind::CommandBegin(_)
+        | EventKind::CommandOutputDelta(_)
+        | EventKind::CommandEnd(_)
+        | EventKind::PermissionRequested(_)
+        | EventKind::PermissionReplied(_)
+        | EventKind::PermissionRuleCreated(_)
+        | EventKind::PermissionRuleUpdated(_)
+        | EventKind::PermissionRuleRevoked(_)
+        | EventKind::TurnStarted(_)
+        | EventKind::TurnCompleted(_)
+        | EventKind::TurnAborted(_)
+        | EventKind::PluginEvent(_)
+        | EventKind::ToolCallIssued(_)
+        | EventKind::ToolCallCompleted(_)
+        | EventKind::SystemNoticeAppended(_)
+        | EventKind::MessageRevised(_) => {}
+    }
+}
+
 /// Rewrite every `message_id` in `kind` through `f`. Mirror of
 /// [`visit_event_message_ids`].
 fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
@@ -1752,7 +1796,16 @@ mod tests {
 
     use super::{SessionCachePolicy, SessionStore, ordered_unique_touched_messages};
     use crate::{
-        db::init_schema, event::EventPublisher, message::Message, role::Role, session::Session,
+        db::crud::{session as session_crud, workspace},
+        db::init_schema,
+        event::{EventKind, EventPublisher},
+        message::{Message, MessageMetadata, PartContent},
+        role::Role,
+        session::{
+            Session,
+            history::{FinishReason, TranscriptContent, TurnCompleted, TurnStarted, UserMessageAppended},
+            ids::{MessageId, TurnId},
+        },
     };
 
     fn test_publisher(db: &sea_orm::DatabaseConnection) -> std::sync::Arc<EventPublisher> {
@@ -1845,5 +1898,84 @@ mod tests {
         assert_eq!(unique.len(), allocated.len());
         assert_eq!(next_part_id, 1_101);
         assert!(!unique.contains(&next_part_id));
+    }
+
+    #[tokio::test]
+    async fn allocator_starts_after_existing_history_part_ids() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("failed to create sqlite db");
+        init_schema(&db).await.expect("failed to init schema");
+
+        let workspace_root = std::env::temp_dir();
+        let publisher = test_publisher(&db);
+        let store = SessionStore::new(db, workspace_root.as_path(), publisher);
+        let turn_id = TurnId::new();
+        let created_at = Utc::now();
+        let workspace_id = workspace::ensure_workspace_id(
+            store.db(),
+            workspace_root.to_string_lossy().as_ref(),
+        )
+        .await
+        .expect("workspace should exist");
+        let session = session_crud::create_session(
+            store.db(),
+            workspace_id,
+            None,
+            "allocator history",
+        )
+        .await
+        .expect("session should exist");
+        let session_id = session.id;
+        let message_id = 7;
+        let part_id = 55;
+        let part = crate::message::MessagePart::with_content(
+            part_id,
+            message_id,
+            created_at,
+            crate::message::ExecutionStatus::Completed,
+            PartContent::text("history"),
+        );
+
+        store
+            .history
+            .append_items(
+                session_id,
+                vec![
+                    EventKind::TurnStarted(TurnStarted {
+                        turn_id,
+                        model_id: "test-model".into(),
+                        provider_id: "test".into(),
+                        request_digest: None,
+                    }),
+                    EventKind::UserMessageAppended(UserMessageAppended {
+                        message_id: MessageId(message_id),
+                        turn_id,
+                        created_at,
+                        content: TranscriptContent::from_text("history"),
+                        parts: vec![part],
+                        metadata: MessageMetadata {
+                            source: crate::message::MessageSource::User,
+                            model_provider_id: "test".to_string(),
+                            model_id: "test-model".to_string(),
+                            ..MessageMetadata::default()
+                        },
+                    }),
+                    EventKind::TurnCompleted(TurnCompleted {
+                        turn_id,
+                        finish_reason: FinishReason::Stop,
+                    }),
+                ],
+                created_at,
+            )
+            .await
+            .expect("history append should succeed");
+
+        let next_part_id = store
+            .reserve_part_id()
+            .await
+            .expect("subsequent part id should reserve");
+
+        assert_eq!(next_part_id, part_id + 1);
     }
 }

@@ -138,17 +138,13 @@ impl SessionViewBuilder {
 
     /// Adopt the authoritative `parts` carried on a history event.
     ///
-    /// Each part keeps its content verbatim but is re-anchored to the
-    /// projection's id space: the part id is replaced with a fresh allocator
-    /// draw and `message_id` is set to the message we are folding into. This
-    /// way two events that happen to share part ids (because they were
-    /// recorded with their original on-the-wire ids) cannot collide inside
-    /// the projection.
+    /// Each part keeps its authoritative persisted id and content verbatim;
+    /// only `message_id` and `part_index` are normalized to the message we
+    /// are folding into.
     fn adopt_parts(&mut self, parts: &[MessagePart], message_id: i64) -> Vec<MessagePart> {
         let mut out = Vec::with_capacity(parts.len());
         for (idx, part) in parts.iter().enumerate() {
             let mut clone = part.clone();
-            clone.id = self.alloc_part_id();
             clone.message_id = message_id;
             clone.part_index = idx as i32;
             out.push(clone);

@@ -1027,14 +1027,16 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 .ok_or_else(|| ServerError::NotFound(format!("session {session_id} not found")))?;
             Ok(QueryResult::Session(session_from_http(session)))
         }
-        Query::ListMessages(ListMessagesParams { session_id, .. }) => {
-            let session = manager.get_session(session_id).await?;
-            let items: Vec<_> = session
-                .messages
+        Query::ListMessages(ListMessagesParams { session_id, parts, .. }) => {
+            let include_full_parts = parts == agena_api::resource::PartLoadMode::Full;
+            let messages = manager
+                .list_projected_messages(session_id, include_full_parts)
+                .await?;
+            let items: Vec<_> = messages
                 .iter()
                 .map(|m| agena_api::resource::MessageResource {
                     id: m.id,
-                    session_id: session.id,
+                    session_id,
                     role: m.role,
                     state: m.state,
                     created_at: m.created_at,
@@ -1043,7 +1045,18 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                     usage: m.usage.clone(),
                     finish: m.finish.clone(),
                     part_count: m.parts.len() as u64,
-                    parts: Some(m.parts.clone()),
+                    parts: Some(
+                        m.parts
+                            .iter()
+                            .cloned()
+                            .map(|mut part| {
+                                if parts == agena_api::resource::PartLoadMode::Summary {
+                                    part.content = None;
+                                }
+                                part
+                            })
+                            .collect(),
+                    ),
                 })
                 .collect();
             let returned = items.len() as u64;
@@ -1056,20 +1069,19 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 },
             }))
         }
-        Query::GetMessage(GetMessageParams { message_id, .. }) => {
+        Query::GetMessage(GetMessageParams { message_id, parts }) => {
             let session_id = manager
                 .find_session_id_for_message(message_id)
                 .await?
                 .ok_or_else(|| ServerError::NotFound(format!("message {message_id} not found")))?;
-            let session = manager.get_session(session_id).await?;
-            let m = session
-                .messages
-                .iter()
-                .find(|m| m.id == message_id)
+            let include_full_parts = parts == agena_api::resource::PartLoadMode::Full;
+            let m = manager
+                .find_projected_message(session_id, message_id, include_full_parts)
+                .await?
                 .ok_or_else(|| ServerError::NotFound(format!("message {message_id}")))?;
             Ok(QueryResult::Message(agena_api::resource::MessageResource {
                 id: m.id,
-                session_id: session.id,
+                session_id,
                 role: m.role,
                 state: m.state,
                 created_at: m.created_at,
@@ -1078,7 +1090,18 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 usage: m.usage.clone(),
                 finish: m.finish.clone(),
                 part_count: m.parts.len() as u64,
-                parts: Some(m.parts.clone()),
+                parts: Some(
+                    m.parts
+                        .iter()
+                        .cloned()
+                        .map(|mut part| {
+                            if parts == agena_api::resource::PartLoadMode::Summary {
+                                part.content = None;
+                            }
+                            part
+                        })
+                        .collect(),
+                ),
             }))
         }
         Query::ListEvents(ListEventsParams {

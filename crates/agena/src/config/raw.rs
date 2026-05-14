@@ -87,6 +87,27 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
                     "provider `{provider_id}` variants must be configured under `providers.{provider_id}.models.\"<model-id>\".variants`; provider-level variants are not supported"
                 )));
             }
+            if let Some(adapters) = provider.get("adapters").and_then(Value::as_table) {
+                for (adapter_id, adapter) in adapters {
+                    let Some(adapter) = adapter.as_table() else {
+                        continue;
+                    };
+                    if let Some(models) = adapter.get("models").and_then(Value::as_table) {
+                        for (model_id, model) in models {
+                            let Some(model) = model.as_table() else {
+                                continue;
+                            };
+                            for field in ["target_model", "display_name", "family"] {
+                                if model.contains_key(field) {
+                                    return Err(ConfigError::Validation(format!(
+                                        "provider `{provider_id}` adapter `{adapter_id}` model `{model_id}` does not support `{field}`"
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -810,8 +831,6 @@ pub(crate) enum ProviderKind {
     Ollama,
     #[serde(rename = "openai")]
     OpenAi,
-    #[serde(rename = "openai_compatible")]
-    OpenAiCompatible,
     #[serde(rename = "anthropic")]
     Anthropic,
     #[serde(rename = "gemini")]
@@ -829,7 +848,6 @@ impl std::str::FromStr for ProviderKind {
         match value.trim() {
             "ollama" => Ok(Self::Ollama),
             "openai" => Ok(Self::OpenAi),
-            "openai_compatible" => Ok(Self::OpenAiCompatible),
             "anthropic" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
             "gitlab" => Ok(Self::Gitlab),
@@ -1123,7 +1141,7 @@ fn resolve_adapter(
 #[allow(clippy::too_many_arguments)]
 fn resolve_adapter_config(
     provider_id: &str,
-    adapter_id: &str,
+    _adapter_id: &str,
     kind: ProviderKind,
     backend: Option<super::OpenAiBackendConfig>,
     enabled: Option<bool>,
@@ -1144,8 +1162,6 @@ fn resolve_adapter_config(
     ai_gateway_headers: BTreeMap<String, String>,
     feature_flags: BTreeMap<String, bool>,
 ) -> Result<ResolvedProviderAdapterConfig, ConfigError> {
-    let field_provider_id = format!("{provider_id}:{adapter_id}");
-
     let definition = match kind {
         ProviderKind::Ollama => ProviderAdapterDefinition::Ollama(super::OllamaProviderOptions {
                 base_url: normalize_optional(base_url),
@@ -1156,17 +1172,6 @@ fn resolve_adapter_config(
             let api_mode = api_mode.unwrap_or(OpenAiApiModeConfig::Responses);
             let stream_mode = stream_mode.unwrap_or(StreamTransportMode::Sse);
             let realtime_ws_url = normalize_optional(realtime_ws_url);
-            if matches!(
-                capability_family,
-                Some(ProviderCapabilityFamilyConfig::OpenAiCompatible)
-            ) {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: field_provider_id,
-                    message:
-                        "`openai` adapter does not accept `capability_family = \"openai_compatible\"`; use the `openai_compatible` adapter instead"
-                            .to_owned(),
-                });
-            }
             if matches!(backend, super::OpenAiBackendConfig::ChatgptCodex) {
                 if api_mode != OpenAiApiModeConfig::Responses {
                     return Err(ConfigError::InvalidProviderConfig {
@@ -1213,24 +1218,6 @@ fn resolve_adapter_config(
                         auth_scheme: normalize_optional(auth_scheme)
                             .or_else(|| Some("Bearer".to_owned())),
                         capability_family,
-                    },
-                })
-        }
-        ProviderKind::OpenAiCompatible => {
-            if normalize_optional(base_url).is_some() {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: field_provider_id,
-                    message: "`openai_compatible` adapter does not accept `base_url`; set `providers.<id>.auth.base_url` instead".to_owned(),
-                });
-            }
-            ProviderAdapterDefinition::OpenAiCompatible(HttpProviderAdapterConfig {
-                    extra_headers,
-                    options: super::OpenAiCompatibleProviderOptions {
-                        auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
-                        auth_scheme: normalize_optional(auth_scheme)
-                            .or_else(|| Some("Bearer".to_owned())),
-                        stream_mode: stream_mode.unwrap_or(StreamTransportMode::Sse),
-                        realtime_ws_url: normalize_optional(realtime_ws_url),
                     },
                 })
         }
@@ -1402,15 +1389,6 @@ fn infer_provider_auth_mode(
     }) {
         return ProviderAuthMode::BedrockSigv4;
     }
-    if adapters.iter().all(|adapter| {
-        matches!(
-            &adapter.definition,
-            ProviderAdapterDefinition::OpenAiCompatible(_)
-        )
-    }) && raw_auth.service_key_env.is_some()
-    {
-        return ProviderAuthMode::SapAiCore;
-    }
     ProviderAuthMode::Api
 }
 
@@ -1450,12 +1428,12 @@ fn validate_provider_auth<'a>(
                         .to_owned(),
                 });
             }
-            (ProviderAuthConfig::SapAiCore(_), ProviderAdapterDefinition::OpenAiCompatible(_)) => {}
+            (ProviderAuthConfig::SapAiCore(_), ProviderAdapterDefinition::OpenAi(_)) => {}
             (ProviderAuthConfig::SapAiCore(_), _) => {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message:
-                        "auth mode `sap_ai_core` only supports `openai_compatible` adapters"
+                        "auth mode `sap_ai_core` only supports `openai` adapters"
                         .to_owned(),
                 });
             }

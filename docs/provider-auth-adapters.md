@@ -91,7 +91,6 @@ CLI、HTTP API、Studio、session 持久化、model ref 都围绕 `provider_id` 
 典型 adapter：
 
 - `openai`
-- `openai_compatible`
 - `anthropic`
 - `gemini`
 - `gitlab`
@@ -265,7 +264,7 @@ auth 决定身份来源；adapter 决定协议。
 - `github_copilot` credential 也可以配 `anthropic` adapter
 - `openai_chatgpt` credential 只适合 `openai` adapter 且 `backend = "chatgpt_codex"`
 - `bedrock_sigv4` 只适合 `amazon_bedrock`
-- `sap_ai_core` 只适合 `openai_compatible`
+- `sap_ai_core` 只适合 `openai`
 
 如果配置了错误组合，运行时报配置错误即可，不再为旧结构做兼容转换。
 

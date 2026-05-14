@@ -207,16 +207,17 @@ api_key_env = "{key_env}"
 [providers.openai_live.adapters.openai]
 
 [providers.compat_live]
-default_model = "openai_compatible/{model}"
+default_model = "openai/{model}"
 
 [providers.compat_live.auth]
 mode = "api"
 base_url = "{base_url}/api/provider/openai/v1"
 api_key_env = "{key_env}"
 
-[providers.compat_live.adapters.openai_compatible]
+[providers.compat_live.adapters.openai]
 auth_header = "authorization"
 auth_scheme = "Bearer"
+api_mode = "chat"
 
 [providers.anthropic_live]
 default_model = "anthropic/{model}"

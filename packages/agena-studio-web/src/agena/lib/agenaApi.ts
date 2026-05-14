@@ -1273,7 +1273,7 @@ export async function listMessages(sessionId: number): Promise<MessageResource[]
   return await collectPagedItems(
     (cursor) =>
       apiJson<PaginatedResponse<MessageResource>>(
-        `/api/v1/sessions/${sessionId}/messages?parts=full&limit=100${
+        `/api/v1/sessions/${sessionId}/messages?parts=summary&limit=100${
           cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
         }`,
       ),

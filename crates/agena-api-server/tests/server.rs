@@ -660,6 +660,14 @@ async fn message_detail_routes_return_message_and_parts() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value.as_array().map(|items| items.len()), Some(1));
+    assert_eq!(
+        value
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("id"))
+            .and_then(|id| id.as_i64()),
+        Some(part.id)
+    );
     assert!(
         value
             .as_array()
@@ -688,6 +696,97 @@ async fn message_detail_routes_return_message_and_parts() {
             .and_then(|content| content.get("text"))
             .and_then(|text| text.as_str()),
         Some("hello")
+    );
+}
+
+#[tokio::test]
+async fn message_list_summary_omits_part_content_while_detail_full_keeps_it() {
+    let (state, manager, workspace_root) = build_state().await;
+    let app = router(state.clone());
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "summary source".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let session = manager
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: session.id,
+            options: test_run_options(),
+            parts: vec![PartContent::text("summary hello")],
+        })
+        .await
+        .expect("submit turn should succeed");
+    let message = session
+        .messages
+        .first()
+        .expect("session should contain a user message");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/sessions/{}/messages?parts=summary",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let first = value
+        .get("items")
+        .and_then(|items| items.as_array())
+        .and_then(|items| items.first())
+        .expect("first list item");
+    assert_eq!(first.get("id").and_then(|id| id.as_i64()), Some(message.id));
+    assert!(
+        first.get("parts")
+            .and_then(|parts| parts.as_array())
+            .and_then(|parts| parts.first())
+            .and_then(|part| part.get("content"))
+            .is_none(),
+        "summary list should omit part content: {value:?}"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/messages/{}?parts=full", message.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        value
+            .get("parts")
+            .and_then(|parts| parts.as_array())
+            .and_then(|parts| parts.first())
+            .and_then(|item| item.get("content"))
+            .and_then(|content| content.get("text"))
+            .and_then(|text| text.as_str()),
+        Some("summary hello")
     );
 }
 

@@ -20,6 +20,8 @@ clap = { workspace = true }
 dashmap = { workspace = true }
 getrandom = { workspace = true }
 agena-otel = { workspace = true }
+mime_guess = { workspace = true }
+path-clean = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
@@ -30,6 +32,12 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 argon2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 url = { workspace = true }
+urlencoding = { workspace = true }
+
+[dev-dependencies]
+http-body-util = { workspace = true }
+tempfile = { workspace = true }
+tower = { workspace = true }
 
 [lints]
 workspace = true

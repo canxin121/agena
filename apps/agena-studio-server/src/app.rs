@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -14,15 +15,19 @@ use agena_api_server::AppState as ApiV2State;
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Json, Router,
+    body::Body,
     extract::Query,
     http::{
-        HeaderValue, Method,
+        HeaderValue, Method, StatusCode,
         header::{self, HeaderName},
     },
     middleware,
+    response::Response,
     routing::get,
 };
 use axum_extra::extract::cookie::SameSite;
+use mime_guess::MimeGuess;
+use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 use tower_http::{
     cors::{AllowOrigin, Any, CorsLayer},
@@ -84,6 +89,58 @@ struct GitStatusCompatFile {
     path: String,
     index: String,
     working_dir: String,
+}
+
+const MAX_COMPAT_FILE_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_COMPAT_LIST_LIMIT: usize = 2000;
+
+type CompatResult<T> = Result<T, (StatusCode, String)>;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsHomeCompatResponse {
+    home: String,
+    path: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FsListCompatQuery {
+    path: Option<String>,
+    #[serde(rename = "respectGitignore")]
+    respect_gitignore: Option<bool>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FsListCompatEntry {
+    name: String,
+    path: String,
+    is_directory: bool,
+    is_file: bool,
+    is_symbolic_link: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsListCompatResponse {
+    path: String,
+    entries: Vec<FsListCompatEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<usize>,
+    total: usize,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FsFileCompatQuery {
+    directory: Option<String>,
+    path: Option<String>,
 }
 
 async fn health(
@@ -167,6 +224,370 @@ fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
     (staged, unstaged, untracked, changed)
 }
 
+fn compat_bad_request(message: impl Into<String>) -> (StatusCode, String) {
+    (StatusCode::BAD_REQUEST, message.into())
+}
+
+fn compat_forbidden(message: impl Into<String>) -> (StatusCode, String) {
+    (StatusCode::FORBIDDEN, message.into())
+}
+
+fn compat_not_found(message: impl Into<String>) -> (StatusCode, String) {
+    (StatusCode::NOT_FOUND, message.into())
+}
+
+fn compat_internal(message: impl Into<String>) -> (StatusCode, String) {
+    (StatusCode::INTERNAL_SERVER_ERROR, message.into())
+}
+
+fn compat_payload_too_large(message: impl Into<String>) -> (StatusCode, String) {
+    (StatusCode::PAYLOAD_TOO_LARGE, message.into())
+}
+
+fn compat_home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("USERPROFILE")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            let drive = env::var_os("HOMEDRIVE")?;
+            let path = env::var_os("HOMEPATH")?;
+            if drive.is_empty() || path.is_empty() {
+                return None;
+            }
+            let mut joined = PathBuf::from(drive);
+            joined.push(path);
+            Some(joined)
+        })
+}
+
+fn compat_cwd() -> PathBuf {
+    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn compat_path_string(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn compat_resolve_path(raw: &str) -> PathBuf {
+    let candidate = PathBuf::from(raw);
+    let absolute = if candidate.is_absolute() {
+        candidate
+    } else {
+        compat_cwd().join(candidate)
+    };
+    absolute.clean()
+}
+
+async fn compat_validate_directory(raw: &str) -> CompatResult<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(compat_bad_request("Path is required"));
+    }
+
+    let absolute = compat_resolve_path(trimmed);
+    let metadata = tokio::fs::metadata(&absolute)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => compat_not_found("Directory not found"),
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access to directory denied"),
+            _ => compat_internal("Failed to validate directory"),
+        })?;
+
+    if !metadata.is_dir() {
+        return Err(compat_bad_request("Specified path is not a directory"));
+    }
+
+    Ok(absolute)
+}
+
+fn compat_default_list_root() -> PathBuf {
+    compat_home_dir().unwrap_or_else(compat_cwd).clean()
+}
+
+fn compat_git_check_ignore(directory: &Path, names: &[String]) -> HashSet<String> {
+    if names.is_empty() || !command_available("git") {
+        return HashSet::new();
+    }
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(directory)
+        .arg("check-ignore")
+        .arg("--")
+        .args(names)
+        .output();
+
+    let Ok(output) = output else {
+        return HashSet::new();
+    };
+    if !output.status.success() {
+        return HashSet::new();
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn compat_mime(path: &Path) -> String {
+    MimeGuess::from_path(path)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string()
+}
+
+fn compat_content_disposition(path: &Path, disposition_type: &str) -> String {
+    let raw = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "download".to_string());
+
+    let mut ascii = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        let safe = ch.is_ascii() && !matches!(ch, '"' | '\\') && !ch.is_ascii_control();
+        ascii.push(if safe { ch } else { '_' });
+    }
+    if ascii.trim().is_empty() {
+        ascii = "download".to_string();
+    }
+
+    format!(
+        "{}; filename=\"{}\"; filename*=UTF-8''{}",
+        disposition_type,
+        ascii,
+        urlencoding::encode(&raw)
+    )
+}
+
+fn compat_content_disposition_inline(path: &Path) -> String {
+    compat_content_disposition(path, "inline")
+}
+
+fn compat_content_disposition_attachment(path: &Path) -> String {
+    compat_content_disposition(path, "attachment")
+}
+
+async fn compat_resolve_scoped_file(
+    directory: Option<&str>,
+    path: Option<&str>,
+) -> CompatResult<PathBuf> {
+    let directory = directory
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("Directory parameter is required"))?;
+    let base = compat_validate_directory(directory).await?;
+
+    let target = path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("Path is required"))?;
+
+    let raw_target = PathBuf::from(target);
+    let absolute = if raw_target.is_absolute() {
+        raw_target.clean()
+    } else {
+        base.join(raw_target).clean()
+    };
+
+    if !absolute.starts_with(&base) {
+        return Err(compat_bad_request("Path is outside of active directory"));
+    }
+
+    let metadata = tokio::fs::metadata(&absolute)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => compat_not_found("File not found"),
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access to file denied"),
+            _ => compat_internal("Failed to read file"),
+        })?;
+
+    if !metadata.is_file() {
+        return Err(compat_bad_request("Specified path is not a file"));
+    }
+    if metadata.len() > MAX_COMPAT_FILE_BYTES {
+        return Err(compat_payload_too_large("File too large"));
+    }
+
+    Ok(absolute)
+}
+
+async fn compat_fs_home() -> CompatResult<Json<FsHomeCompatResponse>> {
+    let home = compat_default_list_root();
+    let path = compat_path_string(&home);
+    Ok(Json(FsHomeCompatResponse {
+        home: path.clone(),
+        path,
+    }))
+}
+
+async fn compat_fs_list(
+    Query(query): Query<FsListCompatQuery>,
+) -> CompatResult<Json<FsListCompatResponse>> {
+    let requested = query
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let directory = match requested {
+        Some(value) => compat_validate_directory(&value).await?,
+        None => compat_default_list_root(),
+    };
+    let respect_gitignore = query.respect_gitignore.unwrap_or(false);
+
+    let mut read_dir =
+        tokio::fs::read_dir(&directory)
+            .await
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => compat_not_found("Directory not found"),
+                std::io::ErrorKind::PermissionDenied => {
+                    compat_forbidden("Access to directory denied")
+                }
+                _ => compat_internal(error.to_string()),
+            })?;
+
+    let mut raw_entries = Vec::new();
+    let mut names = Vec::new();
+    while let Some(entry) = read_dir
+        .next_entry()
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        names.push(name.clone());
+        raw_entries.push((name, entry));
+    }
+
+    let ignored = if respect_gitignore {
+        compat_git_check_ignore(&directory, &names)
+    } else {
+        HashSet::new()
+    };
+
+    let mut entries = Vec::new();
+    for (name, entry) in raw_entries {
+        if respect_gitignore && ignored.contains(&name) {
+            continue;
+        }
+
+        let path = entry.path();
+        let file_type = match entry.file_type().await {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        let is_symbolic_link = file_type.is_symlink();
+        let mut is_directory = file_type.is_dir();
+        if !is_directory && is_symbolic_link {
+            if let Ok(target_metadata) = tokio::fs::metadata(&path).await {
+                is_directory = target_metadata.is_dir();
+            }
+        }
+
+        entries.push(FsListCompatEntry {
+            name,
+            path: compat_path_string(&path),
+            is_directory,
+            is_file: file_type.is_file(),
+            is_symbolic_link,
+        });
+    }
+
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let total = entries.len();
+    let offset = query.offset.unwrap_or(0).min(total);
+    let limit = query
+        .limit
+        .map(|value| value.clamp(1, MAX_COMPAT_LIST_LIMIT))
+        .filter(|value| *value > 0);
+
+    let (entries, has_more, next_offset) = if let Some(limit) = limit {
+        let end = offset.saturating_add(limit).min(total);
+        let has_more = end < total;
+        let next_offset = has_more.then_some(end);
+        (entries[offset..end].to_vec(), has_more, next_offset)
+    } else if offset > 0 {
+        (entries[offset..].to_vec(), false, None)
+    } else {
+        (entries, false, None)
+    };
+
+    Ok(Json(FsListCompatResponse {
+        path: compat_path_string(&directory),
+        entries,
+        offset: (query.limit.is_some() || offset > 0).then_some(offset),
+        limit,
+        total,
+        has_more,
+        next_offset,
+    }))
+}
+
+async fn compat_fs_raw(Query(query): Query<FsFileCompatQuery>) -> CompatResult<Response> {
+    let path =
+        compat_resolve_scoped_file(query.directory.as_deref(), query.path.as_deref()).await?;
+    let content = tokio::fs::read(&path)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => compat_not_found("File not found"),
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access to file denied"),
+            _ => compat_internal(error.to_string()),
+        })?;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("cache-control", "no-store")
+        .header("content-type", compat_mime(&path))
+        .header(
+            "content-disposition",
+            compat_content_disposition_inline(&path),
+        )
+        .body(Body::from(content))
+        .map_err(|error| compat_internal(error.to_string()))
+}
+
+async fn compat_fs_download(Query(query): Query<FsFileCompatQuery>) -> CompatResult<Response> {
+    let path =
+        compat_resolve_scoped_file(query.directory.as_deref(), query.path.as_deref()).await?;
+    let content = tokio::fs::read(&path)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => compat_not_found("File not found"),
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access to file denied"),
+            _ => compat_internal(error.to_string()),
+        })?;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("cache-control", "no-store")
+        .header("content-type", compat_mime(&path))
+        .header(
+            "content-disposition",
+            compat_content_disposition_attachment(&path),
+        )
+        .body(Body::from(content))
+        .map_err(|error| compat_internal(error.to_string()))
+}
+
+fn compat_fs_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/api/fs/home", get(compat_fs_home))
+        .route("/api/fs/list", get(compat_fs_list))
+        .route("/api/fs/raw", get(compat_fs_raw))
+        .route("/api/fs/download", get(compat_fs_download))
+}
+
 async fn compat_git_status(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Query(query): Query<GitStatusCompatQuery>,
@@ -226,7 +647,12 @@ async fn compat_git_status(
     let current = git_output(&workspace_root, &["branch", "--show-current"]).unwrap_or_default();
     let tracking = git_output(
         &workspace_root,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
     )
     .and_then(|value| {
         let trimmed = value.trim();
@@ -410,7 +836,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
     let agena_api = agena_api_server::router(ApiV2State::new(runtime.clone(), db.clone())).layer(
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
-    let git_compat = Router::new()
+    let compat_routes = compat_fs_router::<Arc<AppState>>()
         .route("/api/git/status", get(compat_git_status))
         .with_state(shared_state.clone())
         .layer(middleware::from_fn_with_state(
@@ -441,7 +867,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
 
     let mut app = public_router
         .merge(agena_api)
-        .merge(git_compat)
+        .merge(compat_routes)
         .layer(TraceLayer::new_for_http());
 
     if let Some(cors) = build_cors_layer(&normalized_cors_origins, args.cors_allow_all) {
@@ -486,6 +912,10 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tempfile::tempdir;
+    use tower::ServiceExt;
 
     #[test]
     fn normalize_origin_str_accepts_http_and_https_origins() {
@@ -527,5 +957,140 @@ mod tests {
             resolve_same_site(crate::UiCookieSameSite::Lax, true),
             SameSite::Lax
         ));
+    }
+
+    #[tokio::test]
+    async fn compat_fs_home_route_returns_non_empty_home_path() {
+        let response = compat_fs_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/fs/home")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: FsHomeCompatResponse =
+            serde_json::from_slice(&body).expect("response should be valid json");
+        assert!(!payload.home.is_empty());
+        assert_eq!(payload.home, payload.path);
+    }
+
+    #[tokio::test]
+    async fn compat_fs_list_route_lists_directory_with_pagination() {
+        let temp = tempdir().expect("tempdir should be created");
+        std::fs::write(temp.path().join("alpha.txt"), "alpha").expect("alpha should be written");
+        std::fs::write(temp.path().join("beta.txt"), "beta").expect("beta should be written");
+
+        let uri = format!(
+            "/api/fs/list?path={}&offset=1&limit=1",
+            urlencoding::encode(&temp.path().display().to_string())
+        );
+        let response = compat_fs_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: FsListCompatResponse =
+            serde_json::from_slice(&body).expect("response should be valid json");
+        assert_eq!(payload.path, compat_path_string(temp.path()));
+        assert_eq!(payload.total, 2);
+        assert_eq!(payload.offset, Some(1));
+        assert_eq!(payload.limit, Some(1));
+        assert!(!payload.has_more);
+        assert_eq!(payload.next_offset, None);
+        assert_eq!(payload.entries.len(), 1);
+        assert_eq!(payload.entries[0].name, "beta.txt");
+        assert!(payload.entries[0].is_file);
+        assert!(!payload.entries[0].is_directory);
+    }
+
+    #[tokio::test]
+    async fn compat_fs_raw_and_download_routes_serve_scoped_files() {
+        let temp = tempdir().expect("tempdir should be created");
+        let file = temp.path().join("notes.txt");
+        std::fs::write(&file, "hello studio").expect("file should be written");
+
+        let directory_path = temp.path().display().to_string();
+        let directory = urlencoding::encode(&directory_path);
+
+        let raw_uri = format!("/api/fs/raw?directory={directory}&path=notes.txt");
+        let raw_response = compat_fs_router::<()>()
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(raw_uri)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(raw_response.status(), StatusCode::OK);
+        let raw_disposition = raw_response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok())
+            .expect("content disposition should exist")
+            .to_string();
+        assert!(raw_disposition.starts_with("inline;"));
+        let raw_body = raw_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        assert_eq!(raw_body.as_ref(), b"hello studio");
+
+        let download_uri = format!("/api/fs/download?directory={directory}&path=notes.txt");
+        let download_response = compat_fs_router::<()>()
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(download_uri)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(download_response.status(), StatusCode::OK);
+        let download_disposition = download_response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok())
+            .expect("content disposition should exist")
+            .to_string();
+        assert!(download_disposition.starts_with("attachment;"));
+
+        let traversal_uri = format!("/api/fs/raw?directory={directory}&path=../notes.txt");
+        let traversal_response = compat_fs_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri(traversal_uri)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(traversal_response.status(), StatusCode::BAD_REQUEST);
     }
 }

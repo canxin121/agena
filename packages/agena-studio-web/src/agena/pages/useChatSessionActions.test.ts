@@ -27,7 +27,7 @@ function sessionState(overrides?: Partial<SessionExecutionResource>): SessionExe
   }
 }
 
-function message(id: number): MessageResource {
+function message(id: number, overrides?: Partial<MessageResource>): MessageResource {
   return {
     id,
     session_id: 3,
@@ -40,6 +40,7 @@ function message(id: number): MessageResource {
     finish: null,
     part_count: 0,
     parts: [],
+    ...overrides,
   }
 }
 
@@ -98,9 +99,25 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`forkSession:${sessionId}:${atMessageId || ''}:${title}`)
       return sessionState({ session: { ...sessionState().session, id: 13, title: title || 'forked' } })
     },
-    getMessage: async (messageId) => {
-      calls.push(`getMessage:${messageId}`)
-      return { ...message(messageId), part_count: 1, parts: [{ id: 200 + messageId, message_id: messageId, part_index: 0, status: 'complete', kind: 'text', created_at: '2026-05-10T00:00:00Z', content: { type: 'text', text: 'hello' } }] }
+    getMessage: async (messageId, parts) => {
+      calls.push(`getMessage:${messageId}:${parts || 'summary'}`)
+      return {
+        ...message(messageId),
+        part_count: 1,
+        parts: [
+          {
+            id: 200 + messageId,
+            message_id: messageId,
+            part_index: 0,
+            status: 'complete',
+            kind: 'text',
+            summary: 'hello',
+            has_detail: true,
+            created_at: '2026-05-10T00:00:00Z',
+            ...(parts === 'full' ? { content: { type: 'text', text: 'hello' } } : {}),
+          },
+        ],
+      }
     },
     getMessagePart: async (partId) => {
       calls.push(`getMessagePart:${partId}`)
@@ -110,9 +127,21 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`importSessionJsonl:${jsonl}`)
       return sessionState({ session: { ...sessionState().session, id: 15, workspace_id: 4 } })
     },
-    listMessageParts: async (messageId) => {
-      calls.push(`listMessageParts:${messageId}`)
-      return [{ id: 200 + messageId, message_id: messageId, part_index: 0, status: 'complete', kind: 'text', created_at: '2026-05-10T00:00:00Z', content: { type: 'text', text: 'hello' } }]
+    listMessageParts: async (messageId, mode) => {
+      calls.push(`listMessageParts:${messageId}:${mode || 'summary'}`)
+      return [
+        {
+          id: 200 + messageId,
+          message_id: messageId,
+          part_index: 0,
+          status: 'complete',
+          kind: 'text',
+          summary: 'hello',
+          has_detail: true,
+          created_at: '2026-05-10T00:00:00Z',
+          ...(mode === 'full' ? { content: { type: 'text', text: 'hello' } } : {}),
+        },
+      ]
     },
     replyPermission: async ({ sessionId, requestId, kind, scope }) => {
       calls.push(`replyPermission:${sessionId}:${requestId}:${kind}:${scope || ''}`)
@@ -173,7 +202,23 @@ function createInput() {
     inspectedPart: ref<MessagePart | null>(null),
     loading: ref(false),
     localCommandNotice: ref(''),
-    messages: ref<MessageResource[]>([message(21)]),
+    messages: ref<MessageResource[]>([
+      message(21, {
+        part_count: 1,
+        parts: [
+          {
+            id: 221,
+            message_id: 21,
+            part_index: 0,
+            status: 'complete',
+            kind: 'permission_request',
+            summary: 'Awaiting permission: Need to inspect git status',
+            has_detail: true,
+            created_at: '2026-05-10T00:00:00Z',
+          },
+        ],
+      }),
+    ]),
     newSessionTitle: ref(''),
     refreshConversation: async (foreground: boolean) => {
       refreshCalls.push(foreground)
@@ -260,6 +305,39 @@ describe('useChatSessionActions', () => {
     expect(refreshCalls).toEqual([])
     expect(syncCalls).toEqual([])
     expect(deps.calls.some((item) => item.startsWith('submitTurn:'))).toBe(false)
+  })
+
+  test('inspectMessage reuses summary message data and only loads part detail on demand', async () => {
+    const deps = createDeps()
+    const { input } = createInput()
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.inspectMessage(21)
+
+    expect(deps.calls).toEqual(['listMessageParts:21:summary'])
+    expect(input.inspectedMessage.value?.id).toBe(21)
+    expect(input.inspectedMessage.value?.parts?.[0]?.content).toBe(undefined)
+    expect(input.inspectedMessageParts.value[0]?.summary).toBe('hello')
+    expect(input.inspectedPart.value).toBe(null)
+
+    await actions.inspectMessage(21, 221)
+
+    expect(deps.calls).toEqual(['listMessageParts:21:summary', 'listMessageParts:21:summary', 'getMessagePart:221'])
+    expect(input.inspectedPart.value?.id).toBe(221)
+    expect(input.inspectedPart.value?.content).toEqual({ type: 'text', text: 'hello' })
+  })
+
+  test('inspectMessage falls back to summary message fetch when the message is not in the conversation list', async () => {
+    const deps = createDeps()
+    const { input } = createInput()
+    input.messages.value = []
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.inspectMessage(77)
+
+    expect(deps.calls).toEqual(['getMessage:77:summary', 'listMessageParts:77:summary'])
+    expect(input.inspectedMessage.value?.id).toBe(77)
+    expect(input.inspectedPart.value).toBe(null)
   })
 
   test('createSessionAction uses title, reloads sessions, and selects new session', async () => {

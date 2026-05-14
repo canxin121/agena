@@ -109,14 +109,13 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     input.loading.value = true
     input.errorMessage.value = ''
     try {
-      const [message, parts] = await Promise.all([
-        deps.getMessage(messageId),
-        deps.listMessageParts(messageId),
-      ])
+      const existingMessage = input.messages.value.find((message) => message.id === messageId) || null
+      const messagePromise = existingMessage ? Promise.resolve(existingMessage) : deps.getMessage(messageId, 'summary')
+      const partsPromise = deps.listMessageParts(messageId, 'summary')
+      const [message, parts] = await Promise.all([messagePromise, partsPromise])
       input.inspectedMessage.value = message
       input.inspectedMessageParts.value = parts
-      input.inspectedPart.value =
-        partId != null ? await deps.getMessagePart(partId) : parts.find((part) => part.id === message.parts?.[0]?.id) || parts[0] || null
+      input.inspectedPart.value = partId != null ? await deps.getMessagePart(partId) : null
       input.localCommandNotice.value = `Loaded message #${messageId} inspector.`
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)

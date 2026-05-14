@@ -82,7 +82,9 @@ const props = defineProps<{
     <section v-if="props.inspectedMessage" class="card" style="margin-top: 16px">
       <div class="page-header" style="margin-bottom: 12px">
         <h3 style="margin: 0">Message Inspector</h3>
-        <div class="muted mono">message={{ props.inspectedMessage.id }} · parts={{ props.inspectedMessageParts.length }}</div>
+        <div class="muted mono">
+          message={{ props.inspectedMessage.id }} · parts={{ props.inspectedMessageParts.length }} · summary mode
+        </div>
       </div>
       <div class="stack">
         <div><strong>Role:</strong> {{ props.inspectedMessage.role }}</div>
@@ -94,7 +96,9 @@ const props = defineProps<{
               <div>
                 <div><strong>#{{ part.part_index }}</strong> · {{ part.kind }}</div>
                 <div class="muted">{{ part.summary || 'No summary' }}</div>
-                <div class="muted mono">part={{ part.id }} · status={{ part.status }} · detail={{ part.has_detail ? 'yes' : 'no' }}</div>
+                <div class="muted mono">
+                  part={{ part.id }} · status={{ part.status }} · detail={{ part.has_detail ? 'yes' : 'no' }}
+                </div>
               </div>
               <button class="button ghost" :disabled="props.loading" @click="props.inspectMessage(props.inspectedMessage!.id, part.id)">
                 Load Part

@@ -11,6 +11,7 @@ const props = defineProps<{
 
 <template>
   <RuntimeOverviewPanel
+    :catalog-entries="props.overview.catalogEntries"
     :operator-cards="props.overview.operatorCards"
     :runtime-snapshot-facts="props.overview.runtimeSnapshotFacts"
     :runtime="props.overview.runtime"

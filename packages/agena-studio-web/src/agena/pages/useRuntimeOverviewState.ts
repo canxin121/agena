@@ -1,9 +1,10 @@
 import type { ComputedRef, Ref } from 'vue'
 
-import type { ProviderModel, ProviderSummary, RuntimeStatus } from '../lib/agenaApi'
+import type { ModelCatalogEntry, ProviderModel, ProviderSummary, RuntimeStatus } from '../lib/agenaApi'
 import type { OperatorCard, SessionExecutionFact } from './runtimePageModel'
 
 export type RuntimeOverviewStateInput = {
+  catalogEntries: Ref<ModelCatalogEntry[]>
   operatorCards: ComputedRef<OperatorCard[]>
   providerModels: Record<string, ProviderModel[]>
   providers: Ref<ProviderSummary[]>
@@ -14,6 +15,7 @@ export type RuntimeOverviewStateInput = {
 
 export function useRuntimeOverviewState(input: RuntimeOverviewStateInput) {
   return {
+    catalogEntries: input.catalogEntries,
     operatorCards: input.operatorCards,
     providerModels: input.providerModels,
     providers: input.providers,

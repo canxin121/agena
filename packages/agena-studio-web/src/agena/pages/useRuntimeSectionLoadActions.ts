@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 
 import type {
   AuthProvider,
+  ModelCatalogEntry,
   PermissionRuleResource,
   PluginInspect,
   PluginLogEntry,
@@ -26,6 +27,7 @@ export type RuntimeSectionLoadActionsInput = {
   activePluginsTab: Ref<PluginsTab>
   activeSettingsTab: Ref<SettingsTab>
   authProviders: Ref<AuthProvider[]>
+  catalogEntries: Ref<ModelCatalogEntry[]>
   desktopEnabled: Ref<boolean>
   loadDesktopPanel: () => Promise<void>
   loadMarketplacePanel: () => Promise<void>
@@ -73,6 +75,7 @@ export function useRuntimeSectionLoadActions(
       selectedSessionId: input.selectedSessionId.value,
     })
     input.runtime.value = data.runtime
+    input.catalogEntries.value = data.runtime.model_catalog?.entries ?? []
     input.providers.value = data.providers
     input.workspaces.value = data.workspaces
     input.replaceProviderModels(data.providerModels)

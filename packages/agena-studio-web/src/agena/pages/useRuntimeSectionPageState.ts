@@ -22,6 +22,7 @@ export function useRuntimeSectionPageState(input: {
   })
 
   const overview = createRuntimeOverviewPanelState({
+    catalogEntries: state.catalogEntries,
     operatorCards: state.operatorCards,
     providerModels: state.providerModels,
     providers: state.providers,

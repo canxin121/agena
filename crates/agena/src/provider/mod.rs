@@ -4,6 +4,7 @@ mod credential;
 mod amazon_bedrock;
 mod anthropic;
 mod capabilities;
+mod cataloged_models;
 mod chat_wire;
 mod configured_models;
 mod core;
@@ -31,6 +32,7 @@ pub use crate::model::{
 pub use amazon_bedrock::AmazonBedrockProvider;
 pub use anthropic::{AnthropicProfile, AnthropicProvider};
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
+pub use cataloged_models::CatalogedModelsProvider;
 pub use configured_models::{
     ConfiguredModelDefinition, ConfiguredModelVariant, ConfiguredModelsProvider,
     ModelCapabilityFeature, ModelCapabilityPatch,

@@ -4,21 +4,22 @@ use aws_credential_types::Credentials;
 use tokio::sync::Mutex;
 
 use crate::{
+    model_catalog::ModelCatalogSnapshot,
     plugin::{PluginHost, PluginHostBuilder},
     provider::{
         AmazonBedrockProvider, AnthropicProfile, AnthropicProvider, AuthRefreshStrategy,
-        AuthSecretSelector, GeminiProvider, GitlabProvider, GitlabProviderConfig,
-        ManagedCredential, ModelProvider, MultiAdapterProvider, OllamaProvider, OpenAiProvider,
-        ProviderModelRoute, ProviderRegistry, auth::AuthData, parse_sap_ai_core_service_key,
+        AuthSecretSelector, CatalogedModelsProvider, GeminiProvider, GitlabProvider,
+        GitlabProviderConfig, ManagedCredential, ModelProvider, MultiAdapterProvider,
+        OllamaProvider, OpenAiProvider, ProviderModelRoute, ProviderRegistry, auth::AuthData,
+        parse_sap_ai_core_service_key,
     },
 };
 
 use super::raw::parse_adapter_model_ref;
 use super::{
     ConfigEnvironment, ConfigError, ProcessEnvironment, ProviderAdapterDefinition,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    SharedGatewayEndpointLayout,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, SharedGatewayEndpointLayout,
 };
 
 impl ResolvedConfig {
@@ -26,8 +27,23 @@ impl ResolvedConfig {
         self.build_provider_registry_with_env(&ProcessEnvironment)
     }
 
+    pub fn build_provider_registry_with_catalog(
+        &self,
+        catalog: Option<&ModelCatalogSnapshot>,
+    ) -> Result<ProviderRegistry, ConfigError> {
+        self.build_provider_registry_with_catalog_and_env(catalog, &ProcessEnvironment)
+    }
+
     pub fn build_provider_registry_with_env(
         &self,
+        env: &dyn ConfigEnvironment,
+    ) -> Result<ProviderRegistry, ConfigError> {
+        self.build_provider_registry_with_catalog_and_env(None, env)
+    }
+
+    pub fn build_provider_registry_with_catalog_and_env(
+        &self,
+        catalog: Option<&ModelCatalogSnapshot>,
         env: &dyn ConfigEnvironment,
     ) -> Result<ProviderRegistry, ConfigError> {
         let client = ProviderRegistry::build_http_client(self.provider_http_client_config())?;
@@ -38,7 +54,8 @@ impl ResolvedConfig {
                 continue;
             }
 
-            let provider = build_provider(provider_id.as_str(), resolved, client.clone(), env)?;
+            let provider =
+                build_provider(provider_id.as_str(), resolved, client.clone(), env, catalog)?;
             registry.register_arc(provider);
         }
 
@@ -51,7 +68,16 @@ impl super::ConfigResolution {
         &self,
         plugins: &PluginHost,
     ) -> Result<ProviderRegistry, ConfigError> {
-        let mut registry = self.config.build_provider_registry()?;
+        self.build_provider_registry_with_plugins_and_catalog(plugins, None)
+            .await
+    }
+
+    pub async fn build_provider_registry_with_plugins_and_catalog(
+        &self,
+        plugins: &PluginHost,
+        catalog: Option<&ModelCatalogSnapshot>,
+    ) -> Result<ProviderRegistry, ConfigError> {
+        let mut registry = self.config.build_provider_registry_with_catalog(catalog)?;
         if plugins.is_empty() {
             return Ok(registry);
         }
@@ -172,6 +198,7 @@ fn build_provider(
     resolved: &ResolvedProviderConfig,
     client: reqwest::Client,
     env: &dyn ConfigEnvironment,
+    catalog: Option<&ModelCatalogSnapshot>,
 ) -> Result<Arc<dyn ModelProvider>, ConfigError> {
     let adapter_defaults = resolve_adapter_default_models(provider_id, resolved)?;
     let adapters = resolved
@@ -218,12 +245,20 @@ fn build_provider(
         })
         .collect::<Result<std::collections::BTreeMap<_, _>, ConfigError>>()?;
 
-    Ok(Arc::new(MultiAdapterProvider::new(
+    let provider: Arc<dyn ModelProvider> = Arc::new(MultiAdapterProvider::new(
         provider_id,
         resolved.default_model.clone(),
         adapters,
         routes,
-    )))
+    ));
+
+    if let Some(provider_record) =
+        catalog.and_then(|snapshot| snapshot.merged_provider(provider_id))
+    {
+        Ok(CatalogedModelsProvider::new(provider, provider_record))
+    } else {
+        Ok(provider)
+    }
 }
 
 fn build_adapter_provider(
@@ -675,7 +710,9 @@ fn resolve_endpoint_layout(
 
 fn normalize_base_url(value: &str) -> Result<String, ConfigError> {
     let mut url = url::Url::parse(value).map_err(|err| {
-        ConfigError::Validation(format!("provider auth base_url `{value}` is invalid: {err}"))
+        ConfigError::Validation(format!(
+            "provider auth base_url `{value}` is invalid: {err}"
+        ))
     })?;
     let path = url.path().trim_end_matches('/').to_owned();
     url.set_path(if path.is_empty() { "/" } else { path.as_str() });
@@ -703,7 +740,9 @@ fn normalize_gateway_root(
 
     let keep = match layout {
         SharedGatewayEndpointLayout::Direct => segments.len(),
-        SharedGatewayEndpointLayout::ProtocolRoot => trim_protocol_root_segments(segments.as_slice()),
+        SharedGatewayEndpointLayout::ProtocolRoot => {
+            trim_protocol_root_segments(segments.as_slice())
+        }
         SharedGatewayEndpointLayout::ProviderRouted => {
             trim_provider_routed_segments(segments.as_slice())
         }
@@ -722,7 +761,10 @@ fn normalize_gateway_root(
 fn trim_protocol_root_segments(segments: &[String]) -> usize {
     if let Some(mut len) = trim_known_endpoint_suffix(segments) {
         if len > 0
-            && matches!(segments.get(len - 1).map(String::as_str), Some("v1" | "v1beta"))
+            && matches!(
+                segments.get(len - 1).map(String::as_str),
+                Some("v1" | "v1beta")
+            )
         {
             len -= 1;
         }
@@ -1171,11 +1213,11 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use crate::config::SharedGatewayEndpointLayout;
     use crate::config::{
         ConfigEnvironment, ConfigError, ConfigLoader, LoadConfigRequest, ProviderAuthConfig,
     };
     use crate::provider::CapabilitySupport;
-    use crate::config::SharedGatewayEndpointLayout;
 
     #[derive(Clone, Default)]
     struct TestEnvironment {
@@ -1818,7 +1860,7 @@ auth_scheme = "Bearer"
                 &auth,
                 super::HttpAdapterKind::Anthropic,
             )
-                .expect("anthropic base should resolve"),
+            .expect("anthropic base should resolve"),
             "https://api.cxits.cn/api/provider/anthropic/v1"
         );
         assert_eq!(
@@ -1842,7 +1884,7 @@ auth_scheme = "Bearer"
                 &routed,
                 super::HttpAdapterKind::Anthropic,
             )
-                .expect("anthropic routed base should resolve"),
+            .expect("anthropic routed base should resolve"),
             "https://api.cxits.cn/api/provider/anthropic/v1"
         );
 
@@ -1858,7 +1900,7 @@ auth_scheme = "Bearer"
                 &protocol_root,
                 super::HttpAdapterKind::Gemini,
             )
-                .expect("gemini protocol-root base should resolve"),
+            .expect("gemini protocol-root base should resolve"),
             "https://api.cxits.cn/v1beta"
         );
 
@@ -1889,7 +1931,9 @@ auth_scheme = "Bearer"
         );
 
         let direct = ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
-            base_url: "https://aiplatform.googleapis.com/v1/projects/p/locations/l/endpoints/openapi".to_owned(),
+            base_url:
+                "https://aiplatform.googleapis.com/v1/projects/p/locations/l/endpoints/openapi"
+                    .to_owned(),
             endpoint_layout: SharedGatewayEndpointLayout::Auto,
             api_key: None,
             api_key_env: None,

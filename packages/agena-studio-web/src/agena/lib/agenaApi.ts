@@ -83,6 +83,7 @@ export type RuntimeStatus = {
     inserts: number
     evictions: number
   } | null
+  model_catalog?: ModelCatalogResponse | null
   automation: RuntimeAutomationResource
   operator: {
     mcp: {
@@ -226,6 +227,55 @@ export type ProviderSummary = {
   provider_id: string
   default_model: string
   default_model_ref: string
+  catalog_default_model?: string | null
+}
+
+export type ModelCatalogSourceKind = 'remote' | 'fallback' | 'cache' | 'custom'
+export type ModelCatalogEntryKind = 'official' | 'custom'
+
+export type ModelCatalogEntry = {
+  provider_id: string
+  model_id: string
+  kind: ModelCatalogEntryKind
+  source: ModelCatalogSourceKind
+  source_label?: string | null
+  default_model_for_provider?: string | null
+  display_name?: string | null
+  family?: string | null
+  lifecycle?: string | null
+  context_window_tokens?: number | null
+  max_output_tokens?: number | null
+  description?: string | null
+  variants?: Record<string, ProviderModelVariant>
+  capabilities?: Record<string, unknown>
+}
+
+export type ModelCatalogResponse = {
+  remote_url: string
+  fallback_url: string
+  last_refresh_at?: string | null
+  last_successful_source?: ModelCatalogSourceKind | null
+  last_error?: string | null
+  entries: ModelCatalogEntry[]
+}
+
+export type ModelCatalogEntryWriteRequest = {
+  provider_id: string
+  model_id: string
+  set_default_for_provider?: boolean
+  family?: string | null
+  lifecycle?: string | null
+  context_window_tokens?: number | null
+  max_output_tokens?: number | null
+  description?: string | null
+  display_name?: string | null
+  variants?: Record<string, ProviderModelVariant>
+  capabilities?: Record<string, unknown>
+}
+
+export type ModelCatalogProviderDefaultRequest = {
+  provider_id: string
+  model_id: string
 }
 
 export type ProviderModel = {
@@ -640,6 +690,41 @@ export async function reloadRuntime(): Promise<RuntimeReloadResponse> {
   return await apiJson<RuntimeReloadResponse>('/api/v1/runtime/reload', {
     method: 'POST',
   })
+}
+
+export async function fetchModelCatalog(): Promise<ModelCatalogResponse> {
+  return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog')
+}
+
+export async function refreshModelCatalog(): Promise<ModelCatalogResponse> {
+  return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog/refresh', {
+    method: 'POST',
+  })
+}
+
+export async function upsertModelCatalogEntry(input: ModelCatalogEntryWriteRequest): Promise<ModelCatalogResponse> {
+  return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog/entries', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function setModelCatalogProviderDefault(input: ModelCatalogProviderDefaultRequest): Promise<ModelCatalogResponse> {
+  return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog/default-model', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deleteModelCatalogEntry(providerId: string, modelId: string): Promise<ModelCatalogResponse> {
+  return await apiJson<ModelCatalogResponse>(
+    `/api/v1/model-catalog/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}`,
+    {
+      method: 'DELETE',
+    },
+  )
 }
 
 export async function listPlugins(): Promise<PluginStatus[]> {

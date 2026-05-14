@@ -9,8 +9,7 @@ use crate::{
         AmazonBedrockProvider, AnthropicProvider, AuthRefreshStrategy, AuthSecretSelector,
         AnthropicProfile, GeminiProvider, GitlabProvider, GitlabProviderConfig,
         ManagedCredential, ModelProvider, MultiAdapterProvider, OllamaProvider,
-        OpenAiCompatibleProvider, OpenAiProvider, OpencodeProvider, ProviderModelRoute,
-        ProviderRegistry, auth::AuthData,
+        OpenAiProvider, ProviderModelRoute, ProviderRegistry, auth::AuthData,
         parse_sap_ai_core_service_key,
     },
 };
@@ -249,10 +248,13 @@ fn build_adapter_provider(
         )),
         ProviderAdapterDefinition::OpenAi(adapter) => {
             match auth {
-                ProviderAuthConfig::Api(_) | ProviderAuthConfig::GoogleAdc => {
+                ProviderAuthConfig::Api(_)
+                | ProviderAuthConfig::GoogleAdc
+                | ProviderAuthConfig::SapAiCore(_) => {
                     let credential = openai_adapter_api_credential(
                         provider_id,
                         auth,
+                        client.clone(),
                         adapter.options.capability_family,
                         env,
                     )?;
@@ -377,53 +379,11 @@ fn build_adapter_provider(
                 _ => {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
-                        message: "openai adapter requires api or credential auth".to_owned(),
+                        message:
+                            "openai adapter requires api, google_adc, credential, or sap_ai_core auth"
+                                .to_owned(),
                     });
                 }
-            }
-        }
-        ProviderAdapterDefinition::OpenAiCompatible(adapter) => {
-            let credential = openai_compatible_adapter_credential(
-                provider_id,
-                auth,
-                client.clone(),
-                env,
-            )?
-            .credential;
-            let extra_headers = to_hash_map(&adapter.extra_headers);
-            let base_url = provider_api_base_url(auth, provider_id)?;
-            if matches!(provider_id, "opencode" | "opencode-go")
-                || matches!(adapter_id, "opencode" | "opencode-go")
-            {
-                Arc::new(OpencodeProvider::new(
-                    runtime_provider_id.as_str(),
-                    client,
-                    credential,
-                    base_url.clone(),
-                    adapter_default_model.to_owned(),
-                    adapter.options.auth_header.clone(),
-                    adapter.options.auth_scheme.clone(),
-                    extra_headers,
-                    adapter.options.stream_mode.into(),
-                    adapter.options.realtime_ws_url.clone(),
-                ))
-            } else {
-                Arc::new(
-                    OpenAiCompatibleProvider::new_managed(
-                        runtime_provider_id.as_str(),
-                        client,
-                        credential,
-                        base_url,
-                        adapter_default_model.to_owned(),
-                    )
-                    .with_auth_header(
-                        adapter.options.auth_header.clone(),
-                        adapter.options.auth_scheme.clone(),
-                    )
-                    .with_extra_headers(extra_headers)
-                    .with_stream_mode(adapter.options.stream_mode.into())
-                    .with_realtime_ws_url(adapter.options.realtime_ws_url.clone()),
-                )
             }
         }
         ProviderAdapterDefinition::Anthropic(adapter) => match auth {
@@ -678,6 +638,7 @@ fn openai_adapter_base_url(
 fn openai_adapter_api_credential(
     provider_id: &str,
     auth: &ProviderAuthConfig,
+    client: reqwest::Client,
     capability_family: Option<ProviderCapabilityFamilyConfig>,
     env: &dyn ConfigEnvironment,
 ) -> Result<ResolvedManagedCredential, ConfigError> {
@@ -709,37 +670,14 @@ fn openai_adapter_api_credential(
                 auth_data: None,
             })
         }
-        _ => Err(ConfigError::InvalidProviderConfig {
-            provider_id: provider_id.to_owned(),
-            message: "openai adapter requires api/google_adc/credential auth"
-                .to_owned(),
-        }),
-    }
-}
-
-fn openai_compatible_adapter_credential(
-    provider_id: &str,
-    auth: &ProviderAuthConfig,
-    client: reqwest::Client,
-    env: &dyn ConfigEnvironment,
-) -> Result<ResolvedManagedCredential, ConfigError> {
-    match auth {
-        ProviderAuthConfig::Api(_) => api_auth_managed_credential(
-            provider_id,
-            "api_key",
-            auth,
-            AuthSecretSelector::AccessOrApiKey,
-            AuthRefreshStrategy::ReloadFromStore,
-            env,
-            true,
-        ),
         ProviderAuthConfig::SapAiCore(_) => Ok(ResolvedManagedCredential {
             credential: sap_ai_core_managed_credential(provider_id, client, auth, env)?,
             auth_data: None,
         }),
         _ => Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
-            message: "openai_compatible adapter requires api or sap_ai_core auth".to_owned(),
+            message: "openai adapter requires api/google_adc/credential/sap_ai_core auth"
+                .to_owned(),
         }),
     }
 }
@@ -1610,14 +1548,14 @@ capability_family = "gemini"
         let path = write_temp_file(
             r#"
 [providers.sap]
-default_model = "openai_compatible/anthropic/claude-sonnet-4"
+default_model = "openai/anthropic/claude-sonnet-4"
 
 [providers.sap.auth]
 mode = "sap_ai_core"
 base_url = "https://api.example.com/v2"
 api_key = "sap-api-token"
 
-[providers.sap.adapters.openai_compatible]
+[providers.sap.adapters.openai]
 auth_header = "authorization"
 auth_scheme = "Bearer"
 "#,

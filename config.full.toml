@@ -236,8 +236,6 @@ stream_mode = "sse"
 # [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 # input = { unsupported = ["image"] }
 # features = ["tool_calling"]
-# display_name = "GPT-4.1 Mini Internal"
-# family = "gpt"
 # lifecycle = "active"
 # context_window_tokens = 200000
 # max_output_tokens = 16384
@@ -248,7 +246,7 @@ stream_mode = "sse"
 # Example — OpenAI o-series / GPT-5 with named reasoning levels:
 #
 # [providers.openai-reasoning]
-# default_model = "o3-mini"
+# default_model = "openai/o3-mini"
 #
 # [providers.openai-reasoning.auth]
 # mode = "api"
@@ -256,7 +254,6 @@ stream_mode = "sse"
 # api_key_env = "OPENAI_API_KEY"
 #
 # [providers.openai-reasoning.adapters.openai]
-# default_model = "o3-mini"
 #
 # [providers.openai-reasoning.adapters.openai.models."o3-mini".variants.light]
 # display_name = "Light"
@@ -269,7 +266,7 @@ stream_mode = "sse"
 # Example — Anthropic with named thinking levels:
 #
 # [providers.anthropic]
-# default_model = "gitlab/claude-sonnet-4-5"
+# default_model = "anthropic/claude-sonnet-4-5"
 #
 # [providers.anthropic.auth]
 # mode = "api"
@@ -277,7 +274,6 @@ stream_mode = "sse"
 # api_key_env = "ANTHROPIC_API_KEY"
 #
 # [providers.anthropic.adapters.anthropic]
-# default_model = "gitlab/claude-sonnet-4-5"
 #
 # [providers.anthropic.adapters.anthropic.models."claude-sonnet-4-5".variants.light]
 # display_name = "Light"
@@ -295,18 +291,17 @@ stream_mode = "sse"
 #
 # [providers.ollama.adapters.ollama]
 # base_url = "http://localhost:11434"
-# default_model = "ollama/qwen3:14b"
 #
 # [providers.lmstudio]
-# default_model = "local-model"
+# default_model = "openai/local-model"
 #
 # [providers.lmstudio.auth]
 # mode = "api"
 # base_url = "http://localhost:1234/v1"
 # api_key = "local"
 #
-# [providers.lmstudio.adapters.openai_compatible]
-# default_model = "local-model"
+# [providers.lmstudio.adapters.openai]
+# api_mode = "chat"
 #
 # [providers.openrouter]
 # default_model = "openai/gpt-4o-mini"
@@ -316,8 +311,8 @@ stream_mode = "sse"
 # base_url = "https://openrouter.ai/api/v1"
 # api_key_env = "OPENROUTER_API_KEY"
 #
-# [providers.openrouter.adapters.openai_compatible]
-# default_model = "openai/gpt-4o-mini"
+# [providers.openrouter.adapters.openai]
+# api_mode = "chat"
 #
 # [providers."github-copilot"]
 # default_model = "openai/gpt-4o-mini"
@@ -330,7 +325,6 @@ stream_mode = "sse"
 # [providers."github-copilot".adapters.openai]
 # base_url = "https://api.githubcopilot.com"
 # models_url = "https://api.githubcopilot.com/models"
-# default_model = "openai/gpt-4o-mini"
 #
 # [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
 # 
@@ -339,13 +333,12 @@ stream_mode = "sse"
 # auth_header = "authorization"
 # auth_scheme = "Bearer"
 # extra_beta_header = "interleaved-thinking-2025-05-14"
-# default_model = "claude-sonnet-4"
 #
-# [providers."github-copilot".adapters.anthropic.models.claude]
+# [providers."github-copilot".adapters.anthropic.models."claude-sonnet-4"]
 # 
 #
 # [providers."google-vertex"]
-# default_model = "gemini-2.5-pro"
+# default_model = "openai/google/gemini-2.5-pro"
 #
 # [providers."google-vertex".auth]
 # mode = "api"
@@ -353,7 +346,6 @@ stream_mode = "sse"
 # api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 #
 # [providers."google-vertex".adapters.openai]
-# default_model = "gemini-2.5-pro"
 # capability_family = "gemini"
 
 [providers.openai_chatgpt]

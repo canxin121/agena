@@ -19,7 +19,7 @@ use agena::{
     },
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, ModelProvider, OpenAiCompatibleProvider, ProviderRegistry,
+        CompletionToolCall, ModelProvider, OpenAiProvider, ProviderRegistry,
     },
     role::Role,
     session::{ContextGovernor, ContextPolicy, SessionManager, SessionProcessor},
@@ -435,7 +435,7 @@ mode = "api"
 base_url = "{base_url}"
 api_key = "test"
 
-[providers.openai.adapters.openai_compatible]
+[providers.openai.adapters.openai]
 "#,
         base_url = provider.url()
     ));
@@ -448,7 +448,7 @@ api_key = "test"
     agena::db::init_schema(&db).await.unwrap();
 
     let mut registry = ProviderRegistry::new();
-    registry.register(OpenAiCompatibleProvider::new(
+    registry.register(OpenAiProvider::new_with_id(
         "openai",
         reqwest::Client::new(),
         "test",

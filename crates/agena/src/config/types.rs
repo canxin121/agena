@@ -6,7 +6,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::provider::{
     CapabilityFamily, ConfiguredModelDefinition, OpenAiApiMode, OpenAiBackend,
-    OpenAiCompatibleStreamMode, OpenAiStreamMode, ProviderHttpClientConfig,
+    OpenAiStreamMode, ProviderHttpClientConfig,
     ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
     auth::{AuthData, CredentialIssuer},
 };
@@ -411,7 +411,6 @@ pub struct ResolvedProviderAdapterConfig {
 pub enum ProviderAdapterDefinition {
     Ollama(OllamaProviderOptions),
     OpenAi(HttpProviderAdapterConfig<OpenAiProviderOptions>),
-    OpenAiCompatible(HttpProviderAdapterConfig<OpenAiCompatibleProviderOptions>),
     Anthropic(HttpProviderAdapterConfig<AnthropicProviderOptions>),
     Gemini(HttpProviderAdapterConfig<SimpleHttpProviderOptions>),
     Gitlab(GitlabProviderOptions),
@@ -477,14 +476,6 @@ pub struct OpenAiProviderOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct OpenAiCompatibleProviderOptions {
-    pub auth_header: String,
-    pub auth_scheme: Option<String>,
-    pub stream_mode: StreamTransportMode,
-    pub realtime_ws_url: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnthropicProviderOptions {
     pub base_url: Option<String>,
     pub models_url: Option<String>,
@@ -528,8 +519,6 @@ pub struct AmazonBedrockProviderOptions;
 pub enum ProviderCapabilityFamilyConfig {
     #[serde(rename = "openai")]
     OpenAi,
-    #[serde(rename = "openai_compatible")]
-    OpenAiCompatible,
     Anthropic,
     Gemini,
     #[serde(rename = "bedrock")]
@@ -541,7 +530,6 @@ impl From<ProviderCapabilityFamilyConfig> for CapabilityFamily {
     fn from(value: ProviderCapabilityFamilyConfig) -> Self {
         match value {
             ProviderCapabilityFamilyConfig::OpenAi => CapabilityFamily::OpenAi,
-            ProviderCapabilityFamilyConfig::OpenAiCompatible => CapabilityFamily::OpenAiCompatible,
             ProviderCapabilityFamilyConfig::Anthropic => CapabilityFamily::Anthropic,
             ProviderCapabilityFamilyConfig::Gemini => CapabilityFamily::Gemini,
             ProviderCapabilityFamilyConfig::Bedrock => CapabilityFamily::Bedrock,
@@ -579,15 +567,6 @@ impl FromStr for StreamTransportMode {
 }
 
 impl From<StreamTransportMode> for OpenAiStreamMode {
-    fn from(value: StreamTransportMode) -> Self {
-        match value {
-            StreamTransportMode::Sse => Self::Sse,
-            StreamTransportMode::RealtimeWebSocket => Self::RealtimeWebSocket,
-        }
-    }
-}
-
-impl From<StreamTransportMode> for OpenAiCompatibleStreamMode {
     fn from(value: StreamTransportMode) -> Self {
         match value {
             StreamTransportMode::Sse => Self::Sse,

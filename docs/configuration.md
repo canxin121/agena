@@ -342,7 +342,7 @@ enabled = true
 
 - `provider`：逻辑入口，对外暴露 `provider_id` 和 provider 默认模型。
 - `auth`：认证与身份来源，只负责 token / OAuth / ADC / SigV4 / service key。
-- `adapter`：协议实现，例如 `openai`、`openai_compatible`、`anthropic`、`gemini`、`gitlab`、`amazon_bedrock`、`ollama`。
+- `adapter`：协议实现，例如 `openai`、`anthropic`、`gemini`、`gitlab`、`amazon_bedrock`、`ollama`。
 - `model`：真实上游模型节点，key 就是上游 model id，本身支持 metadata/capabilities/variants patch。
 
 关键规则：
@@ -374,7 +374,6 @@ sap_ai_core
 adapter 常见额外字段：
 
 - `openai`：`backend`、`api_mode`、`stream_mode`、`models_url`、`realtime_ws_url`、`auth_header`、`auth_scheme`、`capability_family`、`extra_headers`
-- `openai_compatible`：`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url`、`extra_headers`
 - `anthropic`：`models_url`、`messages_url`、`auth_header`、`auth_scheme`、`extra_beta_header`、`eager_input_streaming`、`extra_headers`
 - `gemini`：`auth_header`、`auth_scheme`、`extra_headers`
 - `gitlab`：`instance_url`、`ai_gateway_url`、`ai_gateway_headers`、`feature_flags`
@@ -442,8 +441,6 @@ canonical 路径是 `providers.<id>.adapters.<adapter>.models."<real-model-id>"`
 
 ```toml
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
-display_name = "Fast"
-family = "gpt"
 lifecycle = "active"
 context_window_tokens = 200000
 max_output_tokens = 16384
@@ -460,7 +457,7 @@ display_name = "Deep"
 thinking = { type = "effort", effort = "high" }
 ```
 
-`display_name`、`family`、`description` 都是可选 patch 字段，不影响路由；真正参与路由的是 provider、adapter、model 三级 id。
+模型节点本身建议只放会影响行为或能力元数据的字段；真正参与路由的是 provider、adapter、model 三级 id。`display_name` 不再作为 model 节点配置字段，variant 的 `display_name` 仍然保留用于命名推理档位等变体。
 
 `input` 和 `features` 都支持 compact array：
 
@@ -497,23 +494,6 @@ streaming
 reasoning
 structured_output
 temperature
-```
-
-`family` 可选值：
-
-```text
-gpt
-codex
-claude
-gemini
-llama
-mistral
-deepseek
-qwen
-nova
-grok
-phi
-command
 ```
 
 `lifecycle` 可选值：

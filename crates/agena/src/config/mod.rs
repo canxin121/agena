@@ -19,7 +19,7 @@ pub use types::{
     ConfigSource, GitlabProviderOptions, HttpProviderAdapterConfig, LspConfig,
     LspServerConfig, McpConfig, McpHttpAuthConfig, McpHttpMode, McpServerConfig, MemoryConfig,
     OllamaProviderOptions, OpenAiApiModeConfig, OpenAiBackendConfig,
-    OpenAiCompatibleProviderOptions, OpenAiProviderOptions, PluginConfig,
+    OpenAiProviderOptions, PluginConfig,
     ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
     ProviderHttpConfig, ProviderSapAiCoreAuthConfig, RequestRetryConfig, ResolvedConfig,

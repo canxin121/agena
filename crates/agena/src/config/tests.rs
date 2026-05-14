@@ -1828,7 +1828,7 @@ api_key = "bedrock-token"
 }
 
 #[test]
-fn openai_compatible_adapter_rejects_adapter_level_base_url() {
+fn unknown_openai_compatible_adapter_is_rejected() {
     let path = write_temp_config(
         r#"
 [providers.gateway]
@@ -1840,7 +1840,6 @@ base_url = "https://gateway.example.com/v1"
 api_key = "secret"
 
 [providers.gateway.adapters.openai_compatible]
-base_url = "https://gateway.example.com/v1"
 "#,
     );
 
@@ -1850,18 +1849,16 @@ base_url = "https://gateway.example.com/v1"
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect_err("adapter-level base_url should be rejected");
+        .expect_err("openai_compatible adapter should be rejected");
 
     assert!(matches!(
         err,
-        ConfigError::InvalidProviderConfig { provider_id, message }
-            if provider_id == "gateway:openai_compatible"
-                && message.contains("does not accept `base_url`")
+        ConfigError::MissingProviderKind { provider_id } if provider_id == "gateway"
     ));
 }
 
 #[test]
-fn openai_adapter_rejects_openai_compatible_capability_family() {
+fn openai_adapter_rejects_removed_openai_compatible_capability_family() {
     let path = write_temp_config(
         r#"
 [providers.gateway]
@@ -1883,14 +1880,37 @@ capability_family = "openai_compatible"
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect_err("openai adapter should reject openai_compatible capability family");
+        .expect_err("removed capability family should be rejected during parse");
 
-    assert!(matches!(
-        err,
-        ConfigError::InvalidProviderConfig { provider_id, message }
-            if provider_id == "gateway:openai"
-                && message.contains("use the `openai_compatible` adapter instead")
-    ));
+    assert!(matches!(err, ConfigError::ParseFile { .. }));
+}
+
+#[test]
+fn provider_model_rejects_removed_legacy_fields() {
+    let path = write_temp_config(
+        r#"
+[providers.gateway]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.gateway.auth]
+mode = "api"
+base_url = "https://gateway.example.com/v1"
+api_key = "secret"
+
+[providers.gateway.adapters.openai.models."gpt-4.1-mini"]
+target_model = "gpt-4.1-mini"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("legacy model fields should be rejected");
+
+    assert!(matches!(err, ConfigError::Validation(message) if message.contains("does not support `target_model`")));
 }
 
 #[test]

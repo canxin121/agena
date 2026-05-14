@@ -268,6 +268,7 @@ impl PromptTokenRuntime {
 pub enum GoalStatus {
     #[default]
     Active,
+    BudgetLimited,
     Completed,
 }
 
@@ -280,6 +281,10 @@ pub struct SessionGoal {
     pub status: GoalStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u64>,
+    #[serde(default)]
+    pub tokens_used: u64,
+    #[serde(default)]
+    pub time_used_seconds: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

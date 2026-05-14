@@ -540,6 +540,48 @@ impl SessionStore {
         .await
     }
 
+    pub(crate) async fn account_goal_usage(
+        &self,
+        session_id: i64,
+        token_delta: u64,
+        time_delta_seconds: u64,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Option<Session>, AppError> {
+        let cache = Arc::clone(&self.cache);
+        with_transaction_and_app_effects(&self.db, move |txn, effects| {
+            let cache = Arc::clone(&cache);
+            Box::pin(async move {
+                let Some(goal) =
+                    session_goal::account_usage(txn, session_id, token_delta, time_delta_seconds)
+                        .await?
+                else {
+                    return Ok(None);
+                };
+                let model = session::touch_session_updated_at(
+                    txn,
+                    session_id,
+                    session::get_session_by_id(txn, session_id)
+                        .await?
+                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
+                        .runtime_state
+                        .unwrap_or_default(),
+                )
+                .await?
+                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+                let mut updated = session_from_model(model)?;
+                updated.goal = Some(session_goal_from_model(goal)?);
+                let session_for_cache = updated.clone();
+                effects.push(async move {
+                    with_cache(cache.as_ref(), |guard| {
+                        guard.insert(session_for_cache, cache_policy);
+                    });
+                });
+                Ok(Some(updated))
+            })
+        })
+        .await
+    }
+
     pub(crate) async fn clear_goal(
         &self,
         session_id: i64,
@@ -1569,12 +1611,13 @@ where
 fn session_goal_from_model(
     model: crate::db::entities::session_goal::Model,
 ) -> Result<SessionGoal, AppError> {
-    let status = match model.status.as_str() {
-        "active" => GoalStatus::Active,
-        "completed" => GoalStatus::Completed,
-        other => {
-            return Err(AppError::Internal(format!(
-                "invalid goal status in persisted goal {}: {other}",
+        let status = match model.status.as_str() {
+            "active" => GoalStatus::Active,
+            "budget_limited" => GoalStatus::BudgetLimited,
+            "completed" => GoalStatus::Completed,
+            other => {
+                return Err(AppError::Internal(format!(
+                    "invalid goal status in persisted goal {}: {other}",
                 model.id
             )));
         }
@@ -1590,6 +1633,15 @@ fn session_goal_from_model(
         objective: model.objective,
         status,
         token_budget,
+        tokens_used: u64::try_from(model.tokens_used).map_err(|_| {
+            AppError::Internal(format!("invalid negative tokens_used in goal {}", model.id))
+        })?,
+        time_used_seconds: u64::try_from(model.time_used_seconds).map_err(|_| {
+            AppError::Internal(format!(
+                "invalid negative time_used_seconds in goal {}",
+                model.id
+            ))
+        })?,
         created_at: timestamp_millis_to_utc(model.created_at_ms)?,
         updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
         completed_at: model

@@ -200,6 +200,10 @@ pub struct SessionGoalEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_used: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_used_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at_ms: Option<i64>,
     pub ts_ms: i64,
 }

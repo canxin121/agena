@@ -486,6 +486,8 @@ async fn goal_command_and_query_round_trip() {
     assert_eq!(goal.session_id, session.id);
     assert_eq!(goal.objective, "close goal scope");
     assert_eq!(goal.token_budget, Some(512));
+    assert_eq!(goal.tokens_used, 0);
+    assert_eq!(goal.time_used_seconds, 0);
 
     let queried = dispatch_query(&state, Query::GetSessionGoal(GetSessionParams { session_id: session.id }))
         .await
@@ -495,6 +497,8 @@ async fn goal_command_and_query_round_trip() {
     };
     assert_eq!(goal.session_id, session.id);
     assert_eq!(goal.objective, "close goal scope");
+    assert_eq!(goal.tokens_used, 0);
+    assert_eq!(goal.time_used_seconds, 0);
 
     let completed = dispatch_command(
         &state,
@@ -510,6 +514,8 @@ async fn goal_command_and_query_round_trip() {
     assert_eq!(goal.session_id, session.id);
     assert_eq!(goal.status, agena::session::GoalStatus::Completed);
     assert!(goal.completed_at.is_some());
+    assert_eq!(goal.tokens_used, 0);
+    assert_eq!(goal.time_used_seconds, 0);
 }
 
 #[tokio::test]

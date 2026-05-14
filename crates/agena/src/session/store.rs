@@ -192,6 +192,47 @@ impl SessionStore {
         Ok(self.history.list_session_events(session_id).await?)
     }
 
+    pub(crate) async fn list_projected_messages(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<Message>, AppError> {
+        Ok(self
+            .history
+            .list_projected_messages(session_id, include_full_parts)
+            .await?)
+    }
+
+    pub(crate) async fn find_projected_message(
+        &self,
+        session_id: i64,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Option<Message>, AppError> {
+        Ok(self
+            .history
+            .find_projected_message(session_id, message_id, include_full_parts)
+            .await?)
+    }
+
+    pub(crate) async fn list_projected_parts(
+        &self,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<crate::message::MessagePart>, AppError> {
+        Ok(self
+            .history
+            .list_projected_parts(message_id, include_full_parts)
+            .await?)
+    }
+
+    pub(crate) async fn find_projected_part(
+        &self,
+        part_id: i64,
+    ) -> Result<Option<crate::message::MessagePart>, AppError> {
+        Ok(self.history.find_projected_part(part_id).await?)
+    }
+
     pub(crate) async fn list_workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
         let Some(workspace_id) = self.lookup_workspace_id().await? else {
             return Ok(Vec::new());
@@ -1657,6 +1698,7 @@ fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
+        | EventKind::SessionGoalUpdated(_)
         | EventKind::TurnStarted(_)
         | EventKind::TurnCompleted(_)
         | EventKind::TurnAborted(_)

@@ -4,7 +4,7 @@
 //! `SessionManager` directly (bypassing `AgenaRuntime`), wire it into
 //! `AppState::with_manager_override`, and exercise the v2 routes.
 
-use std::{process::Command, sync::Arc};
+use std::{process::Command as ProcessCommand, sync::Arc};
 
 use agena::model::{ModelId, ModelRef, ProviderId};
 use agena::{
@@ -300,7 +300,7 @@ async fn vcs_diff_raw_endpoint_returns_plaintext_patch_for_workspace_changes() {
     let app = router(state);
 
     let run_git = |args: &[&str]| {
-        let output = Command::new("git")
+        let output = ProcessCommand::new("git")
             .args(args)
             .current_dir(&workspace_root)
             .output()

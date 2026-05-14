@@ -334,10 +334,15 @@ mod tests {
 filter = "info"
 
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "test"
+
+[providers.openai.adapters.openai]
+default_model = "gpt-4.1-mini"
 "#,
         );
         let workspace_root = path
@@ -364,10 +369,15 @@ api_key = "test"
 filter = "debug"
 
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "test"
+
+[providers.openai.adapters.openai]
+default_model = "gpt-5"
 "#,
         )
         .expect("config rewrite should succeed");
@@ -394,10 +404,15 @@ api_key = "test"
         let path = write_temp_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "test"
+
+[providers.openai.adapters.openai]
+default_model = "gpt-4.1-mini"
 "#,
         );
         let workspace_root = path
@@ -427,10 +442,15 @@ api_key = "test"
         let path = write_temp_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "test"
+
+[providers.openai.adapters.openai]
+default_model = "gpt-4.1-mini"
 "#,
         );
         let workspace_root = path
@@ -459,10 +479,15 @@ api_key = "test"
 filter = "debug"
 
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "test"
+
+[providers.openai.adapters.openai]
+default_model = "gpt-5"
 "#,
         )
         .expect("config rewrite should succeed");

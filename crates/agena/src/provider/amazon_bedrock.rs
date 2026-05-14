@@ -30,9 +30,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider,
-        OpenAiCompatibleProvider, ProviderModel, StreamResumePolicy, prompt_cache, sse, utils,
-        wire_message,
+        CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy,
+        prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -74,7 +73,6 @@ const AU_MODELS: &[&str] = &["anthropic.claude-sonnet-4-5", "anthropic.claude-ha
 
 #[derive(Clone)]
 enum BedrockAuthMode {
-    Bearer(OpenAiCompatibleProvider),
     SigV4 {
         profile: Option<String>,
         static_credentials: Option<Credentials>,
@@ -92,48 +90,6 @@ pub struct AmazonBedrockProvider {
 }
 
 impl AmazonBedrockProvider {
-    pub fn new_bearer(
-        client: reqwest::Client,
-        api_token: impl Into<String>,
-        base_url: impl Into<String>,
-        default_model: impl Into<String>,
-        region: impl Into<String>,
-    ) -> Self {
-        Self::new_managed_bearer(
-            client,
-            ManagedCredential::static_value("amazon-bedrock bearer token", api_token.into()),
-            base_url,
-            default_model,
-            region,
-        )
-    }
-
-    pub fn new_managed_bearer(
-        client: reqwest::Client,
-        api_token: ManagedCredential,
-        base_url: impl Into<String>,
-        default_model: impl Into<String>,
-        region: impl Into<String>,
-    ) -> Self {
-        let base_url = utils::normalize_base_url(base_url.into().as_str());
-        let default_model = ModelId::new(default_model);
-        let region = region.into();
-        Self {
-            client: client.clone(),
-            base_url: base_url.clone(),
-            default_model: default_model.clone(),
-            region,
-            auth_mode: BedrockAuthMode::Bearer(OpenAiCompatibleProvider::new_managed(
-                PROVIDER_ID,
-                client,
-                api_token,
-                base_url,
-                default_model,
-            )),
-            resolved_sigv4_shape: Arc::new(Mutex::new(None)),
-        }
-    }
-
     pub fn new_sigv4(
         client: reqwest::Client,
         base_url: impl Into<String>,
@@ -1299,12 +1255,6 @@ impl ModelProvider for AmazonBedrockProvider {
             );
 
         match &self.auth_mode {
-            BedrockAuthMode::Bearer(provider) => {
-                shape.insert_string("auth_mode", "bearer");
-                if let Some(bearer_shape) = provider.prompt_cache_shape(model) {
-                    shape.extend_prefixed("bearer", &bearer_shape);
-                }
-            }
             BedrockAuthMode::SigV4 {
                 profile,
                 static_credentials,
@@ -1337,7 +1287,6 @@ impl ModelProvider for AmazonBedrockProvider {
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         match &self.auth_mode {
-            BedrockAuthMode::Bearer(inner) => inner.list_models().await,
             BedrockAuthMode::SigV4 {
                 profile,
                 static_credentials,
@@ -1356,7 +1305,6 @@ impl ModelProvider for AmazonBedrockProvider {
         };
 
         match &self.auth_mode {
-            BedrockAuthMode::Bearer(inner) => inner.complete(request).await,
             BedrockAuthMode::SigV4 {
                 profile,
                 static_credentials,
@@ -1381,7 +1329,6 @@ impl ModelProvider for AmazonBedrockProvider {
         };
 
         match &self.auth_mode {
-            BedrockAuthMode::Bearer(inner) => inner.complete_stream(request).await,
             BedrockAuthMode::SigV4 {
                 profile,
                 static_credentials,

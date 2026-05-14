@@ -2050,7 +2050,9 @@ fn configured_provider_auth_id(
         ProviderAuthConfig::None
         | ProviderAuthConfig::GoogleAdc
         | ProviderAuthConfig::BedrockSigv4(_) => None,
-        ProviderAuthConfig::Secret(_) | ProviderAuthConfig::SapAiCore(_) => {
+        ProviderAuthConfig::Api(_)
+        | ProviderAuthConfig::Credential(_)
+        | ProviderAuthConfig::SapAiCore(_) => {
             Some(provider_id.to_owned())
         }
     }
@@ -2288,16 +2290,48 @@ fn secret_preview(secret: &str) -> Option<String> {
 mod tests {
     use super::*;
     use agena::config::{
-        BedrockSigv4AuthConfig, ProviderAuthConfig, ProviderSapAiCoreAuthConfig,
-        ProviderSecretAuthConfig, ResolvedProviderConfig,
+        BedrockSigv4AuthConfig, HttpProviderAdapterConfig, OpenAiApiModeConfig,
+        OpenAiBackendConfig, OpenAiProviderOptions, ProviderAdapterDefinition,
+        ProviderApiAuthConfig, ProviderAuthConfig, ProviderCredentialAuthConfig,
+        ProviderSapAiCoreAuthConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+        StreamTransportMode,
     };
 
-    fn resolved_provider_with_auth(auth: ProviderAuthConfig) -> ResolvedProviderConfig {
+    fn openai_adapter(
+        backend: OpenAiBackendConfig,
+    ) -> (String, ResolvedProviderAdapterConfig) {
+        (
+            "openai".to_owned(),
+            ResolvedProviderAdapterConfig {
+                default_model: "default".to_owned(),
+                definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+                    extra_headers: Default::default(),
+                    options: OpenAiProviderOptions {
+                        backend,
+                        api_mode: OpenAiApiModeConfig::Responses,
+                        api_mode_explicit: false,
+                        stream_mode: StreamTransportMode::Sse,
+                        realtime_ws_url: None,
+                        base_url: None,
+                        models_url: None,
+                        auth_header: "authorization".to_owned(),
+                        auth_scheme: Some("Bearer".to_owned()),
+                        capability_family: None,
+                    },
+                }),
+            },
+        )
+    }
+
+    fn resolved_provider_with_auth(
+        auth: ProviderAuthConfig,
+        adapters: Vec<(String, ResolvedProviderAdapterConfig)>,
+    ) -> ResolvedProviderConfig {
         ResolvedProviderConfig {
             enabled: true,
             default_model: "default".to_owned(),
             auth,
-            adapters: Default::default(),
+            adapters: adapters.into_iter().collect(),
             models: Default::default(),
         }
     }
@@ -2305,17 +2339,19 @@ mod tests {
     #[test]
     fn configured_provider_auth_id_uses_openai_for_chatgpt_codex_backend() {
         let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
-                secret: None,
-                secret_env: None,
-                credential: Some(agena::provider::auth::AuthData::OAuth {
-                    refresh: "refresh-token".to_owned(),
-                    access: "access-token".to_owned(),
-                    expires_at_ms: 4_102_444_800_000,
-                    account_id: Some("acct-openai".to_owned()),
-                    enterprise_url: None,
-                }),
-            }));
+            resolved_provider_with_auth(ProviderAuthConfig::Credential(
+                ProviderCredentialAuthConfig {
+                    issuer: agena::provider::auth::CredentialIssuer::OpenaiChatgpt,
+                    credential: Some(agena::provider::auth::AuthData::OAuth {
+                        issuer: Some(agena::provider::auth::CredentialIssuer::OpenaiChatgpt),
+                        refresh: "refresh-token".to_owned(),
+                        access: "access-token".to_owned(),
+                        expires_at_ms: 4_102_444_800_000,
+                        account_id: Some("acct-openai".to_owned()),
+                        enterprise_url: None,
+                    }),
+                },
+            ), vec![openai_adapter(OpenAiBackendConfig::ChatgptCodex)]);
 
         assert_eq!(
             configured_provider_auth_id("openai_chatgpt", &provider).as_deref(),
@@ -2326,17 +2362,19 @@ mod tests {
     #[test]
     fn configured_provider_auth_id_prefers_gitlab_auth_provider_when_no_api_key_is_set() {
         let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
-                secret: None,
-                secret_env: None,
-                credential: Some(agena::provider::auth::AuthData::OAuth {
-                    refresh: "refresh-token".to_owned(),
-                    access: "access-token".to_owned(),
-                    expires_at_ms: 4_102_444_800_000,
-                    account_id: None,
-                    enterprise_url: None,
-                }),
-            }));
+            resolved_provider_with_auth(ProviderAuthConfig::Credential(
+                ProviderCredentialAuthConfig {
+                    issuer: agena::provider::auth::CredentialIssuer::Gitlab,
+                    credential: Some(agena::provider::auth::AuthData::OAuth {
+                        issuer: Some(agena::provider::auth::CredentialIssuer::Gitlab),
+                        refresh: "refresh-token".to_owned(),
+                        access: "access-token".to_owned(),
+                        expires_at_ms: 4_102_444_800_000,
+                        account_id: None,
+                        enterprise_url: None,
+                    }),
+                },
+            ), vec![]);
 
         assert_eq!(
             configured_provider_auth_id("gitlab-duo", &provider).as_deref(),
@@ -2346,12 +2384,14 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_uses_provider_id_for_direct_gitlab_api_key() {
-        let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
-                secret: Some("glpat-test".to_owned()),
-                secret_env: None,
-                credential: None,
-            }));
+        let provider = resolved_provider_with_auth(
+            ProviderAuthConfig::Api(ProviderApiAuthConfig {
+                base_url: "https://gitlab.com/api/v4".to_owned(),
+                api_key: Some("glpat-test".to_owned()),
+                api_key_env: None,
+            }),
+            vec![],
+        );
 
         assert_eq!(
             configured_provider_auth_id("gitlab-self", &provider).as_deref(),
@@ -2362,17 +2402,19 @@ mod tests {
     #[test]
     fn configured_provider_auth_id_ignores_empty_gitlab_api_key_overrides() {
         let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
-                secret: Some("   ".to_owned()),
-                secret_env: Some("GITLAB_TOKEN".to_owned()),
-                credential: Some(agena::provider::auth::AuthData::OAuth {
-                    refresh: "refresh-token".to_owned(),
-                    access: "access-token".to_owned(),
-                    expires_at_ms: 4_102_444_800_000,
-                    account_id: None,
-                    enterprise_url: None,
-                }),
-            }));
+            resolved_provider_with_auth(ProviderAuthConfig::Credential(
+                ProviderCredentialAuthConfig {
+                    issuer: agena::provider::auth::CredentialIssuer::Gitlab,
+                    credential: Some(agena::provider::auth::AuthData::OAuth {
+                        issuer: Some(agena::provider::auth::CredentialIssuer::Gitlab),
+                        refresh: "refresh-token".to_owned(),
+                        access: "access-token".to_owned(),
+                        expires_at_ms: 4_102_444_800_000,
+                        account_id: None,
+                        enterprise_url: None,
+                    }),
+                },
+            ), vec![]);
 
         assert_eq!(
             configured_provider_auth_id("gitlab", &provider).as_deref(),
@@ -2382,14 +2424,14 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_keeps_direct_http_provider_ids() {
-        let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
-                secret: Some("sk-test".to_owned()),
-                secret_env: None,
-                credential: Some(agena::provider::auth::AuthData::Api {
-                    key: "sk-inline".to_owned(),
-                }),
-            }));
+        let provider = resolved_provider_with_auth(
+            ProviderAuthConfig::Api(ProviderApiAuthConfig {
+                base_url: "https://api.openai.com/v1".to_owned(),
+                api_key: Some("sk-test".to_owned()),
+                api_key_env: None,
+            }),
+            vec![],
+        );
 
         assert_eq!(
             configured_provider_auth_id("openai", &provider).as_deref(),
@@ -2400,17 +2442,19 @@ mod tests {
     #[test]
     fn configured_provider_auth_id_uses_configured_copilot_auth_provider() {
         let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
-                secret: None,
-                secret_env: None,
-                credential: Some(agena::provider::auth::AuthData::OAuth {
-                    refresh: "refresh-token".to_owned(),
-                    access: "access-token".to_owned(),
-                    expires_at_ms: 4_102_444_800_000,
-                    account_id: None,
-                    enterprise_url: Some("github.example.com".to_owned()),
-                }),
-            }));
+            resolved_provider_with_auth(ProviderAuthConfig::Credential(
+                ProviderCredentialAuthConfig {
+                    issuer: agena::provider::auth::CredentialIssuer::GithubCopilot,
+                    credential: Some(agena::provider::auth::AuthData::OAuth {
+                        issuer: Some(agena::provider::auth::CredentialIssuer::GithubCopilot),
+                        refresh: "refresh-token".to_owned(),
+                        access: "access-token".to_owned(),
+                        expires_at_ms: 4_102_444_800_000,
+                        account_id: None,
+                        enterprise_url: Some("github.example.com".to_owned()),
+                    }),
+                },
+            ), vec![openai_adapter(OpenAiBackendConfig::Api)]);
 
         assert_eq!(
             configured_provider_auth_id("copilot-enterprise", &provider).as_deref(),
@@ -2420,12 +2464,14 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_keeps_cloudflare_gateway_provider_id() {
-        let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Secret(ProviderSecretAuthConfig {
-                secret: Some("cf-test".to_owned()),
-                secret_env: None,
-                credential: None,
-            }));
+        let provider = resolved_provider_with_auth(
+            ProviderAuthConfig::Api(ProviderApiAuthConfig {
+                base_url: "https://gateway.cloudflare.example/v1".to_owned(),
+                api_key: Some("cf-test".to_owned()),
+                api_key_env: None,
+            }),
+            vec![],
+        );
 
         assert_eq!(
             configured_provider_auth_id("cloudflare-ai-gateway", &provider).as_deref(),
@@ -2435,14 +2481,18 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_skips_google_adc_and_sigv4_auth() {
-        let google = resolved_provider_with_auth(ProviderAuthConfig::GoogleAdc);
-        let bedrock =
-            resolved_provider_with_auth(ProviderAuthConfig::BedrockSigv4(BedrockSigv4AuthConfig {
+        let google = resolved_provider_with_auth(ProviderAuthConfig::GoogleAdc, vec![]);
+        let bedrock = resolved_provider_with_auth(
+            ProviderAuthConfig::BedrockSigv4(BedrockSigv4AuthConfig {
+                base_url: "https://bedrock-runtime.us-east-1.amazonaws.com".to_owned(),
+                region: "us-east-1".to_owned(),
                 profile: None,
                 access_key_id: None,
                 secret_access_key: None,
                 session_token: None,
-            }));
+            }),
+            vec![],
+        );
 
         assert_eq!(configured_provider_auth_id("vertex", &google), None);
         assert_eq!(configured_provider_auth_id("bedrock", &bedrock), None);
@@ -2450,18 +2500,17 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_uses_sap_ai_core_secret_routing() {
-        let provider = resolved_provider_with_auth(ProviderAuthConfig::SapAiCore(
-            ProviderSapAiCoreAuthConfig {
-                secret: ProviderSecretAuthConfig {
-                    secret: None,
-                    secret_env: None,
-                    credential: Some(agena::provider::auth::AuthData::Api {
-                        key: "sap-inline".to_owned(),
-                    }),
+        let provider = resolved_provider_with_auth(
+            ProviderAuthConfig::SapAiCore(ProviderSapAiCoreAuthConfig {
+                api: ProviderApiAuthConfig {
+                    base_url: "https://api.example.com/v2".to_owned(),
+                    api_key: Some("sap-inline".to_owned()),
+                    api_key_env: None,
                 },
                 service_key_env: "AICORE_SERVICE_KEY".to_owned(),
-            },
-        ));
+            }),
+            vec![],
+        );
 
         assert_eq!(
             configured_provider_auth_id("sap-ai-core", &provider).as_deref(),

@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::error::AppError;
 
 use super::{
-    AuthData, AuthStore, CopilotDeployment, DeviceCodeStart, OAuthAuthorizeStart,
+    AuthData, AuthStore, CopilotDeployment, CredentialIssuer, DeviceCodeStart, OAuthAuthorizeStart,
     OAuthTokenResponse, exchange_gitlab_oauth_code, exchange_openai_oauth_code,
     poll_copilot_device_code, poll_openai_headless_device_code, refresh_gitlab_token,
     refresh_openai_token, start_copilot_device_code, start_gitlab_oauth,
@@ -87,6 +87,7 @@ impl<S: AuthStore> AuthManager<S> {
         .await?;
         let auth = oauth_auth_data(
             provider_id,
+            CredentialIssuer::OpenaiChatgpt,
             token.refresh,
             token.access,
             token.expires_at_ms,
@@ -137,6 +138,7 @@ impl<S: AuthStore> AuthManager<S> {
 
         let auth = oauth_auth_data(
             provider_id,
+            CredentialIssuer::OpenaiChatgpt,
             token.refresh,
             token.access,
             token.expires_at_ms,
@@ -162,6 +164,7 @@ impl<S: AuthStore> AuthManager<S> {
         let token = refresh_openai_token(refresh.as_str()).await?;
         let auth = oauth_auth_data(
             provider_id,
+            CredentialIssuer::OpenaiChatgpt,
             token.refresh,
             token.access,
             token.expires_at_ms,
@@ -205,6 +208,7 @@ impl<S: AuthStore> AuthManager<S> {
 
         let auth = oauth_auth_data(
             provider_id,
+            CredentialIssuer::GithubCopilot,
             token.refresh,
             token.access,
             token.expires_at_ms,
@@ -245,6 +249,7 @@ impl<S: AuthStore> AuthManager<S> {
 
         let auth = oauth_auth_data(
             provider_id,
+            CredentialIssuer::Gitlab,
             token.refresh,
             token.access,
             token.expires_at_ms,
@@ -277,6 +282,7 @@ impl<S: AuthStore> AuthManager<S> {
         let token = refresh_gitlab_token(instance_url.as_str(), refresh.as_str()).await?;
         let auth = oauth_auth_data(
             provider_id,
+            CredentialIssuer::Gitlab,
             token.refresh,
             token.access,
             token.expires_at_ms,
@@ -313,6 +319,7 @@ impl<S: AuthStore> AuthManager<S> {
 
 fn oauth_auth_data(
     provider_id: &str,
+    issuer: CredentialIssuer,
     refresh: String,
     access: String,
     expires_at_ms: i64,
@@ -320,6 +327,7 @@ fn oauth_auth_data(
     enterprise_url: Option<String>,
 ) -> Result<AuthData, AppError> {
     let auth = AuthData::OAuth {
+        issuer: Some(issuer),
         refresh,
         access,
         expires_at_ms,
@@ -340,8 +348,16 @@ fn validate_auth_data(provider_id: &str, auth: &AuthData) -> Result<(), AppError
             }
         }
         AuthData::OAuth {
-            refresh, access, ..
+            issuer,
+            refresh,
+            access,
+            ..
         } => {
+            if issuer.is_none() {
+                return Err(AppError::Config(format!(
+                    "{provider_id} oauth credential must include an issuer"
+                )));
+            }
             if refresh.trim().is_empty() {
                 return Err(AppError::Config(format!(
                     "{provider_id} oauth refresh token cannot be empty"
@@ -463,6 +479,7 @@ mod tests {
             .set_auth_data(
                 "openai",
                 AuthData::OAuth {
+                    issuer: Some(CredentialIssuer::OpenaiChatgpt),
                     refresh: "   ".to_owned(),
                     access: "access".to_owned(),
                     expires_at_ms: 1,
@@ -481,6 +498,7 @@ mod tests {
             .set_auth_data(
                 "openai",
                 AuthData::OAuth {
+                    issuer: Some(CredentialIssuer::OpenaiChatgpt),
                     refresh: "refresh".to_owned(),
                     access: "   ".to_owned(),
                     expires_at_ms: 1,

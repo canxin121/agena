@@ -12,7 +12,7 @@ use crate::{
     provider::auth::{AuthData, AuthStore},
 };
 
-use super::{ProviderAuthConfig, ProviderSecretAuthConfig, ResolvedProviderConfig};
+use super::{ProviderApiAuthConfig, ProviderAuthConfig, ResolvedProviderConfig};
 
 #[derive(Debug, Clone)]
 pub struct ProviderConfigCredentialStore {
@@ -100,12 +100,30 @@ impl AuthStore for ProviderConfigCredentialStore {
     fn set(&self, provider_id: &str, auth: AuthData) -> Result<(), AppError> {
         let mut doc = self.read_doc()?;
         let auth_table = self.ensure_provider_auth_table(&mut doc, provider_id);
-        auth_table["kind"] = value("credential");
-        auth_table.remove("credential_id");
-        auth_table.remove("credential_provider_id");
-        auth_table.remove("stored_credential");
-        auth_table.remove("auth_data");
-        auth_table["credential"] = auth_data_item(auth);
+        auth_table.remove("mode");
+        auth_table.remove("credential");
+        auth_table.remove("issuer");
+
+        match auth {
+            AuthData::Api { key } => {
+                auth_table["mode"] = value("api");
+                auth_table["api_key"] = value(key);
+            }
+            AuthData::OAuth { .. } => {
+                let issuer = auth.issuer().ok_or_else(|| {
+                    AppError::Config(format!(
+                        "{provider_id} oauth credential must include an issuer"
+                    ))
+                })?;
+                auth_table["mode"] = value("credential");
+                auth_table["issuer"] = value(credential_issuer_value(issuer));
+                auth_table["credential"] = auth_data_item(auth);
+            }
+            AuthData::WellKnown { .. } => {
+                auth_table["mode"] = value("credential");
+                auth_table["credential"] = auth_data_item(auth);
+            }
+        }
         self.write_doc(&doc)
     }
 
@@ -130,13 +148,11 @@ impl AuthStore for ProviderConfigCredentialStore {
         };
 
         auth.remove("credential");
-        auth.remove("credential_id");
-        auth.remove("credential_provider_id");
-        auth.remove("stored_credential");
-        auth.remove("auth_data");
+        auth.remove("issuer");
+        auth.remove("api_key");
 
         if auth_table_has_no_sources(auth) {
-            auth.remove("kind");
+            auth.remove("mode");
         }
 
         if auth.iter().next().is_none() {
@@ -152,13 +168,20 @@ pub fn provider_auth_data(resolved: &ResolvedProviderConfig) -> Option<AuthData>
         ProviderAuthConfig::None
         | ProviderAuthConfig::GoogleAdc
         | ProviderAuthConfig::BedrockSigv4(_) => None,
-        ProviderAuthConfig::Secret(secret) => secret_auth_data(secret),
-        ProviderAuthConfig::SapAiCore(config) => secret_auth_data(&config.secret),
+        ProviderAuthConfig::Api(api) => secret_auth_data(api),
+        ProviderAuthConfig::Credential(config) => config.credential.clone(),
+        ProviderAuthConfig::SapAiCore(config) => secret_auth_data(&config.api),
     }
 }
 
 pub fn provider_supports_openai_oauth(resolved: &ResolvedProviderConfig) -> bool {
-    resolved.adapters.values().any(|adapter| {
+    matches!(
+        resolved.auth,
+        ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig {
+            issuer: crate::provider::auth::CredentialIssuer::OpenaiChatgpt,
+            ..
+        })
+    ) && resolved.adapters.values().any(|adapter| {
         matches!(
             &adapter.definition,
             super::ProviderAdapterDefinition::OpenAi(config)
@@ -182,7 +205,7 @@ pub fn provider_gitlab_instance_url(resolved: &ResolvedProviderConfig) -> Option
         .values()
         .filter_map(|adapter| {
             if let super::ProviderAdapterDefinition::Gitlab(options) = &adapter.definition {
-                Some(options.instance_url.clone())
+                options.instance_url.clone()
             } else {
                 None
             }
@@ -198,10 +221,17 @@ pub fn provider_gitlab_instance_url(resolved: &ResolvedProviderConfig) -> Option
 }
 
 pub fn provider_supports_copilot_device(resolved: &ResolvedProviderConfig) -> bool {
-    resolved.adapters.values().any(|adapter| {
+    matches!(
+        resolved.auth,
+        ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig {
+            issuer: crate::provider::auth::CredentialIssuer::GithubCopilot,
+            ..
+        })
+    ) && resolved.adapters.values().any(|adapter| {
         matches!(
-            adapter.definition,
-            super::ProviderAdapterDefinition::Copilot(_)
+            &adapter.definition,
+            super::ProviderAdapterDefinition::OpenAi(config)
+                if matches!(config.options.backend, super::OpenAiBackendConfig::Api)
         )
     })
 }
@@ -209,9 +239,10 @@ pub fn provider_supports_copilot_device(resolved: &ResolvedProviderConfig) -> bo
 pub fn provider_supports_api_key_write(resolved: &ResolvedProviderConfig) -> bool {
     match resolved.auth {
         ProviderAuthConfig::SapAiCore(_) => true,
-        ProviderAuthConfig::Secret(_) => {
+        ProviderAuthConfig::Api(_) => {
             !provider_supports_openai_oauth(resolved) && !provider_supports_copilot_device(resolved)
         }
+        ProviderAuthConfig::Credential(_) => false,
         ProviderAuthConfig::None
         | ProviderAuthConfig::GoogleAdc
         | ProviderAuthConfig::BedrockSigv4(_) => false,
@@ -227,11 +258,11 @@ fn load_provider_configs(path: &Path) -> Result<HashMap<String, ResolvedProvider
     Ok(resolution.config.providers.into_iter().collect())
 }
 
-fn secret_auth_data(secret: &ProviderSecretAuthConfig) -> Option<AuthData> {
-    if let Some(key) = normalize_text(secret.secret.as_deref()) {
+fn secret_auth_data(secret: &ProviderApiAuthConfig) -> Option<AuthData> {
+    if let Some(key) = normalize_text(secret.api_key.as_deref()) {
         return Some(AuthData::Api { key });
     }
-    secret.credential.clone()
+    None
 }
 
 fn normalize_text(value: Option<&str>) -> Option<String> {
@@ -244,12 +275,8 @@ fn normalize_text(value: Option<&str>) -> Option<String> {
 fn auth_table_has_no_sources(table: &Table) -> bool {
     let source_keys = [
         "credential",
-        "secret",
-        "secret_env",
         "api_key",
         "api_key_env",
-        "access_token",
-        "access_token_env",
         "service_key_env",
         "profile",
         "access_key_id",
@@ -260,6 +287,14 @@ fn auth_table_has_no_sources(table: &Table) -> bool {
     !source_keys.iter().any(|key| table.contains_key(key))
 }
 
+fn credential_issuer_value(issuer: crate::provider::auth::CredentialIssuer) -> &'static str {
+    match issuer {
+        crate::provider::auth::CredentialIssuer::OpenaiChatgpt => "openai_chatgpt",
+        crate::provider::auth::CredentialIssuer::GithubCopilot => "github_copilot",
+        crate::provider::auth::CredentialIssuer::Gitlab => "gitlab",
+    }
+}
+
 fn auth_data_item(auth: AuthData) -> Item {
     let mut table = InlineTable::new();
     match auth {
@@ -268,6 +303,7 @@ fn auth_data_item(auth: AuthData) -> Item {
             table.insert("key", Value::from(key));
         }
         AuthData::OAuth {
+            issuer,
             refresh,
             access,
             expires_at_ms,
@@ -275,6 +311,9 @@ fn auth_data_item(auth: AuthData) -> Item {
             enterprise_url,
         } => {
             table.insert("type", Value::from("oauth"));
+            if let Some(issuer) = issuer {
+                table.insert("issuer", Value::from(credential_issuer_value(issuer)));
+            }
             table.insert("refresh", Value::from(refresh));
             table.insert("access", Value::from(access));
             table.insert("expires_at_ms", Value::from(expires_at_ms));
@@ -315,7 +354,9 @@ mod tests {
             &path,
             r#"
 [providers.openai]
-kind = "openai"
+default_model = "gpt-4.1-mini"
+
+[providers.openai.adapters.openai]
 default_model = "gpt-4.1-mini"
 "#,
         )
@@ -333,8 +374,8 @@ default_model = "gpt-4.1-mini"
 
         let text = fs::read_to_string(&path).expect("config should be readable");
         assert!(text.contains("[providers.openai.auth]"));
-        assert!(text.contains("kind = \"credential\""));
-        assert!(text.contains("credential = { type = \"api\", key = \"sk-test\" }"));
+        assert!(text.contains("mode = \"api\""));
+        assert!(text.contains("api_key = \"sk-test\""));
     }
 
     #[test]
@@ -343,19 +384,25 @@ default_model = "gpt-4.1-mini"
         fs::write(
             &path,
             r#"
-[providers.openai]
-kind = "openai"
-default_model = "gpt-4.1-mini"
+[providers.openai_chatgpt]
+default_model = "gpt-5.3-codex"
 
-[providers.openai.auth]
-secret_env = "OPENAI_API_KEY"
-credential = { type = "oauth", refresh = "refresh", access = "access", expires_at_ms = 123 }
+[providers.openai_chatgpt.auth]
+mode = "credential"
+issuer = "openai_chatgpt"
+credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "refresh", access = "access", expires_at_ms = 123 }
+
+[providers.openai_chatgpt.adapters.openai]
+backend = "chatgpt_codex"
+default_model = "gpt-5.3-codex"
 "#,
         )
         .expect("config should be written");
 
         let store = ProviderConfigCredentialStore::new(path);
-        let auth = store.get("openai").expect("store read should succeed");
+        let auth = store
+            .get("openai_chatgpt")
+            .expect("store read should succeed");
         assert!(matches!(
             auth,
             Some(AuthData::OAuth {
@@ -374,12 +421,15 @@ credential = { type = "oauth", refresh = "refresh", access = "access", expires_a
             &path,
             r#"
 [providers.openai]
-kind = "openai"
+default_model = "gpt-4.1-mini"
+
+[providers.openai.adapters.openai]
 default_model = "gpt-4.1-mini"
 
 [providers.openai.auth]
-secret_env = "OPENAI_API_KEY"
-credential = { type = "api", key = "sk-inline" }
+mode = "api"
+api_key_env = "OPENAI_API_KEY"
+api_key = "sk-inline"
 "#,
         )
         .expect("config should be written");
@@ -390,7 +440,7 @@ credential = { type = "api", key = "sk-inline" }
             .expect("credential removal should succeed");
 
         let text = fs::read_to_string(path).expect("config should be readable");
-        assert!(text.contains("secret_env = \"OPENAI_API_KEY\""));
+        assert!(text.contains("api_key_env = \"OPENAI_API_KEY\""));
         assert!(!text.contains("sk-inline"));
     }
 }

@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 use crate::provider::{
-    ConfiguredModelDefinition, OpenAiApiMode, OpenAiBackend, OpenAiCompatibleStreamMode,
-    OpenAiStreamMode, ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
-    ProviderStreamReplayConfig, auth::AuthData,
+    CapabilityFamily, ConfiguredModelDefinition, OpenAiApiMode, OpenAiBackend,
+    OpenAiCompatibleStreamMode, OpenAiStreamMode, ProviderHttpClientConfig,
+    ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
+    auth::{AuthData, CredentialIssuer},
 };
 
 use super::ConfigError;
@@ -311,25 +312,41 @@ pub struct ResolvedProviderConfig {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ProviderAuthConfig {
     None,
-    Secret(ProviderSecretAuthConfig),
+    Api(ProviderApiAuthConfig),
+    Credential(ProviderCredentialAuthConfig),
     BedrockSigv4(BedrockSigv4AuthConfig),
     GoogleAdc,
     SapAiCore(ProviderSapAiCoreAuthConfig),
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Default)]
-pub struct ProviderSecretAuthConfig {
-    pub secret: Option<String>,
-    pub secret_env: Option<String>,
+pub struct ProviderApiAuthConfig {
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub api_key_env: Option<String>,
+}
+
+impl fmt::Debug for ProviderApiAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderApiAuthConfig")
+            .field("base_url", &self.base_url)
+            .field("api_key", &redacted(self.api_key.as_deref()))
+            .field("api_key_env", &self.api_key_env)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderCredentialAuthConfig {
+    pub issuer: CredentialIssuer,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<AuthData>,
 }
 
-impl fmt::Debug for ProviderSecretAuthConfig {
+impl fmt::Debug for ProviderCredentialAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProviderSecretAuthConfig")
-            .field("secret", &redacted(self.secret.as_deref()))
-            .field("secret_env", &self.secret_env)
+        f.debug_struct("ProviderCredentialAuthConfig")
+            .field("issuer", &self.issuer)
             .field(
                 "credential",
                 &self
@@ -343,6 +360,8 @@ impl fmt::Debug for ProviderSecretAuthConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct BedrockSigv4AuthConfig {
+    pub base_url: String,
+    pub region: String,
     pub profile: Option<String>,
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
@@ -352,6 +371,8 @@ pub struct BedrockSigv4AuthConfig {
 impl fmt::Debug for BedrockSigv4AuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BedrockSigv4AuthConfig")
+            .field("base_url", &self.base_url)
+            .field("region", &self.region)
             .field("profile", &self.profile)
             .field("access_key_id", &redacted(self.access_key_id.as_deref()))
             .field(
@@ -365,14 +386,14 @@ impl fmt::Debug for BedrockSigv4AuthConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct ProviderSapAiCoreAuthConfig {
-    pub secret: ProviderSecretAuthConfig,
+    pub api: ProviderApiAuthConfig,
     pub service_key_env: String,
 }
 
 impl fmt::Debug for ProviderSapAiCoreAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProviderSapAiCoreAuthConfig")
-            .field("secret", &self.secret)
+            .field("api", &self.api)
             .field("service_key_env", &self.service_key_env)
             .finish()
     }
@@ -391,14 +412,10 @@ pub enum ProviderAdapterDefinition {
     Ollama(OllamaProviderOptions),
     OpenAi(HttpProviderAdapterConfig<OpenAiProviderOptions>),
     OpenAiCompatible(HttpProviderAdapterConfig<OpenAiCompatibleProviderOptions>),
-    SapAiCore(HttpProviderAdapterConfig<OpenAiCompatibleProviderOptions>),
     Anthropic(HttpProviderAdapterConfig<AnthropicProviderOptions>),
     Gemini(HttpProviderAdapterConfig<SimpleHttpProviderOptions>),
     Gitlab(GitlabProviderOptions),
-    Copilot(CopilotProviderOptions),
     AmazonBedrock(AmazonBedrockProviderOptions),
-    GoogleVertex(GoogleVertexProviderOptions),
-    CloudflareAiGateway(CloudflareAiGatewayProviderOptions),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -411,12 +428,11 @@ pub struct ResolvedProviderModelConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OllamaProviderOptions {
-    pub base_url: String,
+    pub base_url: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct HttpProviderAdapterConfig<T> {
-    pub base_url: String,
     pub extra_headers: BTreeMap<String, String>,
     pub options: T,
 }
@@ -424,7 +440,6 @@ pub struct HttpProviderAdapterConfig<T> {
 impl<T: fmt::Debug> fmt::Debug for HttpProviderAdapterConfig<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HttpProviderAdapterConfig")
-            .field("base_url", &self.base_url)
             .field("extra_headers", &self.extra_headers)
             .field("options", &self.options)
             .finish()
@@ -450,8 +465,16 @@ fn credential_debug_kind(value: &AuthData) -> &'static str {
 pub struct OpenAiProviderOptions {
     pub backend: OpenAiBackendConfig,
     pub api_mode: OpenAiApiModeConfig,
+    #[serde(skip_serializing)]
+    pub api_mode_explicit: bool,
     pub stream_mode: StreamTransportMode,
     pub realtime_ws_url: Option<String>,
+    pub base_url: Option<String>,
+    pub models_url: Option<String>,
+    pub auth_header: String,
+    pub auth_scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_family: Option<ProviderCapabilityFamilyConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -464,17 +487,25 @@ pub struct OpenAiCompatibleProviderOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnthropicProviderOptions {
+    pub base_url: Option<String>,
+    pub models_url: Option<String>,
+    pub messages_url: Option<String>,
     pub auth_header: String,
     pub auth_scheme: Option<String>,
+    pub extra_beta_header: Option<String>,
+    pub eager_input_streaming: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct SimpleHttpProviderOptions;
+pub struct SimpleHttpProviderOptions {
+    pub auth_header: Option<String>,
+    pub auth_scheme: Option<String>,
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GitlabProviderOptions {
-    pub instance_url: String,
-    pub ai_gateway_url: String,
+    pub instance_url: Option<String>,
+    pub ai_gateway_url: Option<String>,
     pub ai_gateway_headers: BTreeMap<String, String>,
     pub feature_flags: BTreeMap<String, bool>,
 }
@@ -490,33 +521,33 @@ impl fmt::Debug for GitlabProviderOptions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CopilotProviderOptions {
-    pub base_url: String,
-    pub models_url: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct AmazonBedrockProviderOptions;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCapabilityFamilyConfig {
+    #[serde(rename = "openai")]
+    OpenAi,
+    #[serde(rename = "openai_compatible")]
+    OpenAiCompatible,
+    Anthropic,
+    Gemini,
+    #[serde(rename = "bedrock")]
+    Bedrock,
+    Gitlab,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct AmazonBedrockProviderOptions {
-    pub base_url: String,
-    pub region: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct GoogleVertexProviderOptions {
-    pub base_url: String,
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize)]
-pub struct CloudflareAiGatewayProviderOptions {
-    pub base_url: String,
-}
-
-impl fmt::Debug for CloudflareAiGatewayProviderOptions {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CloudflareAiGatewayProviderOptions")
-            .field("base_url", &self.base_url)
-            .finish()
+impl From<ProviderCapabilityFamilyConfig> for CapabilityFamily {
+    fn from(value: ProviderCapabilityFamilyConfig) -> Self {
+        match value {
+            ProviderCapabilityFamilyConfig::OpenAi => CapabilityFamily::OpenAi,
+            ProviderCapabilityFamilyConfig::OpenAiCompatible => CapabilityFamily::OpenAiCompatible,
+            ProviderCapabilityFamilyConfig::Anthropic => CapabilityFamily::Anthropic,
+            ProviderCapabilityFamilyConfig::Gemini => CapabilityFamily::Gemini,
+            ProviderCapabilityFamilyConfig::Bedrock => CapabilityFamily::Bedrock,
+            ProviderCapabilityFamilyConfig::Gitlab => CapabilityFamily::Gitlab,
+        }
     }
 }
 

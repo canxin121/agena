@@ -12,5 +12,6 @@ pub use oauth::{
 };
 pub use store::AuthStore;
 pub use types::{
-    AuthData, CopilotDeployment, DeviceCodeStart, OAuthAuthorizeStart, OAuthTokenResponse,
+    AuthData, CopilotDeployment, CredentialIssuer, DeviceCodeStart, OAuthAuthorizeStart,
+    OAuthTokenResponse,
 };

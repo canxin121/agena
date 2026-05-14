@@ -602,6 +602,7 @@ async fn resolve_inline_auth_credential(
     match refresh {
         AuthRefreshStrategy::OpenAiOAuth => {
             let AuthData::OAuth {
+                issuer,
                 refresh: refresh_token,
                 account_id,
                 enterprise_url,
@@ -614,6 +615,7 @@ async fn resolve_inline_auth_credential(
             let refreshed =
                 crate::provider::auth::refresh_openai_token(refresh_token.as_str()).await?;
             let updated = AuthData::OAuth {
+                issuer,
                 refresh: refreshed.refresh,
                 access: refreshed.access,
                 expires_at_ms: refreshed.expires_at_ms,
@@ -625,6 +627,7 @@ async fn resolve_inline_auth_credential(
         }
         AuthRefreshStrategy::GitlabOAuth { instance_url } => {
             let AuthData::OAuth {
+                issuer,
                 refresh: refresh_token,
                 account_id,
                 enterprise_url,
@@ -637,6 +640,7 @@ async fn resolve_inline_auth_credential(
             let refreshed =
                 refresh_gitlab_token(instance_url.as_str(), refresh_token.as_str()).await?;
             let updated = AuthData::OAuth {
+                issuer,
                 refresh: refreshed.refresh,
                 access: refreshed.access,
                 expires_at_ms: refreshed.expires_at_ms,

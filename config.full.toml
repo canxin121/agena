@@ -222,11 +222,11 @@ include_global = true
 default_model = "gpt-4.1-mini"
 
 [providers.openai.auth]
-secret_env = "OPENAI_API_KEY"
-
-[providers.openai.adapters.api]
-kind = "openai"
+mode = "api"
 base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.openai.adapters.openai]
 default_model = "gpt-4.1-mini"
 api_mode = "auto"
 stream_mode = "sse"
@@ -234,7 +234,7 @@ stream_mode = "sse"
 # Optional explicit per-model metadata / capability configuration.
 # Keys are exact model ids under the provider; no matcher syntax is supported.
 #
-# [providers.openai.adapters.api.models."gpt-4.1-mini"]
+# [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 # input = { unsupported = ["image"] }
 # features = ["tool_calling"]
 # display_name = "GPT-4.1 Mini Internal"
@@ -252,18 +252,18 @@ stream_mode = "sse"
 # default_model = "o3-mini"
 #
 # [providers.openai-reasoning.auth]
-# secret_env = "OPENAI_API_KEY"
-#
-# [providers.openai-reasoning.adapters.api]
-# kind = "openai"
+# mode = "api"
 # base_url = "https://api.openai.com/v1"
+# api_key_env = "OPENAI_API_KEY"
+#
+# [providers.openai-reasoning.adapters.openai]
 # default_model = "o3-mini"
 #
-# [providers.openai-reasoning.adapters.api.models."o3-mini".variants.light]
+# [providers.openai-reasoning.adapters.openai.models."o3-mini".variants.light]
 # display_name = "Light"
 # thinking = { type = "effort", effort = "low" }
 #
-# [providers.openai-reasoning.adapters.api.models."o3-mini".variants.deep]
+# [providers.openai-reasoning.adapters.openai.models."o3-mini".variants.deep]
 # display_name = "Deep"
 # thinking = { type = "effort", effort = "high" }
 #
@@ -273,18 +273,18 @@ stream_mode = "sse"
 # default_model = "claude-sonnet-4-5"
 #
 # [providers.anthropic.auth]
-# secret_env = "ANTHROPIC_API_KEY"
-#
-# [providers.anthropic.adapters.api]
-# kind = "anthropic"
+# mode = "api"
 # base_url = "https://api.anthropic.com/v1"
+# api_key_env = "ANTHROPIC_API_KEY"
+#
+# [providers.anthropic.adapters.anthropic]
 # default_model = "claude-sonnet-4-5"
 #
-# [providers.anthropic.adapters.api.models."claude-sonnet-4-5".variants.light]
+# [providers.anthropic.adapters.anthropic.models."claude-sonnet-4-5".variants.light]
 # display_name = "Light"
 # thinking = { type = "budget", budget_tokens = 3000 }
 #
-# [providers.anthropic.adapters.api.models."claude-sonnet-4-5".variants.deep]
+# [providers.anthropic.adapters.anthropic.models."claude-sonnet-4-5".variants.deep]
 # display_name = "Deep"
 # thinking = { type = "budget", budget_tokens = 30000 }
 
@@ -294,8 +294,7 @@ stream_mode = "sse"
 # [providers.ollama]
 # default_model = "qwen3:14b"
 #
-# [providers.ollama.adapters.local]
-# kind = "ollama"
+# [providers.ollama.adapters.ollama]
 # base_url = "http://localhost:11434"
 # default_model = "qwen3:14b"
 #
@@ -303,55 +302,70 @@ stream_mode = "sse"
 # default_model = "local-model"
 #
 # [providers.lmstudio.auth]
-# secret = "local"
-#
-# [providers.lmstudio.adapters.local]
-# kind = "openai_compatible"
+# mode = "api"
 # base_url = "http://localhost:1234/v1"
+# api_key = "local"
+#
+# [providers.lmstudio.adapters.openai_compatible]
 # default_model = "local-model"
 #
 # [providers.openrouter]
 # default_model = "openai/gpt-4o-mini"
 #
 # [providers.openrouter.auth]
-# secret_env = "OPENROUTER_API_KEY"
-#
-# [providers.openrouter.adapters.api]
-# kind = "openai_compatible"
+# mode = "api"
 # base_url = "https://openrouter.ai/api/v1"
+# api_key_env = "OPENROUTER_API_KEY"
+#
+# [providers.openrouter.adapters.openai_compatible]
 # default_model = "openai/gpt-4o-mini"
 #
 # [providers."github-copilot"]
 # default_model = "gpt-4o-mini"
 #
 # [providers."github-copilot".auth]
-# credential = { type = "oauth", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
+# mode = "credential"
+# issuer = "github_copilot"
+# credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 #
-# [providers."github-copilot".adapters.api]
-# kind = "copilot"
+# [providers."github-copilot".adapters.openai]
 # base_url = "https://api.githubcopilot.com"
 # models_url = "https://api.githubcopilot.com/models"
 # default_model = "gpt-4o-mini"
+#
+# [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
+# target_model = "gpt-4o-mini"
+#
+# [providers."github-copilot".adapters.anthropic]
+# auth_header = "authorization"
+# auth_scheme = "Bearer"
+# extra_beta_header = "interleaved-thinking-2025-05-14"
+# default_model = "claude-sonnet-4"
+#
+# [providers."github-copilot".adapters.anthropic.models.claude]
+# target_model = "claude-sonnet-4"
 #
 # [providers."google-vertex"]
 # default_model = "gemini-2.5-pro"
 #
 # [providers."google-vertex".auth]
-# secret_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
-#
-# [providers."google-vertex".adapters.api]
-# kind = "google_vertex"
+# mode = "api"
 # base_url = "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/endpoints/openapi"
+# api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
+#
+# [providers."google-vertex".adapters.openai]
 # default_model = "gemini-2.5-pro"
+# capability_family = "gemini"
 
 [providers.openai_chatgpt]
 default_model = "gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
-credential = { type = "oauth", refresh = "openai-refresh-token", access = "openai-access-token", expires_at_ms = 4102444800000, account_id = "acct-example" }
+mode = "credential"
+issuer = "openai_chatgpt"
+credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "openai-refresh-token", access = "openai-access-token", expires_at_ms = 4102444800000, account_id = "acct-example" }
 
-[providers.openai_chatgpt.adapters.codex]
-kind = "openai"
+[providers.openai_chatgpt.adapters.openai]
 backend = "chatgpt_codex"
 default_model = "gpt-5.3-codex"
 
@@ -359,17 +373,30 @@ default_model = "gpt-5.3-codex"
 default_model = "gpt-4o-mini"
 
 [providers."github-copilot".auth]
-credential = { type = "oauth", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
+mode = "credential"
+issuer = "github_copilot"
+credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 
-[providers."github-copilot".adapters.api]
-kind = "copilot"
+[providers."github-copilot".adapters.openai]
+# base_url = "https://api.githubcopilot.com"
 default_model = "gpt-4o-mini"
+
+[providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
+target_model = "gpt-4o-mini"
+
+[providers."github-copilot".adapters.anthropic]
+# auth_header = "authorization"
+# auth_scheme = "Bearer"
+# extra_beta_header = "interleaved-thinking-2025-05-14"
+default_model = "claude-sonnet-4"
+
+[providers."github-copilot".adapters.anthropic.models.claude]
+target_model = "claude-sonnet-4"
 
 [providers.ollama]
 default_model = "qwen3:14b"
 
-[providers.ollama.adapters.local]
-kind = "ollama"
+[providers.ollama.adapters.ollama]
 base_url = "http://localhost:11434"
 default_model = "qwen3:14b"
 
@@ -377,10 +404,11 @@ default_model = "qwen3:14b"
 default_model = "claude-sonnet-4-5"
 
 [providers.gitlab.auth]
-credential = { type = "oauth", refresh = "gitlab-refresh-token", access = "gitlab-access-token", expires_at_ms = 4102444800000 }
+mode = "credential"
+issuer = "gitlab"
+credential = { type = "oauth", issuer = "gitlab", refresh = "gitlab-refresh-token", access = "gitlab-access-token", expires_at_ms = 4102444800000 }
 
-[providers.gitlab.adapters.duo]
-kind = "gitlab"
+[providers.gitlab.adapters.gitlab]
 instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
 default_model = "claude-sonnet-4-5"
@@ -389,9 +417,10 @@ default_model = "claude-sonnet-4-5"
 default_model = "google/gemini-2.5-flash"
 
 [providers."google-vertex".auth]
-secret_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
-
-[providers."google-vertex".adapters.api]
-kind = "google_vertex"
+mode = "api"
 base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
+api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
+
+[providers."google-vertex".adapters.openai]
 default_model = "google/gemini-2.5-flash"
+capability_family = "gemini"

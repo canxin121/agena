@@ -65,6 +65,21 @@ describe('chatRenderModel', () => {
     ])
   })
 
+  test('renders summary-only activity parts without fetching full content', () => {
+    const summaryOnly = message(4, {
+      parts: [
+        messagePart(4, {
+          kind: 'permission_request',
+          summary: 'Awaiting permission: Need to inspect git status',
+          has_detail: true,
+          content: undefined,
+        }),
+      ],
+    })
+
+    expect(messageBlocks(summaryOnly)).toEqual([{ body: 'Awaiting permission: Need to inspect git status', kind: 'text' }])
+  })
+
   test('extracts tags, usage facts, and timeline message ids', () => {
     const tagged = message(3, {
       metadata: { tags: ['tool', '', 'review'] },

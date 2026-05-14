@@ -505,6 +505,8 @@ export type MessageResource = {
   parts?: MessagePart[] | null
 }
 
+export type PartLoadMode = 'none' | 'summary' | 'full'
+
 export type PermissionRequest = {
   request_id: string
   session_id?: number | null
@@ -1298,12 +1300,12 @@ export async function listSessionTimeline(
   return response.items ?? []
 }
 
-export async function getMessage(messageId: number): Promise<MessageResource> {
-  return await apiJson<MessageResource>(`/api/v1/messages/${messageId}?parts=full`)
+export async function getMessage(messageId: number, parts: PartLoadMode = 'summary'): Promise<MessageResource> {
+  return await apiJson<MessageResource>(`/api/v1/messages/${messageId}?parts=${encodeURIComponent(parts)}`)
 }
 
-export async function listMessageParts(messageId: number): Promise<MessagePart[]> {
-  return await apiJson<MessagePart[]>(`/api/v1/messages/${messageId}/parts?mode=full`)
+export async function listMessageParts(messageId: number, mode: PartLoadMode = 'summary'): Promise<MessagePart[]> {
+  return await apiJson<MessagePart[]>(`/api/v1/messages/${messageId}/parts?mode=${encodeURIComponent(mode)}`)
 }
 
 export async function getMessagePart(partId: number): Promise<MessagePart> {

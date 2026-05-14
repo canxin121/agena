@@ -401,7 +401,7 @@ impl fmt::Debug for ProviderSapAiCoreAuthConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderAdapterConfig {
-    pub default_model: String,
+    pub enabled: bool,
     #[serde(flatten)]
     pub definition: ProviderAdapterDefinition,
 }
@@ -420,8 +420,7 @@ pub enum ProviderAdapterDefinition {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderModelConfig {
-    pub adapter: String,
-    pub target_model: String,
+    pub enabled: bool,
     #[serde(flatten)]
     pub definition: ConfiguredModelDefinition,
 }

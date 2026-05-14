@@ -45,7 +45,7 @@ fn loader_applies_file_then_env_then_cli() {
 timeout_secs = 90
 
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -53,7 +53,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 "#,
     );
 
@@ -136,14 +135,13 @@ fn loader_rejects_legacy_mode_config() {
 mode = "prod"
 
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 "#,
     );
 
@@ -165,14 +163,13 @@ fn loader_rejects_legacy_modes_table() {
     let path = write_temp_config(
         r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 
 [modes.prod.permission]
 default_write = "ask"
@@ -197,14 +194,13 @@ fn loader_rejects_provider_level_variants() {
     let path = write_temp_config(
         r#"
 [providers.openai]
-default_model = "gpt-5"
+default_model = "openai/gpt-5"
 
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5"
 
 [providers.openai.variants.deep]
 thinking = { type = "effort", effort = "high" }
@@ -255,7 +251,7 @@ fn openai_provider_defaults_api_backend_base_url_and_empty_inline_credential() {
     let path = write_temp_config(
         r#"
 [providers.api]
-default_model = "gpt-5"
+default_model = "openai/gpt-5"
 
 [providers.api.auth]
 mode = "api"
@@ -263,7 +259,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
 [providers.api.adapters.openai]
-default_model = "gpt-5"
 "#,
     );
 
@@ -281,7 +276,7 @@ default_model = "gpt-5"
         .get("api")
         .expect("api provider should exist");
 
-    assert_eq!(provider.default_model, "gpt-5");
+    assert_eq!(provider.default_model, "openai/gpt-5");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
             assert_eq!(api.base_url, "https://api.openai.com/v1");
@@ -308,7 +303,7 @@ fn openai_chatgpt_codex_backend_defaults_base_url_and_empty_inline_credential() 
     let path = write_temp_config(
         r#"
 [providers.chatgpt]
-default_model = "gpt-5.3-codex"
+default_model = "openai/gpt-5.3-codex"
 
 [providers.chatgpt.auth]
 mode = "credential"
@@ -316,7 +311,6 @@ issuer = "openai_chatgpt"
 
 [providers.chatgpt.adapters.openai]
 backend = "chatgpt_codex"
-default_model = "gpt-5.3-codex"
 "#,
     );
 
@@ -334,7 +328,7 @@ default_model = "gpt-5.3-codex"
         .get("chatgpt")
         .expect("chatgpt provider should exist");
 
-    assert_eq!(provider.default_model, "gpt-5.3-codex");
+    assert_eq!(provider.default_model, "openai/gpt-5.3-codex");
     match &provider.auth {
         ProviderAuthConfig::Credential(config) => {
             assert_eq!(
@@ -365,7 +359,7 @@ fn openai_chatgpt_codex_backend_rejects_direct_api_keys() {
     let path = write_temp_config(
         r#"
 [providers.chatgpt]
-default_model = "gpt-5.3-codex"
+default_model = "openai/gpt-5.3-codex"
 
 [providers.chatgpt.auth]
 mode = "api"
@@ -374,7 +368,6 @@ api_key_env = "OPENAI_API_KEY"
 
 [providers.chatgpt.adapters.openai]
 backend = "chatgpt_codex"
-default_model = "gpt-5.3-codex"
 "#,
     );
 
@@ -396,7 +389,7 @@ fn openai_chatgpt_codex_backend_rejects_non_responses_api_mode() {
     let path = write_temp_config(
         r#"
 [providers.chatgpt]
-default_model = "gpt-5.3-codex"
+default_model = "openai/gpt-5.3-codex"
 
 [providers.chatgpt.auth]
 mode = "credential"
@@ -404,7 +397,6 @@ issuer = "openai_chatgpt"
 
 [providers.chatgpt.adapters.openai]
 backend = "chatgpt_codex"
-default_model = "gpt-5.3-codex"
 api_mode = "chat"
 "#,
     );
@@ -427,14 +419,13 @@ fn openai_provider_with_github_copilot_credential_uses_credential_auth() {
     let path = write_temp_config(
         r#"
 [providers."github-copilot"]
-default_model = "gpt-4o-mini"
+default_model = "openai/gpt-4o-mini"
 
 [providers."github-copilot".auth]
 mode = "credential"
 issuer = "github_copilot"
 
 [providers."github-copilot".adapters.openai]
-default_model = "gpt-4o-mini"
 "#,
     );
 
@@ -479,7 +470,7 @@ fn openai_provider_rejects_mismatched_credential_issuer_and_backend() {
     let path = write_temp_config(
         r#"
 [providers.bad]
-default_model = "gpt-4o-mini"
+default_model = "openai/gpt-4o-mini"
 
 [providers.bad.auth]
 mode = "credential"
@@ -487,7 +478,6 @@ issuer = "github_copilot"
 
 [providers.bad.adapters.openai]
 backend = "chatgpt_codex"
-default_model = "gpt-4o-mini"
 "#,
     );
 
@@ -509,14 +499,13 @@ fn anthropic_provider_with_github_copilot_credential_uses_credential_auth() {
     let path = write_temp_config(
         r#"
 [providers."github-copilot-claude"]
-default_model = "claude-sonnet-4"
+default_model = "anthropic/claude-sonnet-4"
 
 [providers."github-copilot-claude".auth]
 mode = "credential"
 issuer = "github_copilot"
 
 [providers."github-copilot-claude".adapters.anthropic]
-default_model = "claude-sonnet-4"
 "#,
     );
 
@@ -559,14 +548,13 @@ fn anthropic_provider_rejects_non_copilot_credential_issuer() {
     let path = write_temp_config(
         r#"
 [providers.bad]
-default_model = "claude-sonnet-4"
+default_model = "anthropic/claude-sonnet-4"
 
 [providers.bad.auth]
 mode = "credential"
 issuer = "openai_chatgpt"
 
 [providers.bad.adapters.anthropic]
-default_model = "claude-sonnet-4"
 "#,
     );
 
@@ -588,14 +576,13 @@ fn gemini_adapter_rejects_github_copilot_credential() {
     let path = write_temp_config(
         r#"
 [providers.bad]
-default_model = "gemini-2.5-pro"
+default_model = "gemini/gemini-2.5-pro"
 
 [providers.bad.auth]
 mode = "credential"
 issuer = "github_copilot"
 
 [providers.bad.adapters.gemini]
-default_model = "gemini-2.5-pro"
 "#,
     );
 
@@ -618,7 +605,7 @@ fn multi_adapter_provider_loads_shared_auth_and_routes_models() {
     let path = write_temp_config(
         r#"
 [providers.shared]
-default_model = "fast"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"
@@ -626,19 +613,13 @@ base_url = "https://gateway.example.com/v1"
 api_key_env = "SHARED_GATEWAY_API_KEY"
 
 [providers.shared.adapters.openai]
-default_model = "gpt-4.1"
 
-[providers.shared.adapters.openai.models.fast]
-target_model = "gpt-4.1-mini"
-
-[providers.shared.adapters.openai.models.fast.variants.deep]
+[providers.shared.adapters.openai.models."gpt-4.1-mini".variants.deep]
 thinking = { type = "effort", effort = "high" }
 
 [providers.shared.adapters.anthropic]
-default_model = "claude-sonnet-4"
 
-[providers.shared.adapters.anthropic.models.coder]
-target_model = "claude-sonnet-4"
+[providers.shared.adapters.anthropic.models."claude-sonnet-4"]
 "#,
     );
 
@@ -656,7 +637,7 @@ target_model = "claude-sonnet-4"
         .get("shared")
         .expect("shared provider should exist");
 
-    assert_eq!(provider.default_model, "fast");
+    assert_eq!(provider.default_model, "openai/gpt-4.1-mini");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
             assert_eq!(api.base_url, "https://gateway.example.com/v1");
@@ -666,41 +647,25 @@ target_model = "claude-sonnet-4"
     }
     assert_eq!(provider.adapters.len(), 2);
     assert_eq!(
-        provider
-            .models
-            .get("fast")
-            .map(|model| model.adapter.as_str()),
-        Some("openai")
-    );
-    assert_eq!(
-        provider
-            .models
-            .get("fast")
-            .map(|model| model.target_model.as_str()),
-        Some("gpt-4.1-mini")
+        provider.models.get("openai/gpt-4.1-mini").map(|model| model.enabled),
+        Some(true)
     );
     assert!(
         provider
             .models
-            .get("fast")
+            .get("openai/gpt-4.1-mini")
             .and_then(|model| model.definition.variants.get("deep"))
             .is_some()
     );
-    assert_eq!(
-        provider
-            .models
-            .get("coder")
-            .map(|model| model.adapter.as_str()),
-        Some("anthropic")
-    );
+    assert!(provider.models.contains_key("anthropic/claude-sonnet-4"));
 }
 
 #[test]
-fn multi_adapter_provider_requires_explicit_models() {
+fn multi_adapter_provider_allows_passthrough_models_without_explicit_routes() {
     let path = write_temp_config(
         r#"
 [providers.shared]
-default_model = "fast"
+default_model = "openai/gpt-4.1"
 
 [providers.shared.auth]
 mode = "api"
@@ -708,29 +673,28 @@ base_url = "https://gateway.example.com/v1"
 api_key_env = "SHARED_GATEWAY_API_KEY"
 
 [providers.shared.adapters.openai]
-default_model = "gpt-4.1"
 
 [providers.shared.adapters.anthropic]
-default_model = "claude-sonnet-4"
 
-[providers.shared.adapters.anthropic.models.coder]
-target_model = "claude-sonnet-4"
+[providers.shared.adapters.anthropic.models."claude-sonnet-4"]
 "#,
     );
 
     let loader = ConfigLoader::new(TestEnvironment::default());
-    let err = loader
+    let resolution = loader
         .load(&LoadConfigRequest {
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect_err("multi-adapter provider should require explicit models per adapter");
+        .expect("multi-adapter provider should allow passthrough models");
 
-    assert!(matches!(
-        err,
-        ConfigError::InvalidProviderConfig { provider_id, message }
-            if provider_id == "shared" && message.contains("multi-adapter provider requires explicit models")
-    ));
+    let provider = resolution
+        .config
+        .providers
+        .get("shared")
+        .expect("shared provider should exist");
+    assert_eq!(provider.default_model, "openai/gpt-4.1");
+    assert!(provider.models.contains_key("anthropic/claude-sonnet-4"));
 }
 
 #[test]
@@ -738,7 +702,7 @@ fn multiple_providers_keep_distinct_inline_credentials() {
     let path = write_temp_config(
         r#"
 [providers.primary]
-default_model = "gpt-4.1"
+default_model = "openai/gpt-4.1"
 
 [providers.primary.auth]
 mode = "api"
@@ -746,10 +710,9 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-primary"
 
 [providers.primary.adapters.openai]
-default_model = "gpt-4.1"
 
 [providers.secondary]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.secondary.auth]
 mode = "api"
@@ -757,7 +720,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-secondary"
 
 [providers.secondary.adapters.openai]
-default_model = "gpt-4.1-mini"
 "#,
     );
 
@@ -902,11 +864,9 @@ fn provider_auth_credential_inline_config_loads() {
     let path = write_temp_config(
         r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
-
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
@@ -1264,15 +1224,12 @@ fn provider_models_parse() {
     let path = write_temp_config(
         r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
-
-[providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 input = { unsupported = ["image"] }
@@ -1295,7 +1252,7 @@ input = { unsupported = ["image"] }
     assert_eq!(provider.models.len(), 1);
     let model = provider
         .models
-        .get("gpt-4.1-mini")
+        .get("openai/gpt-4.1-mini")
         .expect("configured model should exist");
     assert_eq!(
         model.definition.capabilities.image_input,
@@ -1304,35 +1261,35 @@ input = { unsupported = ["image"] }
 }
 
 #[test]
-fn provider_models_require_non_empty_configuration() {
+fn provider_models_allow_empty_configuration() {
     let path = write_temp_config(
         r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
-[providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
-
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 "#,
     );
 
     let loader = ConfigLoader::new(TestEnvironment::default());
-    let err = loader
+    let resolution = loader
         .load(&LoadConfigRequest {
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect_err("invalid override should fail validation");
+        .expect("empty model config should be allowed");
 
-    assert!(
-        matches!(err, ConfigError::Validation(message) if message.contains("model `gpt-4.1-mini` must set at least one field or target_model"))
-    );
+    let provider = resolution
+        .config
+        .providers
+        .get("openai")
+        .expect("openai provider should exist");
+    assert!(provider.models.contains_key("openai/gpt-4.1-mini"));
 }
 
 #[test]
@@ -1340,15 +1297,12 @@ fn provider_models_reject_overlapping_compact_capabilities() {
     let path = write_temp_config(
         r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
-
-[providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 input = { supported = ["image"], unsupported = ["image"] }
@@ -1373,15 +1327,12 @@ fn provider_models_resolved_config_serializes_compact_patch_shape() {
     let path = write_temp_config(
         r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
-
-[providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 input = { unsupported = ["image"] }
@@ -1402,9 +1353,9 @@ features = ["tool_calling"]
         .expect("resolved config should serialize");
 
     assert!(serialized.contains(
-        "[config.providers.openai.models.\"gpt-4.1-mini\".definition.capabilities.input]"
+        "[config.providers.openai.models.\"openai/gpt-4.1-mini\".definition.capabilities.input]"
     ) || serialized.contains(
-        "[config.providers.openai.models.\"gpt-4.1-mini\".input]"
+        "[config.providers.openai.models.\"openai/gpt-4.1-mini\".input]"
     ));
     assert!(serialized.contains("unsupported = [\"image\"]"));
     assert!(serialized.contains("features = [\"tool_calling\"]"));
@@ -1554,7 +1505,7 @@ async fn build_plugin_host_with_no_entries_succeeds() {
         &path,
         r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -1562,7 +1513,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
+
 "#,
     )
     .expect("config should be written");
@@ -1604,7 +1555,7 @@ kind = "cdylib"
 path = "missing-plugins/libfoo.so"
 
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -1612,7 +1563,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 "#,
     )
     .expect("config should be written");
@@ -1829,7 +1779,7 @@ fn runtime_default_agent_falls_back_to_build() {
     let path = write_temp_config(
         r#"
 [providers.openai]
-default_model = "gpt-5"
+default_model = "openai/gpt-5"
 
 [providers.openai.auth]
 mode = "api"
@@ -1837,7 +1787,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5"
 "#,
     );
 
@@ -1862,7 +1811,7 @@ fn legacy_amazon_bedrock_root_shape_is_rejected() {
 [providers.bedrock]
 kind = "amazon_bedrock"
 base_url = "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
-default_model = "amazon.nova-pro-v1:0"
+default_model = "amazon_bedrock/amazon.nova-pro-v1:0"
 api_key = "bedrock-token"
 "#,
     );
@@ -1883,7 +1832,7 @@ fn openai_compatible_adapter_rejects_adapter_level_base_url() {
     let path = write_temp_config(
         r#"
 [providers.gateway]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.gateway.auth]
 mode = "api"
@@ -1892,7 +1841,6 @@ api_key = "secret"
 
 [providers.gateway.adapters.openai_compatible]
 base_url = "https://gateway.example.com/v1"
-default_model = "gpt-4.1-mini"
 "#,
     );
 
@@ -1917,7 +1865,7 @@ fn openai_adapter_rejects_openai_compatible_capability_family() {
     let path = write_temp_config(
         r#"
 [providers.gateway]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.gateway.auth]
 mode = "api"
@@ -1925,7 +1873,6 @@ base_url = "https://gateway.example.com/v1"
 api_key = "secret"
 
 [providers.gateway.adapters.openai]
-default_model = "gpt-4.1-mini"
 capability_family = "openai_compatible"
 "#,
     );
@@ -1951,7 +1898,7 @@ fn canonical_amazon_bedrock_adapter_keeps_sigv4_auth() {
     let path = write_temp_config(
         r#"
 [providers.bedrock]
-default_model = "anthropic.claude-3-7-sonnet-20250219-v1:0"
+default_model = "amazon_bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"
 
 [providers.bedrock.auth]
 mode = "bedrock_sigv4"
@@ -1960,7 +1907,6 @@ region = "us-east-1"
 profile = "prod"
 
 [providers.bedrock.adapters.amazon_bedrock]
-default_model = "anthropic.claude-3-7-sonnet-20250219-v1:0"
 "#,
     );
 

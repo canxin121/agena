@@ -4,7 +4,6 @@ use aws_credential_types::Credentials;
 use tokio::sync::Mutex;
 
 use crate::{
-    model::ModelId,
     plugin::{PluginHost, PluginHostBuilder},
     provider::{
         AmazonBedrockProvider, AnthropicProvider, AuthRefreshStrategy, AuthSecretSelector,
@@ -21,6 +20,7 @@ use super::{
     ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig,
     ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
 };
+use super::raw::parse_adapter_model_ref;
 
 impl ResolvedConfig {
     pub fn build_provider_registry(&self) -> Result<ProviderRegistry, ConfigError> {
@@ -174,9 +174,11 @@ fn build_provider(
     client: reqwest::Client,
     env: &dyn ConfigEnvironment,
 ) -> Result<Arc<dyn ModelProvider>, ConfigError> {
+    let adapter_defaults = resolve_adapter_default_models(provider_id, resolved)?;
     let adapters = resolved
         .adapters
         .iter()
+        .filter(|(_, adapter)| adapter.enabled)
         .map(|(adapter_id, adapter)| {
             Ok((
                 adapter_id.clone(),
@@ -184,6 +186,10 @@ fn build_provider(
                     provider_id,
                     adapter_id.as_str(),
                     adapter,
+                    adapter_defaults
+                        .get(adapter_id.as_str())
+                        .expect("adapter default should exist")
+                        .as_str(),
                     &resolved.auth,
                     client.clone(),
                     env,
@@ -195,28 +201,29 @@ fn build_provider(
     let routes = resolved
         .models
         .iter()
+        .filter(|(model_id, _)| {
+            parse_adapter_model_ref(provider_id, model_id)
+                .ok()
+                .and_then(|(adapter_id, _)| resolved.adapters.get(adapter_id.as_str()))
+                .map(|adapter| adapter.enabled)
+                .unwrap_or(false)
+        })
         .map(|(model_id, config)| {
             Ok((
                 model_id.clone(),
                 ProviderModelRoute {
-                    adapter_id: config.adapter.clone(),
-                    target_model: ModelId::new(config.target_model.clone()),
+                    enabled: config.enabled,
                     definition: config.definition.clone(),
                 },
             ))
         })
         .collect::<Result<std::collections::BTreeMap<_, _>, ConfigError>>()?;
 
-    let passthrough_adapter_id = (resolved.adapters.len() == 1)
-        .then(|| resolved.adapters.keys().next().cloned())
-        .flatten();
-
     Ok(Arc::new(MultiAdapterProvider::new(
         provider_id,
         resolved.default_model.clone(),
         adapters,
         routes,
-        passthrough_adapter_id,
     )))
 }
 
@@ -224,6 +231,7 @@ fn build_adapter_provider(
     provider_id: &str,
     adapter_id: &str,
     config: &ResolvedProviderAdapterConfig,
+    adapter_default_model: &str,
     auth: &ProviderAuthConfig,
     client: reqwest::Client,
     env: &dyn ConfigEnvironment,
@@ -237,7 +245,7 @@ fn build_adapter_provider(
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_owned()),
-            config.default_model.clone(),
+            adapter_default_model.to_owned(),
         )),
         ProviderAdapterDefinition::OpenAi(adapter) => {
             match auth {
@@ -253,7 +261,7 @@ fn build_adapter_provider(
                         client,
                         credential.credential,
                         openai_adapter_base_url(provider_id, auth, &adapter.options)?,
-                        config.default_model.clone(),
+                        adapter_default_model.to_owned(),
                     )
                     .with_backend(adapter.options.backend.into())
                     .with_auth_header(
@@ -291,7 +299,7 @@ fn build_adapter_provider(
                             client,
                             credential.credential,
                             "https://chatgpt.com/backend-api/codex".to_owned(),
-                            config.default_model.clone(),
+                            adapter_default_model.to_owned(),
                         )
                         .with_backend(adapter.options.backend.into())
                         .with_auth_header(
@@ -339,7 +347,7 @@ fn build_adapter_provider(
                                     }
                                 })
                                 .unwrap_or_else(|| "https://api.githubcopilot.com".to_owned()),
-                            config.default_model.clone(),
+                            adapter_default_model.to_owned(),
                         )
                         .with_profile(crate::provider::OpenAiProfile::GithubCopilot)
                         .with_backend(adapter.options.backend.into())
@@ -392,7 +400,7 @@ fn build_adapter_provider(
                     client,
                     credential,
                     base_url.clone(),
-                    config.default_model.clone(),
+                    adapter_default_model.to_owned(),
                     adapter.options.auth_header.clone(),
                     adapter.options.auth_scheme.clone(),
                     extra_headers,
@@ -406,7 +414,7 @@ fn build_adapter_provider(
                         client,
                         credential,
                         base_url,
-                        config.default_model.clone(),
+                        adapter_default_model.to_owned(),
                     )
                     .with_auth_header(
                         adapter.options.auth_header.clone(),
@@ -445,7 +453,7 @@ fn build_adapter_provider(
                     client,
                     credential.credential,
                     base_url,
-                    config.default_model.clone(),
+                    adapter_default_model.to_owned(),
                 )
                 .with_profile(AnthropicProfile::GithubCopilot)
                 .with_models_url(adapter.options.models_url.clone())
@@ -482,7 +490,7 @@ fn build_adapter_provider(
                         .base_url
                         .clone()
                         .unwrap_or(provider_api_base_url(auth, provider_id)?),
-                    config.default_model.clone(),
+                    adapter_default_model.to_owned(),
                 )
                 .with_models_url(adapter.options.models_url.clone())
                 .with_messages_url(adapter.options.messages_url.clone())
@@ -509,7 +517,7 @@ fn build_adapter_provider(
                 )?
                 .credential,
                 provider_api_base_url(auth, provider_id)?,
-                config.default_model.clone(),
+                adapter_default_model.to_owned(),
             )
             .with_extra_headers(to_hash_map(&adapter.extra_headers));
                 if let Some(header) = adapter.options.auth_header.clone() {
@@ -528,7 +536,7 @@ fn build_adapter_provider(
                     .ai_gateway_url
                     .clone()
                     .unwrap_or_else(|| "https://cloud.gitlab.com".to_owned()),
-                default_model: config.default_model.clone(),
+                default_model: adapter_default_model.to_owned(),
                 ai_gateway_headers: to_hash_map(&adapter.ai_gateway_headers),
                 feature_flags: to_hash_map(&adapter.feature_flags),
             };
@@ -574,7 +582,7 @@ fn build_adapter_provider(
             ProviderAuthConfig::BedrockSigv4(sigv4) => AmazonBedrockProvider::new_sigv4(
                 client,
                 sigv4.base_url.clone(),
-                config.default_model.clone(),
+                adapter_default_model.to_owned(),
                 sigv4.region.clone(),
                 sigv4.profile.clone(),
                 static_bedrock_credentials(
@@ -594,6 +602,49 @@ fn build_adapter_provider(
     };
 
     Ok(provider)
+}
+
+fn resolve_adapter_default_models(
+    provider_id: &str,
+    resolved: &ResolvedProviderConfig,
+) -> Result<std::collections::BTreeMap<String, String>, ConfigError> {
+    let (default_adapter_id, default_model_id) =
+        parse_adapter_model_ref(provider_id, resolved.default_model.as_str())?;
+
+    let mut defaults = std::collections::BTreeMap::new();
+    for adapter_id in resolved
+        .adapters
+        .iter()
+        .filter(|(_, adapter)| adapter.enabled)
+        .map(|(adapter_id, _)| adapter_id)
+    {
+        let default_for_adapter = if adapter_id == &default_adapter_id {
+            Some(default_model_id.clone())
+        } else {
+            resolved
+                .models
+                .iter()
+                .find_map(|(visible_model_id, model)| {
+                    if !model.enabled {
+                        return None;
+                    }
+                    let (route_adapter_id, route_model_id) =
+                        parse_adapter_model_ref(provider_id, visible_model_id).ok()?;
+                    (route_adapter_id == *adapter_id).then_some(route_model_id)
+                })
+        };
+
+        let default_for_adapter =
+            default_for_adapter.ok_or_else(|| ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.to_owned(),
+                message: format!(
+                    "provider must set `default_model` or declare at least one enabled model for adapter `{adapter_id}`"
+                ),
+            })?;
+        defaults.insert(adapter_id.clone(), default_for_adapter);
+    }
+
+    Ok(defaults)
 }
 
 fn api_auth<'a>(
@@ -1068,7 +1119,7 @@ mod tests {
         let path = write_temp_file(
             r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -1076,7 +1127,6 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 "#,
         );
 
@@ -1104,7 +1154,7 @@ default_model = "gpt-4.1-mini"
         let path = write_temp_file(
             r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -1112,7 +1162,6 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 input = { unsupported = ["image"] }
@@ -1135,7 +1184,7 @@ input = { unsupported = ["image"] }
             .expect("registry should build");
 
         let capabilities = registry
-            .model_capabilities(&crate::model::ModelRef::new("openai", "gpt-4.1-mini"))
+            .model_capabilities(&crate::model::ModelRef::new("openai", "openai/gpt-4.1-mini"))
             .expect("provider capabilities should resolve");
         assert_eq!(capabilities.image_input, CapabilitySupport::Unsupported);
         assert_eq!(capabilities.document_input, CapabilitySupport::Supported);
@@ -1146,7 +1195,7 @@ input = { unsupported = ["image"] }
         let path = write_temp_file(
             r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -1154,7 +1203,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-from-config"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 "#,
         );
 
@@ -1181,7 +1229,7 @@ default_model = "gpt-4.1-mini"
         let path = write_temp_file(
             r#"
 [providers.openai]
-default_model = "gpt-5.3-codex"
+default_model = "openai/gpt-5.3-codex"
 
 [providers.openai.auth]
 mode = "credential"
@@ -1190,7 +1238,6 @@ credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "refresh-tok
 
 [providers.openai.adapters.openai]
 backend = "chatgpt_codex"
-default_model = "gpt-5.3-codex"
 "#,
         );
 
@@ -1217,7 +1264,7 @@ default_model = "gpt-5.3-codex"
         let path = write_temp_file(
             r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -1226,7 +1273,6 @@ api_key = "sk-from-config"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 "#,
         );
 
@@ -1253,7 +1299,7 @@ default_model = "gpt-4.1-mini"
         let path = write_temp_file(
             r#"
 [providers.gitlab]
-default_model = "claude-sonnet-4-5"
+default_model = "gitlab/claude-sonnet-4-5"
 
 [providers.gitlab.auth]
 mode = "credential"
@@ -1263,7 +1309,6 @@ credential = { type = "oauth", issuer = "gitlab", refresh = "refresh-token", acc
 [providers.gitlab.adapters.gitlab]
 instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
-default_model = "claude-sonnet-4-5"
 "#,
         );
 
@@ -1290,7 +1335,7 @@ default_model = "claude-sonnet-4-5"
         let path = write_temp_file(
             r#"
 [providers.openai_chatgpt]
-default_model = "gpt-5.3-codex"
+default_model = "openai/gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
 mode = "credential"
@@ -1298,7 +1343,6 @@ issuer = "openai_chatgpt"
 
 [providers.openai_chatgpt.adapters.openai]
 backend = "chatgpt_codex"
-default_model = "gpt-5.3-codex"
 "#,
         );
 
@@ -1328,7 +1372,7 @@ default_model = "gpt-5.3-codex"
         let path = write_temp_file(
             r#"
 [providers.openai_chatgpt]
-default_model = "gpt-5.3-codex"
+default_model = "openai/gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
 mode = "credential"
@@ -1337,7 +1381,6 @@ credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "refresh-tok
 
 [providers.openai_chatgpt.adapters.openai]
 backend = "chatgpt_codex"
-default_model = "gpt-5.3-codex"
 "#,
         );
 
@@ -1364,14 +1407,13 @@ default_model = "gpt-5.3-codex"
         let path = write_temp_file(
             r#"
 [providers."github-copilot"]
-default_model = "gpt-4o-mini"
+default_model = "openai/gpt-4o-mini"
 
 [providers."github-copilot".auth]
 mode = "credential"
 issuer = "github_copilot"
 
 [providers."github-copilot".adapters.openai]
-default_model = "gpt-4o-mini"
 "#,
         );
 
@@ -1401,7 +1443,7 @@ default_model = "gpt-4o-mini"
         let path = write_temp_file(
             r#"
 [providers."github-copilot"]
-default_model = "gpt-4o-mini"
+default_model = "openai/gpt-4o-mini"
 
 [providers."github-copilot".auth]
 mode = "credential"
@@ -1409,7 +1451,6 @@ issuer = "github_copilot"
 credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 
 [providers."github-copilot".adapters.openai]
-default_model = "gpt-4o-mini"
 "#,
         );
 
@@ -1436,7 +1477,7 @@ default_model = "gpt-4o-mini"
         let path = write_temp_file(
             r#"
 [providers."github-copilot-claude"]
-default_model = "claude-sonnet-4"
+default_model = "anthropic/claude-sonnet-4"
 
 [providers."github-copilot-claude".auth]
 mode = "credential"
@@ -1444,7 +1485,6 @@ issuer = "github_copilot"
 credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 
 [providers."github-copilot-claude".adapters.anthropic]
-default_model = "claude-sonnet-4"
 "#,
         );
 
@@ -1471,7 +1511,7 @@ default_model = "claude-sonnet-4"
         let path = write_temp_file(
             r#"
 [providers.gitlab]
-default_model = "claude-sonnet-4-5"
+default_model = "gitlab/claude-sonnet-4-5"
 
 [providers.gitlab.auth]
 mode = "credential"
@@ -1480,7 +1520,6 @@ issuer = "gitlab"
 [providers.gitlab.adapters.gitlab]
 instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
-default_model = "claude-sonnet-4-5"
 "#,
         );
 
@@ -1510,7 +1549,7 @@ default_model = "claude-sonnet-4-5"
         let path = write_temp_file(
             r#"
 [providers."google-vertex"]
-default_model = "google/gemini-2.5-flash"
+default_model = "openai/google/gemini-2.5-flash"
 
 [providers."google-vertex".auth]
 mode = "api"
@@ -1518,7 +1557,6 @@ base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/lo
 api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 
 [providers."google-vertex".adapters.openai]
-default_model = "google/gemini-2.5-flash"
 capability_family = "gemini"
 "#,
         );
@@ -1572,7 +1610,7 @@ capability_family = "gemini"
         let path = write_temp_file(
             r#"
 [providers.sap]
-default_model = "anthropic/claude-sonnet-4"
+default_model = "openai_compatible/anthropic/claude-sonnet-4"
 
 [providers.sap.auth]
 mode = "sap_ai_core"
@@ -1580,7 +1618,6 @@ base_url = "https://api.example.com/v2"
 api_key = "sap-api-token"
 
 [providers.sap.adapters.openai_compatible]
-default_model = "anthropic/claude-sonnet-4"
 auth_header = "authorization"
 auth_scheme = "Bearer"
 "#,

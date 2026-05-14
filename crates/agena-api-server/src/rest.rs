@@ -2303,7 +2303,7 @@ mod tests {
         (
             "openai".to_owned(),
             ResolvedProviderAdapterConfig {
-                default_model: "default".to_owned(),
+                enabled: true,
                 definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
                     extra_headers: Default::default(),
                     options: OpenAiProviderOptions {
@@ -2329,7 +2329,7 @@ mod tests {
     ) -> ResolvedProviderConfig {
         ResolvedProviderConfig {
             enabled: true,
-            default_model: "default".to_owned(),
+            default_model: "openai/default".to_owned(),
             auth,
             adapters: adapters.into_iter().collect(),
             models: Default::default(),

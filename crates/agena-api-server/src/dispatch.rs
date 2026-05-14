@@ -1151,7 +1151,7 @@ mod tests {
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-default_model = "gpt-5.4"
+default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
@@ -1159,7 +1159,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5.4"
 "#,
             "single-provider-default",
         )
@@ -1178,7 +1177,7 @@ default_model = "gpt-5.4"
             .await
             .expect("single provider should resolve default model");
         assert_eq!(core.model.provider_id.as_str(), "openai");
-        assert_eq!(core.model.model_id.as_str(), "gpt-5.4");
+        assert_eq!(core.model.model_id.as_str(), "openai/gpt-5.4");
     }
 
     #[tokio::test]
@@ -1186,7 +1185,7 @@ default_model = "gpt-5.4"
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-default_model = "gpt-5.4"
+default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
@@ -1194,14 +1193,12 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5.4"
 
 [providers.ollama]
-default_model = "qwen3:14b"
+default_model = "ollama/qwen3:14b"
 
 [providers.ollama.adapters.ollama]
 base_url = "http://localhost:11434"
-default_model = "qwen3:14b"
 "#,
             "multiple-provider-default",
         )
@@ -1229,7 +1226,7 @@ default_model = "qwen3:14b"
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-default_model = "gpt-5.4"
+default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
@@ -1237,21 +1234,19 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5.4"
 
 [providers.ollama]
-default_model = "qwen3:14b"
+default_model = "ollama/qwen3:14b"
 
 [providers.ollama.adapters.ollama]
 base_url = "http://localhost:11434"
-default_model = "qwen3:14b"
 "#,
             "explicit-model",
         )
         .await;
         let session_id = create_session(&state, &workspace_root, "explicit model").await;
         let options = RunOptions {
-            model: Some(ModelRef::new("openai", "gpt-5.4")),
+            model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
             variant: None,
             agent_profile: None,
             system: Some("be concise".into()),
@@ -1263,7 +1258,7 @@ default_model = "qwen3:14b"
             .await
             .expect("explicit model should bypass default inference");
         assert_eq!(core.model.provider_id.as_str(), "openai");
-        assert_eq!(core.model.model_id.as_str(), "gpt-5.4");
+        assert_eq!(core.model.model_id.as_str(), "openai/gpt-5.4");
         assert_eq!(core.system.as_deref(), Some("be concise"));
         assert_eq!(core.temperature, Some(0.7));
         assert_eq!(core.max_output_tokens, Some(256));
@@ -1274,7 +1269,7 @@ default_model = "qwen3:14b"
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-default_model = "gpt-5.4"
+default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
@@ -1282,7 +1277,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5.4"
 
 [providers.openai.adapters.openai.models."gpt-5.4".variants.light]
 thinking = { type = "budget", budget_tokens = 3000 }
@@ -1295,7 +1289,7 @@ thinking = { type = "budget", budget_tokens = 30000 }
         .await;
         let session_id = create_session(&state, &workspace_root, "variant").await;
         let options = RunOptions {
-            model: Some(ModelRef::new("openai", "gpt-5.4")),
+            model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
             variant: Some("deep".to_string()),
             agent_profile: None,
             system: None,
@@ -1322,7 +1316,7 @@ thinking = { type = "budget", budget_tokens = 30000 }
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-default_model = "gpt-5.4"
+default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
@@ -1330,7 +1324,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5.4"
 
 [providers.openai.adapters.openai.models."gpt-5.4".variants.light]
 thinking = { type = "budget", budget_tokens = 3000 }
@@ -1340,7 +1333,7 @@ thinking = { type = "budget", budget_tokens = 3000 }
         .await;
         let session_id = create_session(&state, &workspace_root, "variant").await;
         let options = RunOptions {
-            model: Some(ModelRef::new("openai", "gpt-5.4")),
+            model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
             variant: Some("deep".to_string()),
             agent_profile: None,
             system: None,
@@ -1363,7 +1356,7 @@ thinking = { type = "budget", budget_tokens = 3000 }
         let (state, _) = test_state_with_config(
             r#"
 [providers.openai]
-default_model = "gpt-5.4"
+default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
@@ -1371,7 +1364,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5.4"
 "#,
             "runtime-agent-inventory",
         )

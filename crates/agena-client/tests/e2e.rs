@@ -428,7 +428,7 @@ async fn spawn_server_with_provider() -> (String, String, Arc<SessionManager>, S
     let config_path = write_temp_config(&format!(
         r#"
 [providers.openai]
-default_model = "gpt-4o-mini"
+default_model = "openai/gpt-4o-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -436,7 +436,6 @@ base_url = "{base_url}"
 api_key = "test"
 
 [providers.openai.adapters.openai_compatible]
-default_model = "gpt-4o-mini"
 "#,
         base_url = provider.url()
     ));

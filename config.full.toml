@@ -219,7 +219,7 @@ include_global = true
 # backend = "duck_duck_go_html"
 
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -227,7 +227,6 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 api_mode = "auto"
 stream_mode = "sse"
 
@@ -270,7 +269,7 @@ stream_mode = "sse"
 # Example — Anthropic with named thinking levels:
 #
 # [providers.anthropic]
-# default_model = "claude-sonnet-4-5"
+# default_model = "gitlab/claude-sonnet-4-5"
 #
 # [providers.anthropic.auth]
 # mode = "api"
@@ -278,7 +277,7 @@ stream_mode = "sse"
 # api_key_env = "ANTHROPIC_API_KEY"
 #
 # [providers.anthropic.adapters.anthropic]
-# default_model = "claude-sonnet-4-5"
+# default_model = "gitlab/claude-sonnet-4-5"
 #
 # [providers.anthropic.adapters.anthropic.models."claude-sonnet-4-5".variants.light]
 # display_name = "Light"
@@ -292,11 +291,11 @@ stream_mode = "sse"
 # structure:
 #
 # [providers.ollama]
-# default_model = "qwen3:14b"
+# default_model = "ollama/qwen3:14b"
 #
 # [providers.ollama.adapters.ollama]
 # base_url = "http://localhost:11434"
-# default_model = "qwen3:14b"
+# default_model = "ollama/qwen3:14b"
 #
 # [providers.lmstudio]
 # default_model = "local-model"
@@ -321,7 +320,7 @@ stream_mode = "sse"
 # default_model = "openai/gpt-4o-mini"
 #
 # [providers."github-copilot"]
-# default_model = "gpt-4o-mini"
+# default_model = "openai/gpt-4o-mini"
 #
 # [providers."github-copilot".auth]
 # mode = "credential"
@@ -331,10 +330,10 @@ stream_mode = "sse"
 # [providers."github-copilot".adapters.openai]
 # base_url = "https://api.githubcopilot.com"
 # models_url = "https://api.githubcopilot.com/models"
-# default_model = "gpt-4o-mini"
+# default_model = "openai/gpt-4o-mini"
 #
 # [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
-# target_model = "gpt-4o-mini"
+# 
 #
 # [providers."github-copilot".adapters.anthropic]
 # auth_header = "authorization"
@@ -343,7 +342,7 @@ stream_mode = "sse"
 # default_model = "claude-sonnet-4"
 #
 # [providers."github-copilot".adapters.anthropic.models.claude]
-# target_model = "claude-sonnet-4"
+# 
 #
 # [providers."google-vertex"]
 # default_model = "gemini-2.5-pro"
@@ -358,7 +357,7 @@ stream_mode = "sse"
 # capability_family = "gemini"
 
 [providers.openai_chatgpt]
-default_model = "gpt-5.3-codex"
+default_model = "openai/gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
 mode = "credential"
@@ -367,10 +366,9 @@ credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "openai-refr
 
 [providers.openai_chatgpt.adapters.openai]
 backend = "chatgpt_codex"
-default_model = "gpt-5.3-codex"
 
 [providers."github-copilot"]
-default_model = "gpt-4o-mini"
+default_model = "openai/gpt-4o-mini"
 
 [providers."github-copilot".auth]
 mode = "credential"
@@ -379,29 +377,26 @@ credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-ref
 
 [providers."github-copilot".adapters.openai]
 # base_url = "https://api.githubcopilot.com"
-default_model = "gpt-4o-mini"
 
 [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
-target_model = "gpt-4o-mini"
+
 
 [providers."github-copilot".adapters.anthropic]
 # auth_header = "authorization"
 # auth_scheme = "Bearer"
 # extra_beta_header = "interleaved-thinking-2025-05-14"
-default_model = "claude-sonnet-4"
 
-[providers."github-copilot".adapters.anthropic.models.claude]
-target_model = "claude-sonnet-4"
+[providers."github-copilot".adapters.anthropic.models."claude-sonnet-4"]
+
 
 [providers.ollama]
-default_model = "qwen3:14b"
+default_model = "ollama/qwen3:14b"
 
 [providers.ollama.adapters.ollama]
 base_url = "http://localhost:11434"
-default_model = "qwen3:14b"
 
 [providers.gitlab]
-default_model = "claude-sonnet-4-5"
+default_model = "gitlab/claude-sonnet-4-5"
 
 [providers.gitlab.auth]
 mode = "credential"
@@ -411,10 +406,9 @@ credential = { type = "oauth", issuer = "gitlab", refresh = "gitlab-refresh-toke
 [providers.gitlab.adapters.gitlab]
 instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
-default_model = "claude-sonnet-4-5"
 
 [providers."google-vertex"]
-default_model = "google/gemini-2.5-flash"
+default_model = "openai/google/gemini-2.5-flash"
 
 [providers."google-vertex".auth]
 mode = "api"
@@ -422,5 +416,4 @@ base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/lo
 api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 
 [providers."google-vertex".adapters.openai]
-default_model = "google/gemini-2.5-flash"
 capability_family = "gemini"

@@ -599,10 +599,7 @@ pub fn catalog_family_for_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::{
-        ConfiguredModelVariant, FeatureCapabilityPatch, FeatureCapabilityPatchBody,
-        ModelCapabilityFeature,
-    };
+    use crate::{model::CapabilitySupport, provider::ConfiguredModelVariant};
 
     #[test]
     fn merged_provider_prefers_custom_default_and_models() {
@@ -662,12 +659,7 @@ mod tests {
                             CatalogModelDefinition {
                                 display_name: Some("Claude Sonnet".to_owned()),
                                 capabilities: ModelCapabilityPatch {
-                                    features: Some(FeatureCapabilityPatch::Patch(
-                                        FeatureCapabilityPatchBody {
-                                            supported: vec![ModelCapabilityFeature::Reasoning],
-                                            unsupported: Vec::new(),
-                                        },
-                                    )),
+                                    reasoning: Some(CapabilitySupport::Supported),
                                     ..ModelCapabilityPatch::default()
                                 },
                                 ..CatalogModelDefinition::default()

@@ -188,6 +188,22 @@ pub struct PermissionRuleEvent {
     pub ts_ms: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGoalEvent {
+    pub session_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_ms: Option<i64>,
+    pub ts_ms: i64,
+}
+
 // NOTE: the wrapper enum `SessionEvent` has been removed in favor of the
 // unified `crate::event::EventKind`. The payload structs above are still the
 // canonical definitions — they are referenced verbatim by the corresponding

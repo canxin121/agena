@@ -31,8 +31,8 @@ pub(crate) use model::{
     MESSAGE_TAG_TOOL_RESULT_PRUNED,
 };
 pub use model::{
-    PlanState, PromptTokenRuntime, PromptTokenUsageSnapshot, PromptWindowRuntime,
-    ProviderPromptAnchor, Session, SessionExecutionContext, SessionListRequest,
+    GoalStatus, PlanState, PromptTokenRuntime, PromptTokenUsageSnapshot, PromptWindowRuntime,
+    ProviderPromptAnchor, Session, SessionExecutionContext, SessionGoal, SessionListRequest,
     SessionRuntimeState, SessionRuntimeStatus, SessionStatus, SessionSummary,
 };
 pub use processor::SessionProcessor;

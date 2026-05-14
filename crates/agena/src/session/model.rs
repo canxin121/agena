@@ -263,6 +263,29 @@ impl PromptTokenRuntime {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalStatus {
+    #[default]
+    Active,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+pub struct SessionGoal {
+    pub id: i64,
+    pub session_id: i64,
+    pub objective: String,
+    #[serde(default)]
+    pub status: GoalStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
 pub struct ProviderPromptAnchor {
     pub provider_id: String,
@@ -525,6 +548,8 @@ pub struct SessionSummary {
     pub child_session_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<SessionGoal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
@@ -542,6 +567,8 @@ pub struct Session {
     pub is_subagent: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<SessionGoal>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<Message>,
     #[serde(skip, default)]
@@ -565,6 +592,7 @@ impl Session {
             is_subagent: false,
             created_at: now,
             updated_at: now,
+            goal: None,
             messages: Vec::new(),
             runtime: SessionRuntimeState::default(),
             approx_bytes: 0,
@@ -675,6 +703,7 @@ impl Session {
         self.is_subagent = persisted.is_subagent;
         self.created_at = persisted.created_at;
         self.updated_at = persisted.updated_at;
+        self.goal = persisted.goal.clone();
         self.runtime = persisted.runtime.clone();
     }
 

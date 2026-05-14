@@ -5,8 +5,10 @@
 use std::collections::HashMap;
 
 use crate::local_api::{
-    PermissionRuleListQuery, PermissionRuleResource as HttpPermissionRuleResource,
-    PermissionRuleWriteRequest, SessionAutomationResource as HttpSessionAutomationResource,
+    ModelCatalogEntryResource as HttpModelCatalogEntryResource,
+    ModelCatalogResponse as HttpModelCatalogResponse, PermissionRuleListQuery,
+    PermissionRuleResource as HttpPermissionRuleResource, PermissionRuleWriteRequest,
+    SessionAutomationResource as HttpSessionAutomationResource,
     SessionCreateRequest as HttpSessionCreateRequest,
     SessionExecutionContextResource as HttpSessionExecutionContextResource,
     SessionExecutionResource as HttpSessionExecutionResource, SessionListQuery,
@@ -39,13 +41,14 @@ use agena_api::{
         ListSessionsParams, ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        ProviderModelsResponse, ProviderSummaryResource, RunOptions, RuntimeAgentResource,
-        RuntimeAgentsResource, RuntimeAutomationResource, RuntimeLspResource,
-        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
-        RuntimeOperatorResource, RuntimeSessionCacheResource, RuntimeSkillResource,
-        RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
-        SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
-        SessionResource, SessionRunState, WorkspaceResource,
+        ModelCatalogEntryResource, ModelCatalogResponse, ProviderModelsResponse,
+        ProviderSummaryResource, RunOptions, RuntimeAgentResource, RuntimeAgentsResource,
+        RuntimeAutomationResource, RuntimeLspResource, RuntimeLspServerResource,
+        RuntimeMcpResource, RuntimeMcpServerResource, RuntimeOperatorResource,
+        RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
+        RuntimeStatusResponse, RuntimeTaskResource, SessionAutomationResource,
+        SessionExecutionContextResource, SessionExecutionResource, SessionResource,
+        SessionRunState, WorkspaceResource,
     },
 };
 
@@ -153,6 +156,42 @@ fn scheduled_job_run_from_http(
     }
 }
 
+fn model_catalog_entry_from_http(
+    value: HttpModelCatalogEntryResource,
+) -> ModelCatalogEntryResource {
+    ModelCatalogEntryResource {
+        provider_id: value.provider_id,
+        model_id: value.model_id,
+        kind: value.kind,
+        source: value.source,
+        source_label: value.source_label,
+        default_model_for_provider: value.default_model_for_provider,
+        display_name: value.display_name,
+        family: value.family,
+        lifecycle: value.lifecycle,
+        context_window_tokens: value.context_window_tokens,
+        max_output_tokens: value.max_output_tokens,
+        description: value.description,
+        variants: value.variants,
+        capabilities: value.capabilities,
+    }
+}
+
+fn model_catalog_from_http(value: HttpModelCatalogResponse) -> ModelCatalogResponse {
+    ModelCatalogResponse {
+        remote_url: value.remote_url,
+        fallback_url: value.fallback_url,
+        last_refresh_at: value.last_refresh_at,
+        last_successful_source: value.last_successful_source,
+        last_error: value.last_error,
+        entries: value
+            .entries
+            .into_iter()
+            .map(model_catalog_entry_from_http)
+            .collect(),
+    }
+}
+
 fn execution_context_from_http(
     value: HttpSessionExecutionContextResource,
 ) -> SessionExecutionContextResource {
@@ -239,6 +278,19 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     let resolution = snapshot.config_resolution();
     let mut provider_ids = snapshot.provider_registry().provider_ids();
     provider_ids.sort();
+    let model_catalog = model_catalog_from_http(crate::local_api::ModelCatalogResponse {
+        remote_url: snapshot.model_catalog_response().remote_url,
+        fallback_url: snapshot.model_catalog_response().fallback_url,
+        last_refresh_at: snapshot.model_catalog_response().last_refresh_at,
+        last_successful_source: snapshot.model_catalog_response().last_successful_source,
+        last_error: snapshot.model_catalog_response().last_error,
+        entries: snapshot
+            .model_catalog_response()
+            .entries
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+    });
     let session_cache = snapshot.session_manager().map(|manager| {
         let stats = manager.cache_stats();
         RuntimeSessionCacheResource {
@@ -444,6 +496,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             interval_secs: snapshot.janitor_interval().as_secs(),
         },
         session_cache,
+        model_catalog: Some(model_catalog),
         automation,
         operator: RuntimeOperatorResource {
             mcp,
@@ -457,6 +510,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
 fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource> {
     let snapshot = state.runtime().current_snapshot();
     let registry = snapshot.provider_registry();
+    let catalog_snapshot = snapshot.model_catalog_snapshot();
     let mut providers = registry
         .provider_ids()
         .into_iter()
@@ -466,6 +520,9 @@ fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource> {
                 .map(|provider| ProviderSummaryResource {
                     default_model_ref: format!("{provider_id}/{}", provider.default_model()),
                     default_model: provider.default_model().to_string(),
+                    catalog_default_model: catalog_snapshot
+                        .merged_provider(provider_id.as_str())
+                        .and_then(|catalog_provider| catalog_provider.default_model),
                     provider_id,
                 })
         })

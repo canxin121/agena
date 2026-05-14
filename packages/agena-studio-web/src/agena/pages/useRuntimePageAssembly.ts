@@ -166,6 +166,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     activePluginsTab: input.activePluginsTab,
     activeSettingsTab: input.activeSettingsTab,
     authProviders: input.authProviders,
+    catalogEntries: input.catalogEntries,
     desktopEnabled: input.desktopEnabled,
     loadDesktopPanel,
     loadMarketplacePanel,

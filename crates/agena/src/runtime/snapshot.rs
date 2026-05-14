@@ -13,6 +13,10 @@ use crate::{
     agent::Agent,
     config::{ConfigLoader, ConfigResolution, LoadConfigRequest, ProcessEnvironment},
     model::ModelRef,
+    model_catalog::{
+        ModelCatalogConfig, ModelCatalogResponse, ModelCatalogService, ModelCatalogSnapshot,
+        ModelCatalogStore,
+    },
     plugin::PluginHost,
     provider::ProviderRegistry,
     session::{
@@ -32,6 +36,7 @@ pub struct RuntimeSnapshot {
 #[derive(Clone)]
 struct RuntimeServices {
     providers: Arc<ProviderRegistry>,
+    model_catalog: Arc<ModelCatalogService>,
     plugins: Arc<PluginHost>,
     agents: crate::agents::SubagentRegistry,
     session_manager: Option<Arc<SessionManager>>,
@@ -78,6 +83,7 @@ impl RuntimeServices {
     #[allow(clippy::too_many_arguments)]
     fn new(
         providers: Arc<ProviderRegistry>,
+        model_catalog: Arc<ModelCatalogService>,
         plugins: Arc<PluginHost>,
         agents: crate::agents::SubagentRegistry,
         session_manager: Option<Arc<SessionManager>>,
@@ -88,6 +94,7 @@ impl RuntimeServices {
     ) -> Self {
         Self {
             providers,
+            model_catalog,
             plugins,
             agents,
             session_manager,
@@ -208,9 +215,24 @@ impl RuntimeSnapshot {
         // Make the active host visible to provider request builders for the
         // `chat.headers` hook (no constructor threading required).
         super::plugin_slot::install(Arc::clone(&plugins));
+        let provider_client =
+            ProviderRegistry::build_http_client(resolution.config.provider_http_client_config())?;
+        let model_catalog = Arc::new(ModelCatalogService::new(
+            provider_client,
+            ModelCatalogStore::new(ModelCatalogConfig::for_workspace_root(workspace_root)),
+        )?);
+        let mut catalog_snapshot = model_catalog.snapshot();
+        if catalog_snapshot.official.providers.is_empty() {
+            if let Ok(snapshot) = model_catalog.refresh().await {
+                catalog_snapshot = snapshot;
+            }
+        }
         let providers = Arc::new(
             resolution
-                .build_provider_registry_with_plugins(plugins.as_ref())
+                .build_provider_registry_with_plugins_and_catalog(
+                    plugins.as_ref(),
+                    Some(&catalog_snapshot),
+                )
                 .await?,
         );
         // Notify plugins of the resolved config (best-effort).
@@ -268,6 +290,7 @@ impl RuntimeSnapshot {
         };
         let services = RuntimeServices::new(
             providers,
+            model_catalog,
             plugins,
             agents,
             session_manager,
@@ -301,6 +324,18 @@ impl RuntimeSnapshot {
 
     pub fn provider_registry(&self) -> Arc<ProviderRegistry> {
         Arc::clone(&self.services.providers)
+    }
+
+    pub fn model_catalog(&self) -> Arc<ModelCatalogService> {
+        Arc::clone(&self.services.model_catalog)
+    }
+
+    pub fn model_catalog_snapshot(&self) -> ModelCatalogSnapshot {
+        self.services.model_catalog.snapshot()
+    }
+
+    pub fn model_catalog_response(&self) -> ModelCatalogResponse {
+        self.services.model_catalog.snapshot().to_response()
     }
 
     pub fn mcp_manager(&self) -> Option<Arc<agena_mcp_client::McpConnectionManager>> {

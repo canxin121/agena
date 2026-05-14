@@ -16,13 +16,15 @@ use crate::local_api::{
     MarketplaceRegistryRequestBody, MarketplaceSearchRequestBody, MarketplaceSearchResponse,
     MarketplaceSyncResponse, MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
     MarketplaceUninstallResponse, MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
-    MarketplaceUpgradeResponse, MessageListQuery, PartLoadMode, PermissionRuleListQuery,
-    PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
-    PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse, RuntimeReloadResponse,
-    SessionContinueRequestBody, SessionCreateRequest, SessionEventStreamQuery, SessionListQuery,
-    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
-    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
-    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
+    MarketplaceUpgradeResponse, MessageListQuery, ModelCatalogEntryWriteRequest,
+    ModelCatalogProviderDefaultRequest, ModelCatalogResponse, PartLoadMode,
+    PermissionRuleListQuery, PermissionRuleRevokeRequest, PermissionRuleWriteRequest,
+    PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
+    RuntimeReloadResponse, SessionContinueRequestBody, SessionCreateRequest,
+    SessionEventStreamQuery, SessionListQuery, SessionPermissionReplyRequestBody,
+    SessionReplaceRequest, SessionRewindRequestBody, SessionRunOptionsRequest, SessionTurnRequest,
+    SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery, WorkspaceListQuery,
+    WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::config::{
     ProviderAuthConfig, ProviderConfigCredentialStore, ResolvedProviderConfig, provider_auth_data,
@@ -279,6 +281,82 @@ pub async fn reload_runtime(
         generation: report.generation,
         loaded_at: report.loaded_at,
     }))
+}
+
+pub async fn get_model_catalog(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ServerError> {
+    let snapshot = state.runtime().current_snapshot();
+    Ok(Json(ModelCatalogResponse {
+        remote_url: snapshot.model_catalog_response().remote_url,
+        fallback_url: snapshot.model_catalog_response().fallback_url,
+        last_refresh_at: snapshot.model_catalog_response().last_refresh_at,
+        last_successful_source: snapshot.model_catalog_response().last_successful_source,
+        last_error: snapshot.model_catalog_response().last_error,
+        entries: snapshot
+            .model_catalog_response()
+            .entries
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+    }))
+}
+
+pub async fn refresh_model_catalog(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ServerError> {
+    let snapshot = state.runtime().current_snapshot();
+    snapshot
+        .model_catalog()
+        .refresh()
+        .await
+        .map_err(ServerError::Core)?;
+    reload_runtime_from_config(&state).await?;
+    get_model_catalog(State(state)).await
+}
+
+pub async fn upsert_model_catalog_entry(
+    State(state): State<AppState>,
+    Json(request): Json<ModelCatalogEntryWriteRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    let snapshot = state.runtime().current_snapshot();
+    snapshot
+        .model_catalog()
+        .upsert_custom_entry(
+            request.provider_id,
+            request.model_id,
+            request.definition,
+            request.set_default_for_provider,
+        )
+        .map_err(ServerError::Core)?;
+    reload_runtime_from_config(&state).await?;
+    get_model_catalog(State(state)).await
+}
+
+pub async fn set_model_catalog_provider_default(
+    State(state): State<AppState>,
+    Json(request): Json<ModelCatalogProviderDefaultRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    let snapshot = state.runtime().current_snapshot();
+    snapshot
+        .model_catalog()
+        .set_provider_default_model(request.provider_id, request.model_id)
+        .map_err(ServerError::Core)?;
+    reload_runtime_from_config(&state).await?;
+    get_model_catalog(State(state)).await
+}
+
+pub async fn delete_model_catalog_entry(
+    State(state): State<AppState>,
+    Path((provider_id, model_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ServerError> {
+    let snapshot = state.runtime().current_snapshot();
+    snapshot
+        .model_catalog()
+        .remove_custom_entry(provider_id.as_str(), model_id.as_str())
+        .map_err(ServerError::Core)?;
+    reload_runtime_from_config(&state).await?;
+    get_model_catalog(State(state)).await
 }
 
 pub async fn get_git_status(
@@ -2074,9 +2152,7 @@ fn configured_provider_auth_id(
         | ProviderAuthConfig::BedrockSigv4(_) => None,
         ProviderAuthConfig::Api(_)
         | ProviderAuthConfig::Credential(_)
-        | ProviderAuthConfig::SapAiCore(_) => {
-            Some(provider_id.to_owned())
-        }
+        | ProviderAuthConfig::SapAiCore(_) => Some(provider_id.to_owned()),
     }
 }
 
@@ -2315,14 +2391,11 @@ mod tests {
         BedrockSigv4AuthConfig, HttpProviderAdapterConfig, OpenAiApiModeConfig,
         OpenAiBackendConfig, OpenAiProviderOptions, ProviderAdapterDefinition,
         ProviderApiAuthConfig, ProviderAuthConfig, ProviderCredentialAuthConfig,
-        ProviderGoogleAdcAuthConfig, ProviderSapAiCoreAuthConfig,
-        ResolvedProviderAdapterConfig, ResolvedProviderConfig, SharedGatewayEndpointLayout,
-        StreamTransportMode,
+        ProviderGoogleAdcAuthConfig, ProviderSapAiCoreAuthConfig, ResolvedProviderAdapterConfig,
+        ResolvedProviderConfig, SharedGatewayEndpointLayout, StreamTransportMode,
     };
 
-    fn openai_adapter(
-        backend: OpenAiBackendConfig,
-    ) -> (String, ResolvedProviderAdapterConfig) {
+    fn openai_adapter(backend: OpenAiBackendConfig) -> (String, ResolvedProviderAdapterConfig) {
         (
             "openai".to_owned(),
             ResolvedProviderAdapterConfig {
@@ -2360,20 +2433,20 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_uses_openai_for_chatgpt_codex_backend() {
-        let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Credential(
-                ProviderCredentialAuthConfig {
-                    issuer: agena::provider::auth::CredentialIssuer::OpenaiChatgpt,
-                    credential: Some(agena::provider::auth::AuthData::OAuth {
-                        issuer: Some(agena::provider::auth::CredentialIssuer::OpenaiChatgpt),
-                        refresh: "refresh-token".to_owned(),
-                        access: "access-token".to_owned(),
-                        expires_at_ms: 4_102_444_800_000,
-                        account_id: Some("acct-openai".to_owned()),
-                        enterprise_url: None,
-                    }),
-                },
-            ), vec![openai_adapter(OpenAiBackendConfig::ChatgptCodex)]);
+        let provider = resolved_provider_with_auth(
+            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
+                issuer: agena::provider::auth::CredentialIssuer::OpenaiChatgpt,
+                credential: Some(agena::provider::auth::AuthData::OAuth {
+                    issuer: Some(agena::provider::auth::CredentialIssuer::OpenaiChatgpt),
+                    refresh: "refresh-token".to_owned(),
+                    access: "access-token".to_owned(),
+                    expires_at_ms: 4_102_444_800_000,
+                    account_id: Some("acct-openai".to_owned()),
+                    enterprise_url: None,
+                }),
+            }),
+            vec![openai_adapter(OpenAiBackendConfig::ChatgptCodex)],
+        );
 
         assert_eq!(
             configured_provider_auth_id("openai_chatgpt", &provider).as_deref(),
@@ -2383,20 +2456,20 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_prefers_gitlab_auth_provider_when_no_api_key_is_set() {
-        let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Credential(
-                ProviderCredentialAuthConfig {
-                    issuer: agena::provider::auth::CredentialIssuer::Gitlab,
-                    credential: Some(agena::provider::auth::AuthData::OAuth {
-                        issuer: Some(agena::provider::auth::CredentialIssuer::Gitlab),
-                        refresh: "refresh-token".to_owned(),
-                        access: "access-token".to_owned(),
-                        expires_at_ms: 4_102_444_800_000,
-                        account_id: None,
-                        enterprise_url: None,
-                    }),
-                },
-            ), vec![]);
+        let provider = resolved_provider_with_auth(
+            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
+                issuer: agena::provider::auth::CredentialIssuer::Gitlab,
+                credential: Some(agena::provider::auth::AuthData::OAuth {
+                    issuer: Some(agena::provider::auth::CredentialIssuer::Gitlab),
+                    refresh: "refresh-token".to_owned(),
+                    access: "access-token".to_owned(),
+                    expires_at_ms: 4_102_444_800_000,
+                    account_id: None,
+                    enterprise_url: None,
+                }),
+            }),
+            vec![],
+        );
 
         assert_eq!(
             configured_provider_auth_id("gitlab-duo", &provider).as_deref(),
@@ -2424,20 +2497,20 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_ignores_empty_gitlab_api_key_overrides() {
-        let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Credential(
-                ProviderCredentialAuthConfig {
-                    issuer: agena::provider::auth::CredentialIssuer::Gitlab,
-                    credential: Some(agena::provider::auth::AuthData::OAuth {
-                        issuer: Some(agena::provider::auth::CredentialIssuer::Gitlab),
-                        refresh: "refresh-token".to_owned(),
-                        access: "access-token".to_owned(),
-                        expires_at_ms: 4_102_444_800_000,
-                        account_id: None,
-                        enterprise_url: None,
-                    }),
-                },
-            ), vec![]);
+        let provider = resolved_provider_with_auth(
+            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
+                issuer: agena::provider::auth::CredentialIssuer::Gitlab,
+                credential: Some(agena::provider::auth::AuthData::OAuth {
+                    issuer: Some(agena::provider::auth::CredentialIssuer::Gitlab),
+                    refresh: "refresh-token".to_owned(),
+                    access: "access-token".to_owned(),
+                    expires_at_ms: 4_102_444_800_000,
+                    account_id: None,
+                    enterprise_url: None,
+                }),
+            }),
+            vec![],
+        );
 
         assert_eq!(
             configured_provider_auth_id("gitlab", &provider).as_deref(),
@@ -2465,20 +2538,20 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_uses_configured_copilot_auth_provider() {
-        let provider =
-            resolved_provider_with_auth(ProviderAuthConfig::Credential(
-                ProviderCredentialAuthConfig {
-                    issuer: agena::provider::auth::CredentialIssuer::GithubCopilot,
-                    credential: Some(agena::provider::auth::AuthData::OAuth {
-                        issuer: Some(agena::provider::auth::CredentialIssuer::GithubCopilot),
-                        refresh: "refresh-token".to_owned(),
-                        access: "access-token".to_owned(),
-                        expires_at_ms: 4_102_444_800_000,
-                        account_id: None,
-                        enterprise_url: Some("github.example.com".to_owned()),
-                    }),
-                },
-            ), vec![openai_adapter(OpenAiBackendConfig::Api)]);
+        let provider = resolved_provider_with_auth(
+            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
+                issuer: agena::provider::auth::CredentialIssuer::GithubCopilot,
+                credential: Some(agena::provider::auth::AuthData::OAuth {
+                    issuer: Some(agena::provider::auth::CredentialIssuer::GithubCopilot),
+                    refresh: "refresh-token".to_owned(),
+                    access: "access-token".to_owned(),
+                    expires_at_ms: 4_102_444_800_000,
+                    account_id: None,
+                    enterprise_url: Some("github.example.com".to_owned()),
+                }),
+            }),
+            vec![openai_adapter(OpenAiBackendConfig::Api)],
+        );
 
         assert_eq!(
             configured_provider_auth_id("copilot-enterprise", &provider).as_deref(),

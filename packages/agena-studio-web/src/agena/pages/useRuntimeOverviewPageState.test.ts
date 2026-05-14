@@ -6,6 +6,7 @@ import { createRuntimeOverviewPanelState, useRuntimeOverviewPageState } from './
 describe('useRuntimeOverviewPageState', () => {
   test('assembles overview panel state from provided runtime source', () => {
     const overview = createRuntimeOverviewPanelState({
+      catalogEntries: ref([]),
       operatorCards: computed(() => [{ label: 'Providers', value: '2' }]),
       providerModels: { anthropic: [] },
       providers: ref([]),
@@ -40,6 +41,7 @@ describe('useRuntimeOverviewPageState', () => {
           return {
             shared,
             state: {
+              catalogEntries: ref([]),
               operatorCards: computed(() => []),
               providerModels: {},
               providers: ref([]),

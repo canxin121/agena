@@ -151,6 +151,64 @@ async fn health_endpoint_returns_ok() {
 }
 
 #[tokio::test]
+async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
+    let (state, _, _) = build_state().await;
+    let app = router(state);
+
+    let runtime_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/runtime")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(runtime_response.status(), StatusCode::OK);
+    let runtime_body = runtime_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let runtime_value: serde_json::Value = serde_json::from_slice(&runtime_body).unwrap();
+    assert!(
+        runtime_value.get("model_catalog").is_some(),
+        "runtime payload should include model_catalog: {runtime_value:?}"
+    );
+
+    let catalog_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/model-catalog")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog_body = catalog_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let catalog_value: serde_json::Value = serde_json::from_slice(&catalog_body).unwrap();
+    assert!(
+        catalog_value.get("remote_url").is_some(),
+        "catalog payload should include remote_url: {catalog_value:?}"
+    );
+    assert!(
+        catalog_value
+            .get("entries")
+            .and_then(|value| value.as_array())
+            .is_some(),
+        "catalog payload should include entries array: {catalog_value:?}"
+    );
+}
+
+#[tokio::test]
 async fn operational_probes_and_metrics_return_expected_shapes() {
     let (state, _, _) = build_state().await;
     let app = router(state);
@@ -209,7 +267,10 @@ async fn project_git_init_endpoint_initializes_repository_and_returns_status() {
     let app = router(state);
 
     let git_dir = std::path::Path::new(&workspace_root).join(".git");
-    assert!(!git_dir.exists(), "test workspace should start without .git");
+    assert!(
+        !git_dir.exists(),
+        "test workspace should start without .git"
+    );
 
     let response = app
         .oneshot(

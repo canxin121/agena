@@ -4,6 +4,7 @@ import { useRuntimeOverviewState } from './useRuntimeOverviewState'
 import { useRuntimeSectionState, type RuntimeSectionSharedState } from './useRuntimeSectionState'
 
 export type RuntimeOverviewPageStateSource = {
+  catalogEntries: Parameters<typeof useRuntimeOverviewState>[0]['catalogEntries']
   operatorCards: Parameters<typeof useRuntimeOverviewState>[0]['operatorCards']
   providerModels: Parameters<typeof useRuntimeOverviewState>[0]['providerModels']
   providers: Parameters<typeof useRuntimeOverviewState>[0]['providers']
@@ -33,6 +34,7 @@ const defaultDeps: RuntimeOverviewPageStateDeps = {
 
 export function createRuntimeOverviewPanelState(state: RuntimeOverviewPageStateSource) {
   return useRuntimeOverviewState({
+    catalogEntries: state.catalogEntries,
     operatorCards: state.operatorCards,
     providerModels: state.providerModels,
     providers: state.providers,

@@ -9,6 +9,7 @@ use agena::{
     agents::AgentScope,
     message::{MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
+    model_catalog::{CatalogModelDefinition, ModelCatalogEntryKind, ModelCatalogEntrySourceKind},
     session::{SessionStatus, SessionSummary},
 };
 
@@ -189,8 +190,67 @@ pub struct RuntimeStatusResponse {
     pub janitor: RuntimeTaskResource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_cache: Option<RuntimeSessionCacheResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_catalog: Option<ModelCatalogResponse>,
     pub automation: RuntimeAutomationResource,
     pub operator: RuntimeOperatorResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalogResponse {
+    pub remote_url: String,
+    pub fallback_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_refresh_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_successful_source: Option<ModelCatalogEntrySourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    pub entries: Vec<ModelCatalogEntryResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalogEntryResource {
+    pub provider_id: String,
+    pub model_id: String,
+    pub kind: ModelCatalogEntryKind,
+    pub source: ModelCatalogEntrySourceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model_for_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<agena::model::ModelFamily>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<agena::model::ModelLifecycle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub variants: std::collections::BTreeMap<String, agena::provider::ConfiguredModelVariant>,
+    #[serde(flatten)]
+    pub capabilities: agena::provider::ModelCapabilityPatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalogEntryWriteRequest {
+    pub provider_id: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub set_default_for_provider: bool,
+    #[serde(flatten)]
+    pub definition: CatalogModelDefinition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalogProviderDefaultRequest {
+    pub provider_id: String,
+    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -440,6 +500,8 @@ pub struct ProviderSummaryResource {
     pub provider_id: String,
     pub default_model: String,
     pub default_model_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_default_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

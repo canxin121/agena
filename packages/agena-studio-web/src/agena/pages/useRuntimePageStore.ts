@@ -8,6 +8,7 @@ import type {
   MarketplaceInstalledPluginResource,
   MarketplaceOutdatedPluginResource,
   MarketplacePluginResource,
+  ModelCatalogEntry,
   PermissionMode,
   PermissionRuleResource,
   PluginInspect,
@@ -72,6 +73,7 @@ export function useRuntimePageStore() {
   const runtimeSkillQuery = ref('')
   const mcpQuery = ref('')
   const lspQuery = ref('')
+  const catalogEntries = ref<ModelCatalogEntry[]>([])
   const marketplaceRegistryUrl = ref('')
   const marketplaceRegistryId = ref('default')
   const marketplaceInstallSpec = ref('')
@@ -135,6 +137,7 @@ export function useRuntimePageStore() {
     browserAuthCodeDrafts,
     browserAuthInstanceDrafts,
     browserAuthStartState,
+    catalogEntries,
     desktopConfig,
     desktopForm,
     desktopInstallerAssetName,

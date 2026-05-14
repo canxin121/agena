@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import type { ProviderModel, ProviderSummary, RuntimeStatus } from '@/agena/lib/agenaApi'
+import type { ModelCatalogEntry, ProviderModel, ProviderSummary, RuntimeStatus } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
+  catalogEntries: ModelCatalogEntry[]
   operatorCards: Array<{ label: string; value: string | number }>
   runtimeSnapshotFacts: Array<{ label: string; value: string; mono?: boolean }>
   runtime: RuntimeStatus | null
@@ -76,6 +77,7 @@ const props = defineProps<{
           <div v-for="provider in props.providers" :key="provider.provider_id" class="list-item">
             <div><strong>{{ provider.provider_id }}</strong></div>
             <div class="muted">Default model: {{ provider.default_model }}</div>
+            <div v-if="provider.catalog_default_model" class="muted">Catalog default: {{ provider.catalog_default_model }}</div>
             <div class="muted mono">{{ provider.default_model_ref }}</div>
             <div class="muted">
               Models:
@@ -94,6 +96,38 @@ const props = defineProps<{
           </div>
         </div>
         <p v-else class="muted">Session cache is not available.</p>
+      </section>
+    </div>
+
+    <div class="grid one" style="margin-top: 16px">
+      <section class="card">
+        <h3>Model Catalog</h3>
+        <div v-if="props.runtime?.model_catalog" class="stack">
+          <div><strong>Remote:</strong> <span class="mono">{{ props.runtime.model_catalog.remote_url }}</span></div>
+          <div><strong>Fallback:</strong> <span class="mono">{{ props.runtime.model_catalog.fallback_url }}</span></div>
+          <div><strong>Last Source:</strong> {{ props.runtime.model_catalog.last_successful_source || 'none' }}</div>
+          <div><strong>Last Refresh:</strong> {{ props.runtime.model_catalog.last_refresh_at || 'never' }}</div>
+          <div v-if="props.runtime.model_catalog.last_error" class="muted">{{ props.runtime.model_catalog.last_error }}</div>
+          <div v-if="props.catalogEntries.length" class="list">
+            <div v-for="entry in props.catalogEntries" :key="`${entry.provider_id}/${entry.model_id}/${entry.kind}`" class="list-item">
+              <div class="page-header" style="align-items: flex-start">
+                <div>
+                  <div><strong>{{ entry.provider_id }}/{{ entry.model_id }}</strong></div>
+                  <div class="muted">
+                    {{ entry.display_name || 'Unnamed model' }} · {{ entry.kind }} · {{ entry.source }}
+                  </div>
+                  <div v-if="entry.default_model_for_provider" class="muted">
+                    Provider default: {{ entry.default_model_for_provider }}
+                  </div>
+                  <div v-if="entry.description" class="muted">{{ entry.description }}</div>
+                </div>
+                <span class="badge">{{ entry.source_label || entry.kind }}</span>
+              </div>
+            </div>
+          </div>
+          <p v-else class="muted">No catalog entries loaded.</p>
+        </div>
+        <p v-else class="muted">Model catalog is not available in the runtime snapshot yet.</p>
       </section>
     </div>
   </div>

@@ -101,6 +101,7 @@ Provider 覆盖：
 ```text
 providers.<id>.default_model
 providers.<id>.auth.base_url
+providers.<id>.auth.endpoint_layout
 providers.<id>.auth.api_key
 providers.<id>.auth.api_key_env
 providers.<id>.enabled
@@ -374,8 +375,9 @@ sap_ai_core
 
 常用字段：
 
-- `api`：`base_url`、`api_key`、`api_key_env`
+- `api`：`base_url`、`endpoint_layout`、`api_key`、`api_key_env`
 - `credential`：`issuer`、`credential`
+- `google_adc`：`base_url`、`endpoint_layout`
 - `bedrock_sigv4`：`base_url`、`region`、`profile`、`access_key_id`、`secret_access_key`、`session_token`
 - `sap_ai_core`：`base_url`、`api_key`、`api_key_env`、`service_key_env`
 
@@ -417,7 +419,6 @@ credential = { type = "oauth", issuer = "github_copilot", refresh = "...", acces
 
 [providers."github-copilot".adapters.openai]
 enabled = true
-models_url = "https://api.githubcopilot.com/models"
 
 [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
 enabled = true
@@ -429,7 +430,8 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"
-base_url = "https://gateway.example.com/v1"
+base_url = "https://gateway.example.com"
+endpoint_layout = "protocol_root"
 api_key_env = "SHARED_GATEWAY_API_KEY"
 
 [providers.shared.adapters.openai]
@@ -444,6 +446,19 @@ enabled = true
 [providers.shared.adapters.anthropic.models."claude-sonnet-4"]
 enabled = true
 ```
+
+当一个 auth 网关同时提供多种协议时，`base_url` 表示共享入口，运行时会根据 `endpoint_layout` 自动派生各 adapter 的真实协议 base：
+
+- `direct`：直接使用填写的 `base_url`
+- `protocol_root`：派生 `/v1` 或 `/v1beta`
+- `provider_routed`：派生 `/api/provider/<provider>/...`
+- `auto`：按 URL 形状自动判断，默认值
+
+常见输入示例：
+
+- `https://api.cxits.cn/v1/messages` 会被收敛成共享入口 `https://api.cxits.cn`
+- `https://api.cxits.cn/v1beta/models/gemini-2.5-pro:generateContent` 也会先收敛成 `https://api.cxits.cn`
+- `https://api.cxits.cn/api/provider/openai/v1` 会被识别成 `provider_routed` 共享入口
 
 ### Model metadata 和 variants
 

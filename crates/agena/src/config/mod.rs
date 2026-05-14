@@ -22,11 +22,13 @@ pub use types::{
     OpenAiProviderOptions, PluginConfig,
     ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
-    ProviderHttpConfig, ProviderSapAiCoreAuthConfig, RequestRetryConfig, ResolvedConfig,
+    ProviderGoogleAdcAuthConfig, ProviderHttpConfig, ProviderSapAiCoreAuthConfig,
+    RequestRetryConfig, ResolvedConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
     RuntimeConfig, RuntimeJanitorConfig, RuntimeReloadConfig, SessionCacheConfig,
-    SimpleHttpProviderOptions, StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig,
-    WebSearchBackend, WebSearchBackendKind, WebSearchConfig, WebToolsConfig,
+    SharedGatewayEndpointLayout, SimpleHttpProviderOptions, StreamReplayConfig,
+    StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend, WebSearchBackendKind,
+    WebSearchConfig, WebToolsConfig,
 };
 
 pub use credential_store::{

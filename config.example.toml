@@ -63,8 +63,6 @@ enabled = true
 #
 # [providers."github-copilot".adapters.openai]
 # enabled = true
-# base_url = "https://api.githubcopilot.com"
-# models_url = "https://api.githubcopilot.com/models"
 #
 # [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
 #
@@ -75,6 +73,26 @@ enabled = true
 # extra_beta_header = "interleaved-thinking-2025-05-14"
 #
 # [providers."github-copilot".adapters.anthropic.models."claude-sonnet-4"]
+
+# Shared gateway example: one auth endpoint, multiple protocol adapters.
+#
+# [providers.shared]
+# default_model = "openai/gpt-4.1-mini"
+#
+# [providers.shared.auth]
+# mode = "api"
+# base_url = "https://api.cxits.cn"
+# endpoint_layout = "protocol_root"
+# api_key_env = "SHARED_GATEWAY_API_KEY"
+#
+# [providers.shared.adapters.openai]
+# enabled = true
+#
+# [providers.shared.adapters.anthropic]
+# enabled = true
+#
+# [providers.shared.adapters.gemini]
+# enabled = true
 
 [runtime]
 # Set `default_agent` explicitly when you want a different primary persona for

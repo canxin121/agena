@@ -16,8 +16,9 @@ use crate::{
 use super::raw::parse_adapter_model_ref;
 use super::{
     ConfigEnvironment, ConfigError, ProcessEnvironment, ProviderAdapterDefinition,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig, ResolvedConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig,
+    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    SharedGatewayEndpointLayout,
 };
 
 impl ResolvedConfig {
@@ -247,7 +248,7 @@ fn build_adapter_provider(
         )),
         ProviderAdapterDefinition::OpenAi(adapter) => match auth {
             ProviderAuthConfig::Api(_)
-            | ProviderAuthConfig::GoogleAdc
+            | ProviderAuthConfig::GoogleAdc(_)
             | ProviderAuthConfig::SapAiCore(_) => {
                 let credential = openai_adapter_api_credential(
                     provider_id,
@@ -260,7 +261,7 @@ fn build_adapter_provider(
                     runtime_provider_id.as_str(),
                     client,
                     credential.credential,
-                    openai_adapter_base_url(provider_id, auth, &adapter.options)?,
+                    resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::OpenAi)?,
                     adapter_default_model.to_owned(),
                 )
                 .with_backend(adapter.options.backend.into())
@@ -326,27 +327,11 @@ fn build_adapter_provider(
                         AuthRefreshStrategy::ReloadFromStore,
                         env,
                     )?;
-                    let enterprise_url = credential
-                        .auth_data
-                        .as_ref()
-                        .and_then(current_enterprise_url);
-
                     let mut provider = OpenAiProvider::new_managed_with_id(
                         runtime_provider_id.as_str(),
                         client,
                         credential.credential,
-                        adapter
-                            .options
-                            .base_url
-                            .clone()
-                            .or_else(|| {
-                                if enterprise_url.is_some() {
-                                    None
-                                } else {
-                                    Some("https://api.githubcopilot.com".to_owned())
-                                }
-                            })
-                            .unwrap_or_else(|| "https://api.githubcopilot.com".to_owned()),
+                        "https://api.githubcopilot.com".to_owned(),
                         adapter_default_model.to_owned(),
                     )
                     .with_profile(crate::provider::OpenAiProfile::GithubCopilot)
@@ -397,11 +382,7 @@ fn build_adapter_provider(
                     AuthRefreshStrategy::ReloadFromStore,
                     env,
                 )?;
-                let base_url = adapter
-                    .options
-                    .base_url
-                    .clone()
-                    .or_else(|| copilot_base_url(credential.auth_data.as_ref(), None))
+                let base_url = copilot_base_url(credential.auth_data.as_ref(), None)
                     .unwrap_or_else(|| "https://api.githubcopilot.com".to_owned());
 
                 let mut provider = AnthropicProvider::new_managed_with_id(
@@ -441,11 +422,7 @@ fn build_adapter_provider(
                         true,
                     )?
                     .credential,
-                    adapter
-                        .options
-                        .base_url
-                        .clone()
-                        .unwrap_or(provider_api_base_url(auth, provider_id)?),
+                    resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Anthropic)?,
                     adapter_default_model.to_owned(),
                 )
                 .with_models_url(adapter.options.models_url.clone())
@@ -471,7 +448,7 @@ fn build_adapter_provider(
                     true,
                 )?
                 .credential,
-                provider_api_base_url(auth, provider_id)?,
+                resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Gemini)?,
                 adapter_default_model.to_owned(),
             )
             .with_extra_headers(to_hash_map(&adapter.extra_headers));
@@ -616,19 +593,201 @@ fn api_auth<'a>(
     }
 }
 
-fn openai_adapter_base_url(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HttpAdapterKind {
+    OpenAi,
+    Anthropic,
+    Gemini,
+}
+
+fn resolve_http_adapter_base_url(
     provider_id: &str,
     auth: &ProviderAuthConfig,
-    options: &super::OpenAiProviderOptions,
+    adapter: HttpAdapterKind,
 ) -> Result<String, ConfigError> {
-    options
-        .base_url
-        .clone()
-        .or_else(|| provider_api_base_url(auth, provider_id).ok())
-        .ok_or_else(|| ConfigError::InvalidProviderConfig {
+    let (base_url, layout) = provider_endpoint_root(auth, provider_id)?;
+    let normalized = normalize_base_url(base_url)?;
+    let resolved_layout = resolve_endpoint_layout(layout, normalized.as_str());
+    let gateway_root = normalize_gateway_root(normalized.as_str(), resolved_layout)?;
+    Ok(match resolved_layout {
+        SharedGatewayEndpointLayout::Direct => normalized,
+        SharedGatewayEndpointLayout::ProtocolRoot => {
+            protocol_root_adapter_base(gateway_root.as_str(), adapter)
+        }
+        SharedGatewayEndpointLayout::ProviderRouted => {
+            provider_routed_adapter_base(gateway_root.as_str(), adapter)
+        }
+        SharedGatewayEndpointLayout::Auto => unreachable!("auto layout must be resolved"),
+    })
+}
+
+fn provider_endpoint_root<'a>(
+    auth: &'a ProviderAuthConfig,
+    provider_id: &str,
+) -> Result<(&'a str, SharedGatewayEndpointLayout), ConfigError> {
+    match auth {
+        ProviderAuthConfig::Api(config) => Ok((config.base_url.as_str(), config.endpoint_layout)),
+        ProviderAuthConfig::GoogleAdc(config) => {
+            Ok((config.base_url.as_str(), config.endpoint_layout))
+        }
+        ProviderAuthConfig::SapAiCore(config) => {
+            Ok((config.api.base_url.as_str(), config.api.endpoint_layout))
+        }
+        _ => Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
-            message: "openai adapter requires provider or adapter base_url".to_owned(),
+            message: "provider auth does not define an api base_url".to_owned(),
+        }),
+    }
+}
+
+fn resolve_endpoint_layout(
+    layout: SharedGatewayEndpointLayout,
+    normalized_base_url: &str,
+) -> SharedGatewayEndpointLayout {
+    match layout {
+        SharedGatewayEndpointLayout::Auto => {
+            if normalized_base_url.contains("/api/provider/") {
+                SharedGatewayEndpointLayout::ProviderRouted
+            } else {
+                let path = url::Url::parse(normalized_base_url)
+                    .ok()
+                    .map(|url| url.path().trim_end_matches('/').to_owned())
+                    .unwrap_or_default();
+                if path.is_empty()
+                    || path.ends_with("/v1")
+                    || path.ends_with("/v1beta")
+                    || path.ends_with("/chat/completions")
+                    || path.ends_with("/responses")
+                    || path.ends_with("/messages")
+                    || path.ends_with("/models")
+                    || path.contains(":generateContent")
+                    || path.contains(":streamGenerateContent")
+                {
+                    SharedGatewayEndpointLayout::ProtocolRoot
+                } else {
+                    SharedGatewayEndpointLayout::Direct
+                }
+            }
+        }
+        other => other,
+    }
+}
+
+fn normalize_base_url(value: &str) -> Result<String, ConfigError> {
+    let mut url = url::Url::parse(value).map_err(|err| {
+        ConfigError::Validation(format!("provider auth base_url `{value}` is invalid: {err}"))
+    })?;
+    let path = url.path().trim_end_matches('/').to_owned();
+    url.set_path(if path.is_empty() { "/" } else { path.as_str() });
+    Ok(url.to_string().trim_end_matches('/').to_owned())
+}
+
+fn normalize_gateway_root(
+    normalized_base_url: &str,
+    layout: SharedGatewayEndpointLayout,
+) -> Result<String, ConfigError> {
+    let mut url = url::Url::parse(normalized_base_url).map_err(|err| {
+        ConfigError::Validation(format!(
+            "provider auth base_url `{normalized_base_url}` is invalid: {err}"
+        ))
+    })?;
+    let segments = url
+        .path_segments()
+        .map(|segments| {
+            segments
+                .filter(|segment| !segment.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
         })
+        .unwrap_or_default();
+
+    let keep = match layout {
+        SharedGatewayEndpointLayout::Direct => segments.len(),
+        SharedGatewayEndpointLayout::ProtocolRoot => trim_protocol_root_segments(segments.as_slice()),
+        SharedGatewayEndpointLayout::ProviderRouted => {
+            trim_provider_routed_segments(segments.as_slice())
+        }
+        SharedGatewayEndpointLayout::Auto => unreachable!("auto layout must be resolved"),
+    };
+
+    let path = if keep == 0 {
+        "/".to_owned()
+    } else {
+        format!("/{}", segments[..keep].join("/"))
+    };
+    url.set_path(path.as_str());
+    Ok(url.to_string().trim_end_matches('/').to_owned())
+}
+
+fn trim_protocol_root_segments(segments: &[String]) -> usize {
+    if let Some(mut len) = trim_known_endpoint_suffix(segments) {
+        if len > 0
+            && matches!(segments.get(len - 1).map(String::as_str), Some("v1" | "v1beta"))
+        {
+            len -= 1;
+        }
+        return len;
+    }
+    if matches!(segments.last().map(String::as_str), Some("v1" | "v1beta")) {
+        return segments.len().saturating_sub(1);
+    }
+    segments.len()
+}
+
+fn trim_provider_routed_segments(segments: &[String]) -> usize {
+    if let Some(index) = segments
+        .windows(3)
+        .position(|window| window[0] == "api" && window[1] == "provider")
+    {
+        return index;
+    }
+    trim_protocol_root_segments(segments)
+}
+
+fn trim_known_endpoint_suffix(segments: &[String]) -> Option<usize> {
+    if segments.len() >= 2
+        && segments[segments.len() - 2] == "chat"
+        && segments[segments.len() - 1] == "completions"
+    {
+        return Some(segments.len() - 2);
+    }
+    if segments.len() >= 2
+        && segments[segments.len() - 2] == "models"
+        && matches!(
+            segments.last().map(String::as_str),
+            Some(last)
+                if last.contains(":generateContent") || last.contains(":streamGenerateContent")
+        )
+    {
+        return Some(segments.len() - 2);
+    }
+    if matches!(
+        segments.last().map(String::as_str),
+        Some("responses" | "messages" | "models")
+    ) {
+        return Some(segments.len() - 1);
+    }
+    if let Some(last) = segments.last()
+        && (last.contains(":generateContent") || last.contains(":streamGenerateContent"))
+    {
+        return Some(segments.len().saturating_sub(1));
+    }
+    None
+}
+
+fn protocol_root_adapter_base(root: &str, adapter: HttpAdapterKind) -> String {
+    match adapter {
+        HttpAdapterKind::OpenAi | HttpAdapterKind::Anthropic => format!("{root}/v1"),
+        HttpAdapterKind::Gemini => format!("{root}/v1beta"),
+    }
+}
+
+fn provider_routed_adapter_base(root: &str, adapter: HttpAdapterKind) -> String {
+    match adapter {
+        HttpAdapterKind::OpenAi => format!("{root}/api/provider/openai/v1"),
+        HttpAdapterKind::Anthropic => format!("{root}/api/provider/anthropic/v1"),
+        HttpAdapterKind::Gemini => format!("{root}/api/provider/google/v1beta"),
+    }
 }
 
 fn openai_adapter_api_credential(
@@ -648,7 +807,7 @@ fn openai_adapter_api_credential(
             env,
             true,
         ),
-        ProviderAuthConfig::GoogleAdc => {
+        ProviderAuthConfig::GoogleAdc(_) => {
             if !matches!(
                 capability_family,
                 Some(ProviderCapabilityFamilyConfig::Gemini)
@@ -942,20 +1101,6 @@ fn static_bedrock_credentials(
     }
 }
 
-fn provider_api_base_url(
-    auth: &ProviderAuthConfig,
-    provider_id: &str,
-) -> Result<String, ConfigError> {
-    match auth {
-        ProviderAuthConfig::Api(config) => Ok(config.base_url.clone()),
-        ProviderAuthConfig::SapAiCore(config) => Ok(config.api.base_url.clone()),
-        _ => Err(ConfigError::InvalidProviderConfig {
-            provider_id: provider_id.to_owned(),
-            message: "provider auth does not define an api base_url".to_owned(),
-        }),
-    }
-}
-
 fn runtime_adapter_provider_id(provider_id: &str, adapter_id: &str) -> String {
     if adapter_id == "default" {
         provider_id.to_owned()
@@ -1026,8 +1171,11 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use crate::config::{ConfigEnvironment, ConfigError, ConfigLoader, LoadConfigRequest};
+    use crate::config::{
+        ConfigEnvironment, ConfigError, ConfigLoader, LoadConfigRequest, ProviderAuthConfig,
+    };
     use crate::provider::CapabilitySupport;
+    use crate::config::SharedGatewayEndpointLayout;
 
     #[derive(Clone, Default)]
     struct TestEnvironment {
@@ -1589,6 +1737,172 @@ auth_scheme = "Bearer"
 
         let ids = registry.provider_ids();
         assert!(ids.iter().any(|id| id == "sap"));
+    }
+
+    #[test]
+    fn shared_gateway_protocol_root_derives_adapter_bases() {
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "shared",
+                &ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+                    base_url: "https://api.cxits.cn/v1".to_owned(),
+                    endpoint_layout: SharedGatewayEndpointLayout::ProtocolRoot,
+                    api_key: None,
+                    api_key_env: None,
+                }),
+                super::HttpAdapterKind::OpenAi,
+            )
+            .expect("openai base should resolve"),
+            "https://api.cxits.cn/v1"
+        );
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "shared",
+                &ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+                    base_url: "https://api.cxits.cn/v1".to_owned(),
+                    endpoint_layout: SharedGatewayEndpointLayout::ProtocolRoot,
+                    api_key: None,
+                    api_key_env: None,
+                }),
+                super::HttpAdapterKind::Anthropic,
+            )
+            .expect("anthropic base should resolve"),
+            "https://api.cxits.cn/v1"
+        );
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "shared",
+                &ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+                    base_url: "https://api.cxits.cn/v1".to_owned(),
+                    endpoint_layout: SharedGatewayEndpointLayout::ProtocolRoot,
+                    api_key: None,
+                    api_key_env: None,
+                }),
+                super::HttpAdapterKind::Gemini,
+            )
+            .expect("gemini base should resolve"),
+            "https://api.cxits.cn/v1beta"
+        );
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "shared",
+                &ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+                    base_url: "https://api.cxits.cn".to_owned(),
+                    endpoint_layout: SharedGatewayEndpointLayout::ProtocolRoot,
+                    api_key: None,
+                    api_key_env: None,
+                }),
+                super::HttpAdapterKind::OpenAi,
+            )
+            .expect("openai root base should resolve"),
+            "https://api.cxits.cn/v1"
+        );
+    }
+
+    #[test]
+    fn shared_gateway_provider_routed_derives_adapter_bases() {
+        let auth = ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+            base_url: "https://api.cxits.cn/api/provider/openai/v1".to_owned(),
+            endpoint_layout: SharedGatewayEndpointLayout::ProviderRouted,
+            api_key: None,
+            api_key_env: None,
+        });
+        assert_eq!(
+            super::resolve_http_adapter_base_url("shared", &auth, super::HttpAdapterKind::OpenAi)
+                .expect("openai base should resolve"),
+            "https://api.cxits.cn/api/provider/openai/v1"
+        );
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "shared",
+                &auth,
+                super::HttpAdapterKind::Anthropic,
+            )
+                .expect("anthropic base should resolve"),
+            "https://api.cxits.cn/api/provider/anthropic/v1"
+        );
+        assert_eq!(
+            super::resolve_http_adapter_base_url("shared", &auth, super::HttpAdapterKind::Gemini)
+                .expect("gemini base should resolve"),
+            "https://api.cxits.cn/api/provider/google/v1beta"
+        );
+    }
+
+    #[test]
+    fn shared_gateway_auto_detects_routed_and_protocol_layouts() {
+        let routed = ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+            base_url: "https://api.cxits.cn/api/provider/openai/v1".to_owned(),
+            endpoint_layout: SharedGatewayEndpointLayout::Auto,
+            api_key: None,
+            api_key_env: None,
+        });
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "shared",
+                &routed,
+                super::HttpAdapterKind::Anthropic,
+            )
+                .expect("anthropic routed base should resolve"),
+            "https://api.cxits.cn/api/provider/anthropic/v1"
+        );
+
+        let protocol_root = ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+            base_url: "https://api.cxits.cn/v1/messages".to_owned(),
+            endpoint_layout: SharedGatewayEndpointLayout::Auto,
+            api_key: None,
+            api_key_env: None,
+        });
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "shared",
+                &protocol_root,
+                super::HttpAdapterKind::Gemini,
+            )
+                .expect("gemini protocol-root base should resolve"),
+            "https://api.cxits.cn/v1beta"
+        );
+
+        let gemini_endpoint = ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+            base_url: "https://api.cxits.cn/v1beta/models/gemini-2.5-pro:generateContent"
+                .to_owned(),
+            endpoint_layout: SharedGatewayEndpointLayout::Auto,
+            api_key: None,
+            api_key_env: None,
+        });
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "shared",
+                &gemini_endpoint,
+                super::HttpAdapterKind::OpenAi,
+            )
+            .expect("openai base should normalize from gemini endpoint"),
+            "https://api.cxits.cn/v1"
+        );
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "shared",
+                &gemini_endpoint,
+                super::HttpAdapterKind::Gemini,
+            )
+            .expect("gemini base should normalize from gemini endpoint"),
+            "https://api.cxits.cn/v1beta"
+        );
+
+        let direct = ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+            base_url: "https://aiplatform.googleapis.com/v1/projects/p/locations/l/endpoints/openapi".to_owned(),
+            endpoint_layout: SharedGatewayEndpointLayout::Auto,
+            api_key: None,
+            api_key_env: None,
+        });
+        assert_eq!(
+            super::resolve_http_adapter_base_url(
+                "vertex",
+                &direct,
+                super::HttpAdapterKind::OpenAi,
+            )
+                .expect("direct base should resolve"),
+            "https://aiplatform.googleapis.com/v1/projects/p/locations/l/endpoints/openapi"
+        );
     }
 
     fn write_temp_file(content: &str) -> PathBuf {

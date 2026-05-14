@@ -844,7 +844,7 @@ impl std::str::FromStr for ProviderKind {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct RawProviderModelConfig {
-    pub(crate) target_model: Option<String>,
+    pub(crate) enabled: Option<bool>,
     #[serde(flatten)]
     pub(crate) definition: ConfiguredModelDefinition,
 }
@@ -901,7 +901,7 @@ impl Merge for RawProviderAuthConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawProviderAdapterConfig {
     pub(crate) backend: Option<super::OpenAiBackendConfig>,
-    pub(crate) default_model: Option<String>,
+    pub(crate) enabled: Option<bool>,
     pub(crate) base_url: Option<String>,
     pub(crate) models_url: Option<String>,
     pub(crate) capability_family: Option<ProviderCapabilityFamilyConfig>,
@@ -924,7 +924,7 @@ pub(crate) struct RawProviderAdapterConfig {
 impl Merge for RawProviderAdapterConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.backend, overlay.backend);
-        merge_option(&mut self.default_model, overlay.default_model);
+        merge_option(&mut self.enabled, overlay.enabled);
         merge_option(&mut self.base_url, overlay.base_url);
         merge_option(&mut self.models_url, overlay.models_url);
         merge_option(&mut self.capability_family, overlay.capability_family);
@@ -983,7 +983,6 @@ impl RawProviderConfig {
 
         let mut adapters = BTreeMap::new();
         let mut models = BTreeMap::new();
-        let adapter_count = self.adapters.len();
         for (adapter_id, mut adapter_raw) in self.adapters {
             normalize_model_configs(&mut adapter_raw.models);
             validate_configured_models(
@@ -991,27 +990,19 @@ impl RawProviderConfig {
                 format!("adapter `{adapter_id}`").as_str(),
                 &adapter_raw.models,
             )?;
-            if adapter_count > 1 && adapter_raw.models.is_empty() {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.clone(),
-                    message: format!(
-                        "multi-adapter provider requires explicit models under `providers.{provider_id}.adapters.{adapter_id}.models`"
-                    ),
-                });
-            }
             let adapter = resolve_adapter(provider_id.as_str(), adapter_id.as_str(), adapter_raw)?;
             for (model_id, configured) in &adapter.models {
-                if models.contains_key(model_id) {
+                let route_id = format!("{adapter_id}/{model_id}");
+                if models.contains_key(route_id.as_str()) {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.clone(),
-                        message: format!("duplicate routed model `{model_id}` across adapters"),
+                        message: format!("duplicate routed model `{route_id}` across adapters"),
                     });
                 }
                 models.insert(
-                    model_id.clone(),
+                    route_id,
                     ResolvedProviderModelConfig {
-                        adapter: adapter_id.clone(),
-                        target_model: configured.target_model.clone(),
+                        enabled: configured.enabled,
                         definition: configured.definition.clone(),
                     },
                 );
@@ -1021,24 +1012,36 @@ impl RawProviderConfig {
 
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;
-        let default_model = normalize_optional(self.default_model).unwrap_or_else(|| {
-            adapters
-                .values()
-                .next()
-                .map(|adapter| adapter.default_model.clone())
-                .unwrap_or_default()
-        });
+        let default_model = required_string(provider_id.as_str(), "default_model", self.default_model)?;
         if default_model.is_empty() {
             return Err(ConfigError::MissingProviderField {
                 provider_id: provider_id.clone(),
                 field: "default_model",
             });
         }
-        if adapters.len() > 1 && !models.contains_key(default_model.as_str()) {
+        let (default_adapter_id, _default_model_id) =
+            parse_adapter_model_ref(provider_id.as_str(), default_model.as_str())?;
+        let default_adapter = adapters.get(default_adapter_id.as_str()).ok_or_else(|| {
+            ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.clone(),
+                message: format!(
+                    "provider default_model `{default_model}` references unknown adapter `{default_adapter_id}`"
+                ),
+            }
+        })?;
+        if !default_adapter.enabled {
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.clone(),
                 message: format!(
-                    "multi-adapter provider default_model `{default_model}` must be declared under adapter models"
+                    "provider default_model `{default_model}` references disabled adapter `{default_adapter_id}`"
+                ),
+            });
+        }
+        if matches!(models.get(default_model.as_str()), Some(configured) if !configured.enabled) {
+            return Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.clone(),
+                message: format!(
+                    "provider default_model `{default_model}` references disabled model route"
                 ),
             });
         }
@@ -1083,7 +1086,7 @@ fn resolve_adapter(
         adapter_id,
         kind,
         raw.backend,
-        raw.default_model,
+        raw.enabled,
         raw.base_url,
         raw.models_url,
         raw.capability_family,
@@ -1108,9 +1111,7 @@ fn resolve_adapter(
             Ok((
                 model_id.clone(),
                 ResolvedProviderModelConfig {
-                    adapter: adapter_id.to_owned(),
-                    target_model: normalize_optional(configured.target_model)
-                        .unwrap_or_else(|| model_id.clone()),
+                    enabled: configured.enabled.unwrap_or(true),
                     definition: configured.definition,
                 },
             ))
@@ -1125,7 +1126,7 @@ fn resolve_adapter_config(
     adapter_id: &str,
     kind: ProviderKind,
     backend: Option<super::OpenAiBackendConfig>,
-    default_model: Option<String>,
+    enabled: Option<bool>,
     base_url: Option<String>,
     models_url: Option<String>,
     capability_family: Option<ProviderCapabilityFamilyConfig>,
@@ -1145,13 +1146,10 @@ fn resolve_adapter_config(
 ) -> Result<ResolvedProviderAdapterConfig, ConfigError> {
     let field_provider_id = format!("{provider_id}:{adapter_id}");
 
-    let (default_model, definition) = match kind {
-        ProviderKind::Ollama => (
-            required_string(field_provider_id.as_str(), "default_model", default_model)?,
-            ProviderAdapterDefinition::Ollama(super::OllamaProviderOptions {
+    let definition = match kind {
+        ProviderKind::Ollama => ProviderAdapterDefinition::Ollama(super::OllamaProviderOptions {
                 base_url: normalize_optional(base_url),
             }),
-        ),
         ProviderKind::OpenAi => {
             let backend = backend.unwrap_or_default();
             let api_mode_explicit = api_mode.is_some();
@@ -1201,9 +1199,7 @@ fn resolve_adapter_config(
                     });
                 }
             }
-            (
-                required_string(field_provider_id.as_str(), "default_model", default_model)?,
-                ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+            ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
                     extra_headers,
                     options: super::OpenAiProviderOptions {
                         backend,
@@ -1218,8 +1214,7 @@ fn resolve_adapter_config(
                             .or_else(|| Some("Bearer".to_owned())),
                         capability_family,
                     },
-                }),
-            )
+                })
         }
         ProviderKind::OpenAiCompatible => {
             if normalize_optional(base_url).is_some() {
@@ -1228,9 +1223,7 @@ fn resolve_adapter_config(
                     message: "`openai_compatible` adapter does not accept `base_url`; set `providers.<id>.auth.base_url` instead".to_owned(),
                 });
             }
-            (
-                required_string(field_provider_id.as_str(), "default_model", default_model)?,
-                ProviderAdapterDefinition::OpenAiCompatible(HttpProviderAdapterConfig {
+            ProviderAdapterDefinition::OpenAiCompatible(HttpProviderAdapterConfig {
                     extra_headers,
                     options: super::OpenAiCompatibleProviderOptions {
                         auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
@@ -1239,12 +1232,9 @@ fn resolve_adapter_config(
                         stream_mode: stream_mode.unwrap_or(StreamTransportMode::Sse),
                         realtime_ws_url: normalize_optional(realtime_ws_url),
                     },
-                }),
-            )
+                })
         }
-        ProviderKind::Anthropic => (
-            required_string(field_provider_id.as_str(), "default_model", default_model)?,
-            ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
+        ProviderKind::Anthropic => ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
                 extra_headers,
                 options: super::AnthropicProviderOptions {
                     base_url: normalize_optional(base_url),
@@ -1256,36 +1246,26 @@ fn resolve_adapter_config(
                     eager_input_streaming,
                 },
             }),
-        ),
-        ProviderKind::Gemini => (
-            required_string(field_provider_id.as_str(), "default_model", default_model)?,
-            ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
+        ProviderKind::Gemini => ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
                 extra_headers,
                 options: super::SimpleHttpProviderOptions {
                     auth_header: normalize_optional(auth_header),
                     auth_scheme: normalize_optional(auth_scheme),
                 },
             }),
-        ),
-        ProviderKind::Gitlab => (
-            default_model.unwrap_or_else(|| "claude-sonnet-4-5".to_owned()),
-            ProviderAdapterDefinition::Gitlab(super::GitlabProviderOptions {
+        ProviderKind::Gitlab => ProviderAdapterDefinition::Gitlab(super::GitlabProviderOptions {
                 instance_url: normalize_optional(instance_url),
                 ai_gateway_url: normalize_optional(ai_gateway_url),
                 ai_gateway_headers,
                 feature_flags,
             }),
-        ),
         ProviderKind::AmazonBedrock => {
-            (
-                required_string(field_provider_id.as_str(), "default_model", default_model)?,
-                ProviderAdapterDefinition::AmazonBedrock(super::AmazonBedrockProviderOptions),
-            )
+            ProviderAdapterDefinition::AmazonBedrock(super::AmazonBedrockProviderOptions)
         }
     };
 
     Ok(ResolvedProviderAdapterConfig {
-        default_model,
+        enabled: enabled.unwrap_or(true),
         definition,
     })
 }
@@ -1625,13 +1605,6 @@ fn validate_configured_models(
                 "provider `{provider_id}` {scope} model id cannot be empty"
             )));
         }
-        if configured.definition.is_empty()
-            && normalize_optional(configured.target_model.clone()).is_none()
-        {
-            return Err(ConfigError::Validation(format!(
-                "provider `{provider_id}` {scope} model `{model_id}` must set at least one field or target_model"
-            )));
-        }
         if let Err(message) = configured.definition.capabilities.validate() {
             return Err(ConfigError::Validation(format!(
                 "provider `{provider_id}` {scope} model `{model_id}` has invalid capability patch: {message}"
@@ -1675,6 +1648,33 @@ fn required_string(
         provider_id: provider_id.to_owned(),
         field,
     })
+}
+
+pub(crate) fn parse_adapter_model_ref(
+    provider_id: &str,
+    value: &str,
+) -> Result<(String, String), ConfigError> {
+    let Some((adapter_id, model_id)) = value.split_once('/') else {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: format!(
+                "model reference `{value}` must be in `<adapter>/<model>` format"
+            ),
+        });
+    };
+
+    let adapter_id = adapter_id.trim();
+    let model_id = model_id.trim();
+    if adapter_id.is_empty() || model_id.is_empty() {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: format!(
+                "model reference `{value}` must be in `<adapter>/<model>` format"
+            ),
+        });
+    }
+
+    Ok((adapter_id.to_owned(), model_id.to_owned()))
 }
 
 fn reject_legacy_provider_env_overrides(env: &dyn ConfigEnvironment) -> Result<(), ConfigError> {

@@ -411,9 +411,21 @@ impl ProviderRegistry {
         let provider_id = ProviderId::try_new(target)
             .map_err(|err| AppError::Config(format!("invalid provider id `{target}`: {err}")))?;
         let model_id = match requested_model {
-            Some(requested_model) => ModelId::try_new(requested_model).map_err(|err| {
-                AppError::Config(format!("invalid model id `{requested_model}`: {err}"))
-            })?,
+            Some(requested_model) => {
+                let Some((adapter_id, model_name)) = requested_model.split_once('/') else {
+                    return Err(AppError::Config(format!(
+                        "model override `{requested_model}` must be in `<adapter>/<model>` format"
+                    )));
+                };
+                if adapter_id.trim().is_empty() || model_name.trim().is_empty() {
+                    return Err(AppError::Config(format!(
+                        "model override `{requested_model}` must be in `<adapter>/<model>` format"
+                    )));
+                }
+                ModelId::try_new(requested_model).map_err(|err| {
+                    AppError::Config(format!("invalid model id `{requested_model}`: {err}"))
+                })?
+            }
             None => provider.default_model().clone(),
         };
 
@@ -1522,9 +1534,9 @@ mod tests {
     fn resolve_model_target_parses_explicit_model_reference() {
         let registry = ProviderRegistry::new();
         let resolved = registry
-            .resolve_model_target("openai/gpt-5", None)
+            .resolve_model_target("openai/openai/gpt-5", None)
             .expect("model reference should parse");
-        assert_eq!(resolved, model_ref("openai", "gpt-5"));
+        assert_eq!(resolved, model_ref("openai", "openai/gpt-5"));
     }
 
     #[tokio::test]

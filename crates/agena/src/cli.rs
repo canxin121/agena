@@ -3976,14 +3976,13 @@ mod tests {
         let path = write_temp_config(
             r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 "#,
         );
         let cli = AgenaCli {
@@ -4034,14 +4033,13 @@ default_model = "gpt-4.1-mini"
         let path = write_temp_config(
             r#"
 [providers.openai]
-default_model = "gpt-4.1-mini"
+default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-4.1-mini"
 "#,
         );
         let cli = AgenaCli {
@@ -4838,7 +4836,7 @@ default_model = "gpt-4.1-mini"
         let path = write_temp_config(
             r#"
 [providers.openai]
-default_model = "gpt-5"
+default_model = "openai/gpt-5"
 
 [providers.openai.auth]
 mode = "api"
@@ -4846,7 +4844,6 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5"
 
 [providers.openai.adapters.openai.models."gpt-5"]
 input = { unsupported = ["image"] }
@@ -4948,7 +4945,7 @@ default_model = "claude-sonnet-4-5"
         let path = write_temp_config(
             r#"
 [providers.openai]
-default_model = "gpt-5"
+default_model = "openai/gpt-5"
 
 [providers.openai.auth]
 mode = "api"
@@ -4956,7 +4953,6 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5"
 "#,
         );
         let env = TestEnvironment {
@@ -4989,8 +4985,8 @@ default_model = "gpt-5"
 
         assert!(providers.iter().any(|item| {
             item["provider_id"] == "openai"
-                && item["default_model"] == "gpt-5"
-                && item["default_model_ref"] == "openai/gpt-5"
+                && item["default_model"] == "openai/gpt-5"
+                && item["default_model_ref"] == "openai/openai/gpt-5"
         }));
     }
 
@@ -4999,7 +4995,7 @@ default_model = "gpt-5"
         let path = write_temp_config(
             r#"
 [providers.openai]
-default_model = "gpt-5.4"
+default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
@@ -5007,7 +5003,6 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
-default_model = "gpt-5.4"
 "#,
         );
         let cli = AgenaCli {

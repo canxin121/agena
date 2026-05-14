@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use futures_core::Stream;
@@ -16,8 +19,7 @@ use super::{
 
 #[derive(Debug, Clone)]
 pub struct ProviderModelRoute {
-    pub adapter_id: String,
-    pub target_model: ModelId,
+    pub enabled: bool,
     pub definition: ConfiguredModelDefinition,
 }
 
@@ -27,7 +29,6 @@ pub struct MultiAdapterProvider {
     default_model: ModelId,
     adapters: BTreeMap<String, Arc<dyn ModelProvider>>,
     routes: BTreeMap<String, ProviderModelRoute>,
-    passthrough_adapter_id: Option<String>,
 }
 
 impl MultiAdapterProvider {
@@ -36,14 +37,12 @@ impl MultiAdapterProvider {
         default_model: impl Into<String>,
         adapters: BTreeMap<String, Arc<dyn ModelProvider>>,
         routes: BTreeMap<String, ProviderModelRoute>,
-        passthrough_adapter_id: Option<String>,
     ) -> Self {
         Self {
             id: id.into(),
             default_model: ModelId::new(default_model),
             adapters,
             routes,
-            passthrough_adapter_id,
         }
     }
 
@@ -51,33 +50,55 @@ impl MultiAdapterProvider {
         self.adapters
             .get(adapter_id)
             .cloned()
-            .ok_or_else(|| AppError::Config(format!("adapter not found: {adapter_id}")))
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "provider `{}` has no enabled adapter `{adapter_id}`",
+                    self.id
+                ))
+            })
+    }
+
+    fn parse_visible_model_id(&self, visible_model_id: &str) -> Result<(String, ModelId), AppError> {
+        let Some((adapter_id, model_id)) = visible_model_id.split_once('/') else {
+            return Err(AppError::Config(format!(
+                "provider `{}` model `{visible_model_id}` must be in `<adapter>/<model>` format",
+                self.id
+            )));
+        };
+
+        let adapter_id = adapter_id.trim();
+        let model_id = model_id.trim();
+        if adapter_id.is_empty() || model_id.is_empty() {
+            return Err(AppError::Config(format!(
+                "provider `{}` model `{visible_model_id}` must be in `<adapter>/<model>` format",
+                self.id
+            )));
+        }
+
+        Ok((adapter_id.to_owned(), ModelId::new(model_id)))
     }
 
     fn resolve_route(
         &self,
         model: &ModelId,
     ) -> Result<(String, ModelId, ConfiguredModelDefinition), AppError> {
+        let (adapter_id, target_model) = self.parse_visible_model_id(model.as_str())?;
         if let Some(route) = self.routes.get(model.as_str()) {
+            if !route.enabled {
+                return Err(AppError::Config(format!(
+                    "provider `{}` model `{}` is disabled",
+                    self.id, model
+                )));
+            }
             return Ok((
-                route.adapter_id.clone(),
-                route.target_model.clone(),
+                adapter_id,
+                target_model,
                 route.definition.clone(),
             ));
         }
 
-        if let Some(adapter_id) = self.passthrough_adapter_id.as_deref() {
-            return Ok((
-                adapter_id.to_owned(),
-                model.clone(),
-                ConfiguredModelDefinition::default(),
-            ));
-        }
-
-        Err(AppError::Config(format!(
-            "provider `{}` has no routed model `{}`",
-            self.id, model
-        )))
+        self.adapter(adapter_id.as_str())?;
+        Ok((adapter_id, target_model, ConfiguredModelDefinition::default()))
     }
 
     fn rewrite_model(
@@ -171,9 +192,9 @@ impl ModelProvider for MultiAdapterProvider {
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
-        self.passthrough_adapter_id
-            .as_deref()
-            .and_then(|adapter_id| self.adapter(adapter_id).ok())
+        (self.adapters.len() == 1)
+            .then(|| self.adapters.values().next().cloned())
+            .flatten()
             .map(|adapter| adapter.stream_resume_policy())
             .unwrap_or(StreamResumePolicy::Disabled)
     }
@@ -201,50 +222,45 @@ impl ModelProvider for MultiAdapterProvider {
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let mut visible = Vec::new();
+        let mut seen = BTreeSet::new();
 
-        if let Some(adapter_id) = self.passthrough_adapter_id.as_deref() {
-            let adapter = self.adapter(adapter_id)?;
+        for (adapter_id, adapter) in &self.adapters {
             let listed = adapter.list_models().await?;
             for model in listed {
-                if self.routes.contains_key(model.id.as_str()) {
+                let target_model = model.id.clone();
+                let visible_model = ModelId::new(format!("{adapter_id}/{}", target_model.as_str()));
+                let route = self.routes.get(visible_model.as_str());
+                if matches!(route, Some(route) if !route.enabled) {
                     continue;
                 }
-                let visible_model = model.id.clone();
+                let definition = route
+                    .map(|route| route.definition.clone())
+                    .unwrap_or_default();
+                seen.insert(visible_model.to_string());
                 visible.push(self.rewrite_model(
                     &visible_model,
-                    &visible_model,
+                    &target_model,
                     model,
                     adapter.as_ref(),
-                    &ConfiguredModelDefinition::default(),
+                    &definition,
                 ));
             }
         }
 
         for (visible_model_id, route) in &self.routes {
-            let adapter = self.adapter(route.adapter_id.as_str())?;
-            let listed = adapter.list_models().await?;
+            if !route.enabled || seen.contains(visible_model_id) {
+                continue;
+            }
+
+            let (adapter_id, target_model) = self.parse_visible_model_id(visible_model_id)?;
+            let adapter = self.adapter(adapter_id.as_str())?;
             let visible_model = ModelId::new(visible_model_id.clone());
-            let model = listed
-                .into_iter()
-                .find(|model| model.id == route.target_model)
-                .map(|model| {
-                    self.rewrite_model(
-                        &visible_model,
-                        &route.target_model,
-                        model,
-                        adapter.as_ref(),
-                        &route.definition,
-                    )
-                })
-                .unwrap_or_else(|| {
-                    self.synthesize_model(
-                        &visible_model,
-                        &route.target_model,
-                        adapter.as_ref(),
-                        &route.definition,
-                    )
-                });
-            visible.push(model);
+            visible.push(self.synthesize_model(
+                &visible_model,
+                &target_model,
+                adapter.as_ref(),
+                &route.definition,
+            ));
         }
 
         Ok(visible)
@@ -381,7 +397,7 @@ mod tests {
     async fn multi_adapter_provider_routes_explicit_models() {
         let provider = MultiAdapterProvider::new(
             "shared",
-            "fast",
+            "api/gpt-4.1-mini",
             BTreeMap::from([
                 (
                     "api".to_owned(),
@@ -402,23 +418,20 @@ mod tests {
             ]),
             BTreeMap::from([
                 (
-                    "fast".to_owned(),
+                    "api/gpt-4.1-mini".to_owned(),
                     ProviderModelRoute {
-                        adapter_id: "api".to_owned(),
-                        target_model: ModelId::new("gpt-4.1-mini"),
+                        enabled: true,
                         definition: ConfiguredModelDefinition::default(),
                     },
                 ),
                 (
-                    "coder".to_owned(),
+                    "codex/gpt-5-codex".to_owned(),
                     ProviderModelRoute {
-                        adapter_id: "codex".to_owned(),
-                        target_model: ModelId::new("gpt-5-codex"),
+                        enabled: true,
                         definition: ConfiguredModelDefinition::default(),
                     },
                 ),
             ]),
-            None,
         );
 
         let models = provider.list_models().await.expect("models should list");
@@ -427,12 +440,12 @@ mod tests {
             .map(|model| model.id.to_string())
             .collect::<Vec<_>>();
         assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == "fast"));
-        assert!(ids.iter().any(|id| id == "coder"));
+        assert!(ids.iter().any(|id| id == "api/gpt-4.1-mini"));
+        assert!(ids.iter().any(|id| id == "codex/gpt-5-codex"));
 
         let response = provider
             .complete(CompletionRequest {
-                model: ModelId::new("coder"),
+                model: ModelId::new("codex/gpt-5-codex"),
                 system: None,
                 messages: Vec::new(),
                 tools: Vec::new(),
@@ -451,7 +464,7 @@ mod tests {
             .await
             .expect("completion should route");
         assert_eq!(response.provider_id.as_str(), "shared");
-        assert_eq!(response.model.as_str(), "coder");
+        assert_eq!(response.model.as_str(), "codex/gpt-5-codex");
         assert_eq!(response.text, "shared::codex:gpt-5-codex");
     }
 
@@ -459,7 +472,7 @@ mod tests {
     async fn multi_adapter_provider_supports_single_adapter_passthrough() {
         let provider = MultiAdapterProvider::new(
             "openai",
-            "gpt-4.1",
+            "default/gpt-4.1",
             BTreeMap::from([(
                 "default".to_owned(),
                 Arc::new(StaticProvider {
@@ -469,17 +482,16 @@ mod tests {
                 }) as Arc<dyn ModelProvider>,
             )]),
             BTreeMap::new(),
-            Some("default".to_owned()),
         );
 
         let models = provider.list_models().await.expect("models should list");
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].provider_id.as_str(), "openai");
-        assert_eq!(models[0].id.as_str(), "gpt-4.1");
+        assert_eq!(models[0].id.as_str(), "default/gpt-4.1");
 
         let response = provider
             .complete(CompletionRequest {
-                model: ModelId::new("gpt-4.1"),
+                model: ModelId::new("default/gpt-4.1"),
                 system: None,
                 messages: Vec::new(),
                 tools: Vec::new(),
@@ -498,7 +510,7 @@ mod tests {
             .await
             .expect("completion should pass through");
         assert_eq!(response.provider_id.as_str(), "openai");
-        assert_eq!(response.model.as_str(), "gpt-4.1");
+        assert_eq!(response.model.as_str(), "default/gpt-4.1");
         assert_eq!(response.text, "openai:gpt-4.1");
     }
 }

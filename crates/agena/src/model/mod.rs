@@ -22,7 +22,7 @@ impl IdentifierError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ModelRefParseError {
-    #[error("model reference must be in `provider/model` format")]
+    #[error("model reference must be in `provider/adapter/model` format")]
     MissingSeparator,
     #[error(transparent)]
     InvalidProviderId(#[from] IdentifierError),
@@ -193,6 +193,9 @@ impl FromStr for ModelRef {
         let Some((provider_id, model_id)) = value.split_once('/') else {
             return Err(ModelRefParseError::MissingSeparator);
         };
+        if !model_id.contains('/') {
+            return Err(ModelRefParseError::MissingSeparator);
+        }
         let provider_id = ProviderId::try_new(provider_id)?;
         let model_id = ModelId::try_new(model_id)
             .map_err(|err| ModelRefParseError::InvalidModelId(err.to_string()))?;
@@ -706,14 +709,14 @@ mod tests {
 
     #[test]
     fn model_ref_parses_provider_and_model() {
-        let parsed: ModelRef = "openai/gpt-5".parse().expect("model ref should parse");
+        let parsed: ModelRef = "openai/openai/gpt-5".parse().expect("model ref should parse");
         assert_eq!(parsed.provider_id.as_str(), "openai");
-        assert_eq!(parsed.model_id.as_str(), "gpt-5");
+        assert_eq!(parsed.model_id.as_str(), "openai/gpt-5");
     }
 
     #[test]
     fn model_ref_rejects_missing_separator() {
-        let err = "gpt-5"
+        let err = "openai/gpt-5"
             .parse::<ModelRef>()
             .expect_err("missing provider should fail");
         assert!(matches!(err, ModelRefParseError::MissingSeparator));

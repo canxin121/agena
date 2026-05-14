@@ -21,7 +21,7 @@ store_backend = "auto"
 # preferred `provider + auth + adapters` layout.
 
 [providers.anthropic]
-default_model = "claude-sonnet-4-6"
+default_model = "anthropic/claude-sonnet-4-6"
 
 [providers.anthropic.auth]
 mode = "api"
@@ -29,10 +29,9 @@ base_url = "https://api.anthropic.com/v1"
 api_key_env = "ANTHROPIC_API_KEY"
 
 [providers.anthropic.adapters.anthropic]
-default_model = "claude-sonnet-4-6"
 
 # [providers.openai]
-# default_model = "gpt-4o"
+# default_model = "openai/gpt-4o"
 #
 # [providers.openai.auth]
 # mode = "api"
@@ -40,10 +39,9 @@ default_model = "claude-sonnet-4-6"
 # api_key_env = "OPENAI_API_KEY"
 #
 # [providers.openai.adapters.openai]
-# default_model = "gpt-4o"
 
 # [providers.gemini]
-# default_model = "gemini-2.5-pro"
+# default_model = "gemini/gemini-2.5-pro"
 #
 # [providers.gemini.auth]
 # mode = "api"
@@ -51,10 +49,9 @@ default_model = "claude-sonnet-4-6"
 # api_key_env = "GEMINI_API_KEY"
 #
 # [providers.gemini.adapters.gemini]
-# default_model = "gemini-2.5-pro"
 #
 # [providers."github-copilot"]
-# default_model = "gpt-4o-mini"
+# default_model = "openai/gpt-4o-mini"
 #
 # [providers."github-copilot".auth]
 # mode = "credential"
@@ -64,19 +61,15 @@ default_model = "claude-sonnet-4-6"
 # [providers."github-copilot".adapters.openai]
 # base_url = "https://api.githubcopilot.com"
 # models_url = "https://api.githubcopilot.com/models"
-# default_model = "gpt-4o-mini"
 #
 # [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
-# target_model = "gpt-4o-mini"
 #
 # [providers."github-copilot".adapters.anthropic]
 # auth_header = "authorization"
 # auth_scheme = "Bearer"
 # extra_beta_header = "interleaved-thinking-2025-05-14"
-# default_model = "claude-sonnet-4"
 #
-# [providers."github-copilot".adapters.anthropic.models.claude]
-# target_model = "claude-sonnet-4"
+# [providers."github-copilot".adapters.anthropic.models."claude-sonnet-4"]
 
 [runtime]
 # Set `default_agent` explicitly when you want a different primary persona for

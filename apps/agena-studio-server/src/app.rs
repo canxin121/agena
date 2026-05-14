@@ -1,4 +1,10 @@
-use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    env,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Arc,
+};
 
 use agena::config::ConfigLoader;
 use agena::runtime::AgenaRuntime;
@@ -8,6 +14,7 @@ use agena_api_server::AppState as ApiV2State;
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Json, Router,
+    extract::Query,
     http::{
         HeaderValue, Method,
         header::{self, HeaderName},
@@ -16,7 +23,7 @@ use axum::{
     routing::get,
 };
 use axum_extra::extract::cookie::SameSite;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tower_http::{
     cors::{AllowOrigin, Any, CorsLayer},
     services::{ServeDir, ServeFile},
@@ -46,6 +53,39 @@ struct StudioHealthResponse {
     session_runtime_available: bool,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct GitStatusCompatQuery {
+    directory: Option<String>,
+    summary: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitStatusCompatResponse {
+    current: String,
+    tracking: Option<String>,
+    ahead: u64,
+    behind: u64,
+    files: Vec<GitStatusCompatFile>,
+    total_files: u64,
+    staged_count: u64,
+    unstaged_count: u64,
+    untracked_count: u64,
+    merge_count: u64,
+    offset: u64,
+    limit: u64,
+    has_more: bool,
+    scope: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitStatusCompatFile {
+    path: String,
+    index: String,
+    working_dir: String,
+}
+
 async fn health(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Json<StudioHealthResponse> {
@@ -61,6 +101,163 @@ async fn health(
         config_found: resolution.meta.config_found,
         provider_ids: resolution.config.providers.keys().cloned().collect(),
         session_runtime_available: state.runtime.session_manager().is_some(),
+    })
+}
+
+fn command_available(cmd: &str) -> bool {
+    Command::new(cmd)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn parse_ahead_behind(raw: Option<&str>) -> (u64, u64) {
+    let Some(raw) = raw else {
+        return (0, 0);
+    };
+    let mut parts = raw.split_whitespace();
+    let ahead = parts
+        .next()
+        .and_then(|part| part.parse::<u64>().ok())
+        .unwrap_or(0);
+    let behind = parts
+        .next()
+        .and_then(|part| part.parse::<u64>().ok())
+        .unwrap_or(0);
+    (ahead, behind)
+}
+
+fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
+    let mut staged = 0_u64;
+    let mut unstaged = 0_u64;
+    let mut untracked = 0_u64;
+    let mut changed = 0_u64;
+
+    for line in status.lines().filter(|line| !line.is_empty()) {
+        changed += 1;
+        let bytes = line.as_bytes();
+        let x = bytes.first().copied().unwrap_or(b' ');
+        let y = bytes.get(1).copied().unwrap_or(b' ');
+        if x == b'?' && y == b'?' {
+            untracked += 1;
+            continue;
+        }
+        if x != b' ' {
+            staged += 1;
+        }
+        if y != b' ' {
+            unstaged += 1;
+        }
+    }
+
+    (staged, unstaged, untracked, changed)
+}
+
+async fn compat_git_status(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Query(query): Query<GitStatusCompatQuery>,
+) -> Json<GitStatusCompatResponse> {
+    let workspace_root = query
+        .directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.runtime.workspace_root().to_path_buf());
+    let summary_only = query.summary.unwrap_or(false);
+    let scope = if summary_only { "summary" } else { "full" }.to_string();
+
+    if !command_available("git") {
+        return Json(GitStatusCompatResponse {
+            current: String::new(),
+            tracking: None,
+            ahead: 0,
+            behind: 0,
+            files: Vec::new(),
+            total_files: 0,
+            staged_count: 0,
+            unstaged_count: 0,
+            untracked_count: 0,
+            merge_count: 0,
+            offset: 0,
+            limit: 0,
+            has_more: false,
+            scope,
+        });
+    }
+
+    let repo = git_output(&workspace_root, &["rev-parse", "--is-inside-work-tree"])
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| value == "true");
+    if !repo {
+        return Json(GitStatusCompatResponse {
+            current: String::new(),
+            tracking: None,
+            ahead: 0,
+            behind: 0,
+            files: Vec::new(),
+            total_files: 0,
+            staged_count: 0,
+            unstaged_count: 0,
+            untracked_count: 0,
+            merge_count: 0,
+            offset: 0,
+            limit: 0,
+            has_more: false,
+            scope,
+        });
+    }
+
+    let current = git_output(&workspace_root, &["branch", "--show-current"]).unwrap_or_default();
+    let tracking = git_output(
+        &workspace_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+    )
+    .and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed.to_string())
+    });
+    let ahead_behind = tracking.as_ref().and_then(|_| {
+        git_output(
+            &workspace_root,
+            &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+        )
+    });
+    let (ahead, behind) = parse_ahead_behind(ahead_behind.as_deref());
+    let status = git_output(&workspace_root, &["status", "--porcelain"]).unwrap_or_default();
+    let (staged_count, unstaged_count, untracked_count, total_files) =
+        summarize_git_status(status.as_str());
+
+    Json(GitStatusCompatResponse {
+        current,
+        tracking,
+        ahead,
+        behind,
+        files: Vec::new(),
+        total_files,
+        staged_count,
+        unstaged_count,
+        untracked_count,
+        merge_count: 0,
+        offset: 0,
+        limit: 0,
+        has_more: false,
+        scope,
     })
 }
 
@@ -213,6 +410,13 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
     let agena_api = agena_api_server::router(ApiV2State::new(runtime.clone(), db.clone())).layer(
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
+    let git_compat = Router::new()
+        .route("/api/git/status", get(compat_git_status))
+        .with_state(shared_state.clone())
+        .layer(middleware::from_fn_with_state(
+            shared_state.clone(),
+            crate::ui_auth::require_ui_auth,
+        ));
 
     let ui_dir_path = args.ui_dir.as_ref().map(PathBuf::from);
     let (has_ui, asset_files, static_files) = match &ui_dir_path {
@@ -237,6 +441,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
 
     let mut app = public_router
         .merge(agena_api)
+        .merge(git_compat)
         .layer(TraceLayer::new_for_http());
 
     if let Some(cors) = build_cors_layer(&normalized_cors_origins, args.cors_allow_all) {

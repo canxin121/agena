@@ -190,6 +190,61 @@ impl SessionStore {
         Ok(self.history.list_session_events(session_id).await?)
     }
 
+    pub(crate) async fn list_projected_messages(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<Message>, AppError> {
+        Ok(self
+            .history
+            .list_projected_messages(session_id, include_full_parts)
+            .await?)
+    }
+
+    pub(crate) async fn find_projected_message(
+        &self,
+        session_id: i64,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Option<Message>, AppError> {
+        Ok(self
+            .history
+            .find_projected_message(session_id, message_id, include_full_parts)
+            .await?)
+    }
+
+    pub(crate) async fn list_projected_parts(
+        &self,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<crate::message::MessagePart>, AppError> {
+        Ok(self
+            .history
+            .list_projected_parts(message_id, include_full_parts)
+            .await?)
+    }
+
+    pub(crate) async fn find_projected_part(
+        &self,
+        part_id: i64,
+    ) -> Result<Option<crate::message::MessagePart>, AppError> {
+        Ok(self.history.find_projected_part(part_id).await?)
+    }
+
+    pub(crate) async fn find_projected_session_id_for_message(
+        &self,
+        message_id: i64,
+    ) -> Result<Option<i64>, AppError> {
+        Ok(self.history.find_session_id_for_message(message_id).await?)
+    }
+
+    pub(crate) async fn find_projected_session_id_for_part(
+        &self,
+        part_id: i64,
+    ) -> Result<Option<i64>, AppError> {
+        Ok(self.history.find_session_id_for_part(part_id).await?)
+    }
+
     pub(crate) async fn list_workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
         let Some(workspace_id) = self.lookup_workspace_id().await? else {
             return Ok(Vec::new());
@@ -1023,6 +1078,9 @@ impl SessionStore {
         client_events: Vec<EventKind>,
     ) -> Result<(), AppError> {
         for kind in client_events {
+            if let EventKind::MessagePartUpdated(update) = &kind {
+                self.history.apply_message_part_update(update).await?;
+            }
             self.publish_event(session_id, kind).await?;
         }
         Ok(())

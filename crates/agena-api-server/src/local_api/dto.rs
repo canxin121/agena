@@ -691,9 +691,8 @@ pub struct SessionGoalResource {
     pub status: GoalStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_usage: Option<u64>,
-    pub elapsed_time_ms: i64,
+    pub tokens_used: u64,
+    pub time_used_seconds: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -742,8 +741,8 @@ impl From<SessionSummary> for SessionResource {
                 objective: goal.objective,
                 status: goal.status,
                 token_budget: goal.token_budget,
-                token_usage: None,
-                elapsed_time_ms: (goal.updated_at - goal.created_at).num_milliseconds(),
+                tokens_used: goal.tokens_used,
+                time_used_seconds: goal.time_used_seconds,
                 created_at: goal.created_at,
                 updated_at: goal.updated_at,
                 completed_at: goal.completed_at,

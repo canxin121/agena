@@ -7,6 +7,7 @@ use super::m20260509_000003_permission_rule_revoke;
 use super::m20260509_000004_permission_rule_global_scope;
 use super::m20260515_000005_activity_projection;
 use super::m20260515_000005_session_goal;
+use super::m20260516_000006_session_goal_accounting;
 
 pub struct Migrator;
 
@@ -21,6 +22,7 @@ impl MigratorTrait for Migrator {
             Box::new(EventsMigration),
             Box::new(m20260515_000005_activity_projection::Migration),
             Box::new(m20260515_000005_session_goal::Migration),
+            Box::new(m20260516_000006_session_goal_accounting::Migration),
         ]
     }
 }

@@ -11,6 +11,10 @@ pub struct Model {
     pub objective: String,
     pub status: String,
     pub token_budget: Option<i64>,
+    #[sea_orm(default_value = 0)]
+    pub tokens_used: i64,
+    #[sea_orm(default_value = 0)]
+    pub time_used_seconds: i64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub completed_at_ms: Option<i64>,

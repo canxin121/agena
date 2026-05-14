@@ -782,6 +782,8 @@ impl SessionManager {
                         objective: None,
                         status: None,
                         token_budget: None,
+                        tokens_used: None,
+                        time_used_seconds: None,
                         completed_at_ms: None,
                         ts_ms: Utc::now().timestamp_millis(),
                     }),
@@ -1555,6 +1557,14 @@ impl SessionManager {
                 return Ok(session);
             }
 
+            if session
+                .goal
+                .as_ref()
+                .is_some_and(|goal| goal.status == GoalStatus::BudgetLimited)
+            {
+                return Ok(session);
+            }
+
             if let Some(hit) =
                 super::doom_loop::detect(session.messages.as_slice(), state.config.doom_loop)
             {
@@ -1991,6 +2001,9 @@ impl SessionManager {
                     persisted_session = self
                         .store
                         .append_history_items(persisted_session, turn_events, state.cache_policy())
+                        .await?;
+                    persisted_session = self
+                        .account_goal_usage_from_turn(persisted_session, state.as_ref())
                         .await?;
 
                     if let Some(err) = terminal_error {
@@ -3235,9 +3248,12 @@ impl SessionManager {
                     objective: Some(goal.objective.clone()),
                     status: Some(match goal.status {
                         GoalStatus::Active => "active".to_string(),
+                        GoalStatus::BudgetLimited => "budget_limited".to_string(),
                         GoalStatus::Completed => "completed".to_string(),
                     }),
                     token_budget: goal.token_budget,
+                    tokens_used: Some(goal.tokens_used),
+                    time_used_seconds: Some(goal.time_used_seconds),
                     completed_at_ms: goal.completed_at.map(|ts| ts.timestamp_millis()),
                     ts_ms: Utc::now().timestamp_millis(),
                 }),
@@ -3245,6 +3261,49 @@ impl SessionManager {
             .await
             .map_err(|err| AppError::Internal(format!("publish goal event failed: {err}")))?;
         Ok(())
+    }
+
+    async fn account_goal_usage_from_turn(
+        &self,
+        session: Session,
+        state: &SessionManagerState,
+    ) -> Result<Session, AppError> {
+        let Some(goal_before) = session.goal.as_ref() else {
+            return Ok(session);
+        };
+        let Some(usage) = session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.role == Role::Assistant
+                    && message.state == MessageStatus::Completed
+                    && message.usage.is_some()
+            })
+            .and_then(|message| message.usage.as_ref())
+        else {
+            return Ok(session);
+        };
+
+        let token_delta = usage.total_tokens();
+        if token_delta == 0 {
+            return Ok(session);
+        }
+
+        let accounted = self
+            .store
+            .account_goal_usage(session.id, token_delta, 0, state.cache_policy())
+            .await?;
+        let Some(updated) = accounted else {
+            return Ok(session);
+        };
+        let goal_after = updated.goal.as_ref().ok_or_else(|| {
+            AppError::Internal(format!("goal missing after usage accounting for session {}", session.id))
+        })?;
+        if goal_after != goal_before {
+            self.publish_goal_event(goal_after, session.id).await?;
+        }
+        Ok(updated)
     }
 
     fn apply_execution_context_to_run_options(
@@ -7900,6 +7959,83 @@ mod tests {
         assert_eq!(statuses[0].as_deref(), Some("active"));
         assert_eq!(statuses[1].as_deref(), Some("completed"));
         assert_eq!(statuses[2], None);
+    }
+
+    #[tokio::test]
+    async fn goal_accounting_persists_usage_and_budget_limits_turns() {
+        let workspace = TempWorkspace::new();
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let service = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)).with_usage(CompletionUsage {
+                input_tokens: 7,
+                output_tokens: 5,
+                reasoning_tokens: 1,
+                cache_write_tokens: 0,
+                cache_read_tokens: 0,
+                total_cost: 0.0,
+            }),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "goal-accounting".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        service
+            .create_goal(SessionGoalCreateRequest {
+                session_id: created.id,
+                objective: "stay under budget".to_string(),
+                token_budget: Some(13),
+            })
+            .await
+            .expect("create goal");
+
+        let completed = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+                parts: vec![PartContent::text("hello budget")],
+            })
+            .await
+            .expect("submit turn");
+
+        let goal = completed.goal.expect("goal should still exist");
+        assert_eq!(goal.tokens_used, 13);
+        assert_eq!(goal.time_used_seconds, 0);
+        assert_eq!(goal.status, GoalStatus::BudgetLimited);
+
+        let request_count_after_first_turn = requests
+            .lock()
+            .expect("recording requests lock should succeed")
+            .len();
+        assert_eq!(request_count_after_first_turn, 1);
+
+        let resumed = service
+            .continue_session(SessionContinueRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+            })
+            .await
+            .expect("continue session");
+        let resumed_goal = resumed.goal.expect("goal should remain present");
+        assert_eq!(resumed_goal.status, GoalStatus::BudgetLimited);
+        assert_eq!(resumed_goal.tokens_used, 13);
+        assert_eq!(
+            requests
+                .lock()
+                .expect("recording requests lock should succeed")
+                .len(),
+            1,
+            "budget-limited goal should stop additional model turns"
+        );
     }
 
     /// Cancel a turn while the provider stream is still pending. The

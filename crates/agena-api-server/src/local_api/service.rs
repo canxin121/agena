@@ -1195,26 +1195,18 @@ impl ApiService {
 
     pub async fn session_goal_resource(
         &self,
-        manager: &SessionManager,
-        session: &Session,
+        _manager: &SessionManager,
+        _session: &Session,
         goal: &SessionGoal,
     ) -> ApiResult<SessionGoalResource> {
-        let cost = manager
-            .goal_cost_summary(session.id)
-            .await
-            .map_err(api_error_from_app)?;
         Ok(SessionGoalResource {
             id: goal.id,
             session_id: goal.session_id,
             objective: goal.objective.clone(),
             status: goal.status,
             token_budget: goal.token_budget,
-            token_usage: Some(cost.total_tokens()),
-            elapsed_time_ms: goal
-                .completed_at
-                .unwrap_or(goal.updated_at)
-                .signed_duration_since(goal.created_at)
-                .num_milliseconds(),
+            tokens_used: goal.tokens_used,
+            time_used_seconds: goal.time_used_seconds,
             created_at: goal.created_at,
             updated_at: goal.updated_at,
             completed_at: goal.completed_at,

@@ -2048,7 +2048,7 @@ fn configured_provider_auth_id(
 ) -> Option<String> {
     match &resolved.auth {
         ProviderAuthConfig::None
-        | ProviderAuthConfig::GoogleAdc
+        | ProviderAuthConfig::GoogleAdc(_)
         | ProviderAuthConfig::BedrockSigv4(_) => None,
         ProviderAuthConfig::Api(_)
         | ProviderAuthConfig::Credential(_)
@@ -2293,7 +2293,8 @@ mod tests {
         BedrockSigv4AuthConfig, HttpProviderAdapterConfig, OpenAiApiModeConfig,
         OpenAiBackendConfig, OpenAiProviderOptions, ProviderAdapterDefinition,
         ProviderApiAuthConfig, ProviderAuthConfig, ProviderCredentialAuthConfig,
-        ProviderSapAiCoreAuthConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+        ProviderGoogleAdcAuthConfig, ProviderSapAiCoreAuthConfig,
+        ResolvedProviderAdapterConfig, ResolvedProviderConfig, SharedGatewayEndpointLayout,
         StreamTransportMode,
     };
 
@@ -2312,7 +2313,6 @@ mod tests {
                         api_mode_explicit: false,
                         stream_mode: StreamTransportMode::Sse,
                         realtime_ws_url: None,
-                        base_url: None,
                         models_url: None,
                         auth_header: "authorization".to_owned(),
                         auth_scheme: Some("Bearer".to_owned()),
@@ -2387,6 +2387,7 @@ mod tests {
         let provider = resolved_provider_with_auth(
             ProviderAuthConfig::Api(ProviderApiAuthConfig {
                 base_url: "https://gitlab.com/api/v4".to_owned(),
+                endpoint_layout: SharedGatewayEndpointLayout::Auto,
                 api_key: Some("glpat-test".to_owned()),
                 api_key_env: None,
             }),
@@ -2427,6 +2428,7 @@ mod tests {
         let provider = resolved_provider_with_auth(
             ProviderAuthConfig::Api(ProviderApiAuthConfig {
                 base_url: "https://api.openai.com/v1".to_owned(),
+                endpoint_layout: SharedGatewayEndpointLayout::Auto,
                 api_key: Some("sk-test".to_owned()),
                 api_key_env: None,
             }),
@@ -2467,6 +2469,7 @@ mod tests {
         let provider = resolved_provider_with_auth(
             ProviderAuthConfig::Api(ProviderApiAuthConfig {
                 base_url: "https://gateway.cloudflare.example/v1".to_owned(),
+                endpoint_layout: SharedGatewayEndpointLayout::Auto,
                 api_key: Some("cf-test".to_owned()),
                 api_key_env: None,
             }),
@@ -2481,7 +2484,13 @@ mod tests {
 
     #[test]
     fn configured_provider_auth_id_skips_google_adc_and_sigv4_auth() {
-        let google = resolved_provider_with_auth(ProviderAuthConfig::GoogleAdc, vec![]);
+        let google = resolved_provider_with_auth(
+            ProviderAuthConfig::GoogleAdc(ProviderGoogleAdcAuthConfig {
+                base_url: "https://vertex.example.com/v1".to_owned(),
+                endpoint_layout: Default::default(),
+            }),
+            vec![],
+        );
         let bedrock = resolved_provider_with_auth(
             ProviderAuthConfig::BedrockSigv4(BedrockSigv4AuthConfig {
                 base_url: "https://bedrock-runtime.us-east-1.amazonaws.com".to_owned(),
@@ -2504,6 +2513,7 @@ mod tests {
             ProviderAuthConfig::SapAiCore(ProviderSapAiCoreAuthConfig {
                 api: ProviderApiAuthConfig {
                     base_url: "https://api.example.com/v2".to_owned(),
+                    endpoint_layout: SharedGatewayEndpointLayout::Auto,
                     api_key: Some("sap-inline".to_owned()),
                     api_key_env: None,
                 },

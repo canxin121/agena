@@ -166,7 +166,7 @@ impl AuthStore for ProviderConfigCredentialStore {
 pub fn provider_auth_data(resolved: &ResolvedProviderConfig) -> Option<AuthData> {
     match &resolved.auth {
         ProviderAuthConfig::None
-        | ProviderAuthConfig::GoogleAdc
+        | ProviderAuthConfig::GoogleAdc(_)
         | ProviderAuthConfig::BedrockSigv4(_) => None,
         ProviderAuthConfig::Api(api) => secret_auth_data(api),
         ProviderAuthConfig::Credential(config) => config.credential.clone(),
@@ -244,7 +244,7 @@ pub fn provider_supports_api_key_write(resolved: &ResolvedProviderConfig) -> boo
         }
         ProviderAuthConfig::Credential(_) => false,
         ProviderAuthConfig::None
-        | ProviderAuthConfig::GoogleAdc
+        | ProviderAuthConfig::GoogleAdc(_)
         | ProviderAuthConfig::BedrockSigv4(_) => false,
     }
 }

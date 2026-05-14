@@ -2,7 +2,8 @@ use std::str::FromStr;
 
 use super::{
     ConfigError, RawConfig, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
-    RawStreamReplayConfig, RawTracingConfig, RawUiConfig, parse_numeric,
+    RawStreamReplayConfig, RawTracingConfig, RawUiConfig, SharedGatewayEndpointLayout,
+    parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +20,10 @@ pub enum ConfigOverride {
     StreamReplayMaxTrackedEvents(usize),
     ProviderDefaultModel { provider_id: String, value: String },
     ProviderAuthBaseUrl { provider_id: String, value: String },
+    ProviderAuthEndpointLayout {
+        provider_id: String,
+        value: SharedGatewayEndpointLayout,
+    },
     ProviderAuthApiKey { provider_id: String, value: String },
     ProviderAuthApiKeyEnv { provider_id: String, value: String },
     ProviderEnabled { provider_id: String, value: bool },
@@ -155,6 +160,15 @@ impl ConfigOverride {
                     .get_or_insert_with(Default::default)
                     .base_url = Some(value.clone());
             }
+            Self::ProviderAuthEndpointLayout { provider_id, value } => {
+                config
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .auth
+                    .get_or_insert_with(Default::default)
+                    .endpoint_layout = Some(*value);
+            }
             Self::ProviderAuthApiKey { provider_id, value } => {
                 config
                     .providers
@@ -209,6 +223,10 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
             };
             match auth_field {
                 "base_url" => Ok(ConfigOverride::ProviderAuthBaseUrl { provider_id, value }),
+                "endpoint_layout" => Ok(ConfigOverride::ProviderAuthEndpointLayout {
+                    provider_id,
+                    value: raw_value.parse()?,
+                }),
                 "api_key" => Ok(ConfigOverride::ProviderAuthApiKey { provider_id, value }),
                 "api_key_env" => Ok(ConfigOverride::ProviderAuthApiKeyEnv { provider_id, value }),
                 _ => Err(ConfigError::InvalidOverride(key.to_owned())),

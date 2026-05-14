@@ -38,6 +38,19 @@ fn cli_override_parser_supports_provider_fields() {
 }
 
 #[test]
+fn cli_override_parser_supports_provider_auth_endpoint_layout() {
+    let parsed = "providers.shared.auth.endpoint_layout=provider_routed"
+        .parse::<ConfigOverride>()
+        .expect("override should parse");
+    assert!(matches!(
+        parsed,
+        ConfigOverride::ProviderAuthEndpointLayout { provider_id, value }
+            if provider_id == "shared"
+                && value == SharedGatewayEndpointLayout::ProviderRouted
+    ));
+}
+
+#[test]
 fn loader_applies_file_then_env_then_cli() {
     let path = write_temp_config(
         r#"
@@ -676,6 +689,55 @@ enabled = true
             .is_some()
     );
     assert!(provider.models.contains_key("anthropic/claude-sonnet-4"));
+}
+
+#[test]
+fn multi_adapter_provider_supports_shared_endpoint_layout() {
+    let path = write_temp_config(
+        r#"
+[providers.shared]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.shared.auth]
+mode = "api"
+base_url = "https://gateway.example.com/api/provider/openai/v1"
+endpoint_layout = "provider_routed"
+api_key_env = "SHARED_GATEWAY_API_KEY"
+
+[providers.shared.adapters.openai]
+enabled = true
+
+[providers.shared.adapters.anthropic]
+enabled = true
+
+[providers.shared.adapters.gemini]
+enabled = true
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("shared")
+        .expect("shared provider should exist");
+
+    match &provider.auth {
+        ProviderAuthConfig::Api(api) => {
+            assert_eq!(
+                api.endpoint_layout,
+                SharedGatewayEndpointLayout::ProviderRouted
+            );
+        }
+        other => panic!("expected api auth, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1982,6 +2044,44 @@ capability_family = "openai_compatible"
         .expect_err("removed capability family should be rejected during parse");
 
     assert!(matches!(err, ConfigError::ParseFile { .. }));
+}
+
+#[test]
+fn http_adapters_reject_adapter_level_base_url() {
+    for adapter in ["openai", "anthropic", "gemini"] {
+        let path = write_temp_config(
+            format!(
+                r#"
+[providers.gateway]
+default_model = "{adapter}/test-model"
+
+[providers.gateway.auth]
+mode = "api"
+base_url = "https://gateway.example.com"
+api_key = "secret"
+
+[providers.gateway.adapters.{adapter}]
+enabled = true
+base_url = "https://override.example.com"
+"#
+            )
+            .as_str(),
+        );
+
+        let loader = ConfigLoader::new(TestEnvironment::default());
+        let err = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                ..LoadConfigRequest::default()
+            })
+            .expect_err("adapter-level base_url should be rejected");
+
+        assert!(matches!(
+            err,
+            ConfigError::InvalidProviderConfig { provider_id, message }
+                if provider_id == "gateway" && message.contains("does not support `base_url`")
+        ));
+    }
 }
 
 #[test]

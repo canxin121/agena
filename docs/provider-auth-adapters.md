@@ -70,10 +70,12 @@ CLI、HTTP API、Studio、session 持久化、model ref 都围绕 `provider_id` 
 
 它负责：
 
-- endpoint / token / OAuth / ADC / SigV4 / service key 等认证来源
+- shared endpoint / token / OAuth / ADC / SigV4 / service key 等认证来源
 - refresh 生命周期
 - provider-local metadata，例如 Copilot enterprise host、ChatGPT account id
 - 给同一个 provider 下所有 adapters 共享认证上下文
+
+当一个 auth 网关同时暴露多种协议时，`auth.base_url` 表示用户填写的共享入口，不一定是某个 adapter 的最终协议 base。运行时会根据 `auth.endpoint_layout` 和 adapter kind 自动派生协议后缀。
 
 `auth` 不再拆成独立 connection 对象，也不放在 adapter 上。
 
@@ -213,8 +215,31 @@ api_key_env = "OPENAI_API_KEY"
 字段：
 
 - `base_url`
+- `endpoint_layout`
 - `api_key`
 - `api_key_env`
+
+`endpoint_layout` 可选值：
+
+- `auto`
+- `direct`
+- `protocol_root`
+- `provider_routed`
+
+含义：
+
+- `direct`：`base_url` 已经是当前 provider 直接要使用的最终协议 base
+- `protocol_root`：把 `base_url` 当成共享网关入口，为不同 adapter 自动派生 `/v1` 或 `/v1beta`
+- `provider_routed`：把 `base_url` 当成 CLIProxyAPI / Amp 风格共享入口，为不同 adapter 自动派生 `/api/provider/<provider>/...`
+- `auto`：运行时根据填写的 URL 形状自动推断，默认值就是它
+
+`auto` 的判断大致是：
+
+- `https://api.cxits.cn` -> 按 `direct` 不改动
+- `https://api.cxits.cn/v1` -> 按 `protocol_root`
+- `https://api.cxits.cn/v1/messages` -> 按 `protocol_root`
+- `https://api.cxits.cn/v1beta/models/gemini-2.5-pro:generateContent` -> 按 `protocol_root`
+- `https://api.cxits.cn/api/provider/openai/v1` -> 按 `provider_routed`
 
 ### `credential`
 
@@ -254,7 +279,14 @@ profile = "prod"
 
 ### `google_adc`
 
-用于 Vertex / Google ADC。
+用于 Vertex / Google ADC。和 `api` 一样，它也需要一个共享入口的 `base_url`；区别只是凭证来源来自 Google ADC，而不是 API key。
+
+```toml
+[providers.vertex.auth]
+mode = "google_adc"
+base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
+endpoint_layout = "direct"
+```
 
 ### `sap_ai_core`
 
@@ -328,7 +360,6 @@ credential = { type = "oauth", issuer = "github_copilot", refresh = "...", acces
 
 [providers."github-copilot".adapters.openai]
 enabled = true
-models_url = "https://api.githubcopilot.com/models"
 
 [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
 enabled = true
@@ -363,7 +394,8 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"
-base_url = "https://gateway.example.com/v1"
+base_url = "https://gateway.example.com"
+endpoint_layout = "protocol_root"
 api_key_env = "SHARED_GATEWAY_API_KEY"
 
 [providers.shared.adapters.openai]
@@ -381,6 +413,54 @@ enabled = true
 [providers.shared.adapters.anthropic.models."claude-sonnet-4"]
 enabled = true
 ```
+
+这里：
+
+- `openai` 会自动派生到 `https://gateway.example.com/v1`
+- `anthropic` 会自动派生到 `https://gateway.example.com/v1`
+- `gemini` 如果启用，会自动派生到 `https://gateway.example.com/v1beta`
+
+### CLIProxyAPI Shared Gateway
+
+```toml
+[providers.cliproxy]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.cliproxy.auth]
+mode = "api"
+base_url = "https://api.cxits.cn/api/provider/openai/v1"
+endpoint_layout = "provider_routed"
+api_key_env = "CLIPROXY_API_KEY"
+
+[providers.cliproxy.adapters.openai]
+enabled = true
+
+[providers.cliproxy.adapters.openai.models."gpt-4.1-mini"]
+enabled = true
+
+[providers.cliproxy.adapters.anthropic]
+enabled = true
+
+[providers.cliproxy.adapters.anthropic.models."claude-sonnet-4"]
+enabled = true
+
+[providers.cliproxy.adapters.gemini]
+enabled = true
+
+[providers.cliproxy.adapters.gemini.models."gemini-2.5-pro"]
+enabled = true
+```
+
+即使你填的是 `.../api/provider/openai/v1`，运行时也会先回退到共享 gateway root，再自动为其他 adapter 派生：
+
+- `openai` -> `/api/provider/openai/v1`
+- `anthropic` -> `/api/provider/anthropic/v1`
+- `gemini` -> `/api/provider/google/v1beta`
+
+如果你填的是完整协议 endpoint，运行时也会先把它收敛成共享入口，再按 adapter 重新拼：
+
+- `https://api.cxits.cn/v1/messages` 会收敛成 `https://api.cxits.cn`
+- `https://api.cxits.cn/v1beta/models/gemini-2.5-pro:generateContent` 会收敛成 `https://api.cxits.cn`
 
 ### Amazon Bedrock SigV4
 

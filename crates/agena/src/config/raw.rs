@@ -13,10 +13,11 @@ use super::{
     AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError, HttpProviderAdapterConfig,
     McpConfig, MemoryConfig, OpenAiApiModeConfig, PluginConfig, ProjectInstructionsConfig,
     ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
-    ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderSapAiCoreAuthConfig,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderGoogleAdcAuthConfig,
+    ProviderSapAiCoreAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig,
     ResolvedProviderModelConfig, RuntimeConfig, StreamTransportMode, TelemetryConfig,
-    TracingConfig, UiConfig, WebToolsConfig,
+    TracingConfig, UiConfig, WebToolsConfig, SharedGatewayEndpointLayout,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -884,6 +885,7 @@ pub(crate) enum ProviderAuthMode {
 pub(crate) struct RawProviderAuthConfig {
     pub(crate) mode: Option<ProviderAuthMode>,
     pub(crate) base_url: Option<String>,
+    pub(crate) endpoint_layout: Option<SharedGatewayEndpointLayout>,
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env: Option<String>,
     pub(crate) issuer: Option<CredentialIssuer>,
@@ -901,6 +903,7 @@ impl Merge for RawProviderAuthConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.mode, overlay.mode);
         merge_option(&mut self.base_url, overlay.base_url);
+        merge_option(&mut self.endpoint_layout, overlay.endpoint_layout);
         merge_option(&mut self.api_key, overlay.api_key);
         merge_option(&mut self.api_key_env, overlay.api_key_env);
         merge_option(&mut self.issuer, overlay.issuer);
@@ -1174,6 +1177,14 @@ fn resolve_adapter_config(
             let api_mode = api_mode.unwrap_or(OpenAiApiModeConfig::Responses);
             let stream_mode = stream_mode.unwrap_or(StreamTransportMode::Sse);
             let realtime_ws_url = normalize_optional(realtime_ws_url);
+            if normalize_optional(base_url.clone()).is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message:
+                        "openai adapter does not support `base_url`; configure provider auth endpoint instead"
+                            .to_owned(),
+                });
+            }
             if matches!(backend, super::OpenAiBackendConfig::ChatgptCodex) {
                 if api_mode != OpenAiApiModeConfig::Responses {
                     return Err(ConfigError::InvalidProviderConfig {
@@ -1197,14 +1208,6 @@ fn resolve_adapter_config(
                                 .to_owned(),
                     });
                 }
-                if normalize_optional(base_url.clone()).is_some() {
-                    return Err(ConfigError::InvalidProviderConfig {
-                        provider_id: provider_id.to_owned(),
-                        message:
-                            "openai backend `chatgpt_codex` uses provider auth endpoint; do not set adapter `base_url`"
-                                .to_owned(),
-                    });
-                }
             }
             ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
                 extra_headers,
@@ -1214,7 +1217,6 @@ fn resolve_adapter_config(
                     api_mode_explicit,
                     stream_mode,
                     realtime_ws_url,
-                    base_url: normalize_optional(base_url),
                     models_url: normalize_optional(models_url),
                     auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
                     auth_scheme: normalize_optional(auth_scheme)
@@ -1224,10 +1226,17 @@ fn resolve_adapter_config(
             })
         }
         ProviderKind::Anthropic => {
+            if normalize_optional(base_url.clone()).is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message:
+                        "anthropic adapter does not support `base_url`; configure provider auth endpoint instead"
+                            .to_owned(),
+                });
+            }
             ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
                 extra_headers,
                 options: super::AnthropicProviderOptions {
-                    base_url: normalize_optional(base_url),
                     models_url: normalize_optional(models_url),
                     messages_url: normalize_optional(messages_url),
                     auth_header: auth_header.unwrap_or_else(|| "x-api-key".to_owned()),
@@ -1237,13 +1246,23 @@ fn resolve_adapter_config(
                 },
             })
         }
-        ProviderKind::Gemini => ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
-            extra_headers,
-            options: super::SimpleHttpProviderOptions {
-                auth_header: normalize_optional(auth_header),
-                auth_scheme: normalize_optional(auth_scheme),
-            },
-        }),
+        ProviderKind::Gemini => {
+            if normalize_optional(base_url.clone()).is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message:
+                        "gemini adapter does not support `base_url`; configure provider auth endpoint instead"
+                            .to_owned(),
+                });
+            }
+            ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
+                extra_headers,
+                options: super::SimpleHttpProviderOptions {
+                    auth_header: normalize_optional(auth_header),
+                    auth_scheme: normalize_optional(auth_scheme),
+                },
+            })
+        }
         ProviderKind::Gitlab => ProviderAdapterDefinition::Gitlab(super::GitlabProviderOptions {
             instance_url: normalize_optional(instance_url),
             ai_gateway_url: normalize_optional(ai_gateway_url),
@@ -1283,6 +1302,7 @@ fn resolve_provider_auth<'a>(
             }
             Ok(ProviderAuthConfig::Api(ProviderApiAuthConfig {
                 base_url,
+                endpoint_layout: raw_auth.endpoint_layout.unwrap_or_default(),
                 api_key: normalize_optional(raw_auth.api_key),
                 api_key_env: normalize_optional(raw_auth.api_key_env),
             }))
@@ -1333,11 +1353,17 @@ fn resolve_provider_auth<'a>(
                 session_token: normalize_optional(raw_auth.session_token),
             }))
         }
-        ProviderAuthMode::GoogleAdc => Ok(ProviderAuthConfig::GoogleAdc),
+        ProviderAuthMode::GoogleAdc => Ok(ProviderAuthConfig::GoogleAdc(
+            ProviderGoogleAdcAuthConfig {
+                base_url: required_string(provider_id, "base_url", raw_auth.base_url)?,
+                endpoint_layout: raw_auth.endpoint_layout.unwrap_or_default(),
+            },
+        )),
         ProviderAuthMode::SapAiCore => {
             Ok(ProviderAuthConfig::SapAiCore(ProviderSapAiCoreAuthConfig {
                 api: ProviderApiAuthConfig {
                     base_url: required_string(provider_id, "base_url", raw_auth.base_url)?,
+                    endpoint_layout: raw_auth.endpoint_layout.unwrap_or_default(),
                     api_key: normalize_optional(raw_auth.api_key),
                     api_key_env: normalize_optional(raw_auth.api_key_env),
                 },
@@ -1411,12 +1437,12 @@ fn validate_provider_auth<'a>(
                     message: "auth mode `none` only supports `ollama` adapters".to_owned(),
                 });
             }
-            (ProviderAuthConfig::GoogleAdc, ProviderAdapterDefinition::OpenAi(config))
+            (ProviderAuthConfig::GoogleAdc(_), ProviderAdapterDefinition::OpenAi(config))
                 if matches!(
                     config.options.capability_family,
                     Some(ProviderCapabilityFamilyConfig::Gemini)
                 ) => {}
-            (ProviderAuthConfig::GoogleAdc, _) => {
+            (ProviderAuthConfig::GoogleAdc(_), _) => {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message: "auth mode `google_adc` only supports Vertex-style `openai` adapters"

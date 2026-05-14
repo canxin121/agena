@@ -379,7 +379,6 @@ credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-ref
 
 [providers."github-copilot".adapters.openai]
 enabled = true
-# base_url = "https://api.githubcopilot.com"
 
 [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
 
@@ -413,12 +412,37 @@ enabled = true
 instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
 
+[providers.shared-gateway]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.shared-gateway.auth]
+mode = "api"
+base_url = "https://api.cxits.cn"
+endpoint_layout = "protocol_root"
+api_key_env = "SHARED_GATEWAY_API_KEY"
+
+[providers.shared-gateway.adapters.openai]
+enabled = true
+
+[providers.shared-gateway.adapters.openai.models."gpt-4.1-mini"]
+
+[providers.shared-gateway.adapters.anthropic]
+enabled = true
+
+[providers.shared-gateway.adapters.anthropic.models."claude-sonnet-4"]
+
+[providers.shared-gateway.adapters.gemini]
+enabled = true
+
+[providers.shared-gateway.adapters.gemini.models."gemini-2.5-pro"]
+
 [providers."google-vertex"]
 default_model = "openai/google/gemini-2.5-flash"
 
 [providers."google-vertex".auth]
 mode = "api"
 base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
+endpoint_layout = "direct"
 api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 
 [providers."google-vertex".adapters.openai]

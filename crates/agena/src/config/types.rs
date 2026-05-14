@@ -315,13 +315,25 @@ pub enum ProviderAuthConfig {
     Api(ProviderApiAuthConfig),
     Credential(ProviderCredentialAuthConfig),
     BedrockSigv4(BedrockSigv4AuthConfig),
-    GoogleAdc,
+    GoogleAdc(ProviderGoogleAdcAuthConfig),
     SapAiCore(ProviderSapAiCoreAuthConfig),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SharedGatewayEndpointLayout {
+    #[default]
+    Auto,
+    Direct,
+    ProtocolRoot,
+    ProviderRouted,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Default)]
 pub struct ProviderApiAuthConfig {
     pub base_url: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub endpoint_layout: SharedGatewayEndpointLayout,
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
 }
@@ -330,8 +342,25 @@ impl fmt::Debug for ProviderApiAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProviderApiAuthConfig")
             .field("base_url", &self.base_url)
+            .field("endpoint_layout", &self.endpoint_layout)
             .field("api_key", &redacted(self.api_key.as_deref()))
             .field("api_key_env", &self.api_key_env)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderGoogleAdcAuthConfig {
+    pub base_url: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub endpoint_layout: SharedGatewayEndpointLayout,
+}
+
+impl fmt::Debug for ProviderGoogleAdcAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderGoogleAdcAuthConfig")
+            .field("base_url", &self.base_url)
+            .field("endpoint_layout", &self.endpoint_layout)
             .finish()
     }
 }
@@ -459,6 +488,13 @@ fn credential_debug_kind(value: &AuthData) -> &'static str {
     }
 }
 
+fn is_default<T>(value: &T) -> bool
+where
+    T: Default + PartialEq,
+{
+    value == &T::default()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OpenAiProviderOptions {
     pub backend: OpenAiBackendConfig,
@@ -467,7 +503,6 @@ pub struct OpenAiProviderOptions {
     pub api_mode_explicit: bool,
     pub stream_mode: StreamTransportMode,
     pub realtime_ws_url: Option<String>,
-    pub base_url: Option<String>,
     pub models_url: Option<String>,
     pub auth_header: String,
     pub auth_scheme: Option<String>,
@@ -477,7 +512,6 @@ pub struct OpenAiProviderOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnthropicProviderOptions {
-    pub base_url: Option<String>,
     pub models_url: Option<String>,
     pub messages_url: Option<String>,
     pub auth_header: String,
@@ -534,6 +568,22 @@ impl From<ProviderCapabilityFamilyConfig> for CapabilityFamily {
             ProviderCapabilityFamilyConfig::Gemini => CapabilityFamily::Gemini,
             ProviderCapabilityFamilyConfig::Bedrock => CapabilityFamily::Bedrock,
             ProviderCapabilityFamilyConfig::Gitlab => CapabilityFamily::Gitlab,
+        }
+    }
+}
+
+impl FromStr for SharedGatewayEndpointLayout {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim() {
+            "auto" => Ok(Self::Auto),
+            "direct" => Ok(Self::Direct),
+            "protocol_root" => Ok(Self::ProtocolRoot),
+            "provider_routed" => Ok(Self::ProviderRouted),
+            _ => Err(ConfigError::InvalidOverride(format!(
+                "unknown endpoint layout `{value}`"
+            ))),
         }
     }
 }

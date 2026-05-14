@@ -23,7 +23,41 @@ describe('WorkspacePageContent', () => {
       {
         createWorkspace: async (path) => ({ id: 3, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
         deleteWorkspace: async (workspaceId) => ({ id: workspaceId, path: '/repo-b', created_at: 'x', updated_at: 'x', session_count: 4 }),
-        getGitStatus: async () => null as never,
+        getGitStatus: async () => ({
+          workspace_root: '/repo-b',
+          git_available: true,
+          repo: true,
+          gh_available: false,
+          branch: 'main',
+          upstream: null,
+          ahead: 0,
+          behind: 0,
+          staged_files: 0,
+          unstaged_files: 1,
+          untracked_files: 1,
+          changed_files: 2,
+          clean: false,
+          worktree_active_sessions: 0,
+          worktree_managed_dirs: 0,
+        }),
+        getVcsDiffRaw: async () => 'diff --git a/.agena/config.toml b/.agena/config.toml\n+mode = "studio"\n',
+        initGitProject: async () => ({
+          workspace_root: '/repo-b',
+          git_available: true,
+          repo: true,
+          gh_available: false,
+          branch: 'main',
+          upstream: null,
+          ahead: null,
+          behind: null,
+          staged_files: 0,
+          unstaged_files: 0,
+          untracked_files: 0,
+          changed_files: 0,
+          clean: true,
+          worktree_active_sessions: 0,
+          worktree_managed_dirs: 0,
+        }),
         listWorkspaceFileTree: async ({ workspaceId, path }): Promise<WorkspaceFileTreeResource> => ({
           workspace_id: workspaceId,
           root: '/repo-b',
@@ -49,6 +83,7 @@ describe('WorkspacePageContent', () => {
     )
 
     await state.load()
+    await state.loadVcsDiffRawAction()
 
     const html = await renderVueSsr('/src/agena/pages/WorkspacePageContent.vue', {
       workspace: state,
@@ -56,6 +91,7 @@ describe('WorkspacePageContent', () => {
 
     expect(html.includes('Resolve Workspace')).toBe(true)
     expect(html.includes('Project Status')).toBe(true)
+    expect(html.includes('Load Raw Diff')).toBe(true)
     expect(html.includes('Current Workspace')).toBe(true)
     expect(html.includes('Project Entry Points')).toBe(true)
     expect(html.includes('Open Worktrees')).toBe(true)
@@ -64,5 +100,7 @@ describe('WorkspacePageContent', () => {
     expect(html.includes('/repo-b')).toBe(true)
     expect(html.includes('.agena/skills')).toBe(true)
     expect(html.includes('3 entries')).toBe(true)
+    expect(html.includes('raw_diff=available')).toBe(true)
+    expect(html.includes('diff --git a/.agena/config.toml b/.agena/config.toml')).toBe(true)
   })
 })

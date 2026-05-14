@@ -5,6 +5,8 @@ import {
   createWorkspace,
   deleteWorkspace,
   getGitStatus,
+  getVcsDiffRaw,
+  initGitProject,
   listWorkspaceFileTree,
   listWorkspaces,
   resolveWorkspace,
@@ -35,6 +37,8 @@ export type WorkspacePageStateDeps = {
   createWorkspace: typeof createWorkspace
   deleteWorkspace: typeof deleteWorkspace
   getGitStatus: typeof getGitStatus
+  getVcsDiffRaw: typeof getVcsDiffRaw
+  initGitProject: typeof initGitProject
   listWorkspaceFileTree: typeof listWorkspaceFileTree
   listWorkspaces: typeof listWorkspaces
   resolveWorkspace: typeof resolveWorkspace
@@ -45,6 +49,8 @@ const defaultDeps: WorkspacePageStateDeps = {
   createWorkspace,
   deleteWorkspace,
   getGitStatus,
+  getVcsDiffRaw,
+  initGitProject,
   listWorkspaceFileTree,
   listWorkspaces,
   resolveWorkspace,
@@ -86,6 +92,9 @@ export function useWorkspacePageState(
   const workspacePath = ref('')
   const tree = ref<WorkspaceFileTreeResource | null>(null)
   const gitStatus = ref<GitStatusResource | null>(null)
+  const rawDiff = ref('')
+  const rawDiffLoaded = ref(false)
+  const rawDiffLoading = ref(false)
   const loading = ref(false)
   const actionError = ref('')
   const actionMessage = ref('')
@@ -146,6 +155,37 @@ export function useWorkspacePageState(
       gitStatus.value = await deps.getGitStatus()
     } catch {
       gitStatus.value = null
+    }
+  }
+
+  async function initGitProjectAction() {
+    loading.value = true
+    actionError.value = ''
+    actionMessage.value = ''
+    try {
+      gitStatus.value = await deps.initGitProject()
+      actionMessage.value = `Initialized git repository at ${gitStatus.value.workspace_root}.`
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function loadVcsDiffRawAction() {
+    rawDiffLoading.value = true
+    actionError.value = ''
+    actionMessage.value = ''
+    try {
+      rawDiff.value = await deps.getVcsDiffRaw()
+      rawDiffLoaded.value = true
+      actionMessage.value = rawDiff.value
+        ? 'Loaded raw git diff.'
+        : 'No raw git diff is available for the current workspace.'
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      rawDiffLoading.value = false
     }
   }
 
@@ -323,6 +363,8 @@ export function useWorkspacePageState(
     configSummaryFacts,
     formatSize: formatWorkspaceNodeSize,
     gitStatus,
+    initGitProjectAction,
+    loadVcsDiffRawAction,
     goRoot,
     load,
     loadTree,
@@ -338,6 +380,9 @@ export function useWorkspacePageState(
     pageDescription,
     pageTitle,
     pathInput,
+    rawDiff,
+    rawDiffLoaded,
+    rawDiffLoading,
     renameSelectedWorkspace,
     resolveWorkspaceAction,
     rows,

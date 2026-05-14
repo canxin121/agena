@@ -4,7 +4,7 @@
 //! `SessionManager` directly (bypassing `AgenaRuntime`), wire it into
 //! `AppState::with_manager_override`, and exercise the v2 routes.
 
-use std::sync::Arc;
+use std::{process::Command, sync::Arc};
 
 use agena::model::{ModelId, ModelRef, ProviderId};
 use agena::{
@@ -92,6 +92,7 @@ async fn build_state() -> (AppState, Arc<SessionManager>, String) {
     let db = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
     agena::db::init_schema(db.as_ref()).await.unwrap();
     let workspace_root = format!("/tmp/api-server-workspace-{}", uuid::Uuid::new_v4());
+    std::fs::create_dir_all(&workspace_root).expect("test workspace dir should be created");
     agena::db::crud::workspace::ensure_workspace_id(db.as_ref(), workspace_root.as_str())
         .await
         .expect("workspace should exist for manager scans");
@@ -200,6 +201,93 @@ async fn operational_probes_and_metrics_return_expected_shapes() {
     assert!(text.contains("agena_provider_calls_total"));
     assert!(text.contains("agena_session_active"));
     assert!(text.contains("agena_build_info"));
+}
+
+#[tokio::test]
+async fn project_git_init_endpoint_initializes_repository_and_returns_status() {
+    let (state, _manager, workspace_root) = build_state().await;
+    let app = router(state);
+
+    let git_dir = std::path::Path::new(&workspace_root).join(".git");
+    assert!(!git_dir.exists(), "test workspace should start without .git");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/project/git/init")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        value.get("repo").and_then(|item| item.as_bool()),
+        Some(true),
+        "expected git repo after init: {value:?}"
+    );
+    assert!(git_dir.exists(), "git init should create a .git directory");
+}
+
+#[tokio::test]
+async fn vcs_diff_raw_endpoint_returns_plaintext_patch_for_workspace_changes() {
+    let (state, _manager, workspace_root) = build_state().await;
+    let app = router(state);
+
+    let run_git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&workspace_root)
+            .output()
+            .expect("git command should execute");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    run_git(&["init"]);
+    run_git(&["config", "user.email", "studio@example.com"]);
+    run_git(&["config", "user.name", "Studio Parity"]);
+    std::fs::write(
+        std::path::Path::new(&workspace_root).join("tracked.txt"),
+        "before\n",
+    )
+    .unwrap();
+    run_git(&["add", "tracked.txt"]);
+    run_git(&["commit", "-m", "initial"]);
+
+    std::fs::write(
+        std::path::Path::new(&workspace_root).join("tracked.txt"),
+        "after\n",
+    )
+    .unwrap();
+    std::fs::write(
+        std::path::Path::new(&workspace_root).join("untracked.txt"),
+        "brand new\n",
+    )
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/vcs/diff/raw")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("diff --git a/tracked.txt b/tracked.txt"));
+    assert!(text.contains("diff --git a/untracked.txt b/untracked.txt"));
 }
 
 #[tokio::test]

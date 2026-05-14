@@ -79,6 +79,8 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/runtime", get(rest::get_runtime_status))
             .route("/api/v1/runtime/reload", post(rest::reload_runtime))
             .route("/api/v1/git/status", get(rest::get_git_status))
+            .route("/api/v1/project/git/init", post(rest::init_git_repository))
+            .route("/api/v1/vcs/diff/raw", get(rest::get_vcs_diff_raw))
             .route("/api/v1/plugins", get(rest::list_plugins))
             .route("/api/v1/plugins/{plugin_id}", get(rest::get_plugin))
             .route(

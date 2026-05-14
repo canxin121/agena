@@ -34,6 +34,24 @@ const props = defineProps<{
         <h3>Project Status</h3>
         <p class="muted">See git health, tracked worktree activity, and quick repo readiness before editing files.</p>
       </div>
+      <div class="button-row" style="flex-wrap: wrap">
+        <button
+          v-if="props.workspace.gitStatus.value && !props.workspace.gitStatus.value.repo"
+          class="button"
+          :disabled="props.workspace.loading.value || !props.workspace.gitStatus.value.git_available"
+          @click="props.workspace.initGitProjectAction"
+        >
+          Initialize Git
+        </button>
+        <button
+          v-if="props.workspace.gitStatus.value?.repo"
+          class="button"
+          :disabled="props.workspace.rawDiffLoading.value || props.workspace.loading.value"
+          @click="props.workspace.loadVcsDiffRawAction"
+        >
+          {{ props.workspace.rawDiffLoading.value ? 'Loading Raw Diff...' : 'Load Raw Diff' }}
+        </button>
+      </div>
     </div>
     <div v-if="props.workspace.gitStatus.value" class="stack">
       <div class="muted mono">root={{ props.workspace.gitStatus.value.workspace_root }}</div>
@@ -49,6 +67,17 @@ const props = defineProps<{
       <div class="muted mono">
         clean={{ props.workspace.gitStatus.value.clean ? 'true' : 'false' }} · worktree_active_sessions={{ props.workspace.gitStatus.value.worktree_active_sessions }} · worktree_managed_dirs={{ props.workspace.gitStatus.value.worktree_managed_dirs }}
       </div>
+      <details v-if="props.workspace.rawDiffLoaded.value" class="stack">
+        <summary class="muted mono">
+          raw_diff={{ props.workspace.rawDiff.value ? 'available' : 'empty' }}
+        </summary>
+        <pre
+          v-if="props.workspace.rawDiff.value"
+          class="mono"
+          style="margin: 0; white-space: pre-wrap; overflow-x: auto"
+        >{{ props.workspace.rawDiff.value }}</pre>
+        <div v-else class="muted">No tracked or untracked changes to preview.</div>
+      </details>
     </div>
     <p v-else class="muted">Git/worktree status is not available.</p>
   </section>

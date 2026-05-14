@@ -35,6 +35,8 @@ describe('useWorkspacePageState', () => {
         createWorkspace: async (path) => ({ id: 3, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
         deleteWorkspace: async (workspaceId) => ({ id: workspaceId, path: '/repo-b', created_at: 'x', updated_at: 'x', session_count: 4 }),
         getGitStatus: async () => null as never,
+        getVcsDiffRaw: async () => '',
+        initGitProject: async () => null as never,
         listWorkspaceFileTree: async ({ workspaceId, path }): Promise<WorkspaceFileTreeResource> => ({
           workspace_id: workspaceId,
           root: '/repo-b',
@@ -87,6 +89,8 @@ describe('useWorkspacePageState', () => {
         createWorkspace: async (path) => ({ id: 5, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
         deleteWorkspace: async (workspaceId) => ({ id: workspaceId, path: '/repo-c', created_at: 'x', updated_at: 'x', session_count: 0 }),
         getGitStatus: async () => null as never,
+        getVcsDiffRaw: async () => '',
+        initGitProject: async () => null as never,
         listWorkspaceFileTree: async ({ workspaceId, path }): Promise<WorkspaceFileTreeResource> => ({ workspace_id: workspaceId, root: '/repo-c', path: path || '', entries: [] }),
         listWorkspaces: async () => [{ id: 5, path: '/repo-c', created_at: 'x', updated_at: 'x', session_count: 0 }],
         resolveWorkspace: async (path) => ({ id: 5, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
@@ -120,6 +124,8 @@ describe('useWorkspacePageState', () => {
           createWorkspace: async (path) => ({ id: 2, path, created_at: 'x', updated_at: 'x', session_count: 4 }),
           deleteWorkspace: async (workspaceId) => ({ id: workspaceId, path: '/repo-renamed', created_at: 'x', updated_at: 'x', session_count: 4 }),
           getGitStatus: async () => null as never,
+          getVcsDiffRaw: async () => '',
+          initGitProject: async () => null as never,
           listWorkspaceFileTree: async ({ workspaceId, path }): Promise<WorkspaceFileTreeResource> => ({ workspace_id: workspaceId, root: '/repo', path: path || '', entries: [] }),
           listWorkspaces: async () => [{ id: 2, path: '/repo', created_at: 'x', updated_at: 'x', session_count: 4 }],
           resolveWorkspace: async (path) => ({ id: 2, path, created_at: 'x', updated_at: 'x', session_count: 4 }),
@@ -139,5 +145,116 @@ describe('useWorkspacePageState', () => {
         globalThis.window.confirm = originalConfirm || (() => false)
       }
     }
+  })
+
+  test('initializes git and refreshes project status message', async () => {
+    let initCalls = 0
+    const state = useWorkspacePageState(
+      {
+        route: createRoute(),
+        router: { replace: async () => {}, push: async () => {} } as never,
+      },
+      {
+        createWorkspace: async (path) => ({ id: 9, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+        deleteWorkspace: async (workspaceId) => ({ id: workspaceId, path: '/repo-init', created_at: 'x', updated_at: 'x', session_count: 0 }),
+        getGitStatus: async () => ({
+          workspace_root: '/repo-init',
+          git_available: true,
+          repo: false,
+          gh_available: false,
+          branch: null,
+          upstream: null,
+          ahead: null,
+          behind: null,
+          staged_files: 0,
+          unstaged_files: 0,
+          untracked_files: 0,
+          changed_files: 0,
+          clean: true,
+          worktree_active_sessions: 0,
+          worktree_managed_dirs: 0,
+        }),
+        getVcsDiffRaw: async () => '',
+        initGitProject: async () => {
+          initCalls += 1
+          return {
+            workspace_root: '/repo-init',
+            git_available: true,
+            repo: true,
+            gh_available: false,
+            branch: 'main',
+            upstream: null,
+            ahead: null,
+            behind: null,
+            staged_files: 0,
+            unstaged_files: 0,
+            untracked_files: 0,
+            changed_files: 0,
+            clean: true,
+            worktree_active_sessions: 0,
+            worktree_managed_dirs: 0,
+          }
+        },
+        listWorkspaceFileTree: async ({ workspaceId, path }): Promise<WorkspaceFileTreeResource> => ({ workspace_id: workspaceId, root: '/repo-init', path: path || '', entries: [] }),
+        listWorkspaces: async () => [{ id: 9, path: '/repo-init', created_at: 'x', updated_at: 'x', session_count: 0 }],
+        resolveWorkspace: async (path) => ({ id: 9, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+        updateWorkspace: async ({ workspaceId, path }) => ({ id: workspaceId, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+      },
+    )
+
+    await state.load()
+    await state.initGitProjectAction()
+
+    expect(initCalls).toBe(1)
+    expect(state.gitStatus.value?.repo).toBe(true)
+    expect(state.actionMessage.value).toBe('Initialized git repository at /repo-init.')
+  })
+
+  test('loads raw diff preview on demand', async () => {
+    let diffCalls = 0
+    const state = useWorkspacePageState(
+      {
+        route: createRoute(),
+        router: { replace: async () => {}, push: async () => {} } as never,
+      },
+      {
+        createWorkspace: async (path) => ({ id: 6, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+        deleteWorkspace: async (workspaceId) => ({ id: workspaceId, path: '/repo-diff', created_at: 'x', updated_at: 'x', session_count: 0 }),
+        getGitStatus: async () => ({
+          workspace_root: '/repo-diff',
+          git_available: true,
+          repo: true,
+          gh_available: false,
+          branch: 'main',
+          upstream: null,
+          ahead: 0,
+          behind: 0,
+          staged_files: 0,
+          unstaged_files: 1,
+          untracked_files: 1,
+          changed_files: 2,
+          clean: false,
+          worktree_active_sessions: 0,
+          worktree_managed_dirs: 0,
+        }),
+        getVcsDiffRaw: async () => {
+          diffCalls += 1
+          return 'diff --git a/src/app.ts b/src/app.ts\n+console.log("agena")\n'
+        },
+        initGitProject: async () => null as never,
+        listWorkspaceFileTree: async ({ workspaceId, path }): Promise<WorkspaceFileTreeResource> => ({ workspace_id: workspaceId, root: '/repo-diff', path: path || '', entries: [] }),
+        listWorkspaces: async () => [{ id: 6, path: '/repo-diff', created_at: 'x', updated_at: 'x', session_count: 0 }],
+        resolveWorkspace: async (path) => ({ id: 6, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+        updateWorkspace: async ({ workspaceId, path }) => ({ id: workspaceId, path, created_at: 'x', updated_at: 'x', session_count: 0 }),
+      },
+    )
+
+    await state.load()
+    await state.loadVcsDiffRawAction()
+
+    expect(diffCalls).toBe(1)
+    expect(state.rawDiffLoaded.value).toBe(true)
+    expect(state.rawDiff.value).toContain('diff --git a/src/app.ts b/src/app.ts')
+    expect(state.actionMessage.value).toBe('Loaded raw git diff.')
   })
 })

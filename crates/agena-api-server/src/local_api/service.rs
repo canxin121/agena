@@ -976,6 +976,80 @@ impl ApiService {
         })
     }
 
+    pub async fn git_init(
+        &self,
+        runtime: &agena::runtime::AgenaRuntime,
+    ) -> ApiResult<GitStatusResource> {
+        let workspace_root = runtime.workspace_root().to_path_buf();
+        if !command_available("git") {
+            return Err(ApiError::bad_request(
+                "git is not available on PATH; cannot initialize a repository",
+            ));
+        }
+
+        if !git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]) {
+            let output = Command::new("git")
+                .args(["init"])
+                .current_dir(&workspace_root)
+                .output()
+                .map_err(|error| {
+                    ApiError::internal(format!("failed to execute git init: {error}"))
+                })?;
+            if !output.status.success() {
+                return Err(ApiError::internal(format!(
+                    "git init failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+        }
+
+        self.git_status(runtime).await
+    }
+
+    pub async fn vcs_diff_raw(
+        &self,
+        runtime: &agena::runtime::AgenaRuntime,
+    ) -> ApiResult<String> {
+        let workspace_root = runtime.workspace_root().to_path_buf();
+        if !command_available("git") {
+            return Ok(String::new());
+        }
+        if !git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]) {
+            return Ok(String::new());
+        }
+
+        let mut chunks = Vec::<String>::new();
+        if git_success(&workspace_root, ["rev-parse", "--verify", "HEAD"]) {
+            let tracked = git_output_with_status(
+                &workspace_root,
+                ["diff", "--no-ext-diff", "--binary", "HEAD", "--"],
+                &[0],
+            )?;
+            if !tracked.trim().is_empty() {
+                chunks.push(tracked);
+            }
+        } else {
+            let staged = git_output_with_status(
+                &workspace_root,
+                ["diff", "--no-ext-diff", "--binary", "--cached", "--"],
+                &[0],
+            )?;
+            if !staged.trim().is_empty() {
+                chunks.push(staged);
+            }
+        }
+
+        let status = git_output(&workspace_root, ["status", "--porcelain"])?;
+        for file in untracked_files_from_status(status.as_str()) {
+            let patch = git_untracked_patch(&workspace_root, file.as_str())?;
+            if !patch.trim().is_empty() {
+                chunks.push(patch);
+            }
+        }
+
+        Ok(chunks.join("\n"))
+    }
+
     pub async fn assert_session_version(
         &self,
         session_id: i64,
@@ -1779,6 +1853,16 @@ fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {
 }
 
 fn git_output<const N: usize>(workspace_root: &Path, args: [&str; N]) -> ApiResult<String> {
+    Ok(git_output_with_status(workspace_root, args, &[0])?
+        .trim()
+        .to_string())
+}
+
+fn git_output_with_status<const N: usize>(
+    workspace_root: &Path,
+    args: [&str; N],
+    ok_statuses: &[i32],
+) -> ApiResult<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(workspace_root)
@@ -1786,14 +1870,45 @@ fn git_output<const N: usize>(workspace_root: &Path, args: [&str; N]) -> ApiResu
         .map_err(|error| {
             ApiError::internal(format!("failed to execute git {:?}: {}", args, error))
         })?;
-    if !output.status.success() {
+    let code = output.status.code().unwrap_or_default();
+    if !ok_statuses.contains(&code) {
         return Err(ApiError::internal(format!(
             "git {:?} failed: {}",
             args,
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn untracked_files_from_status(status: &str) -> Vec<String> {
+    status
+        .lines()
+        .filter_map(|line| line.strip_prefix("?? ").map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn git_untracked_patch(workspace_root: &Path, file: &str) -> ApiResult<String> {
+    #[cfg(windows)]
+    let null_path = "NUL";
+    #[cfg(not(windows))]
+    let null_path = "/dev/null";
+
+    git_output_with_status(
+        workspace_root,
+        [
+            "diff",
+            "--no-index",
+            "--binary",
+            "--no-ext-diff",
+            "--",
+            null_path,
+            file,
+        ],
+        &[0, 1],
+    )
 }
 
 fn parse_ahead_behind(value: Option<&str>) -> (Option<u64>, Option<u64>) {

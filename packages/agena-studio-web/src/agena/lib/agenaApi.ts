@@ -1,5 +1,5 @@
 import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from '../../lib/authEvents'
-import { apiJson, apiUrl } from '../../lib/api'
+import { apiJson, apiText, apiUrl } from '../../lib/api'
 import { buildActiveUiAuthHeaders } from '../../lib/uiAuthToken'
 import { normalizeSseBuffer, parseSseEventBlock } from './sse'
 
@@ -1047,6 +1047,20 @@ export async function deletePermissionRule(id: number): Promise<PermissionRuleRe
 
 export async function getGitStatus(): Promise<GitStatusResource> {
   return await apiJson<GitStatusResource>('/api/v1/git/status')
+}
+
+export async function initGitProject(): Promise<GitStatusResource> {
+  return await apiJson<GitStatusResource>('/api/v1/project/git/init', {
+    method: 'POST',
+  })
+}
+
+export async function getVcsDiffRaw(): Promise<string> {
+  return await apiText('/api/v1/vcs/diff/raw', {
+    headers: {
+      accept: 'text/plain',
+    },
+  })
 }
 
 export async function listWorkspaceFileTree(input: {

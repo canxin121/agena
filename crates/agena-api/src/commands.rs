@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::resource::{
     MessagePartContent, PermissionMode, PermissionReply, RunOptions, SessionExecutionResource,
-    SessionResource, UserInputReply, WorkspaceResource,
+    SessionGoalResource, SessionResource, UserInputReply, WorkspaceResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +25,9 @@ pub enum Command {
     CreateSession(CreateSessionParams),
     UpdateSession(UpdateSessionParams),
     DeleteSession(DeleteSessionParams),
+    CreateSessionGoal(CreateSessionGoalParams),
+    CompleteSessionGoal(CompleteSessionGoalParams),
+    ClearSessionGoal(ClearSessionGoalParams),
 
     // ── turn / run ──
     SubmitTurn(SubmitTurnParams),
@@ -59,6 +62,8 @@ pub enum CommandResult {
     WorkspaceDeleted { id: i64 },
     Session(SessionResource),
     SessionDeleted { id: i64 },
+    SessionGoal(SessionGoalResource),
+    SessionGoalCleared { session_id: i64 },
     SessionTree(Vec<SessionResource>),
     SessionExport { jsonl: String },
     RewindCheckpoints(Vec<crate::resource::RewindCheckpointResource>),
@@ -121,6 +126,24 @@ pub struct DeleteSessionParams {
     pub session_id: i64,
     #[serde(default)]
     pub expected_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSessionGoalParams {
+    pub session_id: i64,
+    pub objective: String,
+    #[serde(default)]
+    pub token_budget: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompleteSessionGoalParams {
+    pub session_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClearSessionGoalParams {
+    pub session_id: i64,
 }
 
 // ─── turn / run ──────────────────────────────────────────────────────────

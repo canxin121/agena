@@ -17,8 +17,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260509_000002_permission_rule_scope::Migration),
             Box::new(m20260509_000003_permission_rule_revoke::Migration),
             Box::new(m20260509_000004_permission_rule_global_scope::Migration),
-            Box::new(m20260515_000005_session_goal::Migration),
             Box::new(EventsMigration),
+            Box::new(m20260515_000005_session_goal::Migration),
         ]
     }
 }

@@ -12,7 +12,7 @@ use tracing::Instrument;
 use crate::AppError;
 use crate::event::{
     ErrorInfo, EventKind, PermissionRepliedEvent, PermissionRequestedEvent, RunFailedEvent,
-    RunStartedEvent,
+    RunStartedEvent, SessionGoalEvent,
 };
 use crate::message::{
     AttachmentItem, ExecutionStatus, FileChangePart, FirstPartyToolOutput, Message,
@@ -45,9 +45,10 @@ use super::history::{
     TurnAborted, TurnCompleted, TurnId as HistoryTurnId, TurnStarted, UserMessageAppended,
 };
 use super::model::{
-    MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionListRequest, SessionPendingTool,
-    SessionStatus, SessionSummary,
+    GoalStatus, MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionGoal, SessionListRequest,
+    SessionPendingTool, SessionStatus, SessionSummary,
 };
+use super::cost::SessionCostSummary;
 use super::processor::SessionRunRequest;
 use super::prompt_window::{self, PromptRequestOptions};
 use super::store::{ReservedMessageIds, SessionCommit, SessionStore};
@@ -213,6 +214,13 @@ pub struct SessionSubtaskResponse {
     pub profile_name: Option<String>,
     pub model_provider_id: Option<String>,
     pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionGoalCreateRequest {
+    pub session_id: i64,
+    pub objective: String,
+    pub token_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -602,44 +610,6 @@ impl SessionManager {
         self.store.list_workspace_session_ids().await
     }
 
-    pub async fn list_projected_messages(
-        &self,
-        session_id: i64,
-        include_full_parts: bool,
-    ) -> Result<Vec<Message>, AppError> {
-        self.store
-            .list_projected_messages(session_id, include_full_parts)
-            .await
-    }
-
-    pub async fn find_projected_message(
-        &self,
-        session_id: i64,
-        message_id: i64,
-        include_full_parts: bool,
-    ) -> Result<Option<Message>, AppError> {
-        self.store
-            .find_projected_message(session_id, message_id, include_full_parts)
-            .await
-    }
-
-    pub async fn list_projected_parts(
-        &self,
-        message_id: i64,
-        include_full_parts: bool,
-    ) -> Result<Vec<MessagePart>, AppError> {
-        self.store
-            .list_projected_parts(message_id, include_full_parts)
-            .await
-    }
-
-    pub async fn find_projected_part(
-        &self,
-        part_id: i64,
-    ) -> Result<Option<MessagePart>, AppError> {
-        self.store.find_projected_part(part_id).await
-    }
-
     pub async fn broadcast_session_end(
         &self,
         session_id: i64,
@@ -663,13 +633,17 @@ impl SessionManager {
         &self,
         message_id: i64,
     ) -> Result<Option<i64>, AppError> {
+        let state = self.execution_state();
         self.store
-            .find_projected_session_id_for_message(message_id)
+            .find_session_id_for_message(message_id, state.cache_policy())
             .await
     }
 
     pub async fn find_session_id_for_part(&self, part_id: i64) -> Result<Option<i64>, AppError> {
-        self.store.find_projected_session_id_for_part(part_id).await
+        let state = self.execution_state();
+        self.store
+            .find_session_id_for_part(part_id, state.cache_policy())
+            .await
     }
 
     pub async fn list_session_summaries(
@@ -684,6 +658,105 @@ impl SessionManager {
         session_id: i64,
     ) -> Result<Vec<crate::event::DomainEvent>, AppError> {
         self.store.list_session_events(session_id).await
+    }
+
+    pub async fn get_goal(&self, session_id: i64) -> Result<Option<SessionGoal>, AppError> {
+        Ok(self.get_session(session_id).await?.goal)
+    }
+
+    pub async fn goal_cost_summary(&self, session_id: i64) -> Result<SessionCostSummary, AppError> {
+        let state = self.execution_state();
+        self.store.goal_cost_summary(session_id, state.cache_policy()).await
+    }
+
+    pub async fn create_goal(
+        &self,
+        request: SessionGoalCreateRequest,
+    ) -> Result<SessionGoal, AppError> {
+        if request.objective.trim().is_empty() {
+            return Err(AppError::Internal(
+                "goal objective must not be empty".to_string(),
+            ));
+        }
+        let state = self.execution_state();
+        let existing = self.get_session(request.session_id).await?;
+        if existing.goal.is_some() {
+            return Err(AppError::Internal(format!(
+                "session {} already has an active goal",
+                request.session_id
+            )));
+        }
+        let updated = self
+            .store
+            .upsert_goal(
+                request.session_id,
+                request.objective,
+                request.token_budget,
+                state.cache_policy(),
+            )
+            .await?;
+        let goal = updated.goal.clone().ok_or_else(|| {
+            AppError::Internal(format!(
+                "goal missing after create for session {}",
+                request.session_id
+            ))
+        })?;
+        self.publish_goal_event(&goal, request.session_id).await?;
+        Ok(goal)
+    }
+
+    pub async fn complete_goal(&self, session_id: i64) -> Result<SessionGoal, AppError> {
+        let state = self.execution_state();
+        let session = self.get_session(session_id).await?;
+        let goal = session.goal.ok_or_else(|| {
+            AppError::Internal(format!("session {session_id} has no goal to complete"))
+        })?;
+        if goal.status != GoalStatus::Active {
+            return Err(AppError::Internal(format!(
+                "session {session_id} goal is already completed"
+            )));
+        }
+        let updated = self
+            .store
+            .complete_goal(session_id, state.cache_policy())
+            .await?
+            .ok_or_else(|| AppError::Internal(format!("session {session_id} has no goal")))?;
+        let goal = updated.goal.clone().ok_or_else(|| {
+            AppError::Internal(format!(
+                "goal missing after completion for session {session_id}"
+            ))
+        })?;
+        self.publish_goal_event(&goal, session_id).await?;
+        Ok(goal)
+    }
+
+    pub async fn clear_goal(&self, session_id: i64) -> Result<bool, AppError> {
+        let state = self.execution_state();
+        let existing = self.get_session(session_id).await?;
+        if existing.goal.is_none() {
+            return Ok(false);
+        }
+        let cleared = self.store.clear_goal(session_id, state.cache_policy()).await?;
+        if cleared {
+            self.publisher
+                .publish(
+                    crate::event::PublishContext::for_session(session_id),
+                    EventKind::SessionGoalUpdated(SessionGoalEvent {
+                        session_id,
+                        goal_id: None,
+                        objective: None,
+                        status: None,
+                        token_budget: None,
+                        completed_at_ms: None,
+                        ts_ms: Utc::now().timestamp_millis(),
+                    }),
+                )
+                .await
+                .map_err(|err| {
+                    AppError::Internal(format!("publish goal clear event failed: {err}"))
+                })?;
+        }
+        Ok(cleared)
     }
 
     #[tracing::instrument(skip(self, request), fields(session_id = request.session_id))]
@@ -3115,6 +3188,28 @@ impl SessionManager {
                 state.cache_policy(),
             )
             .await
+    }
+
+    async fn publish_goal_event(&self, goal: &SessionGoal, session_id: i64) -> Result<(), AppError> {
+        self.publisher
+            .publish(
+                crate::event::PublishContext::for_session(session_id),
+                EventKind::SessionGoalUpdated(SessionGoalEvent {
+                    session_id,
+                    goal_id: Some(goal.id),
+                    objective: Some(goal.objective.clone()),
+                    status: Some(match goal.status {
+                        GoalStatus::Active => "active".to_string(),
+                        GoalStatus::Completed => "completed".to_string(),
+                    }),
+                    token_budget: goal.token_budget,
+                    completed_at_ms: goal.completed_at.map(|ts| ts.timestamp_millis()),
+                    ts_ms: Utc::now().timestamp_millis(),
+                }),
+            )
+            .await
+            .map_err(|err| AppError::Internal(format!("publish goal event failed: {err}")))?;
+        Ok(())
     }
 
     fn apply_execution_context_to_run_options(
@@ -7688,6 +7783,88 @@ mod tests {
             received.contains(&"turn_started"),
             "bus should carry TurnStarted, got: {received:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn goal_lifecycle_persists_and_publishes_updates() {
+        use crate::event::{EventFilter, Scope, bus::SubscriptionItem};
+
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "goal-lifecycle".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let mut subscription = service.event_bus().subscribe(EventFilter::new(Scope::Global));
+
+        let created_goal = service
+            .create_goal(SessionGoalCreateRequest {
+                session_id: created.id,
+                objective: "ship goal system".to_string(),
+                token_budget: Some(2048),
+            })
+            .await
+            .expect("create goal");
+        assert_eq!(created_goal.objective, "ship goal system");
+        assert_eq!(created_goal.token_budget, Some(2048));
+        assert_eq!(created_goal.status, GoalStatus::Active);
+
+        let loaded_goal = service
+            .get_goal(created.id)
+            .await
+            .expect("get goal")
+            .expect("goal should exist");
+        assert_eq!(loaded_goal.id, created_goal.id);
+        assert_eq!(loaded_goal.status, GoalStatus::Active);
+
+        let completed_goal = service
+            .complete_goal(created.id)
+            .await
+            .expect("complete goal");
+        assert_eq!(completed_goal.id, created_goal.id);
+        assert_eq!(completed_goal.status, GoalStatus::Completed);
+        assert!(completed_goal.completed_at.is_some());
+
+        let cleared = service.clear_goal(created.id).await.expect("clear goal");
+        assert!(cleared);
+        assert!(
+            service
+                .get_goal(created.id)
+                .await
+                .expect("get cleared goal")
+                .is_none()
+        );
+
+        let mut statuses = Vec::new();
+        let drain = async {
+            while let Some(item) = subscription.recv().await {
+                if let SubscriptionItem::Event(event) = item
+                    && let EventKind::SessionGoalUpdated(payload) = &event.kind
+                    && payload.session_id == created.id
+                {
+                    statuses.push(payload.status.clone());
+                    if statuses.len() == 3 {
+                        break;
+                    }
+                }
+            }
+        };
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(200), drain).await;
+
+        assert_eq!(statuses.len(), 3, "expected 3 goal events, got {statuses:?}");
+        assert_eq!(statuses[0].as_deref(), Some("active"));
+        assert_eq!(statuses[1].as_deref(), Some("completed"));
+        assert_eq!(statuses[2], None);
     }
 
     /// Cancel a turn while the provider stream is still pending. The

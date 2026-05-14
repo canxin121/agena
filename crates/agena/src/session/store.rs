@@ -11,7 +11,7 @@ use crate::{
     AppError,
     db::{
         crud::{permission_rule, session, session_goal, workspace},
-        tx::with_transaction_and_effects,
+        tx::{with_transaction_and_app_effects, with_transaction_and_effects},
     },
     event::{
         DomainEvent, EventKind, EventPublisher, MessagePartUpdatedEvent, PermissionRuleEvent,
@@ -427,26 +427,28 @@ impl SessionStore {
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
         let cache = Arc::clone(&self.cache);
-        with_transaction_and_effects(&self.db, move |txn, effects| {
+        with_transaction_and_app_effects(&self.db, move |txn, effects| {
             let cache = Arc::clone(&cache);
             let objective = objective.clone();
             Box::pin(async move {
                 session::get_session_by_id(txn, session_id)
                     .await?
-                    .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
+                    .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
                 session_goal::upsert_goal(txn, session_id, objective, token_budget).await?;
                 let model = session::touch_session_updated_at(
                     txn,
                     session_id,
                     session::get_session_by_id(txn, session_id)
                         .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
+                        .ok_or_else(|| {
+                            AppError::Internal(format!("session not found: {session_id}"))
+                        })?
                         .runtime_state
                         .unwrap_or_default(),
                 )
                 .await?
-                .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
-                let mut updated = session_from_model_db(model)?;
+                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+                let mut updated = session_from_model(model)?;
                 updated.goal = load_session_goal_on(txn, session_id).await?;
                 let session_for_cache = updated.clone();
                 effects.push(async move {
@@ -466,7 +468,7 @@ impl SessionStore {
         cache_policy: SessionCachePolicy,
     ) -> Result<Option<Session>, AppError> {
         let cache = Arc::clone(&self.cache);
-        with_transaction_and_effects(&self.db, move |txn, effects| {
+        with_transaction_and_app_effects(&self.db, move |txn, effects| {
             let cache = Arc::clone(&cache);
             Box::pin(async move {
                 let Some(goal) = session_goal::mark_completed(txn, session_id).await? else {
@@ -482,8 +484,8 @@ impl SessionStore {
                         .unwrap_or_default(),
                 )
                 .await?
-                .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
-                let mut updated = session_from_model_db(model)?;
+                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+                let mut updated = session_from_model(model)?;
                 updated.goal = Some(session_goal_from_model(goal)?);
                 let session_for_cache = updated.clone();
                 effects.push(async move {
@@ -503,7 +505,7 @@ impl SessionStore {
         cache_policy: SessionCachePolicy,
     ) -> Result<bool, AppError> {
         let cache = Arc::clone(&self.cache);
-        with_transaction_and_effects(&self.db, move |txn, effects| {
+        with_transaction_and_app_effects(&self.db, move |txn, effects| {
             let cache = Arc::clone(&cache);
             Box::pin(async move {
                 let cleared = session_goal::clear_by_session_id(txn, session_id).await?;
@@ -515,8 +517,10 @@ impl SessionStore {
                         .unwrap_or_default();
                     let model = session::touch_session_updated_at(txn, session_id, runtime)
                         .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
-                    let mut updated = session_from_model_db(model)?;
+                        .ok_or_else(|| {
+                            AppError::Internal(format!("session not found: {session_id}"))
+                        })?;
+                    let mut updated = session_from_model(model)?;
                     updated.goal = None;
                     let session_for_cache = updated.clone();
                     effects.push(async move {
@@ -538,6 +542,41 @@ impl SessionStore {
     ) -> Result<SessionCostSummary, AppError> {
         let session = self.load_session(session_id, cache_policy).await?;
         Ok(super::cost::summarize(&session.messages))
+    }
+
+    pub(crate) async fn find_session_id_for_message(
+        &self,
+        message_id: i64,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Option<i64>, AppError> {
+        let session_ids = self.list_workspace_session_ids().await?;
+        for session_id in session_ids {
+            let session = self.load_session(session_id, cache_policy).await?;
+            if session.messages.iter().any(|message| message.id == message_id) {
+                return Ok(Some(session_id));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) async fn find_session_id_for_part(
+        &self,
+        part_id: i64,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Option<i64>, AppError> {
+        let session_ids = self.list_workspace_session_ids().await?;
+        for session_id in session_ids {
+            let session = self.load_session(session_id, cache_policy).await?;
+            if session
+                .messages
+                .iter()
+                .flat_map(|message| message.parts.iter())
+                .any(|part| part.id == part_id)
+            {
+                return Ok(Some(session_id));
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) async fn rewind_to_message(
@@ -1577,6 +1616,7 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
+        | EventKind::SessionGoalUpdated(_)
         | EventKind::TurnStarted(_)
         | EventKind::TurnCompleted(_)
         | EventKind::TurnAborted(_)
@@ -1629,6 +1669,7 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
+        | EventKind::SessionGoalUpdated(_)
         | EventKind::TurnStarted(_)
         | EventKind::TurnCompleted(_)
         | EventKind::TurnAborted(_)

@@ -519,6 +519,7 @@ pub enum MemorySubcommand {
 #[derive(Debug, Clone, Subcommand)]
 pub enum SessionsSubcommand {
     List(SessionListArgs),
+    Goal(SessionGoalCommand),
     /// Reverse a prior `rewind` on the same session by re-admitting every
     /// still-compacted message at or after `--message`.
     Unrewind(SessionUnrewindArgs),
@@ -531,6 +532,51 @@ pub enum SessionsSubcommand {
     Tree(SessionTreeArgs),
     /// List rewind audit checkpoints for a session — what was dropped and when.
     Checkpoints(SessionCheckpointsArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionGoalCommand {
+    #[command(subcommand)]
+    pub command: SessionGoalSubcommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SessionGoalSubcommand {
+    Get(SessionGoalGetArgs),
+    Create(SessionGoalCreateArgs),
+    Complete(SessionGoalCompleteArgs),
+    Clear(SessionGoalClearArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionGoalGetArgs {
+    pub session_id: i64,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionGoalCreateArgs {
+    pub session_id: i64,
+    pub objective: String,
+    #[arg(long)]
+    pub token_budget: Option<u64>,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionGoalCompleteArgs {
+    pub session_id: i64,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionGoalClearArgs {
+    pub session_id: i64,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -852,6 +898,18 @@ struct SessionImportOutput {
 struct SessionCheckpointsOutput {
     session_id: i64,
     checkpoints: Vec<crate::session::RewindCheckpoint>,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionGoalOutput {
+    session_id: i64,
+    goal: Option<crate::session::SessionGoal>,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionGoalClearedOutput {
+    session_id: i64,
+    cleared: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1946,6 +2004,54 @@ impl AgenaCli {
                 let sessions = paginate_session_summaries(sessions, args.offset, args.limit);
                 render_serialized(args.format, &SessionListOutput { sessions })
             }
+            SessionsSubcommand::Goal(args) => match args.command {
+                SessionGoalSubcommand::Get(args) => {
+                    let goal = manager.get_goal(args.session_id).await?;
+                    render_serialized(
+                        args.format,
+                        &SessionGoalOutput {
+                            session_id: args.session_id,
+                            goal,
+                        },
+                    )
+                }
+                SessionGoalSubcommand::Create(args) => {
+                    let goal = manager
+                        .create_goal(crate::session::SessionGoalCreateRequest {
+                            session_id: args.session_id,
+                            objective: args.objective,
+                            token_budget: args.token_budget,
+                        })
+                        .await?;
+                    render_serialized(
+                        args.format,
+                        &SessionGoalOutput {
+                            session_id: args.session_id,
+                            goal: Some(goal),
+                        },
+                    )
+                }
+                SessionGoalSubcommand::Complete(args) => {
+                    let goal = manager.complete_goal(args.session_id).await?;
+                    render_serialized(
+                        args.format,
+                        &SessionGoalOutput {
+                            session_id: args.session_id,
+                            goal: Some(goal),
+                        },
+                    )
+                }
+                SessionGoalSubcommand::Clear(args) => {
+                    let cleared = manager.clear_goal(args.session_id).await?;
+                    render_serialized(
+                        args.format,
+                        &SessionGoalClearedOutput {
+                            session_id: args.session_id,
+                            cleared,
+                        },
+                    )
+                }
+            },
             SessionsSubcommand::Unrewind(args) => {
                 let session = manager
                     .unrewind_session(crate::session::SessionUnrewindRequest {
@@ -4243,6 +4349,102 @@ enabled = true
         assert!(subtree_ids.contains(&child.id));
         assert!(!subtree_ids.contains(&other.id));
         assert_eq!(subtree_ids.first().copied(), Some(root.id));
+    }
+
+    #[tokio::test]
+    async fn sessions_goal_commands_render_goal_lifecycle() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("agena-cli-session-goal-{suffix}.db"));
+        let config_path = write_temp_config("");
+        let cli = AgenaCli {
+            config: Some(config_path),
+            overrides: Vec::new(),
+            database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
+            database_path: None,
+            command: None,
+        };
+        let runtime = cli.session_runtime().await.expect("runtime should build");
+        let manager = runtime
+            .session_manager()
+            .expect("session manager should be available");
+        let created = manager
+            .create_session(crate::session::SessionCreateRequest {
+                title: "goal session".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+
+        let created_output = cli
+            .render_sessions_command(SessionsCommand {
+                command: Some(SessionsSubcommand::Goal(SessionGoalCommand {
+                    command: SessionGoalSubcommand::Create(SessionGoalCreateArgs {
+                        session_id: created.id,
+                        objective: "cli goal".to_owned(),
+                        token_budget: Some(321),
+                        format: ConfigOutputFormat::Json,
+                    }),
+                })),
+            })
+            .await
+            .expect("goal create should render");
+        let created_value: Value =
+            serde_json::from_str(created_output.as_str()).expect("output should be json");
+        assert_eq!(created_value["session_id"], created.id);
+        assert_eq!(created_value["goal"]["objective"], "cli goal");
+        assert_eq!(created_value["goal"]["status"], "active");
+        assert_eq!(created_value["goal"]["token_budget"], 321);
+
+        let completed_output = cli
+            .render_sessions_command(SessionsCommand {
+                command: Some(SessionsSubcommand::Goal(SessionGoalCommand {
+                    command: SessionGoalSubcommand::Complete(SessionGoalCompleteArgs {
+                        session_id: created.id,
+                        format: ConfigOutputFormat::Json,
+                    }),
+                })),
+            })
+            .await
+            .expect("goal complete should render");
+        let completed_value: Value =
+            serde_json::from_str(completed_output.as_str()).expect("output should be json");
+        assert_eq!(completed_value["goal"]["status"], "completed");
+        assert!(completed_value["goal"]["completed_at"].is_string());
+
+        let cleared_output = cli
+            .render_sessions_command(SessionsCommand {
+                command: Some(SessionsSubcommand::Goal(SessionGoalCommand {
+                    command: SessionGoalSubcommand::Clear(SessionGoalClearArgs {
+                        session_id: created.id,
+                        format: ConfigOutputFormat::Json,
+                    }),
+                })),
+            })
+            .await
+            .expect("goal clear should render");
+        let cleared_value: Value =
+            serde_json::from_str(cleared_output.as_str()).expect("output should be json");
+        assert_eq!(cleared_value["session_id"], created.id);
+        assert_eq!(cleared_value["cleared"], true);
+
+        let fetched_output = cli
+            .render_sessions_command(SessionsCommand {
+                command: Some(SessionsSubcommand::Goal(SessionGoalCommand {
+                    command: SessionGoalSubcommand::Get(SessionGoalGetArgs {
+                        session_id: created.id,
+                        format: ConfigOutputFormat::Json,
+                    }),
+                })),
+            })
+            .await
+            .expect("goal get should render");
+        let fetched_value: Value =
+            serde_json::from_str(fetched_output.as_str()).expect("output should be json");
+        assert_eq!(fetched_value["session_id"], created.id);
+        assert!(fetched_value["goal"].is_null());
     }
 
     #[test]

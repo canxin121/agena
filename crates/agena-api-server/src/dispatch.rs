@@ -11,10 +11,10 @@ use crate::local_api::{
     SessionAutomationResource as HttpSessionAutomationResource,
     SessionCreateRequest as HttpSessionCreateRequest,
     SessionExecutionContextResource as HttpSessionExecutionContextResource,
-    SessionExecutionResource as HttpSessionExecutionResource, SessionListQuery,
-    SessionReplaceRequest, SessionResource as HttpSessionResource, SessionRunOptionsRequest,
-    WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource,
-    WorkspaceWriteRequest,
+    SessionExecutionResource as HttpSessionExecutionResource,
+    SessionGoalResource as HttpSessionGoalResource, SessionListQuery, SessionReplaceRequest,
+    SessionResource as HttpSessionResource, SessionRunOptionsRequest, WorkspaceListQuery,
+    WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource, WorkspaceWriteRequest,
 };
 use agena::event::{EventStore, StoreRange};
 use agena::{
@@ -26,13 +26,15 @@ use agena::{
 };
 use agena_api::{
     commands::{
-        CancelTurnParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
-        CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
-        DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
-        ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
-        ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, SubmitTurnParams, UnrewindSessionParams,
-        UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        CancelTurnParams, ClearSessionGoalParams, Command, CommandResult,
+        CompleteSessionGoalParams, ContinueRunParams, CreateSessionGoalParams,
+        CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
+        DeleteSessionParams, DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams,
+        ImportSessionParams, ListRewindCheckpointsParams, ListSessionTreeParams,
+        ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
+        ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams,
+        SubmitTurnParams, UnrewindSessionParams, UpdateSessionParams, UpdateWorkspaceParams,
+        UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
@@ -47,8 +49,8 @@ use agena_api::{
         RuntimeMcpResource, RuntimeMcpServerResource, RuntimeOperatorResource,
         RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
         RuntimeStatusResponse, RuntimeTaskResource, SessionAutomationResource,
-        SessionExecutionContextResource, SessionExecutionResource, SessionResource,
-        SessionRunState, WorkspaceResource,
+        SessionExecutionContextResource, SessionExecutionResource, SessionGoalResource,
+        SessionResource, SessionRunState, WorkspaceResource,
     },
 };
 
@@ -118,6 +120,22 @@ fn session_from_http(value: HttpSessionResource) -> SessionResource {
         message_count: value.message_count,
         child_session_count: value.child_session_count,
         last_message_at: value.last_message_at,
+        goal: value.goal.map(session_goal_from_http),
+    }
+}
+
+fn session_goal_from_http(value: HttpSessionGoalResource) -> SessionGoalResource {
+    SessionGoalResource {
+        id: value.id,
+        session_id: value.session_id,
+        objective: value.objective,
+        status: value.status,
+        token_budget: value.token_budget,
+        token_usage: value.token_usage,
+        elapsed_time_ms: value.elapsed_time_ms,
+        created_at: value.created_at,
+        updated_at: value.updated_at,
+        completed_at: value.completed_at,
     }
 }
 
@@ -226,6 +244,7 @@ fn session_execution_from_http(value: HttpSessionExecutionResource) -> SessionEx
         execution: execution_context_from_http(value.execution),
         pending_permission_requests: value.pending_permission_requests,
         pending_user_input_requests: value.pending_user_input_requests,
+        goal: value.goal.map(session_goal_from_http),
     }
 }
 
@@ -594,6 +613,45 @@ pub async fn dispatch_command(
                 .await
                 .map_err(server_error_from_http)?;
             Ok(CommandResult::Session(session_from_http(session)))
+        }
+        Command::CreateSessionGoal(CreateSessionGoalParams {
+            session_id,
+            objective,
+            token_budget,
+        }) => {
+            let goal = manager
+                .create_goal(agena::session::SessionGoalCreateRequest {
+                    session_id,
+                    objective,
+                    token_budget,
+                })
+                .await?;
+            let session = manager.get_session(session_id).await?;
+            let resource = state
+                .service()
+                .session_goal_resource(manager.as_ref(), &session, &goal)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::SessionGoal(session_goal_from_http(resource)))
+        }
+        Command::CompleteSessionGoal(CompleteSessionGoalParams { session_id }) => {
+            let goal = manager.complete_goal(session_id).await?;
+            let session = manager.get_session(session_id).await?;
+            let resource = state
+                .service()
+                .session_goal_resource(manager.as_ref(), &session, &goal)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::SessionGoal(session_goal_from_http(resource)))
+        }
+        Command::ClearSessionGoal(ClearSessionGoalParams { session_id }) => {
+            let cleared = manager.clear_goal(session_id).await?;
+            if !cleared {
+                return Err(ServerError::NotFound(format!(
+                    "session {session_id} goal not found"
+                )));
+            }
+            Ok(CommandResult::SessionGoalCleared { session_id })
         }
         Command::SubmitTurn(SubmitTurnParams {
             session_id,
@@ -1095,6 +1153,22 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             Ok(QueryResult::SessionState(session_execution_from_http(
                 state_resource,
             )))
+        }
+        Query::GetSessionGoal(GetSessionParams { session_id }) => {
+            let session = manager.get_session(session_id).await?;
+            let goal = match session.goal.as_ref() {
+                Some(goal) => Some(
+                    session_goal_from_http(
+                        state
+                            .service()
+                            .session_goal_resource(manager.as_ref(), &session, goal)
+                            .await
+                            .map_err(server_error_from_http)?,
+                    ),
+                ),
+                None => None,
+            };
+            Ok(QueryResult::SessionGoal(goal))
         }
         Query::ListPermissionRules(ListPermissionRulesParams {
             cursor,

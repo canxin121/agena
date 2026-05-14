@@ -191,12 +191,14 @@ describe('RuntimeSectionPanelRenderer', () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeSectionPanelRenderer.vue', {
       activeTab: 'overview',
       formatProviderModel: sharedPanels.overview.formatProviderModel,
+      load: async () => {},
       panels: sharedPanels,
     })
 
     expect(html.includes('Runtime Snapshot')).toBe(true)
     expect(html.includes('Provider Defaults')).toBe(true)
     expect(html.includes('Model Catalog')).toBe(true)
+    expect(html.includes('Refresh Catalog')).toBe(true)
     expect(html.includes('Workspace Root')).toBe(true)
   })
 
@@ -204,6 +206,7 @@ describe('RuntimeSectionPanelRenderer', () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeSectionPanelRenderer.vue', {
       activeTab: 'workflow',
       formatProviderModel: sharedPanels.overview.formatProviderModel,
+      load: async () => {},
       panels: sharedPanels,
     })
 
@@ -216,11 +219,13 @@ describe('RuntimeSectionPanelRenderer', () => {
     const mcpHtml = await renderVueSsr('/src/agena/pages/RuntimeSectionPanelRenderer.vue', {
       activeTab: 'mcp',
       formatProviderModel: sharedPanels.overview.formatProviderModel,
+      load: async () => {},
       panels: sharedPanels,
     })
     const lspHtml = await renderVueSsr('/src/agena/pages/RuntimeSectionPanelRenderer.vue', {
       activeTab: 'lsp',
       formatProviderModel: sharedPanels.overview.formatProviderModel,
+      load: async () => {},
       panels: sharedPanels,
     })
 
@@ -234,11 +239,13 @@ describe('RuntimeSectionPanelRenderer', () => {
     const skillsHtml = await renderVueSsr('/src/agena/pages/RuntimeSectionPanelRenderer.vue', {
       activeTab: 'skills',
       formatProviderModel: sharedPanels.overview.formatProviderModel,
+      load: async () => {},
       panels: sharedPanels,
     })
     const operatorHtml = await renderVueSsr('/src/agena/pages/RuntimeSectionPanelRenderer.vue', {
       activeTab: 'operator',
       formatProviderModel: sharedPanels.overview.formatProviderModel,
+      load: async () => {},
       panels: sharedPanels,
     })
 

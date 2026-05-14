@@ -4,6 +4,7 @@ import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 import type { ProviderModel } from '../lib/agenaApi'
 import { createRuntimeMarketplaceActions } from './useRuntimeMarketplaceActions'
 import { useRuntimeDesktopActions } from './useRuntimeDesktopActions'
+import { useRuntimeModelCatalogActions } from './useRuntimeModelCatalogActions'
 import { useRuntimeNavigationState } from './useRuntimeNavigationState'
 import { useRuntimePermissionActions } from './useRuntimePermissionActions'
 import { useRuntimePluginDetails } from './useRuntimePluginDetails'
@@ -118,6 +119,13 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
       },
     })
 
+  const modelCatalogActions = useRuntimeModelCatalogActions({
+    actionError: input.actionError,
+    actionMessage: input.actionMessage,
+    catalogEntries: input.catalogEntries,
+    load: loadPageState,
+  })
+
   const sessionWorkflowActions = useRuntimeSessionWorkflowActions({
     actionError: input.actionError,
     actionMessage: input.actionMessage,
@@ -216,6 +224,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     desktopActions,
     loadPageState,
     marketplaceActions,
+    modelCatalogActions,
     navigation,
     permissionActions,
     pluginDetails,

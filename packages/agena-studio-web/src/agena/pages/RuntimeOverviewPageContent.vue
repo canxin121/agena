@@ -5,6 +5,7 @@ import RuntimeOverviewPanel from './RuntimeOverviewPanel.vue'
 
 const props = defineProps<{
   formatProviderModel: ReturnType<typeof useRuntimeSectionPageState>['overview']['formatProviderModel']
+  load: ReturnType<typeof useRuntimeSectionPageState>['load']
   overview: ReturnType<typeof useRuntimeSectionPageState>['overview']
 }>()
 </script>
@@ -19,5 +20,6 @@ const props = defineProps<{
     :provider-models="props.overview.providerModels"
     :session-cache-facts="props.overview.sessionCacheFacts"
     :format-provider-model="props.formatProviderModel"
+    :load="props.load"
   />
 </template>

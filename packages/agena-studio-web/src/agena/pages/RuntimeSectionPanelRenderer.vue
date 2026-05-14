@@ -10,6 +10,7 @@ import RuntimeWorkflowPageContent from './RuntimeWorkflowPageContent.vue'
 const props = defineProps<{
   activeTab: ReturnType<typeof useRuntimeSectionPageState>['activeTab']['value']
   formatProviderModel: ReturnType<typeof useRuntimeSectionPageState>['overview']['formatProviderModel']
+  load: ReturnType<typeof useRuntimeSectionPageState>['load']
   panels: ReturnType<typeof useRuntimeSectionPageState>['panels']
 }>()
 </script>
@@ -19,6 +20,7 @@ const props = defineProps<{
     v-if="props.activeTab === 'overview'"
     :overview="props.panels.overview"
     :format-provider-model="props.formatProviderModel"
+    :load="props.load"
   />
 
   <RuntimeWorkflowPageContent

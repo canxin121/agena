@@ -602,6 +602,44 @@ impl SessionManager {
         self.store.list_workspace_session_ids().await
     }
 
+    pub async fn list_projected_messages(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<Message>, AppError> {
+        self.store
+            .list_projected_messages(session_id, include_full_parts)
+            .await
+    }
+
+    pub async fn find_projected_message(
+        &self,
+        session_id: i64,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Option<Message>, AppError> {
+        self.store
+            .find_projected_message(session_id, message_id, include_full_parts)
+            .await
+    }
+
+    pub async fn list_projected_parts(
+        &self,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<MessagePart>, AppError> {
+        self.store
+            .list_projected_parts(message_id, include_full_parts)
+            .await
+    }
+
+    pub async fn find_projected_part(
+        &self,
+        part_id: i64,
+    ) -> Result<Option<MessagePart>, AppError> {
+        self.store.find_projected_part(part_id).await
+    }
+
     pub async fn broadcast_session_end(
         &self,
         session_id: i64,
@@ -621,41 +659,17 @@ impl SessionManager {
         }
     }
 
-    /// Locate the session that contains a given message id by projecting each
-    /// workspace session and probing its in-memory messages. The legacy
-    /// `message` SQL table no longer exists, so this scan is the only way to
-    /// satisfy the `/api/v1/messages/{id}` family of endpoints which receive
-    /// no session_id from the caller.
     pub async fn find_session_id_for_message(
         &self,
         message_id: i64,
     ) -> Result<Option<i64>, AppError> {
-        for session_id in self.workspace_session_ids().await? {
-            let session = self.get_session(session_id).await?;
-            if session
-                .messages
-                .iter()
-                .any(|message| message.id == message_id)
-            {
-                return Ok(Some(session_id));
-            }
-        }
-        Ok(None)
+        self.store
+            .find_projected_session_id_for_message(message_id)
+            .await
     }
 
-    /// Same as `find_session_id_for_message`, but for a part id.
     pub async fn find_session_id_for_part(&self, part_id: i64) -> Result<Option<i64>, AppError> {
-        for session_id in self.workspace_session_ids().await? {
-            let session = self.get_session(session_id).await?;
-            if session
-                .messages
-                .iter()
-                .any(|message| message.parts.iter().any(|part| part.id == part_id))
-            {
-                return Ok(Some(session_id));
-            }
-        }
-        Ok(None)
+        self.store.find_projected_session_id_for_part(part_id).await
     }
 
     pub async fn list_session_summaries(

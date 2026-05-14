@@ -1,4 +1,4 @@
-use sea_orm::entity::prelude::{DeriveActiveEnum, EnumIter};
+use sea_orm::{entity::prelude::{DeriveActiveEnum, EnumIter}, FromJsonQueryResult};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumString};
 
@@ -31,7 +31,7 @@ pub enum MessageSource {
     Tool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
 pub struct MessageMetadata {
     pub source: MessageSource,
     #[serde(skip_serializing_if = "Option::is_none")]

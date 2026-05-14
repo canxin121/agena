@@ -39,6 +39,7 @@ const {
     <RuntimeSectionPanelRenderer
       :active-tab="activeTab"
       :format-provider-model="formatProviderModel"
+      :load="load"
       :panels="panels"
     />
   </RuntimeSectionLayout>

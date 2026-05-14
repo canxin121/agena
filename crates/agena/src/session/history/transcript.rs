@@ -618,6 +618,7 @@ impl HistoryFold for ProviderTranscriptBuilder {
             | EventKind::RunFailed(_)
             | EventKind::StreamError(_)
             | EventKind::MessagePartUpdated(_)
+            | EventKind::SessionGoalUpdated(_)
             | EventKind::MessagePartDelta(_)
             | EventKind::CommandBegin(_)
             | EventKind::CommandOutputDelta(_)

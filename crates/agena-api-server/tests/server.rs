@@ -25,12 +25,13 @@ use agena::{
 };
 use agena_api::{
     PROTOCOL_VERSION, Scope,
+    commands::{Command, CommandResult, CompleteSessionGoalParams, CreateSessionGoalParams},
     notifications::Notification,
-    queries::PaginatedEvents,
+    queries::{GetSessionParams, PaginatedEvents, Query, QueryResult},
     subscribe::SubscribeRequest,
     ws::{ClientMessage, ServerMessage},
 };
-use agena_api_server::{AppState, router};
+use agena_api_server::{AppState, dispatch::{dispatch_command, dispatch_query}, router};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -445,6 +446,70 @@ async fn session_state_endpoint_returns_execution_resource() {
             .and_then(|allowed_tools| allowed_tools.as_array())
             .is_some()
     );
+}
+
+#[tokio::test]
+async fn goal_command_and_query_round_trip() {
+    let (state, _manager, workspace_root) = build_state().await;
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "goal route".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let created = dispatch_command(
+        &state,
+        Command::CreateSessionGoal(CreateSessionGoalParams {
+            session_id: session.id,
+            objective: "close goal scope".to_string(),
+            token_budget: Some(512),
+        }),
+    )
+    .await
+    .expect("create goal command should succeed");
+    let CommandResult::SessionGoal(goal) = created else {
+        panic!("expected goal result");
+    };
+    assert_eq!(goal.session_id, session.id);
+    assert_eq!(goal.objective, "close goal scope");
+    assert_eq!(goal.token_budget, Some(512));
+
+    let queried = dispatch_query(&state, Query::GetSessionGoal(GetSessionParams { session_id: session.id }))
+        .await
+        .expect("goal query should succeed");
+    let QueryResult::SessionGoal(Some(goal)) = queried else {
+        panic!("expected session goal query result");
+    };
+    assert_eq!(goal.session_id, session.id);
+    assert_eq!(goal.objective, "close goal scope");
+
+    let completed = dispatch_command(
+        &state,
+        Command::CompleteSessionGoal(CompleteSessionGoalParams {
+            session_id: session.id,
+        }),
+    )
+    .await
+    .expect("complete goal command should succeed");
+    let CommandResult::SessionGoal(goal) = completed else {
+        panic!("expected completed goal result");
+    };
+    assert_eq!(goal.session_id, session.id);
+    assert_eq!(goal.status, agena::session::GoalStatus::Completed);
+    assert!(goal.completed_at.is_some());
 }
 
 #[tokio::test]

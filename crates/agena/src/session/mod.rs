@@ -21,8 +21,9 @@ pub use cost::{ModelCostBreakdown, SessionCostSummary};
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
-    SessionManager, SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest,
-    SessionRunOptions, SessionSubtaskRequest, SessionSubtaskResponse, SessionUnrewindRequest,
+    SessionGoalCreateRequest, SessionManager, SessionManagerConfig,
+    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
+    SessionSubtaskRequest, SessionSubtaskResponse, SessionUnrewindRequest,
     SessionUserInputReplyRequest, SessionUserTurnRequest,
 };
 #[allow(unused_imports)]

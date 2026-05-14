@@ -31,7 +31,7 @@ use agena::{
     model::ModelRef,
     permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
     provider::ProviderRegistry,
-    session::{Session, SessionManager},
+    session::{Session, SessionGoal, SessionManager},
 };
 
 use super::{
@@ -40,10 +40,10 @@ use super::{
         PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
         ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
         SessionCreateRequest, SessionEventListQuery, SessionExecutionContextResource,
-        SessionExecutionResource, SessionReplaceRequest, SessionResource, SessionRunOptionsRequest,
-        SessionRunState, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
-        WorkspaceFileTreeResource, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource,
-        WorkspaceWriteRequest,
+        SessionExecutionResource, SessionGoalResource, SessionReplaceRequest, SessionResource,
+        SessionRunOptionsRequest, SessionRunState, WorkspaceFileKind, WorkspaceFileNode,
+        WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
+        WorkspaceResolveRequest, WorkspaceResource, WorkspaceWriteRequest,
     },
     error::ApiError,
     pagination::{
@@ -1197,6 +1197,38 @@ impl ApiService {
             },
             pending_permission_requests: pending_permission_requests(session),
             pending_user_input_requests: pending_user_input_requests(session),
+            goal: match session.goal.as_ref() {
+                Some(goal) => Some(self.session_goal_resource(manager, session, goal).await?),
+                None => None,
+            },
+        })
+    }
+
+    pub async fn session_goal_resource(
+        &self,
+        manager: &SessionManager,
+        session: &Session,
+        goal: &SessionGoal,
+    ) -> ApiResult<SessionGoalResource> {
+        let cost = manager
+            .goal_cost_summary(session.id)
+            .await
+            .map_err(api_error_from_app)?;
+        Ok(SessionGoalResource {
+            id: goal.id,
+            session_id: goal.session_id,
+            objective: goal.objective.clone(),
+            status: goal.status,
+            token_budget: goal.token_budget,
+            token_usage: Some(cost.total_tokens()),
+            elapsed_time_ms: goal
+                .completed_at
+                .unwrap_or(goal.updated_at)
+                .signed_duration_since(goal.created_at)
+                .num_milliseconds(),
+            created_at: goal.created_at,
+            updated_at: goal.updated_at,
+            completed_at: goal.completed_at,
         })
     }
 
@@ -1461,11 +1493,11 @@ fn workspace_fs_error(path: &Path, error: io::Error) -> ApiError {
     }
 }
 
-fn session_resource(
-    model: &entities::session::Model,
-    message_stats: &HashMap<i64, session_crud::SessionMessageStats>,
-    child_counts: &HashMap<i64, i64>,
-) -> ApiResult<SessionResource> {
+    fn session_resource(
+        model: &entities::session::Model,
+        message_stats: &HashMap<i64, session_crud::SessionMessageStats>,
+        child_counts: &HashMap<i64, i64>,
+    ) -> ApiResult<SessionResource> {
     let stats = message_stats.get(&model.id).copied();
     let message_count = stats
         .map(|item| u64::try_from(item.message_count))
@@ -1507,6 +1539,7 @@ fn session_resource(
             .and_then(|item| item.last_message_at_ms)
             .map(timestamp_millis_to_utc)
             .transpose()?,
+        goal: None,
     })
 }
 

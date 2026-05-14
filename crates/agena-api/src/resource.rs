@@ -10,7 +10,7 @@ use agena::{
     message::{MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
     model_catalog::{CatalogModelDefinition, ModelCatalogEntryKind, ModelCatalogEntrySourceKind},
-    session::{SessionStatus, SessionSummary},
+    session::{GoalStatus, SessionStatus, SessionSummary},
 };
 
 // ─── Health / runtime ────────────────────────────────────────────────────
@@ -276,6 +276,23 @@ pub struct WorkspaceResource {
 // ─── Sessions ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionGoalResource {
+    pub id: i64,
+    pub session_id: i64,
+    pub objective: String,
+    pub status: GoalStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<u64>,
+    pub elapsed_time_ms: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResource {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -292,6 +309,8 @@ pub struct SessionResource {
     pub child_session_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<SessionGoalResource>,
 }
 
 impl From<SessionSummary> for SessionResource {
@@ -310,6 +329,18 @@ impl From<SessionSummary> for SessionResource {
             message_count: value.message_count,
             child_session_count: value.child_session_count,
             last_message_at: value.last_message_at,
+            goal: value.goal.map(|goal| SessionGoalResource {
+                id: goal.id,
+                session_id: goal.session_id,
+                objective: goal.objective,
+                status: goal.status,
+                token_budget: goal.token_budget,
+                token_usage: None,
+                elapsed_time_ms: (goal.updated_at - goal.created_at).num_milliseconds(),
+                created_at: goal.created_at,
+                updated_at: goal.updated_at,
+                completed_at: goal.completed_at,
+            }),
         }
     }
 }
@@ -373,6 +404,8 @@ pub struct SessionExecutionResource {
     pub execution: SessionExecutionContextResource,
     pub pending_permission_requests: Vec<PermissionRequest>,
     pub pending_user_input_requests: Vec<UserInputRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<SessionGoalResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

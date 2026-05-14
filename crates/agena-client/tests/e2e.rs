@@ -334,10 +334,15 @@ async fn spawn_permission_server() -> (String, String, Arc<SessionManager>) {
     let config_path = write_temp_config(
         r#"
 [providers."permission-test"]
-kind = "anthropic"
-base_url = "https://example.invalid/v1"
 default_model = "permission-test-model"
+
+[providers."permission-test".auth]
+mode = "api"
+base_url = "https://example.invalid/v1"
 api_key = "test"
+
+[providers."permission-test".adapters.anthropic]
+default_model = "permission-test-model"
 "#,
     );
     let plugins = agena::tool::first_party_plugin_host(workspace_root.clone())
@@ -423,10 +428,15 @@ async fn spawn_server_with_provider() -> (String, String, Arc<SessionManager>, S
     let config_path = write_temp_config(&format!(
         r#"
 [providers.openai]
-kind = "openai_compatible"
-base_url = "{base_url}"
 default_model = "gpt-4o-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "{base_url}"
 api_key = "test"
+
+[providers.openai.adapters.openai_compatible]
+default_model = "gpt-4o-mini"
 "#,
         base_url = provider.url()
     ));

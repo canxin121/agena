@@ -72,6 +72,8 @@ pub(crate) struct ChatMessage {
     pub tool_calls: Option<Vec<ChatToolCallRequest>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot_cache_control: Option<crate::provider::prompt_cache::PromptCacheControl>,
 }
 
 impl ChatMessage {
@@ -82,6 +84,7 @@ impl ChatMessage {
             content: Some(Value::String(content)),
             tool_calls: None,
             tool_call_id: None,
+            copilot_cache_control: None,
         }
     }
 
@@ -92,6 +95,7 @@ impl ChatMessage {
             content: Some(content),
             tool_calls: None,
             tool_call_id: None,
+            copilot_cache_control: None,
         }
     }
 
@@ -102,6 +106,7 @@ impl ChatMessage {
             content,
             tool_calls,
             tool_call_id: None,
+            copilot_cache_control: None,
         }
     }
 
@@ -112,6 +117,7 @@ impl ChatMessage {
             content: Some(content),
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
+            copilot_cache_control: None,
         }
     }
 }

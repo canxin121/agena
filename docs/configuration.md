@@ -96,13 +96,13 @@ runtime.stream_replay.max_tracked_events
 
 Provider 覆盖：
 
-当前 CLI provider 覆盖仍然指向 legacy flat provider 字段。解析阶段会把这些字段 lower 到新的 `provider.auth + provider.adapters` 结构，所以它们适合单 adapter provider 或临时覆盖默认模型、`base_url`、secret；还不能直接覆盖 `providers.<id>.auth.*` 或 `providers.<id>.adapters.<adapter_id>.*`。
+当前 CLI provider 覆盖只接受 canonical 路径。
 
 ```text
 providers.<id>.default_model
-providers.<id>.base_url
-providers.<id>.api_key
-providers.<id>.api_key_env
+providers.<id>.auth.base_url
+providers.<id>.auth.api_key
+providers.<id>.auth.api_key_env
 providers.<id>.enabled
 ```
 
@@ -166,44 +166,12 @@ no
 
 ### Provider-specific overlay
 
-Provider 环境变量使用双下划线分段：
+`AGENA_PROVIDER__...` 这一整套 provider 环境变量覆盖已经移除。
 
-```text
-AGENA_PROVIDER__<PROVIDER_ID>__<FIELD>=...
-```
+现在只支持两种方式：
 
-`<PROVIDER_ID>` 会规范化为小写，并把 `_` 转为 `-`。这些环境变量目前仍然落在 legacy flat provider 字段上，随后再 lower 到新的结构；它们不能直接表达 `providers.<id>.auth.*` 或 `providers.<id>.adapters.<adapter_id>.*`。例如：
-
-```bash
-export AGENA_PROVIDER__OPENAI__DEFAULT_MODEL=gpt-4.1-mini
-export AGENA_PROVIDER__OPENAI__API_KEY_ENV=OPENAI_API_KEY
-```
-
-支持字段：
-
-```text
-ENABLED
-KIND
-DEFAULT_MODEL
-BASE_URL
-API_KEY
-API_KEY_ENV
-AUTH_HEADER
-AUTH_SCHEME
-STREAM_MODE
-API_MODE
-REALTIME_WS_URL
-INSTANCE_URL
-AI_GATEWAY_URL
-MODELS_URL
-REGION
-PROFILE
-ACCESS_TOKEN
-ACCESS_TOKEN_ENV
-ACCESS_KEY_ID
-SECRET_ACCESS_KEY
-SESSION_TOKEN
-```
+- 在配置文件里显式写 canonical 结构。
+- 通过 `--set providers.<id>.default_model=...` 或 `--set providers.<id>.auth.api_key_env=...` 这类 canonical override 设置。
 
 ### 数据库、Studio、TUI
 
@@ -296,11 +264,11 @@ headers = { }
 
 provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有：
 
-- `secret`
-- `secret_env`
+- `api_key`
+- `api_key_env`
 - `credential`
 
-其中 `credential` 用来存储 provider-local API key 或 OAuth token。CLI 登录、REST 登录、token refresh 都会直接回写当前 provider 的 `auth.credential`，不会再经过独立的全局 auth store，也不会跨 provider 共享 credential。
+其中 `credential` 主要用于 provider-local OAuth token。CLI 登录、REST 登录、token refresh 都会直接回写当前 provider 的 `auth`，不会再经过独立的全局 auth store，也不会跨 provider 共享认证状态。
 
 ## Runtime
 
@@ -357,11 +325,11 @@ enabled = true
 default_model = "claude-sonnet-4-6"
 
 [providers.anthropic.auth]
-secret_env = "ANTHROPIC_API_KEY"
-
-[providers.anthropic.adapters.api]
-kind = "anthropic"
+mode = "api"
 base_url = "https://api.anthropic.com/v1"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[providers.anthropic.adapters.anthropic]
 default_model = "claude-sonnet-4-6"
 ```
 
@@ -370,10 +338,12 @@ default_model = "claude-sonnet-4-6"
 - `providers.<id>`: 逻辑 provider id。CLI、HTTP API、Studio 和 model ref 都引用它。
 - `providers.<id>.default_model`: 这个 provider 对外暴露的默认模型。单 adapter provider 省略时会回退到首个 adapter 的 `default_model`；多 adapter provider 应该把它设成已经声明路由的可见 model id。
 - `providers.<id>.auth`: provider 级认证配置，供这个 provider 下的全部 adapters 共享。
-- `providers.<id>.adapters.<adapter_id>`: 一个真实后端 adapter，负责 `kind`、endpoint 和 provider-specific 选项。
+- `providers.<id>.adapters.<adapter_id>`: 一个真实后端 adapter，负责协议类型和 provider-specific 选项。
 - `providers.<id>.adapters.<adapter_id>.default_model`: 该 adapter 的上游默认模型。
 
-一旦声明了 `adapters`，就不要继续把 `kind`、`base_url`、`api_key_env` 这类 legacy flat 字段留在 provider 根节点；这种混用会被拒绝。旧的 flat provider 配置仍然兼容，但只作为输入兼容层，内部会被自动 lower 到新的 `auth + adapters` 结构。
+adapter key 现在就是 kind，本身不再需要额外的 `kind = "..."` 字段。一个 provider 下同 kind adapter 只保留一个；如果你需要另一套 auth/base_url，就应该拆成另一个 provider，而不是在同一个 provider 里堆两个同 kind adapter。
+
+一旦声明了 `adapters`，就不要再把 `kind`、`base_url`、`api_key_env` 这类字段留在 provider 根节点；canonical 结构只有 `provider + auth + adapters`。
 
 Adapter `kind`：
 
@@ -381,14 +351,10 @@ Adapter `kind`：
 ollama
 openai
 openai_compatible
-sap_ai_core
 anthropic
 gemini
 gitlab
-copilot
 amazon_bedrock
-google_vertex
-cloudflare_ai_gateway
 ```
 
 顶层常用字段：
@@ -402,17 +368,18 @@ default_model = "gpt-4.1-mini"
 
 ```toml
 [providers.openai.auth]
-mode = "secret"
-secret = "..."
-secret_env = "OPENAI_API_KEY"
-credential = { type = "api", key = "sk-example" }
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "..."
+api_key_env = "OPENAI_API_KEY"
 ```
 
 `mode` 可选值：
 
 ```text
 none
-secret
+api
+credential
 bedrock_sigv4
 google_adc
 sap_ai_core
@@ -420,33 +387,26 @@ sap_ai_core
 
 字段说明：
 
-- `secret` / `secret_env`: 通用 secret 来源。适用于 OpenAI、Anthropic、Gemini、OpenRouter、GitLab direct token、Vertex 静态 token、Bedrock bearer token 等场景。
-- `credential`: provider-local `AuthData`。适用于 inline API key、OAuth token 以及 provider 自己管理的 refresh metadata。
-- `profile`、`access_key_id`、`secret_access_key`、`session_token`: `bedrock_sigv4` 模式使用。
+- `base_url`: provider 级 HTTP endpoint。OpenAI、Anthropic、Gemini、OpenRouter、Vertex static token 这类 API auth provider 都放在这里。
+- `api_key` / `api_key_env`: `api` 模式使用的静态 token 来源。
+- `issuer`: `credential` 模式使用，声明这份 provider-local auth 属于谁，例如 `openai_chatgpt`、`github_copilot`、`gitlab`。
+- `credential`: provider-local `AuthData`。主要用于 OAuth token 以及 provider 自己管理的 refresh metadata。
+- `profile`、`access_key_id`、`secret_access_key`、`session_token`、`base_url`、`region`: `bedrock_sigv4` 模式使用。
 - `service_key_env`: `sap_ai_core` 模式使用，默认 `AICORE_SERVICE_KEY`。
 
-为了兼容旧配置，`auth` block 里仍接受这些别名：
-
-- `api_key` / `api_key_env`
-- `access_token` / `access_token_env`
-- `kind`
-- `stored_credential` / `auth_data`
+`auth` block 只接受 canonical 字段；旧别名已经移除。
 
 除 `kind` 和 `default_model` 之外，不同 adapter 还有这些字段：
 
 | kind | `providers.<id>.adapters.<adapter_id>` 额外字段 |
 | --- | --- |
 | `ollama` | `base_url` |
-| `openai` | `backend`、`base_url`、`extra_headers`、`api_mode`、`stream_mode`、`realtime_ws_url` |
-| `openai_compatible` | `base_url`、`extra_headers`、`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url` |
-| `sap_ai_core` | `base_url`、`extra_headers`、`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url` |
-| `anthropic` | `base_url`、`extra_headers`、`auth_header`、`auth_scheme` |
-| `gemini` | `base_url`、`extra_headers` |
+| `openai` | `backend`、`extra_headers`、`api_mode`、`stream_mode`、`realtime_ws_url`、`models_url`、`auth_header`、`auth_scheme`、`capability_family` |
+| `openai_compatible` | `extra_headers`、`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url` |
+| `anthropic` | `extra_headers`、`auth_header`、`auth_scheme` |
+| `gemini` | `extra_headers` |
 | `gitlab` | `instance_url`、`ai_gateway_url`、`ai_gateway_headers`、`feature_flags` |
-| `copilot` | `base_url`、`models_url` |
-| `amazon_bedrock` | `base_url`、`region` |
-| `google_vertex` | `base_url` |
-| `cloudflare_ai_gateway` | `base_url` |
+| `amazon_bedrock` | 无 |
 
 OpenAI 的 `backend`：
 
@@ -472,22 +432,24 @@ realtime_websocket
 
 Credential 解析顺序要按 provider 具体实现理解，但通常是：
 
-1. 配置中的直接 `secret`。
-2. 配置中命名的 `secret_env`。
-3. 配置中的 inline `credential`。
+1. `api` 模式下，配置中的 `api_key`。
+2. `api` 模式下，配置中命名的 `api_key_env`。
+3. `credential` 模式下，配置中的 inline `credential`。
 4. provider 特有 fallback，例如 Google Vertex ADC、Amazon Bedrock SigV4、SAP AI Core service key。
 
 几个重要特殊规则：
 
 - `ollama` 使用 `auth.mode = "none"`，不走 credential。
-- `google_vertex` 如果没有静态 token，可用 `auth.mode = "google_adc"`。
-- `amazon_bedrock` 如果没有 bearer secret，可用 `auth.mode = "bedrock_sigv4"`；`access_key_id` 和 `secret_access_key` 必须成对出现。
-- `copilot` 和 OpenAI `backend = "chatgpt_codex"` 只支持 provider-local OAuth credential，不支持直接 `secret` 或 `secret_env`。
-- GitLab 会在构建 registry 时判断当前是否有 direct secret；有的话走 direct token，没有的话走 provider-local OAuth credential。
+- Vertex/OpenAI-style Gemini provider 如果没有静态 token，可用 `auth.mode = "google_adc"`。
+- Amazon Bedrock 的 OpenAI-compatible token endpoint 应该配置成 `openai_compatible` adapter + `auth.mode = "api"`；如果走 AWS 原生签名，再用 `amazon_bedrock` adapter + `auth.mode = "bedrock_sigv4"`。`access_key_id` 和 `secret_access_key` 必须成对出现。
+- `github_copilot` credential + `openai` / `anthropic` adapter，以及 OpenAI `backend = "chatgpt_codex"`，都只支持 provider-local OAuth credential，不支持直接 `api_key` 或 `api_key_env`。
+- GitLab 既支持 `auth.mode = "api"` 直接 token，也支持 `auth.mode = "credential"` 的 provider-local OAuth。
+- `capability_family` 用来把官方 `openai` adapter 的能力/模型元数据判定切到其他家族；目前 canonical 用法是 `gemini`。如果上游本身是 OpenAI-compatible chat-completions 协议，请直接使用 `openai_compatible` adapter，而不是 `openai + capability_family = "openai_compatible"`。
+更细的整体结构、auth 模式和 adapter 约束见 [Provider / Auth / Adapter 架构](provider-auth-adapters.md)。
 
-更细的 provider auth / credential 关系见 [Provider Auth 与 Credential](provider-credentials.md)。
+`openai` adapter 默认使用 `backend = "api"`，此时 endpoint 通常来自 `provider.auth.base_url`，也可以在 adapter 上额外覆写 `base_url` / `models_url`。如果当前 provider 配置的是 `github_copilot` credential，运行时会自动切到 Copilot endpoint / header 语义；当你没有显式设置 `api_mode` 时，会继续按模型自动选择 `chat` 或 `responses` 路径，这条路径适合 Copilot 上的 GPT / Codex / Gemini 等 OpenAI-style 模型。如果 `backend = "chatgpt_codex"`，endpoint 固定为 `https://chatgpt.com/backend-api/codex`，并要求当前 provider 配置 provider-local OpenAI OAuth credential。
 
-`openai` adapter 默认使用 `backend = "api"`，`base_url` 默认是 `https://api.openai.com/v1`。如果 `backend = "chatgpt_codex"`，默认 `base_url` 是 `https://chatgpt.com/backend-api/codex`，并要求当前 provider 配置 provider-local OpenAI OAuth credential。
+如果当前 provider 配置的是 `github_copilot` credential，`anthropic` adapter 也可以复用同一份 provider-local OAuth credential。此时运行时会保留 Copilot 的 bearer token / enterprise host / request headers 语义，但消息协议走 Anthropic `/v1/messages`。你也可以在 adapter 上显式写 `auth_header = "authorization"`、`auth_scheme = "Bearer"`、`messages_url`、`models_url`、`extra_beta_header` 等字段；适合 Copilot 上的 Claude 类模型，或者任何需要 Anthropic wire format 的自定义网关。
 
 如果要走 ChatGPT Codex backend，配置成：
 
@@ -496,17 +458,45 @@ Credential 解析顺序要按 provider 具体实现理解，但通常是：
 default_model = "gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
-credential = { type = "oauth", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-123" }
+mode = "credential"
+issuer = "openai_chatgpt"
+credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-123" }
 
-[providers.openai_chatgpt.adapters.codex]
-kind = "openai"
+[providers.openai_chatgpt.adapters.openai]
 backend = "chatgpt_codex"
 default_model = "gpt-5.3-codex"
 ```
 
-`chatgpt_codex` backend 默认使用 `https://chatgpt.com/backend-api/codex`，并要求当前 provider 配置 OpenAI OAuth credential；它不支持直接 `secret`、`secret_env`、`api_mode = "chat"`、`stream_mode = "realtime_websocket"` 或 `realtime_ws_url`。
+`chatgpt_codex` backend 默认使用 `https://chatgpt.com/backend-api/codex`，并要求当前 provider 配置 OpenAI OAuth credential；它不支持直接 `api_key`、`api_key_env`、`api_mode = "chat"`、`stream_mode = "realtime_websocket"` 或 `realtime_ws_url`。
 
-不要把真实 API key 提交到仓库。优先使用 `secret_env` 或登录命令。
+如果要走 GitHub Copilot OAuth，也使用 `openai` adapter：
+
+```toml
+[providers."github-copilot"]
+default_model = "gpt-4o-mini"
+
+[providers."github-copilot".auth]
+mode = "credential"
+issuer = "github_copilot"
+credential = { type = "oauth", issuer = "github_copilot", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000 }
+
+[providers."github-copilot".adapters.openai]
+default_model = "gpt-4o-mini"
+# models_url = "https://api.githubcopilot.com/models"
+
+[providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
+target_model = "gpt-4o-mini"
+```
+
+```toml
+[providers."github-copilot".adapters.anthropic]
+default_model = "claude-sonnet-4"
+
+[providers."github-copilot".adapters.anthropic.models.claude]
+target_model = "claude-sonnet-4"
+```
+
+不要把真实 API key 提交到仓库。优先使用 `api_key_env` 或登录命令。
 
 Provider-specific 示例：
 
@@ -515,11 +505,11 @@ Provider-specific 示例：
 default_model = "openai/gpt-4.1-mini"
 
 [providers.openrouter.auth]
-secret_env = "OPENROUTER_API_KEY"
-
-[providers.openrouter.adapters.api]
-kind = "openai_compatible"
+mode = "api"
 base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[providers.openrouter.adapters.openai_compatible]
 default_model = "openai/gpt-4.1-mini"
 auth_header = "authorization"
 auth_scheme = "Bearer"
@@ -528,32 +518,31 @@ auth_scheme = "Bearer"
 default_model = "fast"
 
 [providers.shared.auth]
-credential = { type = "oauth", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-shared" }
+mode = "api"
+base_url = "https://gateway.example.com/v1"
+api_key_env = "SHARED_GATEWAY_API_KEY"
 
-[providers.shared.adapters.api]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
+[providers.shared.adapters.openai]
 default_model = "gpt-4.1"
 
-[providers.shared.adapters.api.models.fast]
+[providers.shared.adapters.openai.models.fast]
 target_model = "gpt-4.1-mini"
 
-[providers.shared.adapters.codex]
-kind = "openai"
-backend = "chatgpt_codex"
-default_model = "gpt-5-codex"
+[providers.shared.adapters.anthropic]
+default_model = "claude-sonnet-4"
 
-[providers.shared.adapters.codex.models.coder]
-target_model = "gpt-5-codex"
+[providers.shared.adapters.anthropic.models.coder]
+target_model = "claude-sonnet-4"
 
 [providers.gitlab]
 default_model = "claude-sonnet-4-5"
 
 [providers.gitlab.auth]
-credential = { type = "oauth", refresh = "gitlab-refresh", access = "gitlab-access", expires_at_ms = 4102444800000 }
+mode = "credential"
+issuer = "gitlab"
+credential = { type = "oauth", issuer = "gitlab", refresh = "gitlab-refresh", access = "gitlab-access", expires_at_ms = 4102444800000 }
 
-[providers.gitlab.adapters.duo]
-kind = "gitlab"
+[providers.gitlab.adapters.gitlab]
 instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
 default_model = "claude-sonnet-4-5"
@@ -565,24 +554,46 @@ default_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 [providers.bedrock.auth]
 mode = "bedrock_sigv4"
+base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
+region = "us-east-1"
 profile = "prod"
 
-[providers.bedrock.adapters.aws]
-kind = "amazon_bedrock"
-base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
+[providers.bedrock.adapters.amazon_bedrock]
 default_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
-region = "us-east-1"
+
+[providers.bedrock-openai]
+default_model = "amazon.nova-pro-v1:0"
+
+[providers.bedrock-openai.auth]
+mode = "api"
+base_url = "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
+api_key_env = "BEDROCK_API_KEY"
+
+[providers.bedrock-openai.adapters.openai_compatible]
+default_model = "amazon.nova-pro-v1:0"
+
+[providers.sap]
+default_model = "anthropic/claude-sonnet-4"
+
+[providers.sap.auth]
+mode = "sap_ai_core"
+base_url = "https://api.example.com/v2"
+service_key_env = "AICORE_SERVICE_KEY"
+
+[providers.sap.adapters.openai_compatible]
+default_model = "anthropic/claude-sonnet-4"
 
 [providers.vertex]
 default_model = "gemini-1.5-pro"
 
 [providers.vertex.auth]
-mode = "google_adc"
-
-[providers.vertex.adapters.api]
-kind = "google_vertex"
+mode = "api"
 base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google"
+api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
+
+[providers.vertex.adapters.openai]
 default_model = "gemini-1.5-pro"
+capability_family = "gemini"
 ```
 
 多 adapter provider 的约束：
@@ -592,18 +603,9 @@ default_model = "gemini-1.5-pro"
 - 同一个可见 model id 不能在多个 adapters 下重复声明。
 - 多 adapter provider 的 `default_model` 必须是已经声明过的可见 model id。
 
-### Legacy flat provider 兼容
-
-旧的 flat provider 配置仍然能工作：
-
-- 根节点的 `kind` / `base_url` / `api_key_env` 会被 lower 到新的 `auth` 或隐式 `default` adapter。
-- 根节点的 `[providers.<id>.models]` 会被 lower 到新的 model route 表。
-
-但一旦你开始使用 `adapters`，就必须把旧字段一起迁移进去，不要混用两套写法。
-
 ### Model metadata 和 variants
 
-新的 canonical 路径是 `providers.<id>.adapters.<adapter_id>.models."<visible-model-id>"`。其中：
+新的 canonical 路径是 `providers.<id>.adapters.<kind>.models."<visible-model-id>"`。其中：
 
 - `<visible-model-id>` 是 Agena 对外暴露的模型名。
 - `target_model` 是真实上游模型名；省略时默认和 `<visible-model-id>` 相同。
@@ -612,7 +614,7 @@ default_model = "gemini-1.5-pro"
 示例：
 
 ```toml
-[providers.openai.adapters.api.models.fast]
+[providers.openai.adapters.openai.models.fast]
 target_model = "gpt-4.1-mini"
 display_name = "Fast"
 family = "gpt"
@@ -623,16 +625,14 @@ description = "Fast general-purpose model."
 input = { supported = ["text", "image"], unsupported = ["audio"] }
 features = { supported = ["tool_calling", "streaming"], unsupported = ["temperature"] }
 
-[providers.openai.adapters.api.models.fast.variants.light]
+[providers.openai.adapters.openai.models.fast.variants.light]
 display_name = "Light"
 thinking = { type = "effort", effort = "low" }
 
-[providers.openai.adapters.api.models.fast.variants.deep]
+[providers.openai.adapters.openai.models.fast.variants.deep]
 display_name = "Deep"
 thinking = { type = "effort", effort = "high" }
 ```
-
-如果 provider 仍然使用 legacy flat 写法，没有显式 `adapters`，那么旧路径 `[providers.<id>.models."<model-id>"]` 仍然兼容；不过新文档和示例都以 adapter 路径为准。
 
 `input` 和 `features` 都支持 compact array：
 

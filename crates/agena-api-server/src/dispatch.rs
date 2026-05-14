@@ -1151,10 +1151,15 @@ mod tests {
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "dummy"
+
+[providers.openai.adapters.openai]
+default_model = "gpt-5.4"
 "#,
             "single-provider-default",
         )
@@ -1181,13 +1186,20 @@ api_key = "dummy"
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
+[providers.openai.adapters.openai]
+default_model = "gpt-5.4"
+
 [providers.ollama]
-kind = "ollama"
+default_model = "qwen3:14b"
+
+[providers.ollama.adapters.ollama]
 base_url = "http://localhost:11434"
 default_model = "qwen3:14b"
 "#,
@@ -1217,13 +1229,20 @@ default_model = "qwen3:14b"
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
+[providers.openai.adapters.openai]
+default_model = "gpt-5.4"
+
 [providers.ollama]
-kind = "ollama"
+default_model = "qwen3:14b"
+
+[providers.ollama.adapters.ollama]
 base_url = "http://localhost:11434"
 default_model = "qwen3:14b"
 "#,
@@ -1255,15 +1274,20 @@ default_model = "qwen3:14b"
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
-[providers.openai.models."gpt-5.4".variants.light]
+[providers.openai.adapters.openai]
+default_model = "gpt-5.4"
+
+[providers.openai.adapters.openai.models."gpt-5.4".variants.light]
 thinking = { type = "budget", budget_tokens = 3000 }
 
-[providers.openai.models."gpt-5.4".variants.deep]
+[providers.openai.adapters.openai.models."gpt-5.4".variants.deep]
 thinking = { type = "budget", budget_tokens = 30000 }
 "#,
             "model-variant",
@@ -1298,12 +1322,17 @@ thinking = { type = "budget", budget_tokens = 30000 }
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
-[providers.openai.models."gpt-5.4".variants.light]
+[providers.openai.adapters.openai]
+default_model = "gpt-5.4"
+
+[providers.openai.adapters.openai.models."gpt-5.4".variants.light]
 thinking = { type = "budget", budget_tokens = 3000 }
 "#,
             "unknown-model-variant",
@@ -1334,10 +1363,15 @@ thinking = { type = "budget", budget_tokens = 3000 }
         let (state, _) = test_state_with_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "dummy"
+
+[providers.openai.adapters.openai]
+default_model = "gpt-5.4"
 "#,
             "runtime-agent-inventory",
         )

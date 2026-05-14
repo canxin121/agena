@@ -29,9 +29,8 @@ use crate::{
     agent::Agent,
     config::{
         ConfigEnvironment, ConfigLoader, ConfigOutputFormat, ConfigOverride, LoadConfigRequest,
-        ProcessEnvironment, ProviderConfigCredentialStore, TracingConfig,
-        provider_gitlab_instance_url, provider_has_gitlab_adapter, provider_supports_api_key_write,
-        provider_supports_copilot_device, provider_supports_openai_oauth,
+        ProcessEnvironment, ProviderAuthConfig, ProviderConfigCredentialStore, TracingConfig,
+        provider_gitlab_instance_url,
     },
     db::{
         crud::{permission_rule as permission_rule_crud, workspace as workspace_crud},
@@ -818,6 +817,8 @@ struct AuthSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     enterprise_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    issuer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     expires_at_ms: Option<i64>,
 }
 
@@ -1484,7 +1485,8 @@ impl AgenaCli {
         }
 
         if let Some(api_key) = args.api_key {
-            if !provider_supports_api_key_write(resolved) {
+            if !matches!(resolved.auth, ProviderAuthConfig::Api(_) | ProviderAuthConfig::SapAiCore(_))
+            {
                 return Err(AppError::Config(format!(
                     "{provider_id} does not support api key login"
                 )));
@@ -1495,11 +1497,13 @@ impl AgenaCli {
         }
 
         if args.browser {
-            let openai_browser = provider_supports_openai_oauth(resolved);
-            let gitlab_browser = provider_has_gitlab_adapter(resolved);
-            let gitlab_instance_url = provider_gitlab_instance_url(resolved);
-            match (openai_browser, gitlab_browser) {
-                (true, false) => {
+            match &resolved.auth {
+                ProviderAuthConfig::Credential(config)
+                    if matches!(
+                        config.issuer,
+                        crate::provider::auth::CredentialIssuer::OpenaiChatgpt
+                    ) =>
+                {
                     let redirect_uri = format!("http://localhost:{}/auth/callback", args.port);
                     let start = manager.start_openai_browser_login(redirect_uri.clone())?;
                     println!("open this URL to continue: {}", start.authorize_url);
@@ -1518,8 +1522,10 @@ impl AgenaCli {
                         )
                         .await?;
                 }
-                (false, true) => {
-                    let instance_url = gitlab_instance_url.ok_or_else(|| {
+                ProviderAuthConfig::Credential(config)
+                    if matches!(config.issuer, crate::provider::auth::CredentialIssuer::Gitlab) =>
+                {
+                    let instance_url = provider_gitlab_instance_url(resolved).ok_or_else(|| {
                         AppError::Config(format!(
                             "{provider_id} has ambiguous gitlab browser auth adapters"
                         ))
@@ -1544,12 +1550,7 @@ impl AgenaCli {
                         )
                         .await?;
                 }
-                (true, true) => {
-                    return Err(AppError::Config(format!(
-                        "{provider_id} has ambiguous browser auth providers"
-                    )));
-                }
-                (false, false) => {
+                _ => {
                     return Err(AppError::Config(format!(
                         "{provider_id} does not support browser login"
                     )));
@@ -1560,10 +1561,13 @@ impl AgenaCli {
         }
 
         if args.device {
-            let openai_device = provider_supports_openai_oauth(resolved);
-            let copilot_device = provider_supports_copilot_device(resolved);
-            match (openai_device, copilot_device) {
-                (true, false) => {
+            match &resolved.auth {
+                ProviderAuthConfig::Credential(config)
+                    if matches!(
+                        config.issuer,
+                        crate::provider::auth::CredentialIssuer::OpenaiChatgpt
+                    ) =>
+                {
                     let start = manager.start_openai_headless_login().await?;
                     println!("open this URL: {}", start.verification_url);
                     println!("enter code: {}", start.user_code);
@@ -1584,7 +1588,12 @@ impl AgenaCli {
                         return Err(AppError::Config("openai device login timed out".to_owned()));
                     }
                 }
-                (false, true) => {
+                ProviderAuthConfig::Credential(config)
+                    if matches!(
+                        config.issuer,
+                        crate::provider::auth::CredentialIssuer::GithubCopilot
+                    ) =>
+                {
                     let deployment = match args
                         .enterprise_domain
                         .as_deref()
@@ -1618,12 +1627,7 @@ impl AgenaCli {
                         ));
                     }
                 }
-                (true, true) => {
-                    return Err(AppError::Config(format!(
-                        "{provider_id} has ambiguous device auth providers"
-                    )));
-                }
-                (false, false) => {
+                _ => {
                     return Err(AppError::Config(format!(
                         "{provider_id} does not support device login"
                     )));
@@ -3398,9 +3402,11 @@ fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
             kind: "api_key".to_owned(),
             account_id: None,
             enterprise_url: None,
+            issuer: None,
             expires_at_ms: None,
         },
         AuthData::OAuth {
+            issuer,
             expires_at_ms,
             account_id,
             enterprise_url,
@@ -3410,6 +3416,15 @@ fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
             kind: "oauth".to_owned(),
             account_id,
             enterprise_url,
+            issuer: issuer.map(|issuer| match issuer {
+                crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
+                    "openai_chatgpt".to_owned()
+                }
+                crate::provider::auth::CredentialIssuer::GithubCopilot => {
+                    "github_copilot".to_owned()
+                }
+                crate::provider::auth::CredentialIssuer::Gitlab => "gitlab".to_owned(),
+            }),
             expires_at_ms: Some(expires_at_ms),
         },
         AuthData::WellKnown { .. } => AuthSummary {
@@ -3417,6 +3432,7 @@ fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
             kind: "well_known".to_owned(),
             account_id: None,
             enterprise_url: None,
+            issuer: None,
             expires_at_ms: None,
         },
     }
@@ -3960,7 +3976,13 @@ mod tests {
         let path = write_temp_config(
             r#"
 [providers.openai]
-kind = "openai"
+default_model = "gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+
+[providers.openai.adapters.openai]
 default_model = "gpt-4.1-mini"
 "#,
         );
@@ -4012,7 +4034,13 @@ default_model = "gpt-4.1-mini"
         let path = write_temp_config(
             r#"
 [providers.openai]
-kind = "openai"
+default_model = "gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+
+[providers.openai.adapters.openai]
 default_model = "gpt-4.1-mini"
 "#,
         );
@@ -4810,12 +4838,17 @@ default_model = "gpt-4.1-mini"
         let path = write_temp_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
-[providers.openai.models."gpt-5"]
+[providers.openai.adapters.openai]
+default_model = "gpt-5"
+
+[providers.openai.adapters.openai.models."gpt-5"]
 input = { unsupported = ["image"] }
 "#,
         );
@@ -4865,8 +4898,14 @@ input = { unsupported = ["image"] }
         let path = write_temp_config(
             r#"
 [providers.gitlab]
-kind = "gitlab"
+default_model = "claude-sonnet-4-5"
+
+[providers.gitlab.auth]
+mode = "api"
+base_url = "https://gitlab.com/api/v4"
 api_key = "glpat-test"
+
+[providers.gitlab.adapters.gitlab]
 default_model = "claude-sonnet-4-5"
 "#,
         );
@@ -4909,10 +4948,15 @@ default_model = "claude-sonnet-4-5"
         let path = write_temp_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
+
+[providers.openai.adapters.openai]
+default_model = "gpt-5"
 "#,
         );
         let env = TestEnvironment {
@@ -4955,10 +4999,15 @@ api_key_env = "OPENAI_API_KEY"
         let path = write_temp_config(
             r#"
 [providers.openai]
-kind = "openai"
-base_url = "https://api.openai.com/v1"
 default_model = "gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
 api_key = "dummy"
+
+[providers.openai.adapters.openai]
+default_model = "gpt-5.4"
 "#,
         );
         let cli = AgenaCli {

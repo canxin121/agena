@@ -197,32 +197,52 @@ max_retries_after_output = {stream_replay_max_retries_after_output}
 max_tracked_events = {stream_replay_max_tracked_events}
 
 [providers.openai_live]
-kind = "openai"
-base_url = "{base_url}/api/provider/openai/v1"
 default_model = "{model}"
+
+[providers.openai_live.auth]
+mode = "api"
+base_url = "{base_url}/api/provider/openai/v1"
 api_key_env = "{key_env}"
 
-[providers.compat_live]
-kind = "openai_compatible"
-base_url = "{base_url}/api/provider/openai/v1"
+[providers.openai_live.adapters.openai]
 default_model = "{model}"
+
+[providers.compat_live]
+default_model = "{model}"
+
+[providers.compat_live.auth]
+mode = "api"
+base_url = "{base_url}/api/provider/openai/v1"
 api_key_env = "{key_env}"
+
+[providers.compat_live.adapters.openai_compatible]
+default_model = "{model}"
 auth_header = "authorization"
 auth_scheme = "Bearer"
 
 [providers.anthropic_live]
-kind = "anthropic"
-base_url = "{base_url}/api/provider/anthropic/v1"
 default_model = "{model}"
+
+[providers.anthropic_live.auth]
+mode = "api"
+base_url = "{base_url}/api/provider/anthropic/v1"
 api_key_env = "{key_env}"
+
+[providers.anthropic_live.adapters.anthropic]
+default_model = "{model}"
 auth_header = "authorization"
 auth_scheme = "Bearer"
 
 [providers.gemini_live]
-kind = "gemini"
-base_url = "{base_url}/api/provider/google/v1beta"
 default_model = "{model}"
+
+[providers.gemini_live.auth]
+mode = "api"
+base_url = "{base_url}/api/provider/google/v1beta"
 api_key_env = "{key_env}"
+
+[providers.gemini_live.adapters.gemini]
+default_model = "{model}"
 "#,
         base_url = LIVE_BASE_URL,
         model = LIVE_MODEL,

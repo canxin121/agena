@@ -10,6 +10,7 @@ use crate::{
     message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
     model::{ModelId, ProviderId},
     provider::{
+        CapabilityFamily,
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
         StreamResumePolicy,
@@ -18,13 +19,14 @@ use crate::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
         },
-        sse, utils, wire_message,
+        prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
 
 const CHATGPT_CODEX_ORIGINATOR: &str = "agena";
 const CHATGPT_CODEX_USER_AGENT: &str = concat!("agena/", env!("CARGO_PKG_VERSION"));
+const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 
 #[derive(Clone)]
 pub struct OpenAiProvider {
@@ -36,6 +38,12 @@ pub struct OpenAiProvider {
     backend: OpenAiBackend,
     auth_data: Option<Arc<Mutex<AuthData>>>,
     api_mode: OpenAiApiMode,
+    api_mode_explicit: bool,
+    profile: OpenAiProfile,
+    models_url: Option<String>,
+    auth_header: String,
+    auth_scheme: Option<String>,
+    capability_family: CapabilityFamily,
     extra_headers: HashMap<String, String>,
     stream_mode: OpenAiStreamMode,
     realtime_ws_url: Option<String>,
@@ -52,6 +60,12 @@ pub enum OpenAiApiMode {
 pub enum OpenAiBackend {
     Api,
     ChatgptCodex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiProfile {
+    Standard,
+    GithubCopilot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +131,12 @@ impl OpenAiProvider {
             backend: OpenAiBackend::Api,
             auth_data: None,
             api_mode: OpenAiApiMode::Responses,
+            api_mode_explicit: false,
+            profile: OpenAiProfile::Standard,
+            models_url: None,
+            auth_header: "authorization".to_owned(),
+            auth_scheme: Some("Bearer".to_owned()),
+            capability_family: CapabilityFamily::OpenAi,
             extra_headers: HashMap::new(),
             stream_mode: OpenAiStreamMode::Sse,
             realtime_ws_url: None,
@@ -143,6 +163,36 @@ impl OpenAiProvider {
         self
     }
 
+    pub fn with_api_mode_explicit(mut self, explicit: bool) -> Self {
+        self.api_mode_explicit = explicit;
+        self
+    }
+
+    pub fn with_profile(mut self, profile: OpenAiProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    pub fn with_models_url(mut self, models_url: Option<String>) -> Self {
+        self.models_url = models_url.and_then(|value| utils::normalize_optional_text(Some(value)));
+        self
+    }
+
+    pub fn with_auth_header(
+        mut self,
+        header: impl Into<String>,
+        scheme: Option<impl Into<String>>,
+    ) -> Self {
+        self.auth_header = header.into();
+        self.auth_scheme = scheme.map(|value| value.into());
+        self
+    }
+
+    pub fn with_capability_family(mut self, family: CapabilityFamily) -> Self {
+        self.capability_family = family;
+        self
+    }
+
     pub fn with_stream_mode(mut self, mode: OpenAiStreamMode) -> Self {
         self.stream_mode = mode;
         self
@@ -153,16 +203,56 @@ impl OpenAiProvider {
         self
     }
 
-    fn model_endpoint(&self) -> String {
-        format!("{}/models", self.base_url)
+    fn configured_public_copilot_base_url(&self) -> bool {
+        self.base_url.trim_end_matches('/') == DEFAULT_COPILOT_BASE_URL
     }
 
-    fn responses_endpoint(&self) -> String {
-        format!("{}/responses", self.base_url)
+    fn resolved_base_url(&self) -> Result<String, AppError> {
+        if self.profile != OpenAiProfile::GithubCopilot || !self.configured_public_copilot_base_url()
+        {
+            return Ok(self.base_url.clone());
+        }
+
+        let Some(auth_data) = self.auth_data.as_ref() else {
+            return Ok(self.base_url.clone());
+        };
+
+        let domain = auth_data
+            .try_lock()
+            .ok()
+            .as_deref()
+            .and_then(AuthData::enterprise_url)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                AppError::Config("enterprise_url missing for enterprise copilot auth".to_owned())
+            })?;
+
+        Ok(format!("https://copilot-api.{}", normalize_domain(&domain)))
     }
 
-    fn chat_endpoint(&self) -> String {
-        format!("{}/chat/completions", self.base_url)
+    fn prompt_cache_base_url(&self) -> String {
+        self.resolved_base_url()
+            .unwrap_or_else(|_| self.base_url.clone())
+    }
+
+    fn model_endpoint(&self) -> Result<String, AppError> {
+        Ok(self.models_url.clone().unwrap_or_else(|| {
+            format!("{}/models", self.prompt_cache_base_url().trim_end_matches('/'))
+        }))
+    }
+
+    fn responses_endpoint(&self) -> Result<String, AppError> {
+        Ok(format!(
+            "{}/responses",
+            self.resolved_base_url()?.trim_end_matches('/')
+        ))
+    }
+
+    fn chat_endpoint(&self) -> Result<String, AppError> {
+        Ok(format!(
+            "{}/chat/completions",
+            self.resolved_base_url()?.trim_end_matches('/')
+        ))
     }
 
     fn backend_key(&self) -> &'static str {
@@ -244,9 +334,12 @@ impl OpenAiProvider {
             ))
         })?;
 
-        let auth_header_name = http::header::HeaderName::from_static("authorization");
+        let auth_header_name =
+            http::header::HeaderName::from_bytes(self.auth_header.as_bytes()).map_err(|err| {
+                AppError::Config(format!("openai auth header name is invalid: {err}"))
+            })?;
         let auth_header_value = http::header::HeaderValue::from_str(
-            format!("Bearer {api_key}").as_str(),
+            utils::auth_header_value(self.auth_scheme.as_deref(), api_key).as_str(),
         )
         .map_err(|err| AppError::Config(format!("openai auth header value is invalid: {err}")))?;
         request
@@ -286,6 +379,13 @@ impl OpenAiProvider {
     }
 
     fn should_use_responses(&self, model: &str) -> bool {
+        if matches!(self.profile, OpenAiProfile::GithubCopilot)
+            && !self.api_mode_explicit
+            && matches!(self.api_mode, OpenAiApiMode::Responses)
+        {
+            return Self::copilot_should_use_responses(model);
+        }
+
         if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
             return true;
         }
@@ -297,6 +397,16 @@ impl OpenAiProvider {
                 model.starts_with("gpt-5") || model.starts_with("o3") || model.starts_with("o4")
             }
         }
+    }
+
+    fn copilot_should_use_responses(model: &str) -> bool {
+        let is_gpt5 = model
+            .strip_prefix("gpt-")
+            .and_then(|x| x.split('-').next())
+            .and_then(|major| major.parse::<u32>().ok())
+            .map(|major| major >= 5)
+            .unwrap_or(false);
+        is_gpt5 && !model.starts_with("gpt-5-mini")
     }
 
     fn api_mode_key(&self) -> &'static str {
@@ -330,7 +440,7 @@ impl OpenAiProvider {
     ) -> Result<CompletionResponse, AppError> {
         let body = ChatCompletionRequest {
             model: model.clone(),
-            messages: request_to_chat_messages(request),
+            messages: self.chat_messages_for_request(request),
             tools: (!request.tools.is_empty())
                 .then(|| tools_to_chat_definitions(request.tools.as_slice())),
             temperature: request.temperature,
@@ -351,12 +461,13 @@ impl OpenAiProvider {
         };
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
             self.apply_headers(
                 self.client
-                    .post(self.chat_endpoint())
-                    .bearer_auth(api_key)
+                    .post(self.chat_endpoint().expect("chat endpoint should resolve"))
+                    .header(self.auth_header.as_str(), auth_value)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                RequestHeaderContext::none(),
+                RequestHeaderContext::from_request(request),
             )
             .json(&body)
         })
@@ -378,7 +489,7 @@ impl OpenAiProvider {
     > {
         let body = ChatCompletionRequest {
             model: model.clone(),
-            messages: request_to_chat_messages(request),
+            messages: self.chat_messages_for_request(request),
             tools: (!request.tools.is_empty())
                 .then(|| tools_to_chat_definitions(request.tools.as_slice())),
             temperature: request.temperature,
@@ -401,12 +512,13 @@ impl OpenAiProvider {
         };
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
             self.apply_headers(
                 self.client
-                    .post(self.chat_endpoint())
-                    .bearer_auth(api_key)
+                    .post(self.chat_endpoint().expect("chat endpoint should resolve"))
+                    .header(self.auth_header.as_str(), auth_value)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                RequestHeaderContext::none(),
+                RequestHeaderContext::from_request(request),
             )
             .json(&body)
         })
@@ -930,6 +1042,44 @@ impl OpenAiProvider {
             .collect()
     }
 
+    fn is_vision_request(request: &CompletionRequest) -> bool {
+        request.messages.iter().any(|message| {
+            wire_message::project(message).iter().any(|part| {
+                matches!(
+                    part,
+                    wire_message::WirePart::Attachment { item }
+                        if item.kind == AttachmentKind::Image
+                )
+            })
+        })
+    }
+
+    fn initiator(request: &CompletionRequest) -> &'static str {
+        match request.messages.last().map(|m| m.role) {
+            Some(Role::User) => "user",
+            _ => "agent",
+        }
+    }
+
+    fn chat_messages_for_request(&self, request: &CompletionRequest) -> Vec<chat_wire::ChatMessage> {
+        let mut messages = request_to_chat_messages(request);
+        if matches!(self.profile, OpenAiProfile::GithubCopilot) {
+            apply_chat_prompt_cache_hints(messages.as_mut_slice());
+        }
+        messages
+    }
+
+    fn responses_input_for_request(
+        &self,
+        request: &CompletionRequest,
+    ) -> Vec<OpenAiResponsesInputItem> {
+        let mut input = Self::to_responses_input(request);
+        if !matches!(self.profile, OpenAiProfile::GithubCopilot) {
+            clear_responses_prompt_cache_hints(input.as_mut_slice());
+        }
+        input
+    }
+
     fn to_responses_input(request: &CompletionRequest) -> Vec<OpenAiResponsesInputItem> {
         let mut input = Vec::new();
 
@@ -941,6 +1091,7 @@ impl OpenAiProvider {
             Self::append_responses_items_for_message(&mut input, message);
         }
 
+        apply_responses_prompt_cache_hints(input.as_mut_slice());
         input
     }
 
@@ -1013,6 +1164,7 @@ impl OpenAiProvider {
         input.push(OpenAiResponsesInputItem::Message(OpenAiInputMessage {
             role: role.to_owned(),
             content: vec![OpenAiInputContent::Text { text }],
+            copilot_cache_control: None,
         }));
     }
 
@@ -1042,6 +1194,7 @@ impl OpenAiProvider {
         input.push(OpenAiResponsesInputItem::Message(OpenAiInputMessage {
             role: role.to_owned(),
             content,
+            copilot_cache_control: None,
         }));
     }
 
@@ -1086,13 +1239,14 @@ impl OpenAiProvider {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 if !id.trim().is_empty() && !name.trim().is_empty() {
                                     input.push(OpenAiResponsesInputItem::FunctionCall(
-                                        OpenAiFunctionCallItem {
-                                            kind: "function_call",
-                                            call_id: id,
-                                            name,
-                                            arguments: arguments_json,
-                                        },
-                                    ));
+                                    OpenAiFunctionCallItem {
+                                        kind: "function_call",
+                                        call_id: id,
+                                        name,
+                                        arguments: arguments_json,
+                                        copilot_cache_control: None,
+                                    },
+                                ));
                                 }
                             }
                             wire_message::WirePart::ToolResult {
@@ -1103,12 +1257,13 @@ impl OpenAiProvider {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 if !tool_call_id.trim().is_empty() {
                                     input.push(OpenAiResponsesInputItem::FunctionCallOutput(
-                                        OpenAiFunctionCallOutputItem {
-                                            kind: "function_call_output",
-                                            call_id: tool_call_id,
-                                            output: serde_json::Value::String(output_json),
-                                        },
-                                    ));
+                                    OpenAiFunctionCallOutputItem {
+                                        kind: "function_call_output",
+                                        call_id: tool_call_id,
+                                        output: serde_json::Value::String(output_json),
+                                        copilot_cache_control: None,
+                                    },
+                                ));
                                 }
                             }
                         }
@@ -1148,12 +1303,13 @@ impl OpenAiProvider {
                                         });
                                     } else {
                                         input.push(OpenAiResponsesInputItem::FunctionCallOutput(
-                                            OpenAiFunctionCallOutputItem {
-                                                kind: "function_call_output",
-                                                call_id: tool_call_id,
-                                                output: serde_json::Value::String(output_json),
-                                            },
-                                        ));
+                                        OpenAiFunctionCallOutputItem {
+                                            kind: "function_call_output",
+                                            call_id: tool_call_id,
+                                            output: serde_json::Value::String(output_json),
+                                            copilot_cache_control: None,
+                                        },
+                                    ));
                                     }
                                 }
                                 other => buffered_parts.push(other),
@@ -1188,6 +1344,7 @@ impl OpenAiProvider {
                                         output_json.as_str(),
                                         extra_parts.as_slice(),
                                     ),
+                                    copilot_cache_control: None,
                                 },
                             ));
                         }
@@ -1281,19 +1438,19 @@ impl OpenAiProvider {
         &self,
         endpoint: String,
         body: Option<&impl Serialize>,
-        prompt_window_generation: Option<u64>,
-        prompt_cache_key: Option<&str>,
+        context: RequestHeaderContext<'_>,
     ) -> Result<R, AppError>
     where
         R: for<'de> Deserialize<'de>,
     {
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
             let mut request = self.apply_headers(
                 self.client
                     .post(endpoint.clone())
-                    .bearer_auth(api_key)
+                    .header(self.auth_header.as_str(), auth_value)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                RequestHeaderContext::from_cache(prompt_cache_key, prompt_window_generation),
+                context,
             );
 
             if let Some(body) = body {
@@ -1330,6 +1487,22 @@ impl OpenAiProvider {
             }
         }
 
+        if matches!(self.profile, OpenAiProfile::GithubCopilot) {
+            headers
+                .entry(reqwest::header::USER_AGENT.as_str().to_owned())
+                .or_insert_with(|| "agena/0.1.0".to_owned());
+            headers
+                .entry("Openai-Intent".to_owned())
+                .or_insert_with(|| "conversation-edits".to_owned());
+            headers.insert(
+                "x-initiator".to_owned(),
+                context.initiator_header().to_owned(),
+            );
+            if context.vision_request {
+                headers.insert("Copilot-Vision-Request".to_owned(), "true".to_owned());
+            }
+        }
+
         utils::apply_request_headers(self.id.as_str(), req, &headers)
     }
 }
@@ -1342,16 +1515,17 @@ fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value
 struct RequestHeaderContext<'a> {
     prompt_cache_key: Option<&'a str>,
     prompt_window_generation: Option<u64>,
+    initiator: Option<&'a str>,
+    vision_request: bool,
 }
 
 impl<'a> RequestHeaderContext<'a> {
-    fn from_cache(
-        prompt_cache_key: Option<&'a str>,
-        prompt_window_generation: Option<u64>,
-    ) -> Self {
+    fn from_request(request: &'a CompletionRequest) -> Self {
         Self {
-            prompt_cache_key,
-            prompt_window_generation,
+            prompt_cache_key: request.prompt_cache_key.as_deref(),
+            prompt_window_generation: request.prompt_window_generation,
+            initiator: Some(OpenAiProvider::initiator(request)),
+            vision_request: OpenAiProvider::is_vision_request(request),
         }
     }
 
@@ -1368,6 +1542,10 @@ impl<'a> RequestHeaderContext<'a> {
             )
         })
     }
+
+    fn initiator_header(&self) -> &str {
+        self.initiator.unwrap_or("agent")
+    }
 }
 
 #[async_trait]
@@ -1381,7 +1559,7 @@ impl ModelProvider for OpenAiProvider {
     }
 
     fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
-        Some(crate::provider::CapabilityFamily::OpenAi)
+        Some(self.capability_family)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -1398,9 +1576,30 @@ impl ModelProvider for OpenAiProvider {
             crate::provider::PromptCacheShape::new(self.id.as_str())
                 .with_string("auth_scope", self.api_key.prompt_cache_scope())
                 .with_string("backend", self.backend_key())
-                .with_string("base_url", self.base_url.as_str())
+                .with_string("base_url", self.prompt_cache_base_url().as_str())
                 .with_string("api_mode", self.api_mode_key())
                 .with_string("stream_mode", self.stream_mode_key())
+                .with_optional_string("models_url", self.models_url.as_deref())
+                .with_string("auth_header", self.auth_header.as_str())
+                .with_optional_string("auth_scheme", self.auth_scheme.as_deref())
+                .with_string(
+                    "profile",
+                    match self.profile {
+                        OpenAiProfile::Standard => "standard",
+                        OpenAiProfile::GithubCopilot => "github_copilot",
+                    },
+                )
+                .with_string(
+                    "capability_family",
+                    match self.capability_family {
+                        CapabilityFamily::OpenAi => "openai",
+                        CapabilityFamily::OpenAiCompatible => "openai_compatible",
+                        CapabilityFamily::Anthropic => "anthropic",
+                        CapabilityFamily::Gemini => "gemini",
+                        CapabilityFamily::Bedrock => "bedrock",
+                        CapabilityFamily::Gitlab => "gitlab",
+                    },
+                )
                 .with_optional_string("auth_account_id", self.chatgpt_account_id())
                 .with_bool("uses_responses", self.should_use_responses(model.as_str()))
                 .with_optional_string("realtime_ws_url", self.realtime_ws_url.as_deref())
@@ -1421,8 +1620,11 @@ impl ModelProvider for OpenAiProvider {
         }
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
             self.apply_headers(
-                self.client.get(self.model_endpoint()).bearer_auth(api_key),
+                self.client
+                    .get(self.model_endpoint().expect("model endpoint should resolve"))
+                    .header(self.auth_header.as_str(), auth_value),
                 RequestHeaderContext::none(),
             )
         })
@@ -1431,12 +1633,17 @@ impl ModelProvider for OpenAiProvider {
         let payload: OpenAiModelListResponse =
             utils::parse_json_response(self.id.as_str(), response).await?;
         Ok(payload
-            .data
+            .into_items()
             .into_iter()
             .map(|m| {
                 let model = ProviderModel::new(self.id.as_str(), m.id);
                 let capabilities = self.model_capabilities(&model.id);
-                model.with_capabilities(capabilities)
+                let model = model.with_capabilities(capabilities);
+                if let Some(name) = m.name {
+                    model.with_display_name(name)
+                } else {
+                    model
+                }
             })
             .collect())
     }
@@ -1455,7 +1662,7 @@ impl ModelProvider for OpenAiProvider {
                 .await;
         }
 
-        let input = Self::to_responses_input(&request);
+        let input = self.responses_input_for_request(&request);
 
         let body = OpenAiResponsesRequest {
             model: model.to_string(),
@@ -1479,10 +1686,9 @@ impl ModelProvider for OpenAiProvider {
 
         let response: OpenAiResponsesResponse = match self
             .send_json(
-                self.responses_endpoint(),
+                self.responses_endpoint()?,
                 Some(&body),
-                body.prompt_window_generation,
-                body.prompt_cache_key.as_deref(),
+                RequestHeaderContext::from_request(&request),
             )
             .await
         {
@@ -1548,7 +1754,7 @@ impl ModelProvider for OpenAiProvider {
                 .await;
         }
 
-        let input = Self::to_responses_input(&request);
+        let input = self.responses_input_for_request(&request);
 
         let body = OpenAiResponsesRequest {
             model: model.to_string(),
@@ -1571,15 +1777,13 @@ impl ModelProvider for OpenAiProvider {
         };
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
             self.apply_headers(
                 self.client
-                    .post(self.responses_endpoint())
-                    .bearer_auth(api_key)
+                    .post(self.responses_endpoint().expect("responses endpoint should resolve"))
+                    .header(self.auth_header.as_str(), auth_value)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                RequestHeaderContext::from_cache(
-                    body.prompt_cache_key.as_deref(),
-                    body.prompt_window_generation,
-                ),
+                RequestHeaderContext::from_request(&request),
             )
             .json(&body)
         })
@@ -1810,6 +2014,7 @@ struct OpenAiResponsesRequest {
     prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_response_id: Option<String>,
+    #[cfg_attr(not(test), allow(dead_code))]
     #[serde(skip)]
     prompt_window_generation: Option<u64>,
     stream: bool,
@@ -1853,6 +2058,8 @@ struct OpenAiResponsesTool {
 struct OpenAiInputMessage {
     role: String,
     content: Vec<OpenAiInputContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copilot_cache_control: Option<prompt_cache::PromptCacheControl>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1883,6 +2090,23 @@ enum OpenAiResponsesInputItem {
     FunctionCallOutput(OpenAiFunctionCallOutputItem),
 }
 
+impl OpenAiResponsesInputItem {
+    fn is_system(&self) -> bool {
+        matches!(
+            self,
+            Self::Message(OpenAiInputMessage { role, .. }) if role == "system"
+        )
+    }
+
+    fn set_copilot_cache_control(&mut self, cache_control: prompt_cache::PromptCacheControl) {
+        match self {
+            Self::Message(message) => message.copilot_cache_control = Some(cache_control),
+            Self::FunctionCall(item) => item.copilot_cache_control = Some(cache_control),
+            Self::FunctionCallOutput(item) => item.copilot_cache_control = Some(cache_control),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct OpenAiFunctionCallItem {
     #[serde(rename = "type")]
@@ -1890,6 +2114,8 @@ struct OpenAiFunctionCallItem {
     call_id: String,
     name: String,
     arguments: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copilot_cache_control: Option<prompt_cache::PromptCacheControl>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1898,6 +2124,8 @@ struct OpenAiFunctionCallOutputItem {
     kind: &'static str,
     call_id: String,
     output: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copilot_cache_control: Option<prompt_cache::PromptCacheControl>,
 }
 
 #[derive(Debug, Default)]
@@ -1908,13 +2136,26 @@ struct ResponsesToolState {
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAiModelListResponse {
-    data: Vec<OpenAiModel>,
+#[serde(untagged)]
+enum OpenAiModelListResponse {
+    Wrapped { data: Vec<OpenAiModel> },
+    Bare(Vec<OpenAiModel>),
+}
+
+impl OpenAiModelListResponse {
+    fn into_items(self) -> Vec<OpenAiModel> {
+        match self {
+            Self::Wrapped { data } => data,
+            Self::Bare(data) => data,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct OpenAiModel {
     id: String,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1993,6 +2234,42 @@ fn responses_reasoning_delta(event: &serde_json::Value) -> Option<String> {
     None
 }
 
+fn apply_chat_prompt_cache_hints(messages: &mut [chat_wire::ChatMessage]) {
+    let flags = messages
+        .iter()
+        .map(|message| message.role == "system")
+        .collect::<Vec<_>>();
+    for index in prompt_cache::select_cache_target_indices(flags.as_slice()) {
+        if let Some(message) = messages.get_mut(index) {
+            message.copilot_cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
+        }
+    }
+}
+
+fn apply_responses_prompt_cache_hints(input: &mut [OpenAiResponsesInputItem]) {
+    let flags = input
+        .iter()
+        .map(OpenAiResponsesInputItem::is_system)
+        .collect::<Vec<_>>();
+    for index in prompt_cache::select_cache_target_indices(flags.as_slice()) {
+        if let Some(item) = input.get_mut(index) {
+            item.set_copilot_cache_control(prompt_cache::PromptCacheControl::ephemeral());
+        }
+    }
+}
+
+fn clear_responses_prompt_cache_hints(input: &mut [OpenAiResponsesInputItem]) {
+    for item in input {
+        match item {
+            OpenAiResponsesInputItem::Message(message) => message.copilot_cache_control = None,
+            OpenAiResponsesInputItem::FunctionCall(item) => item.copilot_cache_control = None,
+            OpenAiResponsesInputItem::FunctionCallOutput(item) => {
+                item.copilot_cache_control = None
+            }
+        }
+    }
+}
+
 fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
     let normalized = messages
         .iter()
@@ -2030,6 +2307,15 @@ fn session_text_lossy(message: &Message, projected_parts: &[wire_message::WirePa
     } else {
         wire_message::parts_text_lossy(projected_parts)
     }
+}
+
+fn normalize_domain(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -2451,10 +2737,103 @@ mod tests {
         assert_eq!(request.window_id_header().as_deref(), Some("session-42:4"));
     }
 
+    #[test]
+    fn github_copilot_profile_defaults_to_model_based_responses_selection() {
+        let provider = OpenAiProvider::new_managed_with_id(
+            "github-copilot::openai",
+            reqwest::Client::new(),
+            crate::provider::ManagedCredential::static_value("copilot bearer", "token"),
+            "https://api.githubcopilot.com",
+            "gpt-4o-mini",
+        )
+        .with_profile(OpenAiProfile::GithubCopilot)
+        .with_api_mode(OpenAiApiMode::Responses)
+        .with_api_mode_explicit(false);
+
+        assert!(!provider.should_use_responses("gpt-4o-mini"));
+        assert!(provider.should_use_responses("gpt-5"));
+    }
+
+    #[tokio::test]
+    async fn github_copilot_profile_chat_request_includes_copilot_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let _chat = server
+            .mock("POST", "/chat/completions")
+            .match_header("openai-intent", "conversation-edits")
+            .match_header("x-initiator", "user")
+            .match_header("copilot-vision-request", "true")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": { "role": "assistant", "content": "ok" }
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiProvider::new_managed_with_id(
+            "github-copilot::openai",
+            reqwest::Client::new(),
+            crate::provider::ManagedCredential::static_value("copilot bearer", "token"),
+            server.url(),
+            "gpt-4o-mini",
+        )
+        .with_profile(OpenAiProfile::GithubCopilot)
+        .with_api_mode(OpenAiApiMode::Responses)
+        .with_api_mode_explicit(false);
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("gpt-4o-mini"),
+                system: None,
+                messages: vec![Message::prompt_parts(
+                    crate::role::Role::User,
+                    vec![crate::message::PartContent::attachments(vec![AttachmentItem {
+                        kind: AttachmentKind::Image,
+                        mime: "image/png".to_owned(),
+                        source: AttachmentSource::DataUrl {
+                            url: sample_png_data_url().to_owned(),
+                        },
+                        filename: Some("image.png".to_owned()),
+                        title: None,
+                        size_bytes: Some(68),
+                        sha256: None,
+                        width: Some(1),
+                        height: Some(1),
+                        duration_ms: None,
+                        page_count: None,
+                    }])],
+                )],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                response_format: None,
+            })
+            .await
+            .expect("copilot chat request should succeed");
+
+        assert_eq!(response.text, "ok");
+    }
+
     #[tokio::test]
     async fn complete_chatgpt_codex_backend_sends_account_and_window_headers() {
         let auth_data = Arc::new(tokio::sync::Mutex::new(
             crate::provider::auth::AuthData::OAuth {
+                issuer: Some(crate::provider::auth::CredentialIssuer::OpenaiChatgpt),
                 refresh: "refresh-token".to_owned(),
                 access: "access-token".to_owned(),
                 expires_at_ms: 4_102_444_800_000,
@@ -3207,6 +3586,7 @@ mod tests {
     fn prompt_cache_shape_changes_when_chatgpt_account_id_changes() {
         let auth_data_a = Arc::new(tokio::sync::Mutex::new(
             crate::provider::auth::AuthData::OAuth {
+                issuer: Some(crate::provider::auth::CredentialIssuer::OpenaiChatgpt),
                 refresh: "refresh-a".to_owned(),
                 access: "access-a".to_owned(),
                 expires_at_ms: 0,
@@ -3232,6 +3612,7 @@ mod tests {
 
         let auth_data_b = Arc::new(tokio::sync::Mutex::new(
             crate::provider::auth::AuthData::OAuth {
+                issuer: Some(crate::provider::auth::CredentialIssuer::OpenaiChatgpt),
                 refresh: "refresh-b".to_owned(),
                 access: "access-b".to_owned(),
                 expires_at_ms: 0,

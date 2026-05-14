@@ -1,6 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialIssuer {
+    OpenaiChatgpt,
+    GithubCopilot,
+    Gitlab,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthData {
@@ -9,6 +17,8 @@ pub enum AuthData {
     },
     #[serde(rename = "oauth", alias = "o_auth")]
     OAuth {
+        #[serde(default, alias = "provider", skip_serializing_if = "Option::is_none")]
+        issuer: Option<CredentialIssuer>,
         #[serde(alias = "refreshToken")]
         refresh: String,
         #[serde(alias = "accessToken")]
@@ -43,6 +53,34 @@ impl AuthData {
         match self {
             Self::OAuth { account_id, .. } => account_id.as_deref(),
             _ => None,
+        }
+    }
+
+    pub fn issuer(&self) -> Option<CredentialIssuer> {
+        match self {
+            Self::OAuth { issuer, .. } => *issuer,
+            _ => None,
+        }
+    }
+
+    pub fn with_issuer(self, issuer: CredentialIssuer) -> Self {
+        match self {
+            Self::OAuth {
+                refresh,
+                access,
+                expires_at_ms,
+                account_id,
+                enterprise_url,
+                ..
+            } => Self::OAuth {
+                issuer: Some(issuer),
+                refresh,
+                access,
+                expires_at_ms,
+                account_id,
+                enterprise_url,
+            },
+            other => other,
         }
     }
 
@@ -101,6 +139,7 @@ mod tests {
     fn oauth_deserializes_camel_case_aliases() {
         let payload = serde_json::json!({
             "type": "oauth",
+            "provider": "github_copilot",
             "refreshToken": "r1",
             "accessToken": "a1",
             "expiresAtMs": 123,
@@ -112,6 +151,7 @@ mod tests {
         assert_eq!(
             parsed,
             AuthData::OAuth {
+                issuer: Some(super::CredentialIssuer::GithubCopilot),
                 refresh: "r1".to_owned(),
                 access: "a1".to_owned(),
                 expires_at_ms: 123,
@@ -124,6 +164,7 @@ mod tests {
     #[test]
     fn oauth_serializes_snake_case_fields() {
         let auth = AuthData::OAuth {
+            issuer: Some(super::CredentialIssuer::OpenaiChatgpt),
             refresh: "r1".to_owned(),
             access: "a1".to_owned(),
             expires_at_ms: 123,
@@ -137,6 +178,7 @@ mod tests {
         assert!(object.contains_key("refresh"));
         assert!(object.contains_key("access"));
         assert!(object.contains_key("expires_at_ms"));
+        assert!(object.contains_key("issuer"));
         assert!(object.contains_key("account_id"));
         assert!(object.contains_key("enterprise_url"));
         assert!(!object.contains_key("refreshToken"));

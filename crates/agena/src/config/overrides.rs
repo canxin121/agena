@@ -18,9 +18,9 @@ pub enum ConfigOverride {
     StreamReplayMaxRetriesAfterOutput(u32),
     StreamReplayMaxTrackedEvents(usize),
     ProviderDefaultModel { provider_id: String, value: String },
-    ProviderBaseUrl { provider_id: String, value: String },
-    ProviderApiKey { provider_id: String, value: String },
-    ProviderApiKeyEnv { provider_id: String, value: String },
+    ProviderAuthBaseUrl { provider_id: String, value: String },
+    ProviderAuthApiKey { provider_id: String, value: String },
+    ProviderAuthApiKeyEnv { provider_id: String, value: String },
     ProviderEnabled { provider_id: String, value: bool },
 }
 
@@ -140,19 +140,45 @@ impl ConfigOverride {
                     .max_tracked_events = Some(*value);
             }
             Self::ProviderDefaultModel { provider_id, value } => {
-                config.provider_mut(provider_id).default_model = Some(value.clone());
+                config
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .default_model = Some(value.clone());
             }
-            Self::ProviderBaseUrl { provider_id, value } => {
-                config.provider_mut(provider_id).base_url = Some(value.clone());
+            Self::ProviderAuthBaseUrl { provider_id, value } => {
+                config
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .auth
+                    .get_or_insert_with(Default::default)
+                    .base_url = Some(value.clone());
             }
-            Self::ProviderApiKey { provider_id, value } => {
-                config.provider_mut(provider_id).api_key = Some(value.clone());
+            Self::ProviderAuthApiKey { provider_id, value } => {
+                config
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .auth
+                    .get_or_insert_with(Default::default)
+                    .api_key = Some(value.clone());
             }
-            Self::ProviderApiKeyEnv { provider_id, value } => {
-                config.provider_mut(provider_id).api_key_env = Some(value.clone());
+            Self::ProviderAuthApiKeyEnv { provider_id, value } => {
+                config
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .auth
+                    .get_or_insert_with(Default::default)
+                    .api_key_env = Some(value.clone());
             }
             Self::ProviderEnabled { provider_id, value } => {
-                config.provider_mut(provider_id).enabled = Some(*value);
+                config
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .enabled = Some(*value);
             }
         }
     }
@@ -170,14 +196,24 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
 
     match field {
         "default_model" => Ok(ConfigOverride::ProviderDefaultModel { provider_id, value }),
-        "base_url" => Ok(ConfigOverride::ProviderBaseUrl { provider_id, value }),
-        "api_key" => Ok(ConfigOverride::ProviderApiKey { provider_id, value }),
-        "api_key_env" => Ok(ConfigOverride::ProviderApiKeyEnv { provider_id, value }),
         "enabled" => Ok(ConfigOverride::ProviderEnabled {
             provider_id,
             value: parse_bool(key, raw_value)?,
         }),
-        _ => Err(ConfigError::InvalidOverride(key.to_owned())),
+        "base_url" | "api_key" | "api_key_env" => Err(ConfigError::InvalidOverride(format!(
+            "{key} is no longer supported; use providers.{provider_id}.auth.{field}"
+        ))),
+        _ => {
+            let Some(auth_field) = field.strip_prefix("auth.") else {
+                return Err(ConfigError::InvalidOverride(key.to_owned()));
+            };
+            match auth_field {
+                "base_url" => Ok(ConfigOverride::ProviderAuthBaseUrl { provider_id, value }),
+                "api_key" => Ok(ConfigOverride::ProviderAuthApiKey { provider_id, value }),
+                "api_key_env" => Ok(ConfigOverride::ProviderAuthApiKeyEnv { provider_id, value }),
+                _ => Err(ConfigError::InvalidOverride(key.to_owned())),
+            }
+        }
     }
 }
 

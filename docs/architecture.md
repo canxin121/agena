@@ -109,7 +109,7 @@ Vue 前端。主要通过 `packages/agena-studio-web/src/agena/lib/agenaApi.ts` 
 
 `crates/agena/src/lib.rs` 暴露 core 模块：
 
-- `config`: TOML schema、env overlay、CLI override、legacy provider lowering、provider auth/adapters normalization、provider registry build。
+- `config`: TOML schema、env overlay、CLI override、provider auth/adapters normalization、provider registry build。
 - `runtime`: runtime builder、snapshot、reload、background tasks。
 - `session`: session manager、processor、history、store、cache、compaction。
 - `event`: event bus、publisher、store、filter、envelope。

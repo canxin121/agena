@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::Arc,
+    time::Instant,
 };
 
 use agena::config::ConfigLoader;
@@ -23,9 +24,10 @@ use axum::{
     },
     middleware,
     response::Response,
-    routing::get,
+    routing::{get, post},
 };
 use axum_extra::extract::cookie::SameSite;
+use ignore::WalkBuilder;
 use mime_guess::MimeGuess;
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
@@ -96,6 +98,20 @@ const MAX_COMPAT_FILE_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_COMPAT_LIST_LIMIT: usize = 2000;
 const DEFAULT_COMPAT_READ_CHUNK_LIMIT: usize = 256 * 1024;
 const MAX_COMPAT_READ_CHUNK_LIMIT: usize = 2 * 1024 * 1024;
+const DEFAULT_COMPAT_SEARCH_LIMIT: usize = 60;
+const MAX_COMPAT_SEARCH_LIMIT: usize = 400;
+const COMPAT_FILE_SEARCH_EXCLUDED_DIRS: &[&str] = &[
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    ".next",
+    ".turbo",
+    ".cache",
+    "coverage",
+    "tmp",
+    "logs",
+];
 
 type CompatResult<T> = Result<T, (StatusCode, String)>;
 
@@ -166,6 +182,48 @@ struct FsReadChunkCompatResponse {
     has_more: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FsWriteCompatQuery {
+    directory: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FsWriteCompatBody {
+    path: Option<String>,
+    content: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FsWriteCompatResponse {
+    success: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FsSearchCompatQuery {
+    root: Option<String>,
+    directory: Option<String>,
+    q: Option<String>,
+    #[serde(rename = "includeHidden")]
+    include_hidden: Option<bool>,
+    #[serde(rename = "respectGitignore")]
+    respect_gitignore: Option<bool>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct FsSearchCompatFile {
+    name: String,
+    path: String,
+    relative_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FsSearchCompatResponse {
+    root: String,
+    count: usize,
+    files: Vec<FsSearchCompatFile>,
 }
 
 async fn health(
@@ -464,13 +522,127 @@ async fn compat_resolve_scoped_file(
     Ok(absolute)
 }
 
+async fn compat_resolve_scoped_path(
+    directory: Option<&str>,
+    path: Option<&str>,
+) -> CompatResult<(PathBuf, PathBuf)> {
+    let directory = directory
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("Directory parameter is required"))?;
+    let base = compat_validate_directory(directory).await?;
+
+    let target = path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("Path is required"))?;
+
+    let raw_target = PathBuf::from(target);
+    let absolute = if raw_target.is_absolute() {
+        raw_target.clean()
+    } else {
+        base.join(raw_target).clean()
+    };
+
+    if !absolute.starts_with(&base) {
+        return Err(compat_bad_request("Path is outside of active directory"));
+    }
+
+    Ok((base, absolute))
+}
+
+fn compat_normalize_relative_search_path(root: &Path, target: &Path) -> String {
+    let rel = target
+        .strip_prefix(root)
+        .ok()
+        .and_then(|path| {
+            if path.as_os_str().is_empty() {
+                None
+            } else {
+                Some(path)
+            }
+        })
+        .unwrap_or_else(|| target.file_name().map(Path::new).unwrap_or(target));
+    rel.to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
+}
+
+fn compat_fuzzy_match_score_normalized(query: &str, candidate: &str) -> Option<i32> {
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    let c = candidate.to_ascii_lowercase();
+
+    if let Some(idx) = c.find(query) {
+        let bonus = if idx == 0 {
+            20
+        } else {
+            let prev = c.as_bytes()[idx.saturating_sub(1)] as char;
+            if prev == '/' || prev == '_' || prev == '-' || prev == '.' || prev == ' ' {
+                15
+            } else {
+                0
+            }
+        };
+        let score = 100 + bonus - (idx.min(20) as i32) - ((c.len() / 5) as i32);
+        return Some(score);
+    }
+
+    let mut score: i32 = 0;
+    let mut last_index: i32 = -1;
+    let mut consecutive: i32 = 0;
+
+    for ch in query.chars() {
+        if ch == ' ' {
+            continue;
+        }
+        let start = (last_index + 1).max(0) as usize;
+        let idx = match c[start..].find(ch) {
+            Some(pos) => (start + pos) as i32,
+            None => return None,
+        };
+
+        let gap = idx - last_index - 1;
+        if gap == 0 {
+            consecutive += 1;
+        } else {
+            consecutive = 0;
+        }
+
+        score += 10;
+        score += (18 - idx).max(0);
+        score -= gap.min(10);
+
+        if idx == 0 {
+            score += 12;
+        } else {
+            let prev = c.as_bytes()[(idx - 1) as usize] as char;
+            if prev == '/' || prev == '_' || prev == '-' || prev == '.' || prev == ' ' {
+                score += 10;
+            }
+        }
+
+        if consecutive > 0 {
+            score += 12;
+        }
+
+        last_index = idx;
+    }
+
+    score += (24 - (c.len() as i32 / 3)).max(0);
+    Some(score)
+}
+
 async fn compat_fs_read_file_text(path: &Path) -> CompatResult<String> {
     tokio::fs::read_to_string(path)
         .await
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => compat_not_found("File not found"),
             std::io::ErrorKind::PermissionDenied => compat_forbidden("Access to file denied"),
-            std::io::ErrorKind::InvalidData => compat_bad_request("Specified file is not UTF-8 text"),
+            std::io::ErrorKind::InvalidData => {
+                compat_bad_request("Specified file is not UTF-8 text")
+            }
             _ => compat_internal(error.to_string()),
         })
 }
@@ -696,6 +868,185 @@ async fn compat_fs_read_chunk(
     }))
 }
 
+async fn compat_fs_write(
+    Query(query): Query<FsWriteCompatQuery>,
+    Json(body): Json<FsWriteCompatBody>,
+) -> CompatResult<Json<FsWriteCompatResponse>> {
+    let path = body
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("Path is required"))?;
+    let content = body
+        .content
+        .ok_or_else(|| compat_bad_request("Content is required"))?;
+
+    if content.len() as u64 > MAX_COMPAT_FILE_BYTES {
+        return Err(compat_payload_too_large("Content too large"));
+    }
+
+    let (_base, absolute) =
+        compat_resolve_scoped_path(query.directory.as_deref(), Some(path)).await?;
+
+    if let Some(parent) = absolute.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::PermissionDenied => compat_forbidden("Access denied"),
+                _ => compat_internal(error.to_string()),
+            })?;
+    }
+
+    tokio::fs::write(&absolute, content)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access denied"),
+            _ => compat_internal(error.to_string()),
+        })?;
+
+    Ok(Json(FsWriteCompatResponse { success: true }))
+}
+
+async fn compat_fs_search(
+    Query(query): Query<FsSearchCompatQuery>,
+) -> CompatResult<Json<FsSearchCompatResponse>> {
+    let raw_root = query
+        .root
+        .or(query.directory)
+        .unwrap_or_else(|| compat_default_list_root().display().to_string());
+    let root = compat_validate_directory(&raw_root).await?;
+    let raw_query = query.q.unwrap_or_default();
+    let include_hidden = query.include_hidden.unwrap_or(false);
+    let respect_gitignore = query.respect_gitignore.unwrap_or(true);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_COMPAT_SEARCH_LIMIT)
+        .clamp(1, MAX_COMPAT_SEARCH_LIMIT);
+
+    let query_norm = raw_query.trim().to_ascii_lowercase();
+    let match_all = query_norm.is_empty();
+    let collect_limit = if match_all {
+        limit
+    } else {
+        (limit * 3).max(200)
+    };
+
+    let excluded: HashSet<&'static str> =
+        COMPAT_FILE_SEARCH_EXCLUDED_DIRS.iter().copied().collect();
+    let started = Instant::now();
+    let root_for_filter = root.clone();
+    let mut builder = WalkBuilder::new(&root);
+    builder.hidden(!include_hidden);
+    if !respect_gitignore {
+        builder.git_ignore(false);
+        builder.git_global(false);
+        builder.git_exclude(false);
+        builder.parents(false);
+    }
+    builder.follow_links(false);
+
+    let mut candidates: Vec<(FsSearchCompatFile, i32)> = Vec::new();
+
+    for result in builder
+        .filter_entry(move |entry| {
+            let path = entry.path();
+            if path == root_for_filter {
+                return true;
+            }
+
+            let Some(name) = path.file_name().and_then(|segment| segment.to_str()) else {
+                return true;
+            };
+
+            let lower = name.to_ascii_lowercase();
+            if excluded.contains(lower.as_str()) {
+                return false;
+            }
+            if !include_hidden && name.starts_with('.') {
+                return false;
+            }
+            true
+        })
+        .build()
+    {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+
+        if !entry
+            .file_type()
+            .map(|file_type| file_type.is_file())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let path = entry.path().to_path_buf();
+        let name = path
+            .file_name()
+            .and_then(|segment| segment.to_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+
+        let relative_path = compat_normalize_relative_search_path(&root, &path);
+        let score = if match_all {
+            0
+        } else {
+            match compat_fuzzy_match_score_normalized(&query_norm, &relative_path) {
+                Some(score) => score,
+                None => continue,
+            }
+        };
+
+        candidates.push((
+            FsSearchCompatFile {
+                name,
+                path: compat_path_string(&path),
+                relative_path,
+            },
+            score,
+        ));
+
+        if candidates.len() >= collect_limit {
+            break;
+        }
+    }
+
+    if !match_all {
+        candidates.sort_by(|(left, left_score), (right, right_score)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left.relative_path.len().cmp(&right.relative_path.len()))
+                .then_with(|| left.relative_path.cmp(&right.relative_path))
+        });
+    }
+
+    let files = candidates
+        .into_iter()
+        .take(limit)
+        .map(|(file, _)| file)
+        .collect::<Vec<_>>();
+
+    tracing::debug!(
+        "compat_fs_search root={} q='{}' count={} elapsed_ms={}",
+        root.display(),
+        raw_query,
+        files.len(),
+        started.elapsed().as_millis()
+    );
+
+    Ok(Json(FsSearchCompatResponse {
+        root: compat_path_string(&root),
+        count: files.len(),
+        files,
+    }))
+}
+
 async fn compat_fs_download(Query(query): Query<FsFileCompatQuery>) -> CompatResult<Response> {
     let path =
         compat_resolve_scoped_file(query.directory.as_deref(), query.path.as_deref()).await?;
@@ -726,8 +1077,10 @@ where
     Router::new()
         .route("/api/fs/home", get(compat_fs_home))
         .route("/api/fs/list", get(compat_fs_list))
+        .route("/api/fs/search", get(compat_fs_search))
         .route("/api/fs/read", get(compat_fs_read))
         .route("/api/fs/read-chunk", get(compat_fs_read_chunk))
+        .route("/api/fs/write", post(compat_fs_write))
         .route("/api/fs/raw", get(compat_fs_raw))
         .route("/api/fs/download", get(compat_fs_download))
 }
@@ -1058,6 +1411,7 @@ mod tests {
     use super::*;
     use axum::http::Request;
     use http_body_util::BodyExt;
+    use serde_json::json;
     use tempfile::tempdir;
     use tower::ServiceExt;
 
@@ -1283,9 +1637,8 @@ mod tests {
 
         let directory_path = temp.path().display().to_string();
         let directory = urlencoding::encode(&directory_path);
-        let read_chunk_uri = format!(
-            "/api/fs/read-chunk?directory={directory}&path=notes.txt&offset=0&limit=5"
-        );
+        let read_chunk_uri =
+            format!("/api/fs/read-chunk?directory={directory}&path=notes.txt&offset=0&limit=5");
 
         let response = compat_fs_router::<()>()
             .oneshot(
@@ -1314,5 +1667,90 @@ mod tests {
         assert_eq!(payload.total_bytes, 12);
         assert!(payload.has_more);
         assert_eq!(payload.next_offset, Some(5));
+    }
+
+    #[tokio::test]
+    async fn compat_fs_write_route_creates_scoped_file() {
+        let temp = tempdir().expect("tempdir should be created");
+        let directory_path = temp.path().display().to_string();
+        let directory = urlencoding::encode(&directory_path);
+
+        let response = compat_fs_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/fs/write?directory={directory}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"path":"nested/notes.txt","content":"hello studio"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: FsWriteCompatResponse =
+            serde_json::from_slice(&body).expect("response should be valid json");
+        assert!(payload.success);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("nested/notes.txt"))
+                .expect("file should exist after write"),
+            "hello studio"
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_fs_search_route_returns_ranked_files() {
+        let temp = tempdir().expect("tempdir should be created");
+        std::fs::create_dir_all(temp.path().join("src")).expect("src dir should exist");
+        std::fs::create_dir_all(temp.path().join("node_modules"))
+            .expect("excluded dir should exist");
+        std::fs::write(temp.path().join("src/app.ts"), "export {}")
+            .expect("app.ts should be written");
+        std::fs::write(temp.path().join("src/app.test.ts"), "export {}")
+            .expect("app.test.ts should be written");
+        std::fs::write(temp.path().join("node_modules/app.ts"), "ignored")
+            .expect("ignored file should be written");
+
+        let root_path = temp.path().display().to_string();
+        let root = urlencoding::encode(&root_path);
+        let uri = format!("/api/fs/search?root={root}&q=app&limit=5&respectGitignore=false");
+
+        let response = compat_fs_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: FsSearchCompatResponse =
+            serde_json::from_slice(&body).expect("response should be valid json");
+        assert_eq!(payload.root, compat_path_string(temp.path()));
+        assert_eq!(payload.count, 2);
+        assert_eq!(payload.files[0].relative_path, "src/app.ts");
+        assert_eq!(payload.files[1].relative_path, "src/app.test.ts");
+        assert!(
+            payload
+                .files
+                .iter()
+                .all(|file| !file.path.contains("node_modules"))
+        );
     }
 }

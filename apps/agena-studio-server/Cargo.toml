@@ -20,6 +20,7 @@ clap = { workspace = true }
 dashmap = { workspace = true }
 getrandom = { workspace = true }
 agena-otel = { workspace = true }
+ignore = { workspace = true }
 mime_guess = { workspace = true }
 path-clean = { workspace = true }
 serde = { workspace = true }

@@ -10,7 +10,7 @@ use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use crate::{
     AppError,
     db::{
-        crud::{permission_rule, session, workspace},
+        crud::{permission_rule, session, session_goal, workspace},
         tx::with_transaction_and_effects,
     },
     event::{
@@ -19,13 +19,14 @@ use crate::{
     },
     message::Message,
     permission::{PermissionMode, PermissionScope, PersistedPermissionRule},
+    session::cost::SessionCostSummary,
 };
 
 use super::{
     Session,
     cache::{SessionCache, SessionCachePolicy, SessionCacheStats},
     history::SessionHistoryStore,
-    model::{SessionListRequest, SessionSummary},
+    model::{GoalStatus, SessionGoal, SessionListRequest, SessionSummary},
 };
 
 pub(crate) struct SessionCommit {
@@ -177,7 +178,8 @@ impl SessionStore {
             })
         })
         .await?;
-
+        let mut session = session;
+        session.goal = load_session_goal(&self.db, session.id).await?;
         Ok(session)
     }
 
@@ -188,61 +190,6 @@ impl SessionStore {
         session_id: i64,
     ) -> Result<Vec<DomainEvent>, AppError> {
         Ok(self.history.list_session_events(session_id).await?)
-    }
-
-    pub(crate) async fn list_projected_messages(
-        &self,
-        session_id: i64,
-        include_full_parts: bool,
-    ) -> Result<Vec<Message>, AppError> {
-        Ok(self
-            .history
-            .list_projected_messages(session_id, include_full_parts)
-            .await?)
-    }
-
-    pub(crate) async fn find_projected_message(
-        &self,
-        session_id: i64,
-        message_id: i64,
-        include_full_parts: bool,
-    ) -> Result<Option<Message>, AppError> {
-        Ok(self
-            .history
-            .find_projected_message(session_id, message_id, include_full_parts)
-            .await?)
-    }
-
-    pub(crate) async fn list_projected_parts(
-        &self,
-        message_id: i64,
-        include_full_parts: bool,
-    ) -> Result<Vec<crate::message::MessagePart>, AppError> {
-        Ok(self
-            .history
-            .list_projected_parts(message_id, include_full_parts)
-            .await?)
-    }
-
-    pub(crate) async fn find_projected_part(
-        &self,
-        part_id: i64,
-    ) -> Result<Option<crate::message::MessagePart>, AppError> {
-        Ok(self.history.find_projected_part(part_id).await?)
-    }
-
-    pub(crate) async fn find_projected_session_id_for_message(
-        &self,
-        message_id: i64,
-    ) -> Result<Option<i64>, AppError> {
-        Ok(self.history.find_session_id_for_message(message_id).await?)
-    }
-
-    pub(crate) async fn find_projected_session_id_for_part(
-        &self,
-        part_id: i64,
-    ) -> Result<Option<i64>, AppError> {
-        Ok(self.history.find_session_id_for_part(part_id).await?)
     }
 
     pub(crate) async fn list_workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
@@ -270,53 +217,53 @@ impl SessionStore {
         let stats = session::session_event_stats_for_ids(&self.db, &ids).await?;
         let child_counts =
             session::child_session_counts_by_parent_ids(&self.db, ids.as_slice()).await?;
-        models
-            .into_iter()
-            .map(|model| {
-                let s = stats.get(&model.id).copied();
-                let message_count = s
-                    .map(|stats| u64::try_from(stats.message_count))
-                    .transpose()
-                    .map_err(|_| {
-                        AppError::Internal(format!(
-                            "invalid negative message count for session {}",
-                            model.id
-                        ))
-                    })?
-                    .unwrap_or_default();
-                let child_session_count = child_counts
-                    .get(&model.id)
-                    .copied()
-                    .map(u64::try_from)
-                    .transpose()
-                    .map_err(|_| {
-                        AppError::Internal(format!(
-                            "invalid negative child count for session {}",
-                            model.id
-                        ))
-                    })?
-                    .unwrap_or_default();
-                let last_message_at = s
-                    .and_then(|stats| stats.last_message_at_ms)
-                    .map(timestamp_millis_to_utc)
-                    .transpose()?;
-                Ok(SessionSummary {
-                    is_subagent: model.is_subagent,
-                    id: model.id,
-                    parent_id: model.parent_id,
-                    depth: model.depth,
-                    root_id: model.root_id,
-                    workspace_id: model.workspace_id,
-                    title: model.title,
-                    version: model.version,
-                    created_at: timestamp_millis_to_utc(model.created_at_ms)?,
-                    updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
-                    message_count,
-                    child_session_count,
-                    last_message_at,
-                })
-            })
-            .collect()
+        let mut out = Vec::with_capacity(models.len());
+        for model in models {
+            let s = stats.get(&model.id).copied();
+            let message_count = s
+                .map(|stats| u64::try_from(stats.message_count))
+                .transpose()
+                .map_err(|_| {
+                    AppError::Internal(format!(
+                        "invalid negative message count for session {}",
+                        model.id
+                    ))
+                })?
+                .unwrap_or_default();
+            let child_session_count = child_counts
+                .get(&model.id)
+                .copied()
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| {
+                    AppError::Internal(format!(
+                        "invalid negative child count for session {}",
+                        model.id
+                    ))
+                })?
+                .unwrap_or_default();
+            let last_message_at = s
+                .and_then(|stats| stats.last_message_at_ms)
+                .map(timestamp_millis_to_utc)
+                .transpose()?;
+            out.push(SessionSummary {
+                is_subagent: model.is_subagent,
+                id: model.id,
+                parent_id: model.parent_id,
+                depth: model.depth,
+                root_id: model.root_id,
+                workspace_id: model.workspace_id,
+                title: model.title,
+                version: model.version,
+                created_at: timestamp_millis_to_utc(model.created_at_ms)?,
+                updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
+                message_count,
+                child_session_count,
+                last_message_at,
+                goal: load_session_goal(&self.db, model.id).await?,
+            });
+        }
+        Ok(out)
     }
 
     pub(crate) async fn list_session_summaries(
@@ -342,54 +289,54 @@ impl SessionStore {
         let child_counts =
             session::child_session_counts_by_parent_ids(&self.db, session_ids.as_slice()).await?;
 
-        session_models
-            .into_iter()
-            .map(|model| {
-                let message_stats = message_stats.get(&model.id).copied();
-                let message_count = message_stats
-                    .map(|stats| u64::try_from(stats.message_count))
-                    .transpose()
-                    .map_err(|_| {
-                        AppError::Internal(format!(
-                            "invalid negative message count for session {}",
-                            model.id
-                        ))
-                    })?
-                    .unwrap_or_default();
-                let child_session_count = child_counts
-                    .get(&model.id)
-                    .copied()
-                    .map(u64::try_from)
-                    .transpose()
-                    .map_err(|_| {
-                        AppError::Internal(format!(
-                            "invalid negative child session count for session {}",
-                            model.id
-                        ))
-                    })?
-                    .unwrap_or_default();
-                let last_message_at = message_stats
-                    .and_then(|stats| stats.last_message_at_ms)
-                    .map(timestamp_millis_to_utc)
-                    .transpose()?;
+        let mut out = Vec::with_capacity(session_models.len());
+        for model in session_models {
+            let message_stats = message_stats.get(&model.id).copied();
+            let message_count = message_stats
+                .map(|stats| u64::try_from(stats.message_count))
+                .transpose()
+                .map_err(|_| {
+                    AppError::Internal(format!(
+                        "invalid negative message count for session {}",
+                        model.id
+                    ))
+                })?
+                .unwrap_or_default();
+            let child_session_count = child_counts
+                .get(&model.id)
+                .copied()
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| {
+                    AppError::Internal(format!(
+                        "invalid negative child session count for session {}",
+                        model.id
+                    ))
+                })?
+                .unwrap_or_default();
+            let last_message_at = message_stats
+                .and_then(|stats| stats.last_message_at_ms)
+                .map(timestamp_millis_to_utc)
+                .transpose()?;
 
-                Ok(SessionSummary {
-                    is_subagent: model.is_subagent,
-                    id: model.id,
-                    parent_id: model.parent_id,
-                    depth: model.depth,
-                    root_id: model.root_id,
-                    workspace_id: model.workspace_id,
-                    title: model.title,
-                    version: model.version,
-                    created_at: timestamp_millis_to_utc(model.created_at_ms)?,
-                    updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
-                    message_count,
-                    child_session_count,
-                    last_message_at,
-                })
-            })
-            .collect()
+            out.push(SessionSummary {
+                is_subagent: model.is_subagent,
+                id: model.id,
+                parent_id: model.parent_id,
+                depth: model.depth,
+                root_id: model.root_id,
+                workspace_id: model.workspace_id,
+                title: model.title,
+                version: model.version,
+                created_at: timestamp_millis_to_utc(model.created_at_ms)?,
+                updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
+                message_count,
+                child_session_count,
+                last_message_at,
+                goal: load_session_goal(&self.db, model.id).await?,
+            });
+        }
+        Ok(out)
     }
 
     pub(crate) async fn load_session(
@@ -409,6 +356,7 @@ impl SessionStore {
             .await?
             .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
         let mut session = session_from_model(session_model)?;
+        session.goal = load_session_goal(&self.db, session_id).await?;
         let projection = self
             .history
             .load_projection(session_id, session.runtime.clone())
@@ -469,6 +417,127 @@ impl SessionStore {
         // Silent: subscribers should not observe a fork copy as fresh activity.
         self.append_history_items_silent(child, items, cache_policy)
             .await
+    }
+
+    pub(crate) async fn upsert_goal(
+        &self,
+        session_id: i64,
+        objective: String,
+        token_budget: Option<u64>,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Session, AppError> {
+        let cache = Arc::clone(&self.cache);
+        with_transaction_and_effects(&self.db, move |txn, effects| {
+            let cache = Arc::clone(&cache);
+            let objective = objective.clone();
+            Box::pin(async move {
+                session::get_session_by_id(txn, session_id)
+                    .await?
+                    .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
+                session_goal::upsert_goal(txn, session_id, objective, token_budget).await?;
+                let model = session::touch_session_updated_at(
+                    txn,
+                    session_id,
+                    session::get_session_by_id(txn, session_id)
+                        .await?
+                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
+                        .runtime_state
+                        .unwrap_or_default(),
+                )
+                .await?
+                .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
+                let mut updated = session_from_model_db(model)?;
+                updated.goal = load_session_goal_on(txn, session_id).await?;
+                let session_for_cache = updated.clone();
+                effects.push(async move {
+                    with_cache(cache.as_ref(), |guard| {
+                        guard.insert(session_for_cache, cache_policy);
+                    });
+                });
+                Ok(updated)
+            })
+        })
+        .await
+    }
+
+    pub(crate) async fn complete_goal(
+        &self,
+        session_id: i64,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Option<Session>, AppError> {
+        let cache = Arc::clone(&self.cache);
+        with_transaction_and_effects(&self.db, move |txn, effects| {
+            let cache = Arc::clone(&cache);
+            Box::pin(async move {
+                let Some(goal) = session_goal::mark_completed(txn, session_id).await? else {
+                    return Ok(None);
+                };
+                let model = session::touch_session_updated_at(
+                    txn,
+                    session_id,
+                    session::get_session_by_id(txn, session_id)
+                        .await?
+                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
+                        .runtime_state
+                        .unwrap_or_default(),
+                )
+                .await?
+                .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
+                let mut updated = session_from_model_db(model)?;
+                updated.goal = Some(session_goal_from_model(goal)?);
+                let session_for_cache = updated.clone();
+                effects.push(async move {
+                    with_cache(cache.as_ref(), |guard| {
+                        guard.insert(session_for_cache, cache_policy);
+                    });
+                });
+                Ok(Some(updated))
+            })
+        })
+        .await
+    }
+
+    pub(crate) async fn clear_goal(
+        &self,
+        session_id: i64,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<bool, AppError> {
+        let cache = Arc::clone(&self.cache);
+        with_transaction_and_effects(&self.db, move |txn, effects| {
+            let cache = Arc::clone(&cache);
+            Box::pin(async move {
+                let cleared = session_goal::clear_by_session_id(txn, session_id).await?;
+                if cleared {
+                    let runtime = session::get_session_by_id(txn, session_id)
+                        .await?
+                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
+                        .runtime_state
+                        .unwrap_or_default();
+                    let model = session::touch_session_updated_at(txn, session_id, runtime)
+                        .await?
+                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?;
+                    let mut updated = session_from_model_db(model)?;
+                    updated.goal = None;
+                    let session_for_cache = updated.clone();
+                    effects.push(async move {
+                        with_cache(cache.as_ref(), |guard| {
+                            guard.insert(session_for_cache, cache_policy);
+                        });
+                    });
+                }
+                Ok(cleared)
+            })
+        })
+        .await
+    }
+
+    pub(crate) async fn goal_cost_summary(
+        &self,
+        session_id: i64,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<SessionCostSummary, AppError> {
+        let session = self.load_session(session_id, cache_policy).await?;
+        Ok(super::cost::summarize(&session.messages))
     }
 
     pub(crate) async fn rewind_to_message(
@@ -587,6 +656,7 @@ impl SessionStore {
             })
         })
         .await?;
+        let goal = load_session_goal(&self.db, session_id).await?;
 
         // Re-project after the publish so the cached session reflects the
         // compaction. Drop the persisted snapshot first — it was folded
@@ -597,6 +667,7 @@ impl SessionStore {
         let post_view = super::history::fold_session_view(post_events.as_slice())
             .map_err(|err| AppError::Internal(format!("failed to project session view: {err}")))?;
         let mut session = session;
+        session.goal = goal;
         session.replace_messages(post_view.messages);
         with_cache(self.cache.as_ref(), |guard| {
             guard.insert(session.clone(), cache_policy);
@@ -700,6 +771,7 @@ impl SessionStore {
             })
         })
         .await?;
+        let goal = load_session_goal(&self.db, session_id).await?;
 
         // Drop the persisted snapshot so the next load re-folds against the
         // newly-published Uncompacted revisions.
@@ -708,6 +780,7 @@ impl SessionStore {
         let post_view = super::history::fold_session_view(post_events.as_slice())
             .map_err(|err| AppError::Internal(format!("failed to project session view: {err}")))?;
         let mut session = session;
+        session.goal = goal;
         session.replace_messages(post_view.messages);
         with_cache(self.cache.as_ref(), |guard| {
             guard.insert(session.clone(), cache_policy);
@@ -868,7 +941,9 @@ impl SessionStore {
                 })
             })
             .await?;
-            session.apply_persisted_metadata(&session_from_model_db(updated)?);
+            let mut persisted = session_from_model_db(updated)?;
+            persisted.goal = load_session_goal(&self.db, new_session_id).await?;
+            session.apply_persisted_metadata(&persisted);
             session.runtime = meta.runtime_state;
             session.refresh_derived();
             with_cache(self.cache.as_ref(), |guard| {
@@ -957,6 +1032,7 @@ impl SessionStore {
         .await?;
 
         session.apply_persisted_metadata(&updated);
+        session.goal = load_session_goal(&self.db, session_id).await?;
         session.replace_messages(view.messages);
         session.runtime = updated.runtime.clone();
         session.refresh_derived();
@@ -1078,9 +1154,6 @@ impl SessionStore {
         client_events: Vec<EventKind>,
     ) -> Result<(), AppError> {
         for kind in client_events {
-            if let EventKind::MessagePartUpdated(update) = &kind {
-                self.history.apply_message_part_update(update).await?;
-            }
             self.publish_event(session_id, kind).await?;
         }
         Ok(())
@@ -1385,6 +1458,59 @@ fn session_from_model_db(model: crate::db::entities::session::Model) -> Result<S
     session.runtime = model.runtime_state.unwrap_or_default();
     session.updated_at = updated_at;
     Ok(session)
+}
+
+async fn load_session_goal(
+    db: &DatabaseConnection,
+    session_id: i64,
+) -> Result<Option<SessionGoal>, AppError> {
+    let Some(model) = session_goal::get_by_session_id(db, session_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(session_goal_from_model(model)?))
+}
+
+async fn load_session_goal_on<C>(db: &C, session_id: i64) -> Result<Option<SessionGoal>, AppError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let Some(model) = session_goal::get_by_session_id(db, session_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(session_goal_from_model(model)?))
+}
+
+fn session_goal_from_model(
+    model: crate::db::entities::session_goal::Model,
+) -> Result<SessionGoal, AppError> {
+    let status = match model.status.as_str() {
+        "active" => GoalStatus::Active,
+        "completed" => GoalStatus::Completed,
+        other => {
+            return Err(AppError::Internal(format!(
+                "invalid goal status in persisted goal {}: {other}",
+                model.id
+            )));
+        }
+    };
+    let token_budget = model
+        .token_budget
+        .map(u64::try_from)
+        .transpose()
+        .map_err(|_| AppError::Internal(format!("invalid negative token budget in goal {}", model.id)))?;
+    Ok(SessionGoal {
+        id: model.id,
+        session_id: model.session_id,
+        objective: model.objective,
+        status,
+        token_budget,
+        created_at: timestamp_millis_to_utc(model.created_at_ms)?,
+        updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
+        completed_at: model
+            .completed_at_ms
+            .map(timestamp_millis_to_utc)
+            .transpose()?,
+    })
 }
 
 fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError> {

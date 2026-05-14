@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::event::client::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, MessagePartDeltaEvent,
     MessagePartUpdatedEvent, PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
-    RunFailedEvent, RunStartedEvent, StreamErrorEvent,
+    RunFailedEvent, RunStartedEvent, SessionGoalEvent, StreamErrorEvent,
 };
 use crate::session::history::{
     AssistantMessageCompleted, MessageRevised, SystemNoticeAppended, ToolCallCompleted,
@@ -34,6 +34,7 @@ pub enum EventKind {
     PermissionRuleCreated(PermissionRuleEvent),
     PermissionRuleUpdated(PermissionRuleEvent),
     PermissionRuleRevoked(PermissionRuleEvent),
+    SessionGoalUpdated(SessionGoalEvent),
 
     // --- append-only history ---
     TurnStarted(TurnStarted),
@@ -76,6 +77,7 @@ impl EventKind {
             Self::PermissionRuleCreated(_) => "permission_rule_created",
             Self::PermissionRuleUpdated(_) => "permission_rule_updated",
             Self::PermissionRuleRevoked(_) => "permission_rule_revoked",
+            Self::SessionGoalUpdated(_) => "session_goal_updated",
             Self::TurnStarted(_) => "turn_started",
             Self::TurnCompleted(_) => "turn_completed",
             Self::TurnAborted(_) => "turn_aborted",
@@ -137,6 +139,7 @@ pub const HISTORY_KINDS: &[&str] = &[
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",
+    "session_goal_updated",
     "turn_started",
     "turn_completed",
     "turn_aborted",
@@ -165,6 +168,7 @@ pub const ALL_KINDS: &[&str] = &[
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",
+    "session_goal_updated",
     "turn_started",
     "turn_completed",
     "turn_aborted",

@@ -174,6 +174,14 @@ enabled = true
 
 这三个开关都用于快速下线 provider、adapter 或单个模型，而不需要删配置。
 
+默认值：
+
+- provider：默认 `enabled = true`
+- adapter：默认 `enabled = false`
+- model：默认 `enabled = true`
+
+因此只要你希望某个 adapter 真正对外提供模型，建议显式写上 `enabled = true`。
+
 ## auth 模式
 
 `provider.auth.mode` 可选值：
@@ -282,6 +290,7 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [providers.openai.adapters.openai.models."gpt-5"]
 enabled = true
@@ -299,6 +308,7 @@ issuer = "openai_chatgpt"
 credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "...", access = "...", expires_at_ms = 4102444800000, account_id = "acct-123" }
 
 [providers.chatgpt.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 
 [providers.chatgpt.adapters.openai.models."gpt-5.3-codex"]
@@ -317,6 +327,7 @@ issuer = "github_copilot"
 credential = { type = "oauth", issuer = "github_copilot", refresh = "...", access = "...", expires_at_ms = 4102444800000 }
 
 [providers."github-copilot".adapters.openai]
+enabled = true
 models_url = "https://api.githubcopilot.com/models"
 
 [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
@@ -335,6 +346,7 @@ issuer = "github_copilot"
 credential = { type = "oauth", issuer = "github_copilot", refresh = "...", access = "...", expires_at_ms = 4102444800000 }
 
 [providers."github-copilot-claude".adapters.anthropic]
+enabled = true
 auth_header = "authorization"
 auth_scheme = "Bearer"
 extra_beta_header = "interleaved-thinking-2025-05-14"
@@ -355,6 +367,7 @@ base_url = "https://gateway.example.com/v1"
 api_key_env = "SHARED_GATEWAY_API_KEY"
 
 [providers.shared.adapters.openai]
+enabled = true
 
 [providers.shared.adapters.openai.models."gpt-4.1-mini"]
 enabled = true
@@ -363,6 +376,7 @@ enabled = true
 thinking = { type = "effort", effort = "high" }
 
 [providers.shared.adapters.anthropic]
+enabled = true
 
 [providers.shared.adapters.anthropic.models."claude-sonnet-4"]
 enabled = true
@@ -381,6 +395,7 @@ region = "us-east-1"
 profile = "prod"
 
 [providers.bedrock.adapters.amazon_bedrock]
+enabled = true
 
 [providers.bedrock.adapters.amazon_bedrock.models."anthropic.claude-3-7-sonnet-20250219-v1:0"]
 enabled = true

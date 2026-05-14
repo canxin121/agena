@@ -342,6 +342,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "test"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let workspace_root = path
@@ -376,6 +377,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "test"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         )
         .expect("config rewrite should succeed");
@@ -410,6 +412,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "test"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let workspace_root = path
@@ -447,6 +450,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "test"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let workspace_root = path
@@ -483,6 +487,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "test"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         )
         .expect("config rewrite should succeed");

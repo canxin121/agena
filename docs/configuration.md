@@ -353,6 +353,14 @@ enabled = true
 - `enabled` 可挂在 provider / adapter / model 三层。
 - 外部完整 model ref 统一为 `"<provider>/<adapter>/<model>"`。
 
+默认值：
+
+- provider：默认 `enabled = true`
+- adapter：默认 `enabled = false`
+- model：默认 `enabled = true`
+
+因此生产配置里建议把实际要启用的 adapter 明确写成 `enabled = true`。
+
 `provider.auth.mode` 可选值：
 
 ```text
@@ -391,6 +399,7 @@ issuer = "openai_chatgpt"
 credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "...", access = "...", expires_at_ms = 4102444800000, account_id = "acct-123" }
 
 [providers.openai_chatgpt.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 
 [providers.openai_chatgpt.adapters.openai.models."gpt-5.3-codex"]
@@ -407,6 +416,7 @@ issuer = "github_copilot"
 credential = { type = "oauth", issuer = "github_copilot", refresh = "...", access = "...", expires_at_ms = 4102444800000 }
 
 [providers."github-copilot".adapters.openai]
+enabled = true
 models_url = "https://api.githubcopilot.com/models"
 
 [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
@@ -423,11 +433,13 @@ base_url = "https://gateway.example.com/v1"
 api_key_env = "SHARED_GATEWAY_API_KEY"
 
 [providers.shared.adapters.openai]
+enabled = true
 
 [providers.shared.adapters.openai.models."gpt-4.1-mini"]
 enabled = true
 
 [providers.shared.adapters.anthropic]
+enabled = true
 
 [providers.shared.adapters.anthropic.models."claude-sonnet-4"]
 enabled = true

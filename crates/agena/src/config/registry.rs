@@ -6,20 +6,19 @@ use tokio::sync::Mutex;
 use crate::{
     plugin::{PluginHost, PluginHostBuilder},
     provider::{
-        AmazonBedrockProvider, AnthropicProvider, AuthRefreshStrategy, AuthSecretSelector,
-        AnthropicProfile, GeminiProvider, GitlabProvider, GitlabProviderConfig,
-        ManagedCredential, ModelProvider, MultiAdapterProvider, OllamaProvider,
-        OpenAiProvider, ProviderModelRoute, ProviderRegistry, auth::AuthData,
-        parse_sap_ai_core_service_key,
+        AmazonBedrockProvider, AnthropicProfile, AnthropicProvider, AuthRefreshStrategy,
+        AuthSecretSelector, GeminiProvider, GitlabProvider, GitlabProviderConfig,
+        ManagedCredential, ModelProvider, MultiAdapterProvider, OllamaProvider, OpenAiProvider,
+        ProviderModelRoute, ProviderRegistry, auth::AuthData, parse_sap_ai_core_service_key,
     },
 };
 
+use super::raw::parse_adapter_model_ref;
 use super::{
     ConfigEnvironment, ConfigError, ProcessEnvironment, ProviderAdapterDefinition,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig,
 };
-use super::raw::parse_adapter_model_ref;
 
 impl ResolvedConfig {
     pub fn build_provider_registry(&self) -> Result<ProviderRegistry, ConfigError> {
@@ -246,23 +245,60 @@ fn build_adapter_provider(
                 .unwrap_or_else(|| "http://localhost:11434".to_owned()),
             adapter_default_model.to_owned(),
         )),
-        ProviderAdapterDefinition::OpenAi(adapter) => {
-            match auth {
-                ProviderAuthConfig::Api(_)
-                | ProviderAuthConfig::GoogleAdc
-                | ProviderAuthConfig::SapAiCore(_) => {
-                    let credential = openai_adapter_api_credential(
+        ProviderAdapterDefinition::OpenAi(adapter) => match auth {
+            ProviderAuthConfig::Api(_)
+            | ProviderAuthConfig::GoogleAdc
+            | ProviderAuthConfig::SapAiCore(_) => {
+                let credential = openai_adapter_api_credential(
+                    provider_id,
+                    auth,
+                    client.clone(),
+                    adapter.options.capability_family,
+                    env,
+                )?;
+                let mut provider = OpenAiProvider::new_managed_with_id(
+                    runtime_provider_id.as_str(),
+                    client,
+                    credential.credential,
+                    openai_adapter_base_url(provider_id, auth, &adapter.options)?,
+                    adapter_default_model.to_owned(),
+                )
+                .with_backend(adapter.options.backend.into())
+                .with_auth_header(
+                    adapter.options.auth_header.clone(),
+                    adapter.options.auth_scheme.clone(),
+                )
+                .with_extra_headers(to_hash_map(&adapter.extra_headers))
+                .with_api_mode(adapter.options.api_mode.into())
+                .with_stream_mode(adapter.options.stream_mode.into())
+                .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
+                .with_models_url(adapter.options.models_url.clone());
+
+                if let Some(family) = adapter.options.capability_family {
+                    provider = provider.with_capability_family(family.into());
+                }
+
+                if let Some(auth_data) = credential.auth_data {
+                    provider = provider.with_auth_data(auth_data);
+                }
+
+                Arc::new(provider)
+            }
+            ProviderAuthConfig::Credential(credential_auth) => match credential_auth.issuer {
+                crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
+                    let credential = require_provider_auth_credential(
                         provider_id,
+                        "api_key",
                         auth,
-                        client.clone(),
-                        adapter.options.capability_family,
+                        AuthSecretSelector::AccessOrApiKey,
+                        AuthRefreshStrategy::OpenAiOAuth,
                         env,
                     )?;
                     let mut provider = OpenAiProvider::new_managed_with_id(
                         runtime_provider_id.as_str(),
                         client,
                         credential.credential,
-                        openai_adapter_base_url(provider_id, auth, &adapter.options)?,
+                        "https://chatgpt.com/backend-api/codex".to_owned(),
                         adapter_default_model.to_owned(),
                     )
                     .with_backend(adapter.options.backend.into())
@@ -273,12 +309,7 @@ fn build_adapter_provider(
                     .with_extra_headers(to_hash_map(&adapter.extra_headers))
                     .with_api_mode(adapter.options.api_mode.into())
                     .with_stream_mode(adapter.options.stream_mode.into())
-                    .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
-                    .with_models_url(adapter.options.models_url.clone());
-
-                    if let Some(family) = adapter.options.capability_family {
-                        provider = provider.with_capability_family(family.into());
-                    }
+                    .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
 
                     if let Some(auth_data) = credential.auth_data {
                         provider = provider.with_auth_data(auth_data);
@@ -286,106 +317,71 @@ fn build_adapter_provider(
 
                     Arc::new(provider)
                 }
-                ProviderAuthConfig::Credential(credential_auth) => match credential_auth.issuer {
-                    crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
-                        let credential = require_provider_auth_credential(
-                            provider_id,
-                            "api_key",
-                            auth,
-                            AuthSecretSelector::AccessOrApiKey,
-                            AuthRefreshStrategy::OpenAiOAuth,
-                            env,
-                        )?;
-                        let mut provider = OpenAiProvider::new_managed_with_id(
-                            runtime_provider_id.as_str(),
-                            client,
-                            credential.credential,
-                            "https://chatgpt.com/backend-api/codex".to_owned(),
-                            adapter_default_model.to_owned(),
-                        )
-                        .with_backend(adapter.options.backend.into())
-                        .with_auth_header(
-                            adapter.options.auth_header.clone(),
-                            adapter.options.auth_scheme.clone(),
-                        )
-                        .with_extra_headers(to_hash_map(&adapter.extra_headers))
-                        .with_api_mode(adapter.options.api_mode.into())
-                        .with_stream_mode(adapter.options.stream_mode.into())
-                        .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
+                crate::provider::auth::CredentialIssuer::GithubCopilot => {
+                    let credential = require_provider_auth_credential(
+                        provider_id,
+                        "bearer_token",
+                        auth,
+                        AuthSecretSelector::RefreshOrAccess,
+                        AuthRefreshStrategy::ReloadFromStore,
+                        env,
+                    )?;
+                    let enterprise_url = credential
+                        .auth_data
+                        .as_ref()
+                        .and_then(current_enterprise_url);
 
-                        if let Some(auth_data) = credential.auth_data {
-                            provider = provider.with_auth_data(auth_data);
-                        }
-
-                        Arc::new(provider)
+                    let mut provider = OpenAiProvider::new_managed_with_id(
+                        runtime_provider_id.as_str(),
+                        client,
+                        credential.credential,
+                        adapter
+                            .options
+                            .base_url
+                            .clone()
+                            .or_else(|| {
+                                if enterprise_url.is_some() {
+                                    None
+                                } else {
+                                    Some("https://api.githubcopilot.com".to_owned())
+                                }
+                            })
+                            .unwrap_or_else(|| "https://api.githubcopilot.com".to_owned()),
+                        adapter_default_model.to_owned(),
+                    )
+                    .with_profile(crate::provider::OpenAiProfile::GithubCopilot)
+                    .with_backend(adapter.options.backend.into())
+                    .with_auth_header(
+                        adapter.options.auth_header.clone(),
+                        adapter.options.auth_scheme.clone(),
+                    )
+                    .with_api_mode(adapter.options.api_mode.into())
+                    .with_api_mode_explicit(adapter.options.api_mode_explicit)
+                    .with_stream_mode(adapter.options.stream_mode.into())
+                    .with_models_url(adapter.options.models_url.clone())
+                    .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
+                    .with_extra_headers(to_hash_map(&adapter.extra_headers));
+                    if let Some(auth_data) = credential.auth_data {
+                        provider = provider.with_auth_data(auth_data);
                     }
-                    crate::provider::auth::CredentialIssuer::GithubCopilot => {
-                        let credential = require_provider_auth_credential(
-                            provider_id,
-                            "bearer_token",
-                            auth,
-                            AuthSecretSelector::RefreshOrAccess,
-                            AuthRefreshStrategy::ReloadFromStore,
-                            env,
-                        )?;
-                        let enterprise_url = credential
-                            .auth_data
-                            .as_ref()
-                            .and_then(current_enterprise_url);
-
-                        let mut provider = OpenAiProvider::new_managed_with_id(
-                            runtime_provider_id.as_str(),
-                            client,
-                            credential.credential,
-                            adapter
-                                .options
-                                .base_url
-                                .clone()
-                                .or_else(|| {
-                                    if enterprise_url.is_some() {
-                                        None
-                                    } else {
-                                        Some("https://api.githubcopilot.com".to_owned())
-                                    }
-                                })
-                                .unwrap_or_else(|| "https://api.githubcopilot.com".to_owned()),
-                            adapter_default_model.to_owned(),
-                        )
-                        .with_profile(crate::provider::OpenAiProfile::GithubCopilot)
-                        .with_backend(adapter.options.backend.into())
-                        .with_auth_header(
-                            adapter.options.auth_header.clone(),
-                            adapter.options.auth_scheme.clone(),
-                        )
-                        .with_api_mode(adapter.options.api_mode.into())
-                        .with_api_mode_explicit(adapter.options.api_mode_explicit)
-                        .with_stream_mode(adapter.options.stream_mode.into())
-                        .with_models_url(adapter.options.models_url.clone())
-                        .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
-                        .with_extra_headers(to_hash_map(&adapter.extra_headers));
-                        if let Some(auth_data) = credential.auth_data {
-                            provider = provider.with_auth_data(auth_data);
-                        }
-                        Arc::new(provider)
-                    }
-                    _ => {
-                        return Err(ConfigError::InvalidProviderConfig {
-                            provider_id: provider_id.to_owned(),
-                            message: "credential issuer is not supported by openai adapter"
-                                .to_owned(),
-                        });
-                    }
-                },
+                    Arc::new(provider)
+                }
                 _ => {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
-                        message:
-                            "openai adapter requires api, google_adc, credential, or sap_ai_core auth"
-                                .to_owned(),
+                        message: "credential issuer is not supported by openai adapter".to_owned(),
                     });
                 }
+            },
+            _ => {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message:
+                        "openai adapter requires api, google_adc, credential, or sap_ai_core auth"
+                            .to_owned(),
+                });
             }
-        }
+        },
         ProviderAdapterDefinition::Anthropic(adapter) => match auth {
             ProviderAuthConfig::Credential(credential_auth)
                 if matches!(
@@ -462,9 +458,8 @@ fn build_adapter_provider(
                 .with_extra_headers(to_hash_map(&adapter.extra_headers)),
             ),
         },
-        ProviderAdapterDefinition::Gemini(adapter) => Arc::new(
-            {
-                let mut provider = GeminiProvider::new_managed(
+        ProviderAdapterDefinition::Gemini(adapter) => Arc::new({
+            let mut provider = GeminiProvider::new_managed(
                 client,
                 api_auth_managed_credential(
                     provider_id,
@@ -480,12 +475,11 @@ fn build_adapter_provider(
                 adapter_default_model.to_owned(),
             )
             .with_extra_headers(to_hash_map(&adapter.extra_headers));
-                if let Some(header) = adapter.options.auth_header.clone() {
-                    provider = provider.with_auth_header(header, adapter.options.auth_scheme.clone());
-                }
-                provider
-            },
-        ),
+            if let Some(header) = adapter.options.auth_header.clone() {
+                provider = provider.with_auth_header(header, adapter.options.auth_scheme.clone());
+            }
+            provider
+        }),
         ProviderAdapterDefinition::Gitlab(adapter) => {
             let runtime_config = GitlabProviderConfig {
                 instance_url: adapter
@@ -511,20 +505,22 @@ fn build_adapter_provider(
                         });
                     }
                 }
-                ProviderAuthConfig::Credential(_) => require_provider_auth_credential(
-                    provider_id,
-                    "api_key",
-                    auth,
-                    AuthSecretSelector::AccessOrApiKey,
-                    AuthRefreshStrategy::GitlabOAuth {
-                        instance_url: adapter
-                            .instance_url
-                            .clone()
-                            .unwrap_or_else(|| "https://gitlab.com".to_owned()),
-                    },
-                    env,
-                )?
-                .credential,
+                ProviderAuthConfig::Credential(_) => {
+                    require_provider_auth_credential(
+                        provider_id,
+                        "api_key",
+                        auth,
+                        AuthSecretSelector::AccessOrApiKey,
+                        AuthRefreshStrategy::GitlabOAuth {
+                            instance_url: adapter
+                                .instance_url
+                                .clone()
+                                .unwrap_or_else(|| "https://gitlab.com".to_owned()),
+                        },
+                        env,
+                    )?
+                    .credential
+                }
                 _ => {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
@@ -643,23 +639,24 @@ fn openai_adapter_api_credential(
     env: &dyn ConfigEnvironment,
 ) -> Result<ResolvedManagedCredential, ConfigError> {
     match auth {
-        ProviderAuthConfig::Api(_) => {
-            api_auth_managed_credential(
-                provider_id,
-                "api_key",
-                auth,
-                AuthSecretSelector::AccessOrApiKey,
-                AuthRefreshStrategy::OpenAiOAuth,
-                env,
-                true,
-            )
-        }
+        ProviderAuthConfig::Api(_) => api_auth_managed_credential(
+            provider_id,
+            "api_key",
+            auth,
+            AuthSecretSelector::AccessOrApiKey,
+            AuthRefreshStrategy::OpenAiOAuth,
+            env,
+            true,
+        ),
         ProviderAuthConfig::GoogleAdc => {
-            if !matches!(capability_family, Some(ProviderCapabilityFamilyConfig::Gemini)) {
+            if !matches!(
+                capability_family,
+                Some(ProviderCapabilityFamilyConfig::Gemini)
+            ) {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message:
-                        "google_adc auth only supports Vertex-style `openai` adapters".to_owned(),
+                    message: "google_adc auth only supports Vertex-style `openai` adapters"
+                        .to_owned(),
                 });
             }
             Ok(ResolvedManagedCredential {
@@ -687,17 +684,12 @@ struct ResolvedManagedCredential {
     auth_data: Option<Arc<Mutex<AuthData>>>,
 }
 
-fn api_auth_has_direct_source(
-    api: &ProviderApiAuthConfig,
-    env: &dyn ConfigEnvironment,
-) -> bool {
+fn api_auth_has_direct_source(api: &ProviderApiAuthConfig, env: &dyn ConfigEnvironment) -> bool {
     match (
-        api
-            .api_key
+        api.api_key
             .as_ref()
             .and_then(|value| normalize_text(value.as_str())),
-        api
-            .api_key_env
+        api.api_key_env
             .as_ref()
             .and_then(|value| normalize_text(value.as_str())),
     ) {
@@ -950,7 +942,10 @@ fn static_bedrock_credentials(
     }
 }
 
-fn provider_api_base_url(auth: &ProviderAuthConfig, provider_id: &str) -> Result<String, ConfigError> {
+fn provider_api_base_url(
+    auth: &ProviderAuthConfig,
+    provider_id: &str,
+) -> Result<String, ConfigError> {
     match auth {
         ProviderAuthConfig::Api(config) => Ok(config.base_url.clone()),
         ProviderAuthConfig::SapAiCore(config) => Ok(config.api.base_url.clone()),
@@ -1065,6 +1060,7 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
 
@@ -1100,6 +1096,7 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [providers.openai.adapters.openai.models."gpt-4.1-mini"]
 input = { unsupported = ["image"] }
@@ -1122,7 +1119,10 @@ input = { unsupported = ["image"] }
             .expect("registry should build");
 
         let capabilities = registry
-            .model_capabilities(&crate::model::ModelRef::new("openai", "openai/gpt-4.1-mini"))
+            .model_capabilities(&crate::model::ModelRef::new(
+                "openai",
+                "openai/gpt-4.1-mini",
+            ))
             .expect("provider capabilities should resolve");
         assert_eq!(capabilities.image_input, CapabilitySupport::Unsupported);
         assert_eq!(capabilities.document_input, CapabilitySupport::Supported);
@@ -1141,6 +1141,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-from-config"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
 
@@ -1175,6 +1176,7 @@ issuer = "openai_chatgpt"
 credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-123" }
 
 [providers.openai.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 "#,
         );
@@ -1211,6 +1213,7 @@ api_key = "sk-from-config"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
 
@@ -1245,6 +1248,7 @@ issuer = "gitlab"
 credential = { type = "oauth", issuer = "gitlab", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000 }
 
 [providers.gitlab.adapters.gitlab]
+enabled = true
 instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
 "#,
@@ -1280,6 +1284,7 @@ mode = "credential"
 issuer = "openai_chatgpt"
 
 [providers.openai_chatgpt.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 "#,
         );
@@ -1318,6 +1323,7 @@ issuer = "openai_chatgpt"
 credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "refresh-token", access = "access-token", expires_at_ms = 4102444800000, account_id = "acct-123" }
 
 [providers.openai_chatgpt.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 "#,
         );
@@ -1352,6 +1358,7 @@ mode = "credential"
 issuer = "github_copilot"
 
 [providers."github-copilot".adapters.openai]
+enabled = true
 "#,
         );
 
@@ -1389,6 +1396,7 @@ issuer = "github_copilot"
 credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 
 [providers."github-copilot".adapters.openai]
+enabled = true
 "#,
         );
 
@@ -1423,6 +1431,7 @@ issuer = "github_copilot"
 credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 
 [providers."github-copilot-claude".adapters.anthropic]
+enabled = true
 "#,
         );
 
@@ -1456,6 +1465,7 @@ mode = "credential"
 issuer = "gitlab"
 
 [providers.gitlab.adapters.gitlab]
+enabled = true
 instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
 "#,
@@ -1495,6 +1505,7 @@ base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/lo
 api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 
 [providers."google-vertex".adapters.openai]
+enabled = true
 capability_family = "gemini"
 "#,
         );
@@ -1556,6 +1567,7 @@ base_url = "https://api.example.com/v2"
 api_key = "sap-api-token"
 
 [providers.sap.adapters.openai]
+enabled = true
 auth_header = "authorization"
 auth_scheme = "Bearer"
 "#,

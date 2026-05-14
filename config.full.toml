@@ -227,6 +227,7 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
+enabled = true
 api_mode = "auto"
 stream_mode = "sse"
 
@@ -254,6 +255,7 @@ stream_mode = "sse"
 # api_key_env = "OPENAI_API_KEY"
 #
 # [providers.openai-reasoning.adapters.openai]
+# enabled = true
 #
 # [providers.openai-reasoning.adapters.openai.models."o3-mini".variants.light]
 # display_name = "Light"
@@ -274,6 +276,7 @@ stream_mode = "sse"
 # api_key_env = "ANTHROPIC_API_KEY"
 #
 # [providers.anthropic.adapters.anthropic]
+# enabled = true
 #
 # [providers.anthropic.adapters.anthropic.models."claude-sonnet-4-5".variants.light]
 # display_name = "Light"
@@ -290,6 +293,7 @@ stream_mode = "sse"
 # default_model = "ollama/qwen3:14b"
 #
 # [providers.ollama.adapters.ollama]
+# enabled = true
 # base_url = "http://localhost:11434"
 #
 # [providers.lmstudio]
@@ -301,6 +305,7 @@ stream_mode = "sse"
 # api_key = "local"
 #
 # [providers.lmstudio.adapters.openai]
+# enabled = true
 # api_mode = "chat"
 #
 # [providers.openrouter]
@@ -312,6 +317,7 @@ stream_mode = "sse"
 # api_key_env = "OPENROUTER_API_KEY"
 #
 # [providers.openrouter.adapters.openai]
+# enabled = true
 # api_mode = "chat"
 #
 # [providers."github-copilot"]
@@ -323,6 +329,7 @@ stream_mode = "sse"
 # credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 #
 # [providers."github-copilot".adapters.openai]
+# enabled = true
 # base_url = "https://api.githubcopilot.com"
 # models_url = "https://api.githubcopilot.com/models"
 #
@@ -330,6 +337,7 @@ stream_mode = "sse"
 # 
 #
 # [providers."github-copilot".adapters.anthropic]
+# enabled = true
 # auth_header = "authorization"
 # auth_scheme = "Bearer"
 # extra_beta_header = "interleaved-thinking-2025-05-14"
@@ -346,6 +354,7 @@ stream_mode = "sse"
 # api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 #
 # [providers."google-vertex".adapters.openai]
+# enabled = true
 # capability_family = "gemini"
 
 [providers.openai_chatgpt]
@@ -357,6 +366,7 @@ issuer = "openai_chatgpt"
 credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "openai-refresh-token", access = "openai-access-token", expires_at_ms = 4102444800000, account_id = "acct-example" }
 
 [providers.openai_chatgpt.adapters.openai]
+enabled = true
 backend = "chatgpt_codex"
 
 [providers."github-copilot"]
@@ -368,12 +378,14 @@ issuer = "github_copilot"
 credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-refresh-token", access = "copilot-access-token", expires_at_ms = 4102444800000 }
 
 [providers."github-copilot".adapters.openai]
+enabled = true
 # base_url = "https://api.githubcopilot.com"
 
 [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
 
 
 [providers."github-copilot".adapters.anthropic]
+enabled = true
 # auth_header = "authorization"
 # auth_scheme = "Bearer"
 # extra_beta_header = "interleaved-thinking-2025-05-14"
@@ -385,6 +397,7 @@ credential = { type = "oauth", issuer = "github_copilot", refresh = "copilot-ref
 default_model = "ollama/qwen3:14b"
 
 [providers.ollama.adapters.ollama]
+enabled = true
 base_url = "http://localhost:11434"
 
 [providers.gitlab]
@@ -396,6 +409,7 @@ issuer = "gitlab"
 credential = { type = "oauth", issuer = "gitlab", refresh = "gitlab-refresh-token", access = "gitlab-access-token", expires_at_ms = 4102444800000 }
 
 [providers.gitlab.adapters.gitlab]
+enabled = true
 instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
 
@@ -408,4 +422,5 @@ base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/lo
 api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
 
 [providers."google-vertex".adapters.openai]
+enabled = true
 capability_family = "gemini"

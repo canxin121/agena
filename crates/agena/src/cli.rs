@@ -1485,8 +1485,10 @@ impl AgenaCli {
         }
 
         if let Some(api_key) = args.api_key {
-            if !matches!(resolved.auth, ProviderAuthConfig::Api(_) | ProviderAuthConfig::SapAiCore(_))
-            {
+            if !matches!(
+                resolved.auth,
+                ProviderAuthConfig::Api(_) | ProviderAuthConfig::SapAiCore(_)
+            ) {
                 return Err(AppError::Config(format!(
                     "{provider_id} does not support api key login"
                 )));
@@ -1523,7 +1525,10 @@ impl AgenaCli {
                         .await?;
                 }
                 ProviderAuthConfig::Credential(config)
-                    if matches!(config.issuer, crate::provider::auth::CredentialIssuer::Gitlab) =>
+                    if matches!(
+                        config.issuer,
+                        crate::provider::auth::CredentialIssuer::Gitlab
+                    ) =>
                 {
                     let instance_url = provider_gitlab_instance_url(resolved).ok_or_else(|| {
                         AppError::Config(format!(
@@ -3983,6 +3988,7 @@ mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let cli = AgenaCli {
@@ -4040,6 +4046,7 @@ mode = "api"
 base_url = "https://api.openai.com/v1"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let cli = AgenaCli {
@@ -4844,6 +4851,7 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [providers.openai.adapters.openai.models."gpt-5"]
 input = { unsupported = ["image"] }
@@ -4872,7 +4880,7 @@ input = { unsupported = ["image"] }
                 &loader,
                 ProviderCommand {
                     command: Some(ProviderSubcommand::Capabilities(ProviderCapabilitiesArgs {
-                        target: "openai/gpt-5".to_owned(),
+                        target: "openai/openai/gpt-5".to_owned(),
                         model: None,
                         format: ConfigOutputFormat::Json,
                     })),
@@ -4883,8 +4891,8 @@ input = { unsupported = ["image"] }
         let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
 
         assert_eq!(value["provider_id"], "openai");
-        assert_eq!(value["model"], "gpt-5");
-        assert_eq!(value["model_ref"], "openai/gpt-5");
+        assert_eq!(value["model"], "openai/gpt-5");
+        assert_eq!(value["model_ref"], "openai/openai/gpt-5");
         assert_eq!(value["capabilities"]["image_input"], "unsupported");
         assert_eq!(value["capabilities"]["document_input"], "supported");
         assert_eq!(value["metadata"]["family"], "gpt");
@@ -4895,7 +4903,7 @@ input = { unsupported = ["image"] }
         let path = write_temp_config(
             r#"
 [providers.gitlab]
-default_model = "claude-sonnet-4-5"
+default_model = "gitlab/claude-sonnet-4-5"
 
 [providers.gitlab.auth]
 mode = "api"
@@ -4903,7 +4911,7 @@ base_url = "https://gitlab.com/api/v4"
 api_key = "glpat-test"
 
 [providers.gitlab.adapters.gitlab]
-default_model = "claude-sonnet-4-5"
+enabled = true
 "#,
         );
         let loader = ConfigLoader::new(TestEnvironment {
@@ -4932,7 +4940,7 @@ default_model = "claude-sonnet-4-5"
         let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
 
         assert_eq!(value["provider_id"], "gitlab");
-        assert_eq!(value["models"][0]["id"], "claude-sonnet-4-5");
+        assert_eq!(value["models"][0]["id"], "gitlab/claude-sonnet-4-5");
         assert_eq!(value["models"][0]["metadata"]["family"], "claude");
         assert_eq!(
             value["models"][0]["capabilities"]["tool_calling"],
@@ -4953,6 +4961,7 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let env = TestEnvironment {
@@ -5003,6 +5012,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let cli = AgenaCli {

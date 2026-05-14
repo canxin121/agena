@@ -1030,7 +1030,8 @@ impl RawProviderConfig {
 
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;
-        let default_model = required_string(provider_id.as_str(), "default_model", self.default_model)?;
+        let default_model =
+            required_string(provider_id.as_str(), "default_model", self.default_model)?;
         if default_model.is_empty() {
             return Err(ConfigError::MissingProviderField {
                 provider_id: provider_id.clone(),
@@ -1096,9 +1097,10 @@ fn resolve_adapter(
     adapter_id: &str,
     raw: RawProviderAdapterConfig,
 ) -> Result<ResolvedAdapterWithModels, ConfigError> {
-    let kind = ProviderKind::from_str(adapter_id).map_err(|_| ConfigError::MissingProviderKind {
-        provider_id: provider_id.to_owned(),
-    })?;
+    let kind =
+        ProviderKind::from_str(adapter_id).map_err(|_| ConfigError::MissingProviderKind {
+            provider_id: provider_id.to_owned(),
+        })?;
     let config = resolve_adapter_config(
         provider_id,
         adapter_id,
@@ -1164,8 +1166,8 @@ fn resolve_adapter_config(
 ) -> Result<ResolvedProviderAdapterConfig, ConfigError> {
     let definition = match kind {
         ProviderKind::Ollama => ProviderAdapterDefinition::Ollama(super::OllamaProviderOptions {
-                base_url: normalize_optional(base_url),
-            }),
+            base_url: normalize_optional(base_url),
+        }),
         ProviderKind::OpenAi => {
             let backend = backend.unwrap_or_default();
             let api_mode_explicit = api_mode.is_some();
@@ -1205,23 +1207,24 @@ fn resolve_adapter_config(
                 }
             }
             ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
-                    extra_headers,
-                    options: super::OpenAiProviderOptions {
-                        backend,
-                        api_mode,
-                        api_mode_explicit,
-                        stream_mode,
-                        realtime_ws_url,
-                        base_url: normalize_optional(base_url),
-                        models_url: normalize_optional(models_url),
-                        auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
-                        auth_scheme: normalize_optional(auth_scheme)
-                            .or_else(|| Some("Bearer".to_owned())),
-                        capability_family,
-                    },
-                })
+                extra_headers,
+                options: super::OpenAiProviderOptions {
+                    backend,
+                    api_mode,
+                    api_mode_explicit,
+                    stream_mode,
+                    realtime_ws_url,
+                    base_url: normalize_optional(base_url),
+                    models_url: normalize_optional(models_url),
+                    auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
+                    auth_scheme: normalize_optional(auth_scheme)
+                        .or_else(|| Some("Bearer".to_owned())),
+                    capability_family,
+                },
+            })
         }
-        ProviderKind::Anthropic => ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
+        ProviderKind::Anthropic => {
+            ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
                 extra_headers,
                 options: super::AnthropicProviderOptions {
                     base_url: normalize_optional(base_url),
@@ -1232,27 +1235,28 @@ fn resolve_adapter_config(
                     extra_beta_header: normalize_optional(extra_beta_header),
                     eager_input_streaming,
                 },
-            }),
+            })
+        }
         ProviderKind::Gemini => ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
-                extra_headers,
-                options: super::SimpleHttpProviderOptions {
-                    auth_header: normalize_optional(auth_header),
-                    auth_scheme: normalize_optional(auth_scheme),
-                },
-            }),
+            extra_headers,
+            options: super::SimpleHttpProviderOptions {
+                auth_header: normalize_optional(auth_header),
+                auth_scheme: normalize_optional(auth_scheme),
+            },
+        }),
         ProviderKind::Gitlab => ProviderAdapterDefinition::Gitlab(super::GitlabProviderOptions {
-                instance_url: normalize_optional(instance_url),
-                ai_gateway_url: normalize_optional(ai_gateway_url),
-                ai_gateway_headers,
-                feature_flags,
-            }),
+            instance_url: normalize_optional(instance_url),
+            ai_gateway_url: normalize_optional(ai_gateway_url),
+            ai_gateway_headers,
+            feature_flags,
+        }),
         ProviderKind::AmazonBedrock => {
             ProviderAdapterDefinition::AmazonBedrock(super::AmazonBedrockProviderOptions)
         }
     };
 
     Ok(ResolvedProviderAdapterConfig {
-        enabled: enabled.unwrap_or(true),
+        enabled: enabled.unwrap_or(false),
         definition,
     })
 }
@@ -1295,10 +1299,12 @@ fn resolve_provider_auth<'a>(
                             .to_owned(),
                 });
             }
-            let issuer = raw_auth.issuer.ok_or_else(|| ConfigError::MissingProviderField {
-                provider_id: provider_id.to_owned(),
-                field: "issuer",
-            })?;
+            let issuer = raw_auth
+                .issuer
+                .ok_or_else(|| ConfigError::MissingProviderField {
+                    provider_id: provider_id.to_owned(),
+                    field: "issuer",
+                })?;
             let credential = raw_auth
                 .credential
                 .map(|credential| credential.with_issuer(issuer));
@@ -1349,8 +1355,7 @@ fn infer_provider_auth_mode(
     if raw_auth.credential.is_some() || raw_auth.issuer.is_some() {
         return ProviderAuthMode::Credential;
     }
-    if raw_auth.base_url.is_some() || raw_auth.api_key.is_some() || raw_auth.api_key_env.is_some()
-    {
+    if raw_auth.base_url.is_some() || raw_auth.api_key.is_some() || raw_auth.api_key_env.is_some() {
         return ProviderAuthMode::Api;
     }
     if raw_auth.access_key_id.is_some()
@@ -1406,13 +1411,11 @@ fn validate_provider_auth<'a>(
                     message: "auth mode `none` only supports `ollama` adapters".to_owned(),
                 });
             }
-            (
-                ProviderAuthConfig::GoogleAdc,
-                ProviderAdapterDefinition::OpenAi(config),
-            ) if matches!(
-                config.options.capability_family,
-                Some(ProviderCapabilityFamilyConfig::Gemini)
-            ) => {}
+            (ProviderAuthConfig::GoogleAdc, ProviderAdapterDefinition::OpenAi(config))
+                if matches!(
+                    config.options.capability_family,
+                    Some(ProviderCapabilityFamilyConfig::Gemini)
+                ) => {}
             (ProviderAuthConfig::GoogleAdc, _) => {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
@@ -1432,9 +1435,7 @@ fn validate_provider_auth<'a>(
             (ProviderAuthConfig::SapAiCore(_), _) => {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message:
-                        "auth mode `sap_ai_core` only supports `openai` adapters"
-                        .to_owned(),
+                    message: "auth mode `sap_ai_core` only supports `openai` adapters".to_owned(),
                 });
             }
             (ProviderAuthConfig::Api(_), ProviderAdapterDefinition::Ollama(_)) => {
@@ -1443,53 +1444,46 @@ fn validate_provider_auth<'a>(
                     message: "api auth is not supported by `ollama` adapters".to_owned(),
                 });
             }
-            (
-                ProviderAuthConfig::Api(_),
-                ProviderAdapterDefinition::OpenAi(config),
-            ) if matches!(config.options.backend, super::OpenAiBackendConfig::ChatgptCodex) => {
+            (ProviderAuthConfig::Api(_), ProviderAdapterDefinition::OpenAi(config))
+                if matches!(
+                    config.options.backend,
+                    super::OpenAiBackendConfig::ChatgptCodex
+                ) =>
+            {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message:
-                        "openai backend `chatgpt_codex` only supports credential auth"
-                            .to_owned(),
+                    message: "openai backend `chatgpt_codex` only supports credential auth"
+                        .to_owned(),
                 });
             }
             (ProviderAuthConfig::Api(_), _) => {}
             (
                 ProviderAuthConfig::Credential(config),
                 ProviderAdapterDefinition::OpenAi(options),
-            ) => {
-                match (
-                    config.issuer,
-                    options.options.backend,
-                ) {
-                    (CredentialIssuer::OpenaiChatgpt, super::OpenAiBackendConfig::ChatgptCodex) => {}
-                    (CredentialIssuer::GithubCopilot, super::OpenAiBackendConfig::Api) => {}
-                    _ => {
-                        return Err(ConfigError::InvalidProviderConfig {
-                            provider_id: provider_id.to_owned(),
-                            message: "credential issuer does not match `openai` adapter requirements"
-                                .to_owned(),
-                        });
-                    }
-                }
-            }
-            (
-                ProviderAuthConfig::Credential(config),
-                ProviderAdapterDefinition::Anthropic(_),
-            ) => {
-                if config.issuer != CredentialIssuer::GithubCopilot {
+            ) => match (config.issuer, options.options.backend) {
+                (CredentialIssuer::OpenaiChatgpt, super::OpenAiBackendConfig::ChatgptCodex) => {}
+                (CredentialIssuer::GithubCopilot, super::OpenAiBackendConfig::Api) => {}
+                _ => {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
-                        message: "credential issuer does not match `anthropic` adapter requirements"
+                        message: "credential issuer does not match `openai` adapter requirements"
                             .to_owned(),
                     });
                 }
+            },
+            (ProviderAuthConfig::Credential(config), ProviderAdapterDefinition::Anthropic(_)) => {
+                if config.issuer != CredentialIssuer::GithubCopilot {
+                    return Err(ConfigError::InvalidProviderConfig {
+                        provider_id: provider_id.to_owned(),
+                        message:
+                            "credential issuer does not match `anthropic` adapter requirements"
+                                .to_owned(),
+                    });
+                }
             }
-            (
-                ProviderAuthConfig::Credential(config),
-                ProviderAdapterDefinition::Gemini(_),
-            ) if config.issuer == CredentialIssuer::GithubCopilot => {
+            (ProviderAuthConfig::Credential(config), ProviderAdapterDefinition::Gemini(_))
+                if config.issuer == CredentialIssuer::GithubCopilot =>
+            {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message: "github_copilot credential does not support `gemini` adapter; use `openai` for Copilot Gemini models"
@@ -1635,9 +1629,7 @@ pub(crate) fn parse_adapter_model_ref(
     let Some((adapter_id, model_id)) = value.split_once('/') else {
         return Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
-            message: format!(
-                "model reference `{value}` must be in `<adapter>/<model>` format"
-            ),
+            message: format!("model reference `{value}` must be in `<adapter>/<model>` format"),
         });
     };
 
@@ -1646,9 +1638,7 @@ pub(crate) fn parse_adapter_model_ref(
     if adapter_id.is_empty() || model_id.is_empty() {
         return Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
-            message: format!(
-                "model reference `{value}` must be in `<adapter>/<model>` format"
-            ),
+            message: format!("model reference `{value}` must be in `<adapter>/<model>` format"),
         });
     }
 

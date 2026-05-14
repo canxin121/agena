@@ -1159,6 +1159,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
             "single-provider-default",
         )
@@ -1193,11 +1194,13 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [providers.ollama]
 default_model = "ollama/qwen3:14b"
 
 [providers.ollama.adapters.ollama]
+enabled = true
 base_url = "http://localhost:11434"
 "#,
             "multiple-provider-default",
@@ -1234,11 +1237,13 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [providers.ollama]
 default_model = "ollama/qwen3:14b"
 
 [providers.ollama.adapters.ollama]
+enabled = true
 base_url = "http://localhost:11434"
 "#,
             "explicit-model",
@@ -1277,6 +1282,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [providers.openai.adapters.openai.models."gpt-5.4".variants.light]
 thinking = { type = "budget", budget_tokens = 3000 }
@@ -1324,6 +1330,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
+enabled = true
 
 [providers.openai.adapters.openai.models."gpt-5.4".variants.light]
 thinking = { type = "budget", budget_tokens = 3000 }
@@ -1364,6 +1371,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
+enabled = true
 "#,
             "runtime-agent-inventory",
         )

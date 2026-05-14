@@ -29,6 +29,7 @@ use axum_extra::extract::cookie::SameSite;
 use mime_guess::MimeGuess;
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tower_http::{
     cors::{AllowOrigin, Any, CorsLayer},
     services::{ServeDir, ServeFile},
@@ -93,6 +94,8 @@ struct GitStatusCompatFile {
 
 const MAX_COMPAT_FILE_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_COMPAT_LIST_LIMIT: usize = 2000;
+const DEFAULT_COMPAT_READ_CHUNK_LIMIT: usize = 256 * 1024;
+const MAX_COMPAT_READ_CHUNK_LIMIT: usize = 2 * 1024 * 1024;
 
 type CompatResult<T> = Result<T, (StatusCode, String)>;
 
@@ -141,6 +144,28 @@ struct FsListCompatResponse {
 struct FsFileCompatQuery {
     directory: Option<String>,
     path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FsReadChunkCompatQuery {
+    directory: Option<String>,
+    path: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsReadChunkCompatResponse {
+    path: String,
+    content: String,
+    offset: usize,
+    limit: usize,
+    loaded_bytes: usize,
+    total_bytes: usize,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
 }
 
 async fn health(
@@ -375,6 +400,26 @@ fn compat_content_disposition_attachment(path: &Path) -> String {
     compat_content_disposition(path, "attachment")
 }
 
+fn compat_decode_utf8_chunk(bytes: &[u8]) -> CompatResult<(String, usize)> {
+    if bytes.is_empty() {
+        return Ok((String::new(), 0));
+    }
+
+    match std::str::from_utf8(bytes) {
+        Ok(content) => Ok((content.to_string(), bytes.len())),
+        Err(error) => {
+            if error.error_len().is_some() {
+                return Err(compat_bad_request("Specified file is not UTF-8 text"));
+            }
+
+            let valid_up_to = error.valid_up_to();
+            let content = std::str::from_utf8(&bytes[..valid_up_to])
+                .map_err(|_| compat_bad_request("Specified file is not UTF-8 text"))?;
+            Ok((content.to_string(), valid_up_to))
+        }
+    }
+}
+
 async fn compat_resolve_scoped_file(
     directory: Option<&str>,
     path: Option<&str>,
@@ -417,6 +462,17 @@ async fn compat_resolve_scoped_file(
     }
 
     Ok(absolute)
+}
+
+async fn compat_fs_read_file_text(path: &Path) -> CompatResult<String> {
+    tokio::fs::read_to_string(path)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => compat_not_found("File not found"),
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access to file denied"),
+            std::io::ErrorKind::InvalidData => compat_bad_request("Specified file is not UTF-8 text"),
+            _ => compat_internal(error.to_string()),
+        })
 }
 
 async fn compat_fs_home() -> CompatResult<Json<FsHomeCompatResponse>> {
@@ -554,6 +610,92 @@ async fn compat_fs_raw(Query(query): Query<FsFileCompatQuery>) -> CompatResult<R
         .map_err(|error| compat_internal(error.to_string()))
 }
 
+async fn compat_fs_read(Query(query): Query<FsFileCompatQuery>) -> CompatResult<Response> {
+    let path =
+        compat_resolve_scoped_file(query.directory.as_deref(), query.path.as_deref()).await?;
+    let content = compat_fs_read_file_text(&path).await?;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("cache-control", "no-store")
+        .header("content-type", "text/plain")
+        .body(Body::from(content))
+        .map_err(|error| compat_internal(error.to_string()))
+}
+
+async fn compat_fs_read_chunk(
+    Query(query): Query<FsReadChunkCompatQuery>,
+) -> CompatResult<Json<FsReadChunkCompatResponse>> {
+    let path =
+        compat_resolve_scoped_file(query.directory.as_deref(), query.path.as_deref()).await?;
+
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => compat_not_found("File not found"),
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access to file denied"),
+            _ => compat_internal("Failed to read file"),
+        })?;
+
+    let total_bytes_u64 = metadata.len();
+    let total_bytes = usize::try_from(total_bytes_u64).unwrap_or(usize::MAX);
+    let offset = query.offset.unwrap_or(0);
+    if (offset as u64) > total_bytes_u64 {
+        return Err(compat_bad_request("Offset is out of range"));
+    }
+
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_COMPAT_READ_CHUNK_LIMIT)
+        .min(MAX_COMPAT_READ_CHUNK_LIMIT);
+
+    if limit == 0 {
+        return Ok(Json(FsReadChunkCompatResponse {
+            path: compat_path_string(&path),
+            content: String::new(),
+            offset,
+            limit,
+            loaded_bytes: offset,
+            total_bytes,
+            has_more: offset < total_bytes,
+            next_offset: (offset < total_bytes).then_some(offset),
+        }));
+    }
+
+    let mut file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => compat_not_found("File not found"),
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access to file denied"),
+            _ => compat_internal(error.to_string()),
+        })?;
+
+    file.seek(SeekFrom::Start(offset as u64))
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+
+    let mut buffer = Vec::with_capacity(limit);
+    file.take(limit as u64)
+        .read_to_end(&mut buffer)
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+
+    let (content, consumed_bytes) = compat_decode_utf8_chunk(&buffer)?;
+    let loaded_bytes = offset.saturating_add(consumed_bytes);
+    let has_more = (loaded_bytes as u64) < total_bytes_u64;
+
+    Ok(Json(FsReadChunkCompatResponse {
+        path: compat_path_string(&path),
+        content,
+        offset,
+        limit,
+        loaded_bytes,
+        total_bytes,
+        has_more,
+        next_offset: has_more.then_some(loaded_bytes),
+    }))
+}
+
 async fn compat_fs_download(Query(query): Query<FsFileCompatQuery>) -> CompatResult<Response> {
     let path =
         compat_resolve_scoped_file(query.directory.as_deref(), query.path.as_deref()).await?;
@@ -584,6 +726,8 @@ where
     Router::new()
         .route("/api/fs/home", get(compat_fs_home))
         .route("/api/fs/list", get(compat_fs_list))
+        .route("/api/fs/read", get(compat_fs_read))
+        .route("/api/fs/read-chunk", get(compat_fs_read_chunk))
         .route("/api/fs/raw", get(compat_fs_raw))
         .route("/api/fs/download", get(compat_fs_download))
 }
@@ -1092,5 +1236,83 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(traversal_response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn compat_fs_read_route_returns_plain_text_for_scoped_file() {
+        let temp = tempdir().expect("tempdir should be created");
+        let file = temp.path().join("notes.txt");
+        std::fs::write(&file, "hello studio").expect("file should be written");
+
+        let directory_path = temp.path().display().to_string();
+        let directory = urlencoding::encode(&directory_path);
+        let read_uri = format!("/api/fs/read?directory={directory}&path=notes.txt");
+
+        let response = compat_fs_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri(read_uri)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/plain")
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        assert_eq!(body.as_ref(), b"hello studio");
+    }
+
+    #[tokio::test]
+    async fn compat_fs_read_chunk_route_returns_metadata_and_chunk_content() {
+        let temp = tempdir().expect("tempdir should be created");
+        let file = temp.path().join("notes.txt");
+        std::fs::write(&file, "hello studio").expect("file should be written");
+
+        let directory_path = temp.path().display().to_string();
+        let directory = urlencoding::encode(&directory_path);
+        let read_chunk_uri = format!(
+            "/api/fs/read-chunk?directory={directory}&path=notes.txt&offset=0&limit=5"
+        );
+
+        let response = compat_fs_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri(read_chunk_uri)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: FsReadChunkCompatResponse =
+            serde_json::from_slice(&body).expect("response should be valid json");
+        assert_eq!(payload.path, compat_path_string(&file));
+        assert_eq!(payload.content, "hello");
+        assert_eq!(payload.offset, 0);
+        assert_eq!(payload.limit, 5);
+        assert_eq!(payload.loaded_bytes, 5);
+        assert_eq!(payload.total_bytes, 12);
+        assert!(payload.has_more);
+        assert_eq!(payload.next_offset, Some(5));
     }
 }

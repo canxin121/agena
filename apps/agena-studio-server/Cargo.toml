@@ -23,7 +23,9 @@ getrandom = { workspace = true }
 agena-otel = { workspace = true }
 ignore = { workspace = true }
 mime_guess = { workspace = true }
+portable-pty = { workspace = true }
 path-clean = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }

@@ -15,6 +15,9 @@ use agena::runtime::AgenaRuntime;
 use agena::storage::StorageConfig;
 use agena::tracing as tracing_config;
 use agena_api_server::AppState as ApiV2State;
+use agena_api_server::local_api::{
+    SessionListQuery, SessionResource, WorkspaceListQuery, WorkspaceResource,
+};
 use anyhow::{Context, Result, anyhow};
 use async_stream::stream;
 use axum::{
@@ -139,6 +142,42 @@ struct CompatSessionMessagesQuery {
 }
 
 #[derive(Debug, Deserialize, Default)]
+struct CompatDirectoriesQuery {
+    offset: Option<usize>,
+    limit: Option<usize>,
+    query: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompatEnvCheckRequest {
+    vars: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CompatEnvCheckResponse {
+    present: Vec<String>,
+    missing: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+struct CompatDirectoryEntry {
+    id: String,
+    path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CompatPagedResponse<T> {
+    items: Vec<T>,
+    total: usize,
+    offset: usize,
+    limit: usize,
+    has_more: bool,
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct CompatSessionDiffQuery {
     directory: Option<String>,
@@ -256,6 +295,8 @@ struct CompatSessionDiffListResponse {
 const MAX_COMPAT_FILE_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_COMPAT_CONFLICT_FILE_BYTES: u64 = 512 * 1024;
 const MAX_COMPAT_LIST_LIMIT: usize = 2000;
+const DEFAULT_COMPAT_DIRECTORIES_LIMIT: usize = 50;
+const MAX_COMPAT_DIRECTORIES_LIMIT: usize = 400;
 const DEFAULT_COMPAT_READ_CHUNK_LIMIT: usize = 256 * 1024;
 const MAX_COMPAT_READ_CHUNK_LIMIT: usize = 2 * 1024 * 1024;
 const DEFAULT_COMPAT_SEARCH_LIMIT: usize = 60;
@@ -2688,6 +2729,98 @@ fn compat_session_manager(
         .ok_or_else(|| compat_internal("Session runtime is unavailable"))
 }
 
+async fn compat_list_all_workspaces(state: &AppState) -> CompatResult<Vec<WorkspaceResource>> {
+    let mut cursor = None;
+    let mut items = Vec::<WorkspaceResource>::new();
+
+    loop {
+        let page = state
+            .compat_api_service
+            .list_workspaces(WorkspaceListQuery {
+                cursor: cursor.take(),
+                limit: Some(200),
+                search: None,
+                include_session_count: false,
+            })
+            .await
+            .map_err(|error| compat_internal(format!("{error:?}")))?;
+        let next = page.page.next_cursor.clone();
+        let has_more = page.page.has_more;
+        items.extend(page.items);
+        if !has_more {
+            break;
+        }
+        cursor = next;
+    }
+
+    Ok(items)
+}
+
+async fn compat_list_all_sessions(state: &AppState) -> CompatResult<Vec<SessionResource>> {
+    let mut cursor = None;
+    let mut items = Vec::<SessionResource>::new();
+
+    loop {
+        let page = state
+            .compat_api_service
+            .list_sessions(SessionListQuery {
+                cursor: cursor.take(),
+                limit: Some(200),
+                workspace_id: None,
+                parent_id: None,
+                roots: false,
+                search: None,
+            })
+            .await
+            .map_err(|error| compat_internal(format!("{error:?}")))?;
+        let next = page.page.next_cursor.clone();
+        let has_more = page.page.has_more;
+        items.extend(page.items);
+        if !has_more {
+            break;
+        }
+        cursor = next;
+    }
+
+    Ok(items)
+}
+
+fn compat_normalize_env_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 80 {
+        return None;
+    }
+    trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+        .then(|| trimmed.to_string())
+}
+
+fn compat_workspace_directory_entry(workspace: &WorkspaceResource) -> CompatDirectoryEntry {
+    CompatDirectoryEntry {
+        id: workspace.id.to_string(),
+        path: workspace.path.clone(),
+    }
+}
+
+fn compat_page<T>(items: Vec<T>, offset: usize, limit: usize) -> CompatPagedResponse<T> {
+    let total = items.len();
+    let limit = limit.max(1);
+    let offset = offset.min(total);
+    let mut tail = items.into_iter().skip(offset);
+    let page_items = tail.by_ref().take(limit).collect::<Vec<_>>();
+    let has_more = offset + page_items.len() < total;
+
+    CompatPagedResponse {
+        items: page_items,
+        total,
+        offset,
+        limit,
+        has_more,
+        next_offset: has_more.then_some(offset + limit),
+    }
+}
+
 fn compat_parse_id(value: &str, label: &str) -> Result<i64, (StatusCode, String)> {
     value
         .trim()
@@ -3260,6 +3393,81 @@ async fn compat_session_status(
             }
         };
         payload.insert(session_id.to_string(), json!({ "type": status }));
+    }
+
+    Ok(Json(Value::Object(payload)))
+}
+
+async fn compat_provider_env_check(
+    Json(body): Json<CompatEnvCheckRequest>,
+) -> Json<CompatEnvCheckResponse> {
+    let mut present = Vec::<String>::new();
+    let mut missing = Vec::<String>::new();
+    let mut unique = std::collections::BTreeSet::<String>::new();
+
+    for name in body.vars.into_iter().take(200) {
+        if let Some(normalized) = compat_normalize_env_name(&name) {
+            unique.insert(normalized);
+        }
+    }
+
+    for name in unique {
+        let configured = std::env::var_os(&name)
+            .and_then(|value| value.into_string().ok())
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        if configured {
+            present.push(name);
+        } else {
+            missing.push(name);
+        }
+    }
+
+    Json(CompatEnvCheckResponse { present, missing })
+}
+
+async fn compat_directories(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Query(query): Query<CompatDirectoriesQuery>,
+) -> CompatResult<Json<CompatPagedResponse<CompatDirectoryEntry>>> {
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_COMPAT_DIRECTORIES_LIMIT)
+        .clamp(1, MAX_COMPAT_DIRECTORIES_LIMIT);
+    let offset = query.offset.unwrap_or(0);
+    let query_norm = query.query.unwrap_or_default().trim().to_lowercase();
+
+    let mut items = compat_list_all_workspaces(state.as_ref())
+        .await?
+        .into_iter()
+        .map(|workspace| compat_workspace_directory_entry(&workspace))
+        .collect::<Vec<_>>();
+    if !query_norm.is_empty() {
+        items.retain(|entry| {
+            entry.id.to_lowercase().contains(&query_norm)
+                || entry.path.to_lowercase().contains(&query_norm)
+        });
+    }
+
+    Ok(Json(compat_page(items, offset, limit)))
+}
+
+async fn compat_session_activity(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> CompatResult<Json<Value>> {
+    let Some(manager) = state.runtime.session_manager() else {
+        return Ok(Json(json!({})));
+    };
+
+    let mut payload = serde_json::Map::new();
+    for session in compat_list_all_sessions(state.as_ref()).await? {
+        let loaded = manager
+            .get_session(session.id)
+            .await
+            .map_err(|error| compat_internal(error.to_string()))?;
+        if matches!(loaded.status(), agena::session::SessionStatus::AwaitingModel) {
+            payload.insert(session.id.to_string(), json!({ "type": "busy" }));
+        }
     }
 
     Ok(Json(Value::Object(payload)))
@@ -4533,10 +4741,13 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
     let compat_routes = compat_fs_router::<Arc<AppState>>()
+        .route("/api/provider/env/check", post(compat_provider_env_check))
+        .route("/api/directories", get(compat_directories))
         .route(
             "/api/session",
             get(compat_session_list).post(compat_session_create),
         )
+        .route("/api/session-activity", get(compat_session_activity))
         .route("/api/session/status", get(compat_session_status))
         .route(
             "/api/session/{session_id}",
@@ -4707,6 +4918,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agena_api_server::local_api::WorkspaceResolveRequest;
     use axum::http::Request;
     use http_body_util::BodyExt;
     use serde_json::json;
@@ -4827,6 +5039,17 @@ include_global = true
         tempfile::TempDir,
     ) {
         compat_test_app_state_with_openai_base_url("http://127.0.0.1:9/v1").await
+    }
+
+    async fn compat_seed_workspace(state: &AppState, path: &Path) -> WorkspaceResource {
+        state
+            .compat_api_service
+            .resolve_workspace(WorkspaceResolveRequest {
+                path: path.display().to_string(),
+                create_if_missing: true,
+            })
+            .await
+            .expect("workspace should resolve")
     }
 
     async fn spawn_mock_openai_server() -> (String, tokio::task::JoinHandle<()>) {
@@ -5128,6 +5351,144 @@ include_global = true
             resolve_same_site(crate::UiCookieSameSite::Lax, true),
             SameSite::Lax
         ));
+    }
+
+    #[tokio::test]
+    async fn compat_provider_env_check_reports_present_and_missing_vars() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let router = Router::new()
+            .route("/api/provider/env/check", post(compat_provider_env_check))
+            .with_state(state.clone());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/provider/env/check")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "vars": [
+                                "PATH",
+                                "AGENA_STUDIO_COMPAT_MISSING_ENV",
+                                "bad-name",
+                                "path"
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: CompatEnvCheckResponse = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert!(payload.present.iter().any(|value| value == "PATH"));
+        assert!(
+            payload
+                .missing
+                .iter()
+                .any(|value| value == "AGENA_STUDIO_COMPAT_MISSING_ENV")
+        );
+        assert!(!payload.present.iter().any(|value| value == "bad-name"));
+        assert!(!payload.missing.iter().any(|value| value == "path"));
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_directories_pages_workspace_entries() {
+        let (state, _db, _config, workspace) = compat_test_app_state().await;
+        let alpha = workspace.path().join("alpha");
+        let beta = workspace.path().join("beta");
+        let gamma = workspace.path().join("gamma");
+        std::fs::create_dir_all(&alpha).expect("alpha should exist");
+        std::fs::create_dir_all(&beta).expect("beta should exist");
+        std::fs::create_dir_all(&gamma).expect("gamma should exist");
+        compat_seed_workspace(state.as_ref(), &alpha).await;
+        compat_seed_workspace(state.as_ref(), &beta).await;
+        compat_seed_workspace(state.as_ref(), &gamma).await;
+
+        let router = Router::new()
+            .route("/api/directories", get(compat_directories))
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/directories?offset=1&limit=2")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: CompatPagedResponse<CompatDirectoryEntry> = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload.total, 3);
+        assert_eq!(payload.offset, 1);
+        assert_eq!(payload.limit, 2);
+        assert_eq!(payload.items.len(), 2);
+        assert!(!payload.has_more);
+        assert_eq!(payload.next_offset, None);
+        assert_eq!(
+            payload
+                .items
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect::<Vec<_>>(),
+            vec![beta.display().to_string(), alpha.display().to_string()]
+        );
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_activity_returns_empty_snapshot_when_no_sessions_are_waiting() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let router = Router::new()
+            .route("/api/session-activity", get(compat_session_activity))
+            .with_state(state.clone());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/session-activity")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload, json!({}));
+
+        state.runtime.shutdown();
     }
 
     #[tokio::test]

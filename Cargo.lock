@@ -526,6 +526,7 @@ dependencies = [
  "agena-otel",
  "anyhow",
  "argon2",
+ "async-stream",
  "axum",
  "axum-extra",
  "base64 0.22.1",

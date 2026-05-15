@@ -16,6 +16,7 @@ use agena::storage::StorageConfig;
 use agena::tracing as tracing_config;
 use agena_api_server::AppState as ApiV2State;
 use agena_api_server::local_api::{
+    AuthCredentialType, AuthProviderResource, PermissionRuleListQuery, PermissionRuleResource,
     SessionListQuery, SessionResource, WorkspaceListQuery, WorkspaceResource,
 };
 use anyhow::{Context, Result, anyhow};
@@ -82,6 +83,14 @@ struct CompatConfigQuery {
 #[serde(rename_all = "camelCase")]
 struct CompatConfigReloadResponse {
     success: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatConfigSettingsResponse {
+    auth_providers: Vec<AuthProviderResource>,
+    permission_rules: Vec<PermissionRuleResource>,
+    generation: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -825,6 +834,139 @@ async fn compat_config_reload(
     Ok(Json(CompatConfigReloadResponse { success: true }))
 }
 
+fn compat_auth_provider_is_supported(resolved: &agena::config::ResolvedProviderConfig) -> bool {
+    matches!(
+        resolved.auth,
+        ProviderAuthConfig::Api(_)
+            | ProviderAuthConfig::Credential(_)
+            | ProviderAuthConfig::SapAiCore(_)
+    )
+}
+
+fn compat_secret_preview(secret: &str) -> Option<String> {
+    let trimmed = secret.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() <= 8 {
+        return Some("*".repeat(trimmed.len()));
+    }
+    Some(format!(
+        "{}...{}",
+        &trimmed[..4],
+        &trimmed[trimmed.len() - 4..]
+    ))
+}
+
+fn compat_auth_provider_resource(
+    provider_id: String,
+    auth: Option<&agena::provider::auth::AuthData>,
+) -> CompatResult<AuthProviderResource> {
+    let mut resource = AuthProviderResource {
+        provider_id,
+        configured: true,
+        credential_present: auth.is_some(),
+        credential_type: None,
+        key_preview: None,
+        expires_at: None,
+        expired: None,
+        account_id: None,
+        enterprise_url: None,
+    };
+
+    match auth {
+        Some(agena::provider::auth::AuthData::Api { key }) => {
+            resource.credential_type = Some(AuthCredentialType::Api);
+            resource.key_preview = compat_secret_preview(key);
+        }
+        Some(agena::provider::auth::AuthData::OAuth {
+            account_id,
+            enterprise_url,
+            ..
+        }) => {
+            resource.credential_type = Some(AuthCredentialType::Oauth);
+            resource.account_id = account_id.clone();
+            resource.enterprise_url = enterprise_url.clone();
+        }
+        Some(agena::provider::auth::AuthData::WellKnown { key, .. }) => {
+            resource.credential_type = Some(AuthCredentialType::WellKnown);
+            resource.key_preview = Some(key.clone());
+        }
+        None => {}
+    }
+
+    Ok(resource)
+}
+
+async fn compat_list_auth_providers(state: &AppState) -> CompatResult<Vec<AuthProviderResource>> {
+    let snapshot = state.runtime.current_snapshot();
+    let resolution = snapshot.config_resolution();
+    let mut provider_ids = resolution
+        .config
+        .providers
+        .iter()
+        .filter(|(_, resolved)| compat_auth_provider_is_supported(resolved))
+        .map(|(provider_id, _)| provider_id.clone())
+        .collect::<Vec<_>>();
+    provider_ids.sort();
+
+    provider_ids
+        .into_iter()
+        .map(|provider_id| {
+            let resolved = resolution
+                .config
+                .providers
+                .get(provider_id.as_str())
+                .ok_or_else(|| compat_internal("auth provider disappeared from config snapshot"))?;
+            compat_auth_provider_resource(provider_id, provider_auth_data(resolved).as_ref())
+        })
+        .collect()
+}
+
+async fn compat_list_permission_rules(
+    state: &AppState,
+) -> CompatResult<Vec<PermissionRuleResource>> {
+    let mut items = Vec::new();
+    let mut cursor = None;
+
+    loop {
+        let page = state
+            .compat_api_service
+            .list_permission_rules(PermissionRuleListQuery {
+                cursor,
+                limit: Some(200),
+                search: None,
+            })
+            .await
+            .map_err(|error| compat_internal(format!("{error:?}")))?;
+        items.extend(page.items);
+
+        if !page.page.has_more {
+            break;
+        }
+        cursor = page.page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    Ok(items)
+}
+
+async fn compat_config_settings(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> CompatResult<Json<CompatConfigSettingsResponse>> {
+    let snapshot = state.runtime.current_snapshot();
+    let auth_providers = compat_list_auth_providers(state.as_ref()).await?;
+    let permission_rules = compat_list_permission_rules(state.as_ref()).await?;
+
+    Ok(Json(CompatConfigSettingsResponse {
+        auth_providers,
+        permission_rules,
+        generation: snapshot.generation(),
+    }))
+}
+
 fn compat_provider_env_names(auth: &ProviderAuthConfig) -> Vec<String> {
     match auth {
         ProviderAuthConfig::Api(config) => config
@@ -916,7 +1058,8 @@ fn compat_provider_auth_exists(resolved: &agena::config::ResolvedProviderConfig)
     match &resolved.auth {
         ProviderAuthConfig::None => false,
         ProviderAuthConfig::Api(config) => {
-            compat_has_value(config.api_key.as_deref()) || compat_has_value(config.api_key_env.as_deref())
+            compat_has_value(config.api_key.as_deref())
+                || compat_has_value(config.api_key_env.as_deref())
         }
         ProviderAuthConfig::Credential(config) => config.credential.is_some(),
         ProviderAuthConfig::BedrockSigv4(config) => {
@@ -3769,7 +3912,10 @@ async fn compat_session_activity(
             .get_session(session.id)
             .await
             .map_err(|error| compat_internal(error.to_string()))?;
-        if matches!(loaded.status(), agena::session::SessionStatus::AwaitingModel) {
+        if matches!(
+            loaded.status(),
+            agena::session::SessionStatus::AwaitingModel
+        ) {
             payload.insert(session.id.to_string(), json!({ "type": "busy" }));
         }
     }
@@ -5046,6 +5192,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
     );
     let compat_routes = compat_fs_router::<Arc<AppState>>()
         .route("/api/config/reload", post(compat_config_reload))
+        .route("/api/config/settings", get(compat_config_settings))
         .route("/api/config/providers", get(compat_config_providers))
         .route(
             "/api/provider/{provider_id}/source",
@@ -5800,6 +5947,77 @@ include_global = true
     }
 
     #[tokio::test]
+    async fn compat_config_settings_returns_auth_providers_and_permission_rules() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        state
+            .compat_api_service
+            .create_permission_rule(agena_api_server::local_api::PermissionRuleWriteRequest {
+                action_key: None,
+                subject_kind: Some("builtin_tool".to_owned()),
+                tool_name: Some("bash".to_owned()),
+                qualifier: Some("git status*".to_owned()),
+                path_access_kind: None,
+                workspace_root: None,
+                target_path: None,
+                network_target: None,
+                network_host: None,
+                network_port: None,
+                scope: Some("global".to_owned()),
+                session_id: None,
+                mode: agena::permission::PermissionMode::Allow,
+            })
+            .await
+            .expect("permission rule should create");
+
+        let router = Router::new()
+            .route("/api/config/settings", get(compat_config_settings))
+            .with_state(state.clone());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/config/settings")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+
+        let auth_providers = payload["authProviders"]
+            .as_array()
+            .expect("authProviders should be an array");
+        assert_eq!(auth_providers.len(), 1);
+        assert_eq!(auth_providers[0]["provider_id"], json!("openai"));
+        assert_eq!(auth_providers[0]["configured"], json!(true));
+        assert_eq!(auth_providers[0]["credential_present"], json!(true));
+        assert_eq!(auth_providers[0]["credential_type"], json!("api"));
+
+        let permission_rules = payload["permissionRules"]
+            .as_array()
+            .expect("permissionRules should be an array");
+        assert_eq!(permission_rules.len(), 1);
+        assert_eq!(permission_rules[0]["subject_kind"], json!("builtin_tool"));
+        assert_eq!(permission_rules[0]["tool_name"], json!("bash"));
+        assert_eq!(permission_rules[0]["qualifier"], json!("git status*"));
+        assert_eq!(permission_rules[0]["scope"], json!("global"));
+        assert_eq!(permission_rules[0]["mode"], json!("allow"));
+        assert!(payload["generation"].as_u64().is_some());
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
     async fn compat_provider_source_returns_expected_shape_for_runtime_config() {
         let (state, _db, _config, _workspace) = compat_test_app_state().await;
         let router = Router::new()
@@ -5879,7 +6097,14 @@ include_global = true
         assert_eq!(payload["sources"]["project"]["exists"], json!(false));
         assert_eq!(
             payload["sources"]["project"]["path"],
-            json!(workspace.path().join(".agena").join("config.toml").display().to_string())
+            json!(
+                workspace
+                    .path()
+                    .join(".agena")
+                    .join("config.toml")
+                    .display()
+                    .to_string()
+            )
         );
         assert_eq!(payload["sources"]["custom"]["exists"], json!(true));
 

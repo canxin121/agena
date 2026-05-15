@@ -5,13 +5,15 @@
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::entry::{FirstPartyExecution, ToolExecutionView, ask_user, tool_search};
 use crate::message::{
     AskUserToolInput, CreateGoalToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
     ExitPlanModeToolInput, ExitWorktreeToolInput, FirstPartyToolOutput, GetGoalToolInput,
     TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput,
-    UpdateGoalStatus, UpdateGoalToolInput, WorkflowPromptToolInput,
+    UpdateGoalStatus, WorkflowPromptToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
@@ -28,6 +30,30 @@ use crate::plugin::sdk::{
 };
 
 pub(crate) const WORKFLOW_PLUGIN_ID: &str = "agena.workflow";
+
+fn deserialize_update_goal_token_budget<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<u64>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Some(Option::<u64>::deserialize(deserializer)?))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+struct WorkflowUpdateGoalToolInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective: Option<String>,
+    pub status: UpdateGoalStatus,
+    /// Omit to preserve the existing budget, pass `null` to clear it, or an
+    /// integer to set a new budget.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_update_goal_token_budget"
+    )]
+    pub token_budget: Option<Option<u64>>,
+}
 
 pub(crate) struct WorkflowPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
@@ -199,7 +225,10 @@ impl WorkflowPlugin {
         .with_payload(payload))
     }
 
-    async fn invoke_update_goal(&self, input: &UpdateGoalToolInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_update_goal(
+        &self,
+        input: &WorkflowUpdateGoalToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let response = self
             .host()?
             .update_goal(HostUpdateGoalRequest {
@@ -209,7 +238,7 @@ impl WorkflowPlugin {
                     UpdateGoalStatus::Paused => HostGoalStatus::Paused,
                     UpdateGoalStatus::Complete => HostGoalStatus::Completed,
                 }),
-                token_budget: input.token_budget.map(Some),
+                token_budget: input.token_budget,
             })
             .await?;
         let payload =
@@ -552,13 +581,20 @@ fn entries() -> Vec<PluginEntryDecl> {
         .host_capability(HostCapability::GoalRegistry),
         PluginEntryDecl::new(
             "update_goal",
-            crate::entry::definition::json_schema_for::<UpdateGoalToolInput>(),
+            crate::entry::definition::json_schema_for::<WorkflowUpdateGoalToolInput>(),
         )
         .description(
-            "Update the current runtime goal, including status transitions and optional objective or budget changes.",
+            "Update the current runtime goal, including status transitions and optional objective or budget changes. Omit `token_budget` to preserve it, pass `null` to clear it, or an integer to set it.",
         )
         .behavior(SdkEntryBehavior::Mutating)
-        .search_terms(["goal", "pause goal", "resume goal", "complete goal", "budget"])
+        .search_terms([
+            "goal",
+            "pause goal",
+            "resume goal",
+            "complete goal",
+            "budget",
+            "clear budget",
+        ])
         .always_load()
         .host_capability(HostCapability::GoalRegistry),
         PluginEntryDecl::new(
@@ -806,7 +842,7 @@ mod tests {
             *self
                 .update_goal_request
                 .lock()
-                    .expect("update goal request lock") = Some(RecordedUpdateGoalRequest {
+                .expect("update goal request lock") = Some(RecordedUpdateGoalRequest {
                 objective: req.objective.clone(),
                 status: req.status,
                 token_budget: req.token_budget,
@@ -1030,7 +1066,7 @@ mod tests {
         let output = plugin
             .tool_invoke(invoke_input(
                 "update_goal",
-                UpdateGoalToolInput {
+                WorkflowUpdateGoalToolInput {
                     objective: None,
                     status: UpdateGoalStatus::Complete,
                     token_budget: None,
@@ -1063,10 +1099,10 @@ mod tests {
         let output = plugin
             .tool_invoke(invoke_input(
                 "update_goal",
-                UpdateGoalToolInput {
+                WorkflowUpdateGoalToolInput {
                     objective: Some("resume and ship it".to_string()),
                     status: UpdateGoalStatus::Paused,
-                    token_budget: Some(256),
+                    token_budget: Some(Some(256)),
                 },
             ))
             .await
@@ -1094,6 +1130,41 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload["goal"]["token_budget"].as_u64()),
             Some(256)
+        );
+    }
+
+    #[tokio::test]
+    async fn update_goal_allows_explicit_budget_clear_with_null() {
+        let (plugin, host) = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(ToolInvokeInput {
+                tool_name: "update_goal".to_string(),
+                session_id: 1,
+                call_id: 2,
+                workspace_root: "/tmp".to_string(),
+                input: serde_json::json!({
+                    "status": "active",
+                    "token_budget": null,
+                }),
+            })
+            .await
+            .expect("update_goal host invoke");
+
+        assert_eq!(
+            host.recorded_update_goal_request(),
+            Some(RecordedUpdateGoalRequest {
+                objective: None,
+                status: Some(HostGoalStatus::Active),
+                token_budget: Some(None),
+            })
+        );
+        assert!(output.output_text.contains("Tokens: 48."));
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .map(|payload| payload["goal"]["token_budget"].is_null()),
+            Some(true)
         );
     }
 

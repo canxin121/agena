@@ -195,6 +195,25 @@ struct FsWriteCompatBody {
     content: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsMkdirCompatBody {
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsDeleteCompatBody {
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsRenameCompatBody {
+    old_path: Option<String>,
+    new_path: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct FsWriteCompatResponse {
     success: bool,
@@ -908,6 +927,101 @@ async fn compat_fs_write(
     Ok(Json(FsWriteCompatResponse { success: true }))
 }
 
+async fn compat_fs_mkdir(
+    Query(query): Query<FsWriteCompatQuery>,
+    Json(body): Json<FsMkdirCompatBody>,
+) -> CompatResult<Json<FsWriteCompatResponse>> {
+    let path = body
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("Path is required"))?;
+
+    let (_base, absolute) =
+        compat_resolve_scoped_path(query.directory.as_deref(), Some(path)).await?;
+
+    tokio::fs::create_dir_all(&absolute)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access denied"),
+            _ => compat_internal(error.to_string()),
+        })?;
+
+    Ok(Json(FsWriteCompatResponse { success: true }))
+}
+
+async fn compat_fs_delete(
+    Query(query): Query<FsWriteCompatQuery>,
+    Json(body): Json<FsDeleteCompatBody>,
+) -> CompatResult<Json<FsWriteCompatResponse>> {
+    let path = body
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("Path is required"))?;
+
+    let (_base, absolute) =
+        compat_resolve_scoped_path(query.directory.as_deref(), Some(path)).await?;
+
+    let metadata = match tokio::fs::symlink_metadata(&absolute).await {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(compat_forbidden("Access denied"));
+        }
+        Err(error) => return Err(compat_internal(error.to_string())),
+    };
+
+    if let Some(metadata) = metadata {
+        let remove_result = if metadata.is_dir() {
+            tokio::fs::remove_dir_all(&absolute).await
+        } else {
+            tokio::fs::remove_file(&absolute).await
+        };
+        remove_result.map_err(|error| match error.kind() {
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access denied"),
+            _ => compat_internal(error.to_string()),
+        })?;
+    }
+
+    Ok(Json(FsWriteCompatResponse { success: true }))
+}
+
+async fn compat_fs_rename(
+    Query(query): Query<FsWriteCompatQuery>,
+    Json(body): Json<FsRenameCompatBody>,
+) -> CompatResult<Json<FsWriteCompatResponse>> {
+    let old_path = body
+        .old_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("oldPath is required"))?;
+    let new_path = body
+        .new_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("newPath is required"))?;
+
+    let (_base, absolute_old) =
+        compat_resolve_scoped_path(query.directory.as_deref(), Some(old_path)).await?;
+    let (_base, absolute_new) =
+        compat_resolve_scoped_path(query.directory.as_deref(), Some(new_path)).await?;
+
+    tokio::fs::rename(&absolute_old, &absolute_new)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => compat_not_found("Source path not found"),
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access denied"),
+            _ => compat_internal(error.to_string()),
+        })?;
+
+    Ok(Json(FsWriteCompatResponse { success: true }))
+}
+
 async fn compat_fs_search(
     Query(query): Query<FsSearchCompatQuery>,
 ) -> CompatResult<Json<FsSearchCompatResponse>> {
@@ -1081,6 +1195,9 @@ where
         .route("/api/fs/read", get(compat_fs_read))
         .route("/api/fs/read-chunk", get(compat_fs_read_chunk))
         .route("/api/fs/write", post(compat_fs_write))
+        .route("/api/fs/mkdir", post(compat_fs_mkdir))
+        .route("/api/fs/delete", post(compat_fs_delete))
+        .route("/api/fs/rename", post(compat_fs_rename))
         .route("/api/fs/raw", get(compat_fs_raw))
         .route("/api/fs/download", get(compat_fs_download))
 }
@@ -1704,6 +1821,122 @@ mod tests {
                 .expect("file should exist after write"),
             "hello studio"
         );
+    }
+
+    #[tokio::test]
+    async fn compat_fs_mkdir_route_creates_scoped_directory() {
+        let temp = tempdir().expect("tempdir should be created");
+        let directory_path = temp.path().display().to_string();
+        let directory = urlencoding::encode(&directory_path);
+
+        let response = compat_fs_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/fs/mkdir?directory={directory}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({"path":"nested/deeper"}).to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: FsWriteCompatResponse =
+            serde_json::from_slice(&body).expect("response should be valid json");
+        assert!(payload.success);
+        assert!(temp.path().join("nested/deeper").is_dir());
+    }
+
+    #[tokio::test]
+    async fn compat_fs_rename_route_renames_scoped_path() {
+        let temp = tempdir().expect("tempdir should be created");
+        std::fs::create_dir_all(temp.path().join("nested")).expect("nested dir should exist");
+        std::fs::write(temp.path().join("nested/notes.txt"), "hello studio")
+            .expect("file should be written");
+        let directory_path = temp.path().display().to_string();
+        let directory = urlencoding::encode(&directory_path);
+
+        let response = compat_fs_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/fs/rename?directory={directory}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"oldPath":"nested/notes.txt","newPath":"nested/archive.txt"})
+                            .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: FsWriteCompatResponse =
+            serde_json::from_slice(&body).expect("response should be valid json");
+        assert!(payload.success);
+        assert!(!temp.path().join("nested/notes.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("nested/archive.txt"))
+                .expect("renamed file should exist"),
+            "hello studio"
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_fs_delete_route_deletes_scoped_path_and_is_idempotent() {
+        let temp = tempdir().expect("tempdir should be created");
+        std::fs::create_dir_all(temp.path().join("nested/deeper"))
+            .expect("nested dir should exist");
+        std::fs::write(temp.path().join("nested/deeper/notes.txt"), "hello studio")
+            .expect("file should be written");
+        let directory_path = temp.path().display().to_string();
+        let directory = urlencoding::encode(&directory_path);
+
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/fs/delete?directory={directory}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({"path":"nested"}).to_string()))
+                .expect("request should build")
+        };
+
+        let first_response = compat_fs_router::<()>()
+            .clone()
+            .oneshot(request())
+            .await
+            .expect("request should succeed");
+        assert_eq!(first_response.status(), StatusCode::OK);
+        assert!(!temp.path().join("nested").exists());
+
+        let second_response = compat_fs_router::<()>()
+            .oneshot(request())
+            .await
+            .expect("request should succeed");
+        assert_eq!(second_response.status(), StatusCode::OK);
+        let body = second_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: FsWriteCompatResponse =
+            serde_json::from_slice(&body).expect("response should be valid json");
+        assert!(payload.success);
     }
 
     #[tokio::test]

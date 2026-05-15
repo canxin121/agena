@@ -19,6 +19,7 @@ use crate::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
         },
+        remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
         prompt_cache, sse, utils, wire_message,
     },
     role::Role,
@@ -1619,33 +1620,42 @@ impl ModelProvider for OpenAiProvider {
             ]);
         }
 
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
-            self.apply_headers(
-                self.client
-                    .get(self.model_endpoint().expect("model endpoint should resolve"))
-                    .header(self.auth_header.as_str(), auth_value),
-                RequestHeaderContext::none(),
-            )
-        })
-        .await?;
+        let source = RemoteModelCatalogSource::new(
+            self.id.as_str(),
+            self.model_endpoint()?,
+            self.api_key.prompt_cache_scope(),
+        );
+        RemoteModelCatalogCache::default()
+            .get_or_fetch(&source, || async {
+                let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+                    let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
+                    self.apply_headers(
+                        self.client
+                            .get(self.model_endpoint().expect("model endpoint should resolve"))
+                            .header(self.auth_header.as_str(), auth_value),
+                        RequestHeaderContext::none(),
+                    )
+                })
+                .await?;
 
-        let payload: OpenAiModelListResponse =
-            utils::parse_json_response(self.id.as_str(), response).await?;
-        Ok(payload
-            .into_items()
-            .into_iter()
-            .map(|m| {
-                let model = ProviderModel::new(self.id.as_str(), m.id);
-                let capabilities = self.model_capabilities(&model.id);
-                let model = model.with_capabilities(capabilities);
-                if let Some(name) = m.name {
-                    model.with_display_name(name)
-                } else {
-                    model
-                }
+                let payload: OpenAiModelListResponse =
+                    utils::parse_json_response(self.id.as_str(), response).await?;
+                Ok(payload
+                    .into_items()
+                    .into_iter()
+                    .map(|m| {
+                        let model = ProviderModel::new(self.id.as_str(), m.id);
+                        let capabilities = self.model_capabilities(&model.id);
+                        let model = model.with_capabilities(capabilities);
+                        if let Some(name) = m.name {
+                            model.with_display_name(name)
+                        } else {
+                            model
+                        }
+                    })
+                    .collect())
             })
-            .collect())
+            .await
     }
 
     #[tracing::instrument(
@@ -2320,7 +2330,7 @@ fn normalize_domain(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     use super::*;
     use futures_util::StreamExt;
@@ -2333,6 +2343,89 @@ mod tests {
     use crate::model::ModelId;
     use crate::tool::{EntryBehavior, EntryDefinition};
 
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: tests serialize env mutation through `env_lock()`.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::set_var(self.key, previous);
+                }
+            } else {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct MemoryAuthStore {
+        values: Mutex<HashMap<String, crate::provider::auth::AuthData>>,
+    }
+
+    impl crate::provider::auth::AuthStore for MemoryAuthStore {
+        fn all(&self) -> Result<HashMap<String, crate::provider::auth::AuthData>, AppError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("auth store lock should succeed")
+                .clone())
+        }
+
+        fn get(
+            &self,
+            provider_id: &str,
+        ) -> Result<Option<crate::provider::auth::AuthData>, AppError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("auth store lock should succeed")
+                .get(provider_id)
+                .cloned())
+        }
+
+        fn set(
+            &self,
+            provider_id: &str,
+            auth: crate::provider::auth::AuthData,
+        ) -> Result<(), AppError> {
+            self.values
+                .lock()
+                .expect("auth store lock should succeed")
+                .insert(provider_id.to_owned(), auth);
+            Ok(())
+        }
+
+        fn remove(&self, provider_id: &str) -> Result<(), AppError> {
+            self.values
+                .lock()
+                .expect("auth store lock should succeed")
+                .remove(provider_id);
+            Ok(())
+        }
+    }
     fn sample_tool_definition() -> EntryDefinition {
         EntryDefinition::plugin(
             "project_search",
@@ -4098,5 +4191,49 @@ mod tests {
                 .as_deref(),
             Some("Bearer sk-test")
         );
+    }
+
+    #[tokio::test]
+    async fn list_models_uses_disk_cache_after_first_fetch() {
+        let _env_lock = env_lock().lock().expect("env lock should succeed");
+        let dir = tempfile::tempdir().expect("tempdir should create");
+        let _cache_dir =
+            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
+
+        let mut server = mockito::Server::new_async().await;
+        {
+            let _mock = server
+                .mock("GET", "/models")
+                .match_header("authorization", "Bearer sk-test")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "data": [{ "id": "gpt-5" }]
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let provider =
+                OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+            let models = provider
+                .list_models()
+                .await
+                .expect("initial list_models should succeed");
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].id.as_str(), "gpt-5");
+        }
+
+        let provider =
+            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let models = provider
+            .list_models()
+            .await
+            .expect("cached list_models should succeed");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "gpt-5");
     }
 }

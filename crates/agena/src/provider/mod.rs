@@ -18,6 +18,7 @@ mod openai_compatible;
 mod opencode;
 mod prompt_cache;
 mod prompt_cache_shape;
+mod remote_model_catalog_cache;
 mod registry;
 mod runtime;
 mod sse;

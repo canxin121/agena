@@ -110,6 +110,11 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Clear the current persisted session goal, if any.
+    async fn clear_goal(&self, _req: HostClearGoalRequest) -> Result<HostClearGoalResponse> {
+        Err(unavailable())
+    }
+
     /// Enter plan mode for the current session.
     async fn enter_plan_mode(&self, _req: HostEnterPlanModeRequest) -> Result<ToolInvokeOutput> {
         Err(unavailable())
@@ -668,6 +673,14 @@ pub struct HostUpdateGoalRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostUpdateGoalResponse {
     pub goal: HostGoal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostClearGoalRequest {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostClearGoalResponse {
+    pub cleared: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -313,6 +313,9 @@ pub struct WorkflowPromptToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 pub struct GetGoalToolInput {}
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct ClearGoalToolInput {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct CreateGoalToolInput {
     pub objective: String,

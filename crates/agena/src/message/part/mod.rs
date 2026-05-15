@@ -18,8 +18,8 @@ pub use content::PartContent;
 pub use message_part::{MessagePart, PartStateTransitionError};
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
-    ApplyPatchToolInput, AskUserToolInput, BashToolInput, CreateGoalToolInput, CronCreateToolInput,
-    CronDeleteToolInput, CronJobSummary, CronListToolInput, CustomToolOutput,
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, ClearGoalToolInput, CreateGoalToolInput,
+    CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput, CustomToolOutput,
     EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput,
     FilesystemAccess, FilesystemEffect, FirstPartyToolInput, FirstPartyToolOutput,
     GetGoalToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,

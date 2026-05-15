@@ -10,18 +10,18 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::entry::{FirstPartyExecution, ToolExecutionView, ask_user, tool_search};
 use crate::message::{
-    AskUserToolInput, CreateGoalToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-    ExitPlanModeToolInput, ExitWorktreeToolInput, FirstPartyToolOutput, GetGoalToolInput,
-    TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput,
-    UpdateGoalStatus, WorkflowPromptToolInput,
+    AskUserToolInput, ClearGoalToolInput, CreateGoalToolInput, EnterPlanModeToolInput,
+    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, FirstPartyToolOutput,
+    GetGoalToolInput, TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
+    ToolSearchToolInput, UpdateGoalStatus, WorkflowPromptToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
-    HostClient, HostCreateGoalRequest, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
-    HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGoal, HostGoalStatus,
-    HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
-    SpawnSubtaskRequest, ToolDescriptor,
+    HostClearGoalRequest, HostClient, HostCreateGoalRequest, HostEnterPlanModeRequest,
+    HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest,
+    HostGoal, HostGoalStatus, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
+    HostUpdateGoalRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
     EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
@@ -225,6 +225,29 @@ impl WorkflowPlugin {
         .with_payload(payload))
     }
 
+    async fn invoke_clear_goal(&self, _input: &ClearGoalToolInput) -> SdkResult<ToolInvokeOutput> {
+        let response = self
+            .host()?
+            .clear_goal(HostClearGoalRequest::default())
+            .await?;
+        let payload =
+            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
+        let text = if response.cleared {
+            format!(
+                "Cleared the current goal.\n\n{}",
+                Self::goal_payload_text(&payload)
+            )
+        } else {
+            format!(
+                "No current goal to clear.\n\n{}",
+                Self::goal_payload_text(&payload)
+            )
+        };
+        Ok(ToolInvokeOutput::text(text)
+            .with_title("goal")
+            .with_payload(payload))
+    }
+
     async fn invoke_update_goal(
         &self,
         input: &WorkflowUpdateGoalToolInput,
@@ -414,6 +437,10 @@ impl Plugin for WorkflowPlugin {
                 self.invoke_get_goal(&serde_json::from_value(input.input)?)
                     .await
             }
+            "clear_goal" => {
+                self.invoke_clear_goal(&serde_json::from_value(input.input)?)
+                    .await
+            }
             "update_goal" => {
                 self.invoke_update_goal(&serde_json::from_value(input.input)?)
                     .await
@@ -580,6 +607,15 @@ fn entries() -> Vec<PluginEntryDecl> {
         .always_load()
         .host_capability(HostCapability::GoalRegistry),
         PluginEntryDecl::new(
+            "clear_goal",
+            crate::entry::definition::json_schema_for::<ClearGoalToolInput>(),
+        )
+        .description("Clear the current runtime goal for this session, if one exists.")
+        .behavior(SdkEntryBehavior::Mutating)
+        .search_terms(["goal", "clear goal", "remove goal", "delete goal"])
+        .always_load()
+        .host_capability(HostCapability::GoalRegistry),
+        PluginEntryDecl::new(
             "update_goal",
             crate::entry::definition::json_schema_for::<WorkflowUpdateGoalToolInput>(),
         )
@@ -675,10 +711,10 @@ mod tests {
 
     use super::*;
     use crate::plugin::sdk::host_api::{
-        EventSubscription, HostCreateGoalRequest, HostCreateGoalResponse, HostEnterPlanModeRequest,
-        HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest,
-        HostGetGoalRequest, HostGetGoalResponse, HostGoal, HostGoalStatus, HostUpdateGoalRequest,
-        HostUpdateGoalResponse, LogLevel,
+        EventSubscription, HostClearGoalRequest, HostClearGoalResponse, HostCreateGoalRequest,
+        HostCreateGoalResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
+        HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
+        HostGoal, HostGoalStatus, HostUpdateGoalRequest, HostUpdateGoalResponse, LogLevel,
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
 
@@ -690,14 +726,23 @@ mod tests {
     }
 
     struct TestHost {
+        clear_goal_request_count: Mutex<u32>,
         update_goal_request: Mutex<Option<RecordedUpdateGoalRequest>>,
     }
 
     impl TestHost {
         fn new() -> Self {
             Self {
+                clear_goal_request_count: Mutex::new(0),
                 update_goal_request: Mutex::new(None),
             }
+        }
+
+        fn clear_goal_request_count(&self) -> u32 {
+            *self
+                .clear_goal_request_count
+                .lock()
+                .expect("clear goal request lock")
         }
 
         fn recorded_update_goal_request(&self) -> Option<RecordedUpdateGoalRequest> {
@@ -859,6 +904,15 @@ mod tests {
                     completed_at_ms: (status == HostGoalStatus::Completed).then_some(123),
                 },
             })
+        }
+
+        async fn clear_goal(&self, _req: HostClearGoalRequest) -> SdkResult<HostClearGoalResponse> {
+            let mut count = self
+                .clear_goal_request_count
+                .lock()
+                .expect("clear goal request lock");
+            *count += 1;
+            Ok(HostClearGoalResponse { cleared: true })
         }
 
         async fn enter_plan_mode(
@@ -1057,6 +1111,25 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload["goal"]["token_budget"].as_u64()),
             Some(128)
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_goal_invokes_host_without_executor_context() {
+        let (plugin, host) = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_input("clear_goal", ClearGoalToolInput::default()))
+            .await
+            .expect("clear_goal host invoke");
+
+        assert_eq!(host.clear_goal_request_count(), 1);
+        assert!(output.output_text.contains("Cleared the current goal."));
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload["cleared"].as_bool()),
+            Some(true)
         );
     }
 

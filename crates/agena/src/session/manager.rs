@@ -685,17 +685,13 @@ impl SessionManager {
         &self,
         message_id: i64,
     ) -> Result<Option<i64>, AppError> {
-        let state = self.execution_state();
         self.store
-            .find_session_id_for_message(message_id, state.cache_policy())
+            .find_projected_session_id_for_message(message_id)
             .await
     }
 
     pub async fn find_session_id_for_part(&self, part_id: i64) -> Result<Option<i64>, AppError> {
-        let state = self.execution_state();
-        self.store
-            .find_session_id_for_part(part_id, state.cache_policy())
-            .await
+        self.store.find_projected_session_id_for_part(part_id).await
     }
 
     pub async fn list_session_summaries(

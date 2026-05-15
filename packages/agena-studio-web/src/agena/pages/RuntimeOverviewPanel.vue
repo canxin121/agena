@@ -60,12 +60,12 @@ const sortedCatalogEntries = computed(() =>
   [...catalogEntriesState.value].sort((left, right) => {
     if (left.provider_id !== right.provider_id) return left.provider_id.localeCompare(right.provider_id)
     if (left.model_id !== right.model_id) return left.model_id.localeCompare(right.model_id)
-    return Number(right.has_local_override || false) - Number(left.has_local_override || false)
+    return left.kind.localeCompare(right.kind)
   }),
 )
 
-function makeEntryKey(providerId: string, modelId: string) {
-  return `${providerId}/${modelId}`
+function makeEntryKey(providerId: string, modelId: string, kind: ModelCatalogEntry['kind']) {
+  return `${providerId}/${modelId}/${kind}`
 }
 
 function resetEditor(providerId = '', modelId = '') {
@@ -75,7 +75,7 @@ function resetEditor(providerId = '', modelId = '') {
 
 function editEntry(entry: ModelCatalogEntry) {
   draft.value = createModelCatalogDraftFromEntry(entry)
-  editingEntryKey.value = makeEntryKey(entry.provider_id, entry.model_id)
+  editingEntryKey.value = makeEntryKey(entry.provider_id, entry.model_id, entry.kind)
 }
 
 type ProviderModelVariantWithDisabled = ProviderModelVariant & {
@@ -105,7 +105,7 @@ function formatVariantThinking(value: Record<string, unknown> | null | undefined
 function loadProviderModelDraft(model: ProviderModel) {
   const matchingEntry = findCatalogEntryForProviderModel(catalogEntriesState.value, model)
   draft.value = createModelCatalogDraftFromProviderSelection(catalogEntriesState.value, model)
-  editingEntryKey.value = matchingEntry ? makeEntryKey(matchingEntry.provider_id, matchingEntry.model_id) : ''
+  editingEntryKey.value = matchingEntry ? makeEntryKey(matchingEntry.provider_id, matchingEntry.model_id, matchingEntry.kind) : ''
   actionError.value = ''
   actionMessage.value = `Loaded ${model.provider_id}/${model.id} into the draft editor.`
 }
@@ -114,7 +114,7 @@ async function saveDraft() {
   submitting.value = true
   try {
     await saveCatalogEntryAction(draft.value)
-    editingEntryKey.value = makeEntryKey(draft.value.provider_id.trim(), draft.value.model_id.trim())
+    editingEntryKey.value = makeEntryKey(draft.value.provider_id.trim(), draft.value.model_id.trim(), 'custom')
   } finally {
     submitting.value = false
   }
@@ -133,7 +133,7 @@ async function deleteEntry(entry: ModelCatalogEntry) {
   submitting.value = true
   try {
     await deleteCatalogEntryAction(entry.provider_id, entry.model_id)
-    if (editingEntryKey.value === makeEntryKey(entry.provider_id, entry.model_id)) {
+    if (editingEntryKey.value === makeEntryKey(entry.provider_id, entry.model_id, entry.kind)) {
       resetEditor(entry.provider_id)
     }
   } finally {
@@ -151,7 +151,7 @@ async function setDefault(entry: ModelCatalogEntry) {
 }
 
 function isEntrySelected(entry: ModelCatalogEntry) {
-  return editingEntryKey.value === makeEntryKey(entry.provider_id, entry.model_id)
+  return editingEntryKey.value === makeEntryKey(entry.provider_id, entry.model_id, entry.kind)
 }
 </script>
 
@@ -292,12 +292,12 @@ function isEntrySelected(entry: ModelCatalogEntry) {
           <div>
             <h3>Model Catalog</h3>
             <p class="muted">
-              Refresh the runtime catalog, pull a live provider model into the draft editor, save local overrides,
-              delete local overrides, and set the provider default model.
+              Refresh the runtime catalog, pull a live provider model into the draft editor, save custom entries from
+              official or live metadata, delete custom entries, and set the provider default model.
             </p>
           </div>
           <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
-            <button class="button" :disabled="submitting" @click="resetEditor()">Blank Override</button>
+            <button class="button" :disabled="submitting" @click="resetEditor()">Blank Custom Entry</button>
             <button class="button primary" :disabled="submitting" @click="refreshCatalog">Refresh Catalog</button>
           </div>
         </div>
@@ -507,7 +507,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
 
         <div class="button-row" style="margin-top: 16px; flex-wrap: wrap">
           <button class="button primary" :disabled="submitting" @click="saveDraft">
-            {{ editingEntryKey ? 'Save Override' : 'Create Override' }}
+            {{ editingEntryKey ? 'Save Custom Entry' : 'Create Custom Entry' }}
           </button>
           <button class="button" :disabled="submitting" @click="resetEditor(draft.provider_id)">Reset Form</button>
         </div>
@@ -518,8 +518,8 @@ function isEntrySelected(entry: ModelCatalogEntry) {
           <div>
             <h3>Catalog Entries</h3>
             <p class="muted">
-              Entries are shown as one merged catalog. Bring a live model into the draft editor, save a local override,
-              and delete only the local override.
+              Official entries are runtime catalog metadata. Custom entries are local overrides layered on top and are
+              the only entries you can delete.
             </p>
           </div>
           <span class="badge">{{ sortedCatalogEntries.length }}</span>
@@ -528,7 +528,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         <div v-if="sortedCatalogEntries.length" class="list" style="margin-top: 12px">
           <div
             v-for="entry in sortedCatalogEntries"
-            :key="`${entry.provider_id}/${entry.model_id}`"
+            :key="makeEntryKey(entry.provider_id, entry.model_id, entry.kind)"
             class="list-item"
             :style="isEntrySelected(entry) ? 'border-color: var(--accent-color, #444);' : ''"
           >
@@ -538,9 +538,9 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                   <strong>{{ entry.provider_id }}/{{ entry.model_id }}</strong>
                 </div>
                 <div class="muted">
-                  {{ entry.display_name || 'Unnamed model' }} · {{ entry.kind }} · {{ entry.source }}
+                  {{ entry.display_name || 'Unnamed model' }} · {{ entry.kind }} · {{ entry.source_label || entry.source }}
                 </div>
-                <div v-if="entry.has_local_override" class="muted">Local override saved for this model.</div>
+                <div v-if="entry.kind === 'custom'" class="muted">Custom entry saved for this model.</div>
                 <div v-if="entry.family || entry.lifecycle" class="muted">
                   {{ entry.family || 'family unset' }} · {{ entry.lifecycle || 'lifecycle unset' }}
                 </div>
@@ -569,19 +569,21 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                   </div>
                 </div>
               </div>
-              <span v-if="entry.has_local_override" class="badge">override</span>
+              <span v-if="entry.kind === 'custom'" class="badge">custom</span>
             </div>
 
             <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
-              <button class="button" :disabled="submitting" @click="editEntry(entry)">Edit Entry</button>
+              <button class="button" :disabled="submitting" @click="editEntry(entry)">
+                {{ entry.kind === 'custom' ? 'Edit Custom Entry' : 'Create Custom Entry' }}
+              </button>
               <button class="button" :disabled="submitting" @click="setDefault(entry)">Set Default</button>
               <button
-                v-if="entry.has_local_override"
+                v-if="entry.kind === 'custom'"
                 class="button danger"
                 :disabled="submitting"
                 @click="deleteEntry(entry)"
               >
-                Delete Override
+                Delete Custom Entry
               </button>
             </div>
           </div>

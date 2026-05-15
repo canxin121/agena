@@ -721,12 +721,13 @@ export async function setModelCatalogProviderDefault(input: ModelCatalogProvider
 }
 
 export async function deleteModelCatalogEntry(providerId: string, modelId: string): Promise<ModelCatalogResponse> {
-  return await apiJson<ModelCatalogResponse>(
-    `/api/v1/model-catalog/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}`,
-    {
-      method: 'DELETE',
-    },
-  )
+  const params = new URLSearchParams({
+    provider_id: providerId,
+    model_id: modelId,
+  })
+  return await apiJson<ModelCatalogResponse>(`/api/v1/model-catalog/entries?${params.toString()}`, {
+    method: 'DELETE',
+  })
 }
 
 export async function listPlugins(): Promise<PluginStatus[]> {

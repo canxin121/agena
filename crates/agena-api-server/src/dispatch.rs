@@ -139,6 +139,45 @@ fn session_goal_from_http(value: HttpSessionGoalResource) -> SessionGoalResource
     }
 }
 
+fn message_resource_from_projected_message(
+    session_id: i64,
+    message: &agena::message::Message,
+    parts_mode: agena_api::resource::PartLoadMode,
+) -> agena_api::resource::MessageResource {
+    let parts = match parts_mode {
+        agena_api::resource::PartLoadMode::None => None,
+        agena_api::resource::PartLoadMode::Summary | agena_api::resource::PartLoadMode::Full => {
+            Some(
+                message
+                    .parts
+                    .iter()
+                    .cloned()
+                    .map(|mut part| {
+                        if parts_mode == agena_api::resource::PartLoadMode::Summary {
+                            part.content = None;
+                        }
+                        part
+                    })
+                    .collect(),
+            )
+        }
+    };
+
+    agena_api::resource::MessageResource {
+        id: message.id,
+        session_id,
+        role: message.role,
+        state: message.state,
+        created_at: message.created_at,
+        updated_at: message.created_at,
+        metadata: message.metadata.clone(),
+        usage: message.usage.clone(),
+        finish: message.finish.clone(),
+        part_count: message.parts.len() as u64,
+        parts,
+    }
+}
+
 fn session_automation_from_http(value: HttpSessionAutomationResource) -> SessionAutomationResource {
     SessionAutomationResource {
         job_count: value.job_count,
@@ -1027,37 +1066,16 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 .ok_or_else(|| ServerError::NotFound(format!("session {session_id} not found")))?;
             Ok(QueryResult::Session(session_from_http(session)))
         }
-        Query::ListMessages(ListMessagesParams { session_id, parts, .. }) => {
+        Query::ListMessages(ListMessagesParams {
+            session_id, parts, ..
+        }) => {
             let include_full_parts = parts == agena_api::resource::PartLoadMode::Full;
             let messages = manager
                 .list_projected_messages(session_id, include_full_parts)
                 .await?;
             let items: Vec<_> = messages
                 .iter()
-                .map(|m| agena_api::resource::MessageResource {
-                    id: m.id,
-                    session_id,
-                    role: m.role,
-                    state: m.state,
-                    created_at: m.created_at,
-                    updated_at: m.created_at,
-                    metadata: m.metadata.clone(),
-                    usage: m.usage.clone(),
-                    finish: m.finish.clone(),
-                    part_count: m.parts.len() as u64,
-                    parts: Some(
-                        m.parts
-                            .iter()
-                            .cloned()
-                            .map(|mut part| {
-                                if parts == agena_api::resource::PartLoadMode::Summary {
-                                    part.content = None;
-                                }
-                                part
-                            })
-                            .collect(),
-                    ),
-                })
+                .map(|m| message_resource_from_projected_message(session_id, m, parts))
                 .collect();
             let returned = items.len() as u64;
             Ok(QueryResult::Messages(PaginatedResponse {
@@ -1079,30 +1097,9 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 .find_projected_message(session_id, message_id, include_full_parts)
                 .await?
                 .ok_or_else(|| ServerError::NotFound(format!("message {message_id}")))?;
-            Ok(QueryResult::Message(agena_api::resource::MessageResource {
-                id: m.id,
-                session_id,
-                role: m.role,
-                state: m.state,
-                created_at: m.created_at,
-                updated_at: m.created_at,
-                metadata: m.metadata.clone(),
-                usage: m.usage.clone(),
-                finish: m.finish.clone(),
-                part_count: m.parts.len() as u64,
-                parts: Some(
-                    m.parts
-                        .iter()
-                        .cloned()
-                        .map(|mut part| {
-                            if parts == agena_api::resource::PartLoadMode::Summary {
-                                part.content = None;
-                            }
-                            part
-                        })
-                        .collect(),
-                ),
-            }))
+            Ok(QueryResult::Message(
+                message_resource_from_projected_message(session_id, &m, parts),
+            ))
         }
         Query::ListEvents(ListEventsParams {
             scope,
@@ -1231,9 +1228,12 @@ mod tests {
     use super::*;
     use crate::local_api::SessionCreateRequest;
     use agena::config::LoadConfigRequest;
+    use agena::db::entities::{activity_message, activity_part};
+    use agena::message::{ExecutionStatus, MessageMetadata, PartContent, PartKind};
     use agena::model::ModelRef;
     use agena::runtime::AgenaRuntime;
     use agena_api::resource::RunOptions;
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set};
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -1298,6 +1298,104 @@ mod tests {
             .expect("runtime build should succeed");
 
         (AppState::new(runtime, db), workspace_root)
+    }
+
+    #[tokio::test]
+    async fn message_queries_respect_none_parts_mode() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+            "message-parts-none",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "message none").await;
+        let db = state.service().clone_db();
+        let created_at = chrono::Utc::now().timestamp_millis();
+        let message_id = 7001;
+        let part_id = 7101;
+
+        activity_message::ActiveModel {
+            message_id: Set(message_id),
+            session_id: Set(session_id),
+            role: Set(agena::role::Role::Assistant),
+            state: Set(ExecutionStatus::Completed),
+            created_at_ms: Set(created_at),
+            updated_at_ms: Set(created_at),
+            metadata: Set(MessageMetadata::default()),
+            usage: Set(None),
+            finish: Set(None),
+            part_count: Set(1),
+            is_compacted: Set(false),
+        }
+        .insert(db.as_ref())
+        .await
+        .expect("activity message projection should insert");
+
+        activity_part::ActiveModel {
+            part_id: Set(part_id),
+            message_id: Set(message_id),
+            session_id: Set(session_id),
+            part_index: Set(0),
+            status: Set(ExecutionStatus::Completed),
+            kind: Set(PartKind::Text),
+            name: Set(None),
+            summary: Set(Some("hello from dispatch".to_string())),
+            has_detail: Set(true),
+            operation_id: Set(None),
+            created_at_ms: Set(created_at),
+            content: Set(Some(PartContent::text("hello from dispatch"))),
+        }
+        .insert(db.as_ref())
+        .await
+        .expect("activity part projection should insert");
+
+        let result = dispatch_query(
+            &state,
+            Query::ListMessages(ListMessagesParams {
+                session_id,
+                cursor: None,
+                limit: None,
+                parts: agena_api::resource::PartLoadMode::None,
+            }),
+        )
+        .await
+        .expect("list messages query should succeed");
+        let QueryResult::Messages(page) = result else {
+            panic!("expected message list result");
+        };
+        let message = page
+            .items
+            .first()
+            .expect("message list should not be empty");
+        assert_eq!(message.id, message_id);
+        assert!(message.parts.is_none(), "none mode should omit parts");
+        assert_eq!(message.part_count, 1);
+
+        let result = dispatch_query(
+            &state,
+            Query::GetMessage(GetMessageParams {
+                message_id,
+                parts: agena_api::resource::PartLoadMode::None,
+            }),
+        )
+        .await
+        .expect("get message query should succeed");
+        let QueryResult::Message(message) = result else {
+            panic!("expected message result");
+        };
+        assert_eq!(message.id, message_id);
+        assert!(message.parts.is_none(), "none mode should omit parts");
+        assert_eq!(message.part_count, 1);
     }
 
     #[tokio::test]

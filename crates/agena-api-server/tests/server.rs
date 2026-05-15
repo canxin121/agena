@@ -898,6 +898,29 @@ async fn message_list_summary_omits_part_content_while_detail_full_keeps_it() {
 }
 
 #[tokio::test]
+async fn message_parts_none_still_404s_for_missing_message() {
+    let (state, _manager, _workspace_root) = build_state().await;
+    let app = router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/messages/999999/parts?mode=none")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        value.get("message").and_then(|message| message.as_str()),
+        Some("message not found: 999999")
+    );
+}
+
+#[tokio::test]
 async fn fork_session_endpoint_rejects_legacy_event_seq_payload() {
     let (state, _manager, workspace_root) = build_state().await;
     let app = router(state.clone());

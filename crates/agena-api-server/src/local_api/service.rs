@@ -605,9 +605,6 @@ impl ApiService {
         message_id: i64,
         mode: PartLoadMode,
     ) -> ApiResult<Vec<MessagePart>> {
-        if mode == PartLoadMode::None {
-            return Ok(Vec::new());
-        }
         let Some(_) = manager
             .find_session_id_for_message(message_id)
             .await
@@ -617,6 +614,9 @@ impl ApiService {
                 "message not found: {message_id}"
             )));
         };
+        if mode == PartLoadMode::None {
+            return Ok(Vec::new());
+        }
         let include_full_parts = mode == PartLoadMode::Full;
         let parts = manager
             .list_projected_parts(message_id, include_full_parts)

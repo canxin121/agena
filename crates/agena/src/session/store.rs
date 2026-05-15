@@ -10,7 +10,11 @@ use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use crate::{
     AppError,
     db::{
-        crud::{permission_rule, session, session_goal, workspace},
+        crud::{
+            permission_rule, session, session_goal,
+            session_goal::{GoalAccountingMode, GoalUpdate},
+            workspace,
+        },
         tx::{with_transaction_and_app_effects, with_transaction_and_effects},
     },
     event::{
@@ -457,7 +461,28 @@ impl SessionStore {
         })
         .flatten()
         {
-            return Ok(session);
+            let session_model = session::get_session_by_id(&self.db, session_id)
+                .await?
+                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+            if session.version == session_model.version {
+                return Ok(session);
+            }
+
+            let mut refreshed = session_from_model(session_model)?;
+            refreshed.goal = load_session_goal(&self.db, session_id).await?;
+            let projection = self
+                .history
+                .load_projection(session_id, refreshed.runtime.clone())
+                .await?;
+            refreshed.replace_messages(projection.messages);
+            refreshed.runtime = projection.runtime;
+            refreshed.refresh_derived();
+
+            with_cache(self.cache.as_ref(), |guard| {
+                guard.insert(refreshed.clone(), cache_policy);
+            });
+
+            return Ok(refreshed);
         }
 
         let session_model = session::get_session_by_id(&self.db, session_id)
@@ -683,20 +708,67 @@ impl SessionStore {
         .await
     }
 
+    pub(crate) async fn update_goal(
+        &self,
+        session_id: i64,
+        update: GoalUpdate,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Option<Session>, AppError> {
+        let cache = Arc::clone(&self.cache);
+        with_transaction_and_app_effects(&self.db, move |txn, effects| {
+            let cache = Arc::clone(&cache);
+            let update = update.clone();
+            Box::pin(async move {
+                let Some(goal) = session_goal::update_goal(txn, session_id, update).await? else {
+                    return Ok(None);
+                };
+                let model = session::touch_session_updated_at(
+                    txn,
+                    session_id,
+                    session::get_session_by_id(txn, session_id)
+                        .await?
+                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
+                        .runtime_state
+                        .unwrap_or_default(),
+                )
+                .await?
+                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+                let mut updated = session_from_model(model)?;
+                updated.goal = Some(session_goal_from_model(goal)?);
+                let session_for_cache = updated.clone();
+                effects.push(async move {
+                    with_cache(cache.as_ref(), |guard| {
+                        guard.insert(session_for_cache, cache_policy);
+                    });
+                });
+                Ok(Some(updated))
+            })
+        })
+        .await
+    }
+
     pub(crate) async fn account_goal_usage(
         &self,
         session_id: i64,
         token_delta: u64,
         time_delta_seconds: u64,
+        mode: GoalAccountingMode,
+        expected_goal_id: Option<i64>,
         cache_policy: SessionCachePolicy,
     ) -> Result<Option<Session>, AppError> {
         let cache = Arc::clone(&self.cache);
         with_transaction_and_app_effects(&self.db, move |txn, effects| {
             let cache = Arc::clone(&cache);
             Box::pin(async move {
-                let Some(goal) =
-                    session_goal::account_usage(txn, session_id, token_delta, time_delta_seconds)
-                        .await?
+                let Some(goal) = session_goal::account_usage(
+                    txn,
+                    session_id,
+                    token_delta,
+                    time_delta_seconds,
+                    mode,
+                    expected_goal_id,
+                )
+                .await?
                 else {
                     return Ok(None);
                 };
@@ -723,6 +795,10 @@ impl SessionStore {
             })
         })
         .await
+    }
+
+    pub(crate) async fn load_goal(&self, session_id: i64) -> Result<Option<SessionGoal>, AppError> {
+        load_session_goal(&self.db, session_id).await
     }
 
     pub(crate) async fn clear_goal(

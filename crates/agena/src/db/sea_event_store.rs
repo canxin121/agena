@@ -6,7 +6,7 @@ use chrono::TimeZone;
 use sea_orm::sea_query::{Expr, Order};
 use sea_orm::{
     ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, TransactionTrait,
+    QuerySelect, TransactionTrait, DbErr,
 };
 use uuid::Uuid;
 
@@ -25,6 +25,12 @@ use crate::db::event_entity as entity;
 pub struct SeaEventStore<K> {
     db: Arc<DatabaseConnection>,
     _phantom: PhantomData<fn() -> K>,
+}
+
+fn is_duplicate_seq_global_error(err: &DbErr) -> bool {
+    let message = err.to_string();
+    message.contains("idx_agena_events_seq_global")
+        || message.contains("agena_events.seq_global")
 }
 
 impl<K> SeaEventStore<K> {
@@ -119,7 +125,12 @@ where
         for ev in events {
             models.push(into_active_model(ev)?);
         }
-        entity::Entity::insert_many(models).exec(&txn).await?;
+        if let Err(err) = entity::Entity::insert_many(models).exec(&txn).await {
+            if is_duplicate_seq_global_error(&err) {
+                return Err(EventStoreError::DuplicateSeq(events[0].meta.seq_global));
+            }
+            return Err(EventStoreError::Backend(err));
+        }
         txn.commit().await?;
         Ok(())
     }

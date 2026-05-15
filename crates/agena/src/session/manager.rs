@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 use tracing::Instrument;
 
 use crate::AppError;
+use crate::db::crud::session_goal::{GoalAccountingMode, GoalUpdate};
 use crate::event::{
     ErrorInfo, EventKind, PermissionRepliedEvent, PermissionRequestedEvent, RunFailedEvent,
     RunStartedEvent, SessionGoalEvent,
@@ -48,6 +49,7 @@ use super::history::{
 use super::model::{
     GoalStatus, GoalSteeringKind, MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionGoal,
     SessionListRequest, SessionPendingTool, SessionStatus, SessionSummary,
+    validate_session_goal_objective,
 };
 use super::processor::SessionRunRequest;
 use super::prompt_window::{self, PromptRequestOptions};
@@ -221,6 +223,15 @@ pub struct SessionGoalCreateRequest {
     pub session_id: i64,
     pub objective: String,
     pub token_budget: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionGoalUpdateRequest {
+    pub session_id: i64,
+    pub objective: Option<String>,
+    pub status: Option<GoalStatus>,
+    pub token_budget: Option<Option<u64>>,
+    pub expected_goal_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -764,7 +775,7 @@ impl SessionManager {
     }
 
     pub async fn get_goal(&self, session_id: i64) -> Result<Option<SessionGoal>, AppError> {
-        Ok(self.get_session(session_id).await?.goal)
+        self.store.load_goal(session_id).await
     }
 
     pub async fn goal_cost_summary(&self, session_id: i64) -> Result<SessionCostSummary, AppError> {
@@ -778,11 +789,7 @@ impl SessionManager {
         &self,
         request: SessionGoalCreateRequest,
     ) -> Result<SessionGoal, AppError> {
-        if request.objective.trim().is_empty() {
-            return Err(AppError::Internal(
-                "goal objective must not be empty".to_string(),
-            ));
-        }
+        validate_session_goal_objective(&request.objective).map_err(AppError::Internal)?;
         let state = self.execution_state();
         let existing = self.get_session(request.session_id).await?;
         if existing.goal.is_some() {
@@ -826,6 +833,57 @@ impl SessionManager {
         Ok(goal)
     }
 
+    pub async fn update_goal(
+        &self,
+        request: SessionGoalUpdateRequest,
+    ) -> Result<SessionGoal, AppError> {
+        if let Some(objective) = request.objective.as_deref() {
+            validate_session_goal_objective(objective).map_err(AppError::Internal)?;
+        }
+        let state = self.execution_state();
+        let existing = self.get_session(request.session_id).await?;
+        let Some(goal_before) = existing.goal.as_ref() else {
+            return Err(AppError::Internal(format!(
+                "session {} has no goal to update",
+                request.session_id
+            )));
+        };
+        if request
+            .expected_goal_id
+            .is_some_and(|expected_goal_id| expected_goal_id != goal_before.id)
+        {
+            return Err(AppError::Internal(format!(
+                "session {} goal changed before update",
+                request.session_id
+            )));
+        }
+
+        let updated = self
+            .store
+            .update_goal(
+                request.session_id,
+                GoalUpdate {
+                    objective: request.objective,
+                    status: request.status,
+                    token_budget: request.token_budget,
+                    expected_goal_id: request.expected_goal_id,
+                },
+                state.cache_policy(),
+            )
+            .await?
+            .ok_or_else(|| AppError::Internal(format!("session {} has no goal", request.session_id)))?;
+        let goal = updated.goal.clone().ok_or_else(|| {
+            AppError::Internal(format!(
+                "goal missing after update for session {}",
+                request.session_id
+            ))
+        })?;
+        if &goal != goal_before {
+            self.publish_goal_event(&goal, request.session_id).await?;
+        }
+        Ok(goal)
+    }
+
     pub async fn complete_goal(&self, session_id: i64) -> Result<SessionGoal, AppError> {
         let state = self.execution_state();
         let session = self.get_session(session_id).await?;
@@ -863,8 +921,7 @@ impl SessionManager {
 
     pub async fn clear_goal(&self, session_id: i64) -> Result<bool, AppError> {
         let state = self.execution_state();
-        let existing = self.get_session(session_id).await?;
-        if existing.goal.is_none() {
+        if self.get_goal(session_id).await?.is_none() {
             return Ok(false);
         }
         let cleared = self
@@ -3733,9 +3790,11 @@ impl SessionManager {
                 session.id,
                 token_delta,
                 time_delta_seconds,
+                GoalAccountingMode::ActiveOnly,
+                None,
                 state.cache_policy(),
-        )
-        .await?;
+            )
+            .await?;
         let Some(updated) = accounted else {
             return Ok(session);
         };
@@ -6083,6 +6142,41 @@ mod tests {
             .resume_from_store()
             .await
             .expect("event sequence should resume from persisted history");
+    }
+
+    async fn persist_goal_without_auto_run(
+        manager: &SessionManager,
+        session_id: i64,
+        objective: &str,
+        token_budget: Option<u64>,
+    ) -> SessionGoal {
+        let state = manager.execution_state();
+        let mut updated = manager
+            .store
+            .upsert_goal(
+                session_id,
+                objective.to_string(),
+                token_budget,
+                state.cache_policy(),
+            )
+            .await
+            .expect("upsert goal without auto run");
+        let goal = updated
+            .goal
+            .clone()
+            .expect("upserted goal should be present");
+        updated.runtime.goal.clear();
+        updated
+            .runtime
+            .goal
+            .set_pending_steering(goal.id, GoalSteeringKind::ObjectiveUpdated);
+        let updated = manager
+            .persist_session_changes(updated, Vec::new(), Vec::new(), None, state)
+            .await
+            .expect("persist runtime goal state without auto run");
+        updated
+            .goal
+            .expect("persisted goal should remain attached to session")
     }
 
     fn pending_permission_request_id(session: &Session) -> String {
@@ -9203,6 +9297,244 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn goal_runtime_external_goal_set_is_visible_to_next_continue_turn() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "goal-external-set.db").await;
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let first = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+        let created = first
+            .create_session(SessionCreateRequest {
+                title: "external-set".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+        resume_event_sequence(&second).await;
+        persist_goal_without_auto_run(
+            &second,
+            created.id,
+            "Externally supplied objective",
+            Some(100),
+        )
+        .await;
+
+        let _ = first
+            .continue_session(SessionContinueRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+            })
+            .await
+            .expect("continue should observe externally created goal");
+
+        let recorded = requests
+            .lock()
+            .expect("recording requests lock should succeed");
+        let request = recorded
+            .last()
+            .expect("goal continuation request should be recorded");
+        assert!(request
+            .messages
+            .iter()
+            .any(|message| message.as_text_lossy().contains("Externally supplied objective")));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn goal_runtime_resumed_session_can_continue_active_goal_after_restart() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "goal-resume.db").await;
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let first = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+        let created = first
+            .create_session(SessionCreateRequest {
+                title: "goal-resume".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let session_id = created.id;
+        persist_goal_without_auto_run(&first, session_id, "Resume this goal after restart", Some(100))
+            .await;
+        drop(first);
+
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+        resume_event_sequence(&second).await;
+
+        let _ = second
+            .continue_session(SessionContinueRequest {
+                session_id,
+                options: recording_run_options(),
+            })
+            .await
+            .expect("continue after restart should observe persisted goal");
+
+        let recorded = requests
+            .lock()
+            .expect("recording requests lock should succeed");
+        let request = recorded
+            .last()
+            .expect("goal continuation request should be recorded after restart");
+        assert!(request
+            .messages
+            .iter()
+            .any(|message| message.as_text_lossy().contains("Resume this goal after restart")));
+    }
+
+    #[tokio::test]
+    async fn goal_runtime_external_goal_clear_stops_next_continue_turn() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "goal-external-clear.db").await;
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let first = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+        let created = first
+            .create_session(SessionCreateRequest {
+                title: "external-clear".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        persist_goal_without_auto_run(
+            &first,
+            created.id,
+            "This should be cleared before continuation",
+            Some(100),
+        )
+        .await;
+
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+        resume_event_sequence(&second).await;
+        assert!(second
+            .clear_goal(created.id)
+            .await
+            .expect("external clear goal should succeed"));
+
+        let _ = first
+            .continue_session(SessionContinueRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+            })
+            .await
+            .expect("continue after external clear should stop cleanly");
+
+        assert!(
+            requests
+                .lock()
+                .expect("recording requests lock should succeed")
+                .is_empty(),
+            "cleared goal should prevent idle continuation"
+        );
+    }
+
+    #[tokio::test]
+    async fn goal_runtime_external_goal_set_refreshes_cached_session() {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "goal-external-cache-refresh.db").await;
+        let first = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = first
+            .create_session(SessionCreateRequest {
+                title: "goal-cache-refresh".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let cached = first
+            .get_session(created.id)
+            .await
+            .expect("prime cached session");
+        assert!(cached.goal.is_none(), "session should start without a goal");
+
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        resume_event_sequence(&second).await;
+        persist_goal_without_auto_run(
+            &second,
+            created.id,
+            "Refresh the cached session goal",
+            Some(100),
+        )
+        .await;
+
+        let refreshed = first
+            .get_session(created.id)
+            .await
+            .expect("reload cached session");
+        let goal = refreshed.goal.expect("cached session should refresh its goal");
+        assert_eq!(goal.objective, "Refresh the cached session goal");
     }
 
     /// Cancel a turn while the provider stream is still pending. The

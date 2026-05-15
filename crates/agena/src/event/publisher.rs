@@ -86,6 +86,50 @@ where
         }
     }
 
+    fn resequence_events(&self, events: &[DomainEvent<K>]) -> Vec<DomainEvent<K>> {
+        events
+            .iter()
+            .cloned()
+            .map(|mut event| {
+                event.meta.seq_global = self.seq.next();
+                event
+            })
+            .collect()
+    }
+
+    async fn persist_with_retry(
+        &self,
+        mut events: Vec<DomainEvent<K>>,
+    ) -> Result<Vec<DomainEvent<K>>, PublishError> {
+        const MAX_DUPLICATE_SEQ_RETRIES: usize = 4;
+
+        if events.is_empty() {
+            return Ok(events);
+        }
+
+        let mut attempts = 0usize;
+        loop {
+            let persistent: Vec<DomainEvent<K>> = events
+                .iter()
+                .filter(|event| event.kind.is_persistent())
+                .cloned()
+                .collect();
+            if persistent.is_empty() {
+                return Ok(events);
+            }
+
+            match self.store.append_batch(&persistent).await {
+                Ok(()) => return Ok(events),
+                Err(EventStoreError::DuplicateSeq(_)) if attempts < MAX_DUPLICATE_SEQ_RETRIES => {
+                    attempts += 1;
+                    self.resume_from_store().await?;
+                    events = self.resequence_events(&events);
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
     /// Persist + broadcast a single event.
     pub async fn publish(
         &self,
@@ -100,11 +144,10 @@ where
         &self,
         event: DomainEvent<K>,
     ) -> Result<DomainEvent<K>, PublishError> {
-        if event.kind.is_persistent() {
-            self.store
-                .append_batch(std::slice::from_ref(&event))
-                .await?;
-        }
+        let mut events = self.persist_with_retry(vec![event]).await?;
+        let event = events
+            .pop()
+            .expect("persist_with_retry should preserve single-event batches");
         self.bus.publish(event.clone()).await?;
         Ok(event)
     }
@@ -115,17 +158,7 @@ where
         &self,
         events: Vec<DomainEvent<K>>,
     ) -> Result<Vec<DomainEvent<K>>, PublishError> {
-        if events.is_empty() {
-            return Ok(events);
-        }
-        let persistent: Vec<DomainEvent<K>> = events
-            .iter()
-            .filter(|e| e.kind.is_persistent())
-            .cloned()
-            .collect();
-        if !persistent.is_empty() {
-            self.store.append_batch(&persistent).await?;
-        }
+        let events = self.persist_with_retry(events).await?;
         for event in &events {
             self.bus.publish(event.clone()).await?;
         }
@@ -139,18 +172,7 @@ where
         &self,
         events: Vec<DomainEvent<K>>,
     ) -> Result<Vec<DomainEvent<K>>, PublishError> {
-        if events.is_empty() {
-            return Ok(events);
-        }
-        let persistent: Vec<DomainEvent<K>> = events
-            .iter()
-            .filter(|e| e.kind.is_persistent())
-            .cloned()
-            .collect();
-        if !persistent.is_empty() {
-            self.store.append_batch(&persistent).await?;
-        }
-        Ok(events)
+        self.persist_with_retry(events).await
     }
 
     /// Re-initialise the sequence allocator from the store's high watermark.

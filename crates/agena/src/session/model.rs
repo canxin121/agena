@@ -324,6 +324,20 @@ impl GoalRuntimeState {
     }
 }
 
+pub const MAX_SESSION_GOAL_OBJECTIVE_CHARS: usize = 4_000;
+
+pub fn validate_session_goal_objective(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("goal objective must not be empty".to_string());
+    }
+    if value.chars().count() > MAX_SESSION_GOAL_OBJECTIVE_CHARS {
+        return Err(format!(
+            "goal objective must be at most {MAX_SESSION_GOAL_OBJECTIVE_CHARS} characters"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
 pub struct SessionGoal {
     pub id: i64,

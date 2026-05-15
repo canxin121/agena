@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agena::config::ConfigLoader;
+use agena::config::{ConfigLoader, ProviderAuthConfig, provider_auth_data};
 use agena::runtime::AgenaRuntime;
 use agena::storage::StorageConfig;
 use agena::tracing as tracing_config;
@@ -71,6 +71,55 @@ struct StudioHealthResponse {
     config_found: bool,
     provider_ids: Vec<String>,
     session_runtime_available: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CompatConfigQuery {
+    directory: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatConfigReloadResponse {
+    success: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatProvidersResponse {
+    providers: Vec<CompatProviderEntry>,
+    default: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatProviderEntry {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    env: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    models: Vec<CompatProviderModel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth: Option<CompatProviderAuthStatus>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatProviderAuthStatus {
+    configured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credential_type: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatProviderModel {
+    id: String,
+    provider_id: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -747,6 +796,131 @@ async fn health(
         provider_ids: resolution.config.providers.keys().cloned().collect(),
         session_runtime_available: state.runtime.session_manager().is_some(),
     })
+}
+
+async fn compat_config_reload(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> CompatResult<Json<CompatConfigReloadResponse>> {
+    state
+        .runtime
+        .reload()
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+
+    Ok(Json(CompatConfigReloadResponse { success: true }))
+}
+
+fn compat_provider_env_names(auth: &ProviderAuthConfig) -> Vec<String> {
+    match auth {
+        ProviderAuthConfig::Api(config) => config
+            .api_key_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| vec![value.to_owned()])
+            .unwrap_or_default(),
+        ProviderAuthConfig::SapAiCore(config) => config
+            .api
+            .api_key_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| vec![value.to_owned()])
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn compat_provider_auth_status(
+    resolved: &agena::config::ResolvedProviderConfig,
+) -> Option<CompatProviderAuthStatus> {
+    let auth = provider_auth_data(resolved);
+    let credential_type = auth.as_ref().map(|data| match data {
+        agena::provider::auth::AuthData::Api { .. } => "api",
+        agena::provider::auth::AuthData::OAuth { .. } => "oauth",
+        agena::provider::auth::AuthData::WellKnown { .. } => "well_known",
+    });
+
+    (credential_type.is_some() || !matches!(resolved.auth, ProviderAuthConfig::None)).then_some(
+        CompatProviderAuthStatus {
+            configured: auth.is_some(),
+            credential_type,
+        },
+    )
+}
+
+fn compat_provider_model_id(model_ref: &str) -> String {
+    model_ref
+        .split_once('/')
+        .map(|(_, model_id)| model_id)
+        .unwrap_or(model_ref)
+        .to_owned()
+}
+
+fn compat_provider_models(
+    provider_id: &str,
+    resolved: &agena::config::ResolvedProviderConfig,
+) -> Vec<CompatProviderModel> {
+    let mut ids = resolved
+        .models
+        .keys()
+        .map(|id| compat_provider_model_id(id))
+        .collect::<Vec<_>>();
+    ids.push(compat_provider_model_id(resolved.default_model.as_str()));
+    ids.sort();
+    ids.dedup();
+
+    ids.into_iter()
+        .map(|id| CompatProviderModel {
+            id,
+            provider_id: provider_id.to_owned(),
+        })
+        .collect()
+}
+
+async fn compat_config_providers(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Query(query): Query<CompatConfigQuery>,
+) -> CompatResult<Json<CompatProvidersResponse>> {
+    let _directory = query.directory;
+    let snapshot = state.runtime.current_snapshot();
+    let resolution = snapshot.config_resolution();
+    let mut provider_ids = resolution
+        .config
+        .providers
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    provider_ids.sort();
+
+    let mut providers = Vec::with_capacity(provider_ids.len());
+    let mut default_models = HashMap::with_capacity(provider_ids.len());
+
+    for provider_id in provider_ids {
+        let Some(resolved) = resolution.config.providers.get(provider_id.as_str()) else {
+            continue;
+        };
+        default_models.insert(
+            provider_id.clone(),
+            compat_provider_model_id(resolved.default_model.as_str()),
+        );
+
+        providers.push(CompatProviderEntry {
+            id: provider_id.clone(),
+            name: Some(provider_id.clone()),
+            env: compat_provider_env_names(&resolved.auth),
+            key: provider_auth_data(resolved)
+                .as_ref()
+                .and_then(|auth| auth.api_key().map(|_| "configured".to_owned())),
+            models: compat_provider_models(provider_id.as_str(), resolved),
+            auth: compat_provider_auth_status(resolved),
+        });
+    }
+
+    Ok(Json(CompatProvidersResponse {
+        providers,
+        default: default_models,
+    }))
 }
 
 fn command_available(cmd: &str) -> bool {
@@ -4741,6 +4915,8 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
     let compat_routes = compat_fs_router::<Arc<AppState>>()
+        .route("/api/config/reload", post(compat_config_reload))
+        .route("/api/config/providers", get(compat_config_providers))
         .route("/api/provider/env/check", post(compat_provider_env_check))
         .route("/api/directories", get(compat_directories))
         .route(
@@ -5401,6 +5577,90 @@ include_global = true
         );
         assert!(!payload.present.iter().any(|value| value == "bad-name"));
         assert!(!payload.missing.iter().any(|value| value == "path"));
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_config_reload_returns_success_shape() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let router = Router::new()
+            .route("/api/config/reload", post(compat_config_reload))
+            .with_state(state.clone());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/config/reload")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload, json!({ "success": true }));
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_config_providers_returns_provider_defaults_and_models() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let router = Router::new()
+            .route("/api/config/providers", get(compat_config_providers))
+            .with_state(state.clone());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/config/providers")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload["default"]["openai"], json!("gpt-4.1-mini"));
+
+        let providers = payload["providers"]
+            .as_array()
+            .expect("providers should be an array");
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0]["id"], json!("openai"));
+        assert_eq!(providers[0]["key"], json!("configured"));
+        assert_eq!(providers[0]["auth"]["configured"], json!(true));
+        assert_eq!(providers[0]["auth"]["credentialType"], json!("api"));
+
+        let models = providers[0]["models"]
+            .as_array()
+            .expect("models should be an array");
+        assert!(
+            models.iter().any(|model| {
+                model["id"] == json!("gpt-4.1-mini") && model["providerId"] == json!("openai")
+            }),
+            "expected default model in provider models: {models:?}"
+        );
 
         state.runtime.shutdown();
     }

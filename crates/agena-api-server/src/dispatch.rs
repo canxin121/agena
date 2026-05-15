@@ -178,6 +178,45 @@ fn message_resource_from_projected_message(
     }
 }
 
+fn message_resource_from_projected_message(
+    session_id: i64,
+    message: &agena::message::Message,
+    parts_mode: agena_api::resource::PartLoadMode,
+) -> agena_api::resource::MessageResource {
+    let parts = match parts_mode {
+        agena_api::resource::PartLoadMode::None => None,
+        agena_api::resource::PartLoadMode::Summary | agena_api::resource::PartLoadMode::Full => {
+            Some(
+                message
+                    .parts
+                    .iter()
+                    .cloned()
+                    .map(|mut part| {
+                        if parts_mode == agena_api::resource::PartLoadMode::Summary {
+                            part.content = None;
+                        }
+                        part
+                    })
+                    .collect(),
+            )
+        }
+    };
+
+    agena_api::resource::MessageResource {
+        id: message.id,
+        session_id,
+        role: message.role,
+        state: message.state,
+        created_at: message.created_at,
+        updated_at: message.created_at,
+        metadata: message.metadata.clone(),
+        usage: message.usage.clone(),
+        finish: message.finish.clone(),
+        part_count: message.parts.len() as u64,
+        parts,
+    }
+}
+
 fn session_automation_from_http(value: HttpSessionAutomationResource) -> SessionAutomationResource {
     SessionAutomationResource {
         job_count: value.job_count,

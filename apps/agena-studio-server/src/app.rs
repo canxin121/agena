@@ -25,7 +25,7 @@ use axum::{
     body::Body,
     extract::{Path as AxumPath, Query},
     http::{
-        HeaderValue, Method, StatusCode,
+        HeaderMap, HeaderValue, Method, StatusCode,
         header::{self, HeaderName},
     },
     middleware,
@@ -118,7 +118,16 @@ struct CompatProviderAuthStatus {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CompatProviderSourceResponse {
-    source: &'static str,
+    provider_id: String,
+    sources: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatProviderSourceEntry {
+    exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -888,49 +897,63 @@ fn compat_has_value(value: Option<&str>) -> bool {
     value.is_some_and(|value| !value.trim().is_empty())
 }
 
-fn compat_provider_source_kind(resolved: &agena::config::ResolvedProviderConfig) -> &'static str {
+fn compat_provider_layer_path(path: Option<&Path>) -> Option<String> {
+    path.map(|path| path.display().to_string())
+}
+
+fn compat_provider_project_config_path(directory: &Path) -> PathBuf {
+    directory.join(".agena").join("config.toml")
+}
+
+fn compat_provider_source_entry(exists: bool, path: Option<&Path>) -> CompatProviderSourceEntry {
+    CompatProviderSourceEntry {
+        exists,
+        path: compat_provider_layer_path(path),
+    }
+}
+
+fn compat_provider_auth_exists(resolved: &agena::config::ResolvedProviderConfig) -> bool {
     match &resolved.auth {
-        ProviderAuthConfig::None => "none",
+        ProviderAuthConfig::None => false,
         ProviderAuthConfig::Api(config) => {
-            if compat_has_value(config.api_key.as_deref()) {
-                "config"
-            } else if compat_has_value(config.api_key_env.as_deref()) {
-                "env"
-            } else {
-                "none"
-            }
+            compat_has_value(config.api_key.as_deref()) || compat_has_value(config.api_key_env.as_deref())
         }
-        ProviderAuthConfig::Credential(config) => {
-            if config.credential.is_some() {
-                "config"
-            } else {
-                "none"
-            }
-        }
+        ProviderAuthConfig::Credential(config) => config.credential.is_some(),
         ProviderAuthConfig::BedrockSigv4(config) => {
-            if compat_has_value(config.profile.as_deref())
+            compat_has_value(config.profile.as_deref())
                 || compat_has_value(config.access_key_id.as_deref())
                 || compat_has_value(config.secret_access_key.as_deref())
                 || compat_has_value(config.session_token.as_deref())
-            {
-                "config"
-            } else {
-                "none"
-            }
         }
-        ProviderAuthConfig::GoogleAdc(_) => "env",
+        ProviderAuthConfig::GoogleAdc(_) => true,
         ProviderAuthConfig::SapAiCore(config) => {
-            if compat_has_value(config.api.api_key.as_deref()) {
-                "config"
-            } else if compat_has_value(config.api.api_key_env.as_deref())
+            compat_has_value(config.api.api_key.as_deref())
+                || compat_has_value(config.api.api_key_env.as_deref())
                 || compat_has_value(Some(config.service_key_env.as_str()))
-            {
-                "env"
-            } else {
-                "none"
-            }
         }
     }
+}
+
+fn compat_provider_sources_value(
+    provider_exists: bool,
+    auth_exists: bool,
+    config_path: &Path,
+    user_path: &Path,
+    project_path: Option<&Path>,
+) -> Value {
+    let is_user = config_path == user_path;
+    let is_project = project_path.is_some_and(|path| config_path == path);
+    let is_custom = provider_exists && !is_user && !is_project;
+
+    json!({
+        "auth": compat_provider_source_entry(auth_exists, None),
+        "user": compat_provider_source_entry(provider_exists && is_user, Some(user_path)),
+        "project": compat_provider_source_entry(provider_exists && is_project, project_path),
+        "custom": compat_provider_source_entry(
+            is_custom,
+            (!is_user && !is_project).then_some(config_path),
+        ),
+    })
 }
 
 async fn compat_config_providers(
@@ -980,18 +1003,53 @@ async fn compat_config_providers(
 
 async fn compat_provider_source(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<CompatConfigQuery>,
     AxumPath(provider_id): AxumPath<String>,
 ) -> CompatResult<Json<CompatProviderSourceResponse>> {
+    let provider_id = provider_id.trim().to_owned();
+    if provider_id.is_empty() {
+        return Err(compat_bad_request("Provider ID is required"));
+    }
+
+    let requested_directory = headers
+        .get("x-opencode-directory")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            query
+                .directory
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        });
+    let validated_directory = match requested_directory {
+        Some(value) => Some(compat_validate_directory(&value).await?),
+        None => None,
+    };
     let snapshot = state.runtime.current_snapshot();
     let resolution = snapshot.config_resolution();
-    let resolved = resolution
-        .config
-        .providers
-        .get(provider_id.as_str())
-        .ok_or_else(|| compat_not_found(format!("Provider not found: {provider_id}")))?;
+    let provider = resolution.config.providers.get(provider_id.as_str());
+    let provider_exists = provider.is_some();
+    let auth_exists = provider.map(compat_provider_auth_exists).unwrap_or(false);
+    let user_path = ConfigLoader::default().default_config_path();
+    let project_path = validated_directory
+        .as_deref()
+        .map(compat_provider_project_config_path);
+    let sources = compat_provider_sources_value(
+        provider_exists,
+        auth_exists,
+        resolution.meta.config_path.as_path(),
+        user_path.as_path(),
+        project_path.as_deref(),
+    );
 
     Ok(Json(CompatProviderSourceResponse {
-        source: compat_provider_source_kind(resolved),
+        provider_id,
+        sources,
     }))
 }
 
@@ -5742,7 +5800,7 @@ include_global = true
     }
 
     #[tokio::test]
-    async fn compat_provider_source_returns_config_for_inline_auth() {
+    async fn compat_provider_source_returns_expected_shape_for_runtime_config() {
         let (state, _db, _config, _workspace) = compat_test_app_state().await;
         let router = Router::new()
             .route(
@@ -5771,61 +5829,22 @@ include_global = true
                 .to_bytes(),
         )
         .expect("response should be valid json");
-        assert_eq!(payload, json!({ "source": "config" }));
+        assert_eq!(payload["providerId"], json!("openai"));
+        assert_eq!(payload["sources"]["auth"]["exists"], json!(true));
+        assert_eq!(payload["sources"]["user"]["exists"], json!(false));
+        assert_eq!(payload["sources"]["project"]["exists"], json!(false));
+        assert_eq!(payload["sources"]["custom"]["exists"], json!(true));
+        assert!(payload["sources"]["custom"]["path"].is_string());
+        assert!(payload["sources"]["user"]["path"].is_string());
 
         state.runtime.shutdown();
     }
 
     #[tokio::test]
-    async fn compat_provider_source_returns_env_when_auth_uses_env_reference() {
-        let config = tempfile::NamedTempFile::new().expect("config file should be created");
-        let workspace = tempdir().expect("workspace should be created");
-        std::fs::write(
-            config.path(),
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        )
-        .expect("config file should be written");
-
-        let db = Arc::new(
-            sea_orm::Database::connect("sqlite::memory:")
-                .await
-                .expect("database should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(agena::config::LoadConfigRequest {
-                config_path: Some(config.path().to_path_buf()),
-                ..agena::config::LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace.path())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-        let state = Arc::new(AppState {
-            ui_auth: crate::ui_auth::init_ui_auth(None),
-            ui_cookie_same_site: SameSite::Lax,
-            cors_allowed_origins: Vec::new(),
-            cors_allow_all: false,
-            compat_api_service: agena_api_server::local_api::ApiService::new(
-                db.clone(),
-                runtime.workspace_root().display().to_string(),
-                runtime
-                    .session_manager()
-                    .map(|manager| manager.event_publisher()),
-            ),
-            runtime,
-        });
+    async fn compat_provider_source_uses_project_path_for_directory_scoped_lookup() {
+        let (state, _db, _config, workspace) = compat_test_app_state().await;
+        let project_config_dir = workspace.path().join(".agena");
+        std::fs::create_dir_all(&project_config_dir).expect("project config dir should exist");
         let router = Router::new()
             .route(
                 "/api/provider/{provider_id}/source",
@@ -5836,7 +5855,10 @@ enabled = true
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri("/api/provider/openai/source")
+                    .uri(format!(
+                        "/api/provider/openai/source?directory={}",
+                        workspace.path().display()
+                    ))
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -5853,13 +5875,19 @@ enabled = true
                 .to_bytes(),
         )
         .expect("response should be valid json");
-        assert_eq!(payload, json!({ "source": "env" }));
+        assert_eq!(payload["providerId"], json!("openai"));
+        assert_eq!(payload["sources"]["project"]["exists"], json!(false));
+        assert_eq!(
+            payload["sources"]["project"]["path"],
+            json!(workspace.path().join(".agena").join("config.toml").display().to_string())
+        );
+        assert_eq!(payload["sources"]["custom"]["exists"], json!(true));
 
         state.runtime.shutdown();
     }
 
     #[tokio::test]
-    async fn compat_provider_source_returns_not_found_for_unknown_provider() {
+    async fn compat_provider_source_returns_empty_sources_for_unknown_provider() {
         let (state, _db, _config, _workspace) = compat_test_app_state().await;
         let router = Router::new()
             .route(
@@ -5878,7 +5906,21 @@ enabled = true
             .await
             .expect("request should succeed");
 
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload["providerId"], json!("missing"));
+        assert_eq!(payload["sources"]["auth"]["exists"], json!(false));
+        assert_eq!(payload["sources"]["user"]["exists"], json!(false));
+        assert_eq!(payload["sources"]["project"]["exists"], json!(false));
+        assert_eq!(payload["sources"]["custom"]["exists"], json!(false));
 
         state.runtime.shutdown();
     }

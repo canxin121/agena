@@ -323,12 +323,18 @@ pub struct CreateGoalToolInput {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateGoalStatus {
+    Active,
+    Paused,
     Complete,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct UpdateGoalToolInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective: Option<String>,
     pub status: UpdateGoalStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]

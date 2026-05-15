@@ -203,11 +203,13 @@ impl WorkflowPlugin {
         let response = self
             .host()?
             .update_goal(HostUpdateGoalRequest {
-                objective: None,
+                objective: input.objective.clone(),
                 status: Some(match input.status {
+                    UpdateGoalStatus::Active => HostGoalStatus::Active,
+                    UpdateGoalStatus::Paused => HostGoalStatus::Paused,
                     UpdateGoalStatus::Complete => HostGoalStatus::Completed,
                 }),
-                token_budget: None,
+                token_budget: input.token_budget.map(Some),
             })
             .await?;
         let payload =
@@ -552,9 +554,11 @@ fn entries() -> Vec<PluginEntryDecl> {
             "update_goal",
             crate::entry::definition::json_schema_for::<UpdateGoalToolInput>(),
         )
-        .description("Update the current runtime goal. Currently supports `status = complete`.")
+        .description(
+            "Update the current runtime goal, including status transitions and optional objective or budget changes.",
+        )
         .behavior(SdkEntryBehavior::Mutating)
-        .search_terms(["goal", "complete goal", "finish objective"])
+        .search_terms(["goal", "pause goal", "resume goal", "complete goal", "budget"])
         .always_load()
         .host_capability(HostCapability::GoalRegistry),
         PluginEntryDecl::new(
@@ -631,6 +635,7 @@ fn entries() -> Vec<PluginEntryDecl> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Mutex;
 
     use super::*;
     use crate::plugin::sdk::host_api::{
@@ -641,7 +646,31 @@ mod tests {
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
 
-    struct TestHost;
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedUpdateGoalRequest {
+        objective: Option<String>,
+        status: Option<HostGoalStatus>,
+        token_budget: Option<Option<u64>>,
+    }
+
+    struct TestHost {
+        update_goal_request: Mutex<Option<RecordedUpdateGoalRequest>>,
+    }
+
+    impl TestHost {
+        fn new() -> Self {
+            Self {
+                update_goal_request: Mutex::new(None),
+            }
+        }
+
+        fn recorded_update_goal_request(&self) -> Option<RecordedUpdateGoalRequest> {
+            self.update_goal_request
+                .lock()
+                .expect("update goal request lock")
+                .clone()
+        }
+    }
 
     #[async_trait]
     impl HostClient for TestHost {
@@ -774,18 +803,24 @@ mod tests {
             &self,
             req: HostUpdateGoalRequest,
         ) -> SdkResult<HostUpdateGoalResponse> {
-            assert_eq!(req.objective, None);
-            assert_eq!(req.status, Some(HostGoalStatus::Completed));
-            assert_eq!(req.token_budget, None);
+            *self
+                .update_goal_request
+                .lock()
+                    .expect("update goal request lock") = Some(RecordedUpdateGoalRequest {
+                objective: req.objective.clone(),
+                status: req.status,
+                token_budget: req.token_budget,
+            });
+            let status = req.status.unwrap_or(HostGoalStatus::Active);
             Ok(HostUpdateGoalResponse {
                 goal: HostGoal {
                     id: 7,
-                    objective: "ship it".to_string(),
-                    status: HostGoalStatus::Completed,
-                    token_budget: Some(128),
+                    objective: req.objective.unwrap_or_else(|| "ship it".to_string()),
+                    status,
+                    token_budget: req.token_budget.unwrap_or(Some(128)),
                     tokens_used: 48,
                     time_used_seconds: 8,
-                    completed_at_ms: Some(123),
+                    completed_at_ms: (status == HostGoalStatus::Completed).then_some(123),
                 },
             })
         }
@@ -860,8 +895,9 @@ mod tests {
         }
     }
 
-    async fn initialized_plugin() -> WorkflowPlugin {
+    async fn initialized_plugin() -> (WorkflowPlugin, Arc<TestHost>) {
         let plugin = WorkflowPlugin::new();
+        let host = Arc::new(TestHost::new());
         plugin
             .init(
                 InitContext {
@@ -873,11 +909,11 @@ mod tests {
                     options: serde_json::Value::Null,
                     protocol_version: crate::plugin::sdk::rpc::PROTOCOL_VERSION,
                 },
-                Arc::new(TestHost),
+                host.clone(),
             )
             .await
             .expect("workflow plugin init");
-        plugin
+        (plugin, host)
     }
 
     fn invoke_input<T: serde::Serialize>(tool_name: &str, input: T) -> ToolInvokeInput {
@@ -892,7 +928,7 @@ mod tests {
 
     #[tokio::test]
     async fn ask_user_invokes_host_without_executor_context() {
-        let plugin = initialized_plugin().await;
+        let (plugin, _) = initialized_plugin().await;
         let output = plugin
             .tool_invoke(invoke_input(
                 "ask_user",
@@ -926,7 +962,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_goal_invokes_host_without_executor_context() {
-        let plugin = initialized_plugin().await;
+        let (plugin, _) = initialized_plugin().await;
         let output = plugin
             .tool_invoke(invoke_input("get_goal", GetGoalToolInput::default()))
             .await
@@ -959,7 +995,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_goal_invokes_host_without_executor_context() {
-        let plugin = initialized_plugin().await;
+        let (plugin, _) = initialized_plugin().await;
         let output = plugin
             .tool_invoke(invoke_input(
                 "create_goal",
@@ -990,18 +1026,28 @@ mod tests {
 
     #[tokio::test]
     async fn update_goal_invokes_host_without_executor_context() {
-        let plugin = initialized_plugin().await;
+        let (plugin, host) = initialized_plugin().await;
         let output = plugin
             .tool_invoke(invoke_input(
                 "update_goal",
                 UpdateGoalToolInput {
+                    objective: None,
                     status: UpdateGoalStatus::Complete,
+                    token_budget: None,
                 },
             ))
             .await
             .expect("update_goal host invoke");
 
         assert!(output.output_text.contains("Goal 7 is completed"));
+        assert_eq!(
+            host.recorded_update_goal_request(),
+            Some(RecordedUpdateGoalRequest {
+                objective: None,
+                status: Some(HostGoalStatus::Completed),
+                token_budget: None,
+            })
+        );
         assert_eq!(
             output
                 .payload
@@ -1012,8 +1058,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_goal_passes_through_non_complete_fields() {
+        let (plugin, host) = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_input(
+                "update_goal",
+                UpdateGoalToolInput {
+                    objective: Some("resume and ship it".to_string()),
+                    status: UpdateGoalStatus::Paused,
+                    token_budget: Some(256),
+                },
+            ))
+            .await
+            .expect("update_goal host invoke");
+
+        assert_eq!(
+            host.recorded_update_goal_request(),
+            Some(RecordedUpdateGoalRequest {
+                objective: Some("resume and ship it".to_string()),
+                status: Some(HostGoalStatus::Paused),
+                token_budget: Some(Some(256)),
+            })
+        );
+        assert!(output.output_text.contains("Goal 7 is paused"));
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload["goal"]["objective"].as_str()),
+            Some("resume and ship it")
+        );
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload["goal"]["token_budget"].as_u64()),
+            Some(256)
+        );
+    }
+
+    #[tokio::test]
     async fn task_invokes_host_without_executor_context() {
-        let plugin = initialized_plugin().await;
+        let (plugin, _) = initialized_plugin().await;
         let output = plugin
             .tool_invoke(invoke_input(
                 "task",
@@ -1047,7 +1133,7 @@ mod tests {
 
     #[tokio::test]
     async fn todo_write_invokes_explicit_host_api() {
-        let plugin = initialized_plugin().await;
+        let (plugin, _) = initialized_plugin().await;
         let output = plugin
             .tool_invoke(invoke_input(
                 "todo_write",
@@ -1078,7 +1164,7 @@ mod tests {
 
     #[tokio::test]
     async fn plan_and_worktree_entries_invoke_explicit_host_apis() {
-        let plugin = initialized_plugin().await;
+        let (plugin, _) = initialized_plugin().await;
 
         let enter_plan = plugin
             .tool_invoke(invoke_input(
@@ -1168,7 +1254,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_search_invokes_host_catalog_without_executor_context() {
-        let plugin = initialized_plugin().await;
+        let (plugin, _) = initialized_plugin().await;
         let output = plugin
             .tool_invoke(invoke_input(
                 "tool_search",
@@ -1194,7 +1280,7 @@ mod tests {
 
     #[tokio::test]
     async fn bundled_workflow_entries_render_prompt_text() {
-        let plugin = initialized_plugin().await;
+        let (plugin, _) = initialized_plugin().await;
 
         let review = plugin
             .tool_invoke(invoke_input(

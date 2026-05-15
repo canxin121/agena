@@ -793,6 +793,37 @@ async fn message_list_summary_omits_part_content_while_detail_full_keeps_it() {
         .oneshot(
             Request::builder()
                 .uri(format!(
+                    "/api/v1/sessions/{}/messages?parts=none",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let first = value
+        .get("items")
+        .and_then(|items| items.as_array())
+        .and_then(|items| items.first())
+        .expect("first list item");
+    assert_eq!(first.get("id").and_then(|id| id.as_i64()), Some(message.id));
+    assert!(
+        first.get("parts").is_none(),
+        "none list should omit parts entirely: {value:?}"
+    );
+    assert_eq!(
+        first.get("part_count").and_then(|count| count.as_u64()),
+        Some(1)
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
                     "/api/v1/sessions/{}/messages?parts=summary",
                     session.id
                 ))
@@ -811,12 +842,35 @@ async fn message_list_summary_omits_part_content_while_detail_full_keeps_it() {
         .expect("first list item");
     assert_eq!(first.get("id").and_then(|id| id.as_i64()), Some(message.id));
     assert!(
-        first.get("parts")
+        first
+            .get("parts")
             .and_then(|parts| parts.as_array())
             .and_then(|parts| parts.first())
             .and_then(|part| part.get("content"))
             .is_none(),
         "summary list should omit part content: {value:?}"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/messages/{}?parts=none", message.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        value.get("parts").is_none(),
+        "none detail should omit parts entirely: {value:?}"
+    );
+    assert_eq!(
+        value.get("part_count").and_then(|count| count.as_u64()),
+        Some(1)
     );
 
     let response = app

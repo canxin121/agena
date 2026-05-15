@@ -293,17 +293,22 @@ pub async fn get_model_catalog(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
     let snapshot = state.runtime().current_snapshot();
+    let catalog = snapshot.model_catalog_response();
     Ok(Json(ModelCatalogResponse {
-        remote_url: snapshot.model_catalog_response().remote_url,
-        fallback_url: snapshot.model_catalog_response().fallback_url,
-        last_refresh_at: snapshot.model_catalog_response().last_refresh_at,
-        last_successful_source: snapshot.model_catalog_response().last_successful_source,
-        last_error: snapshot.model_catalog_response().last_error,
-        entries: snapshot
-            .model_catalog_response()
+        remote_url: catalog.remote_url,
+        fallback_url: catalog.fallback_url,
+        last_refresh_at: catalog.last_refresh_at,
+        last_successful_source: catalog.last_successful_source,
+        last_error: catalog.last_error,
+        entries: catalog
             .entries
             .into_iter()
-            .map(Into::into)
+            .map(|entry| {
+                crate::local_api::ModelCatalogEntryResource::from_record(
+                    entry,
+                    catalog.last_successful_source,
+                )
+            })
             .collect(),
     }))
 }

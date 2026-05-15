@@ -125,10 +125,30 @@ pub struct ModelCatalogResponse {
     pub entries: Vec<ModelCatalogEntryResource>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCatalogEntryKind {
+    Official,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCatalogSourceKind {
+    Remote,
+    Fallback,
+    Cache,
+    Custom,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelCatalogEntryResource {
     pub provider_id: String,
     pub model_id: String,
+    pub kind: ModelCatalogEntryKind,
+    pub source: ModelCatalogSourceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model_for_provider: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -153,9 +173,43 @@ pub struct ModelCatalogEntryResource {
 
 impl From<ModelCatalogEntryRecord> for ModelCatalogEntryResource {
     fn from(value: ModelCatalogEntryRecord) -> Self {
+        Self::from_record(value, None)
+    }
+}
+
+impl ModelCatalogEntryResource {
+    pub fn from_record(
+        value: ModelCatalogEntryRecord,
+        last_successful_source: Option<ModelCatalogEntrySourceKind>,
+    ) -> Self {
+        let kind = if value.has_local_override {
+            ModelCatalogEntryKind::Custom
+        } else {
+            ModelCatalogEntryKind::Official
+        };
+        let source = if value.has_local_override {
+            ModelCatalogSourceKind::Custom
+        } else {
+            match last_successful_source.unwrap_or(ModelCatalogEntrySourceKind::Remote) {
+                ModelCatalogEntrySourceKind::Remote => ModelCatalogSourceKind::Remote,
+                ModelCatalogEntrySourceKind::Fallback => ModelCatalogSourceKind::Fallback,
+                ModelCatalogEntrySourceKind::Cache => ModelCatalogSourceKind::Cache,
+            }
+        };
+        let source_label = Some(match source {
+            ModelCatalogSourceKind::Remote => "remote catalog",
+            ModelCatalogSourceKind::Fallback => "fallback catalog",
+            ModelCatalogSourceKind::Cache => "cached catalog",
+            ModelCatalogSourceKind::Custom => "workspace override",
+        })
+        .map(str::to_owned);
+
         Self {
             provider_id: value.provider_id,
             model_id: value.model_id,
+            kind,
+            source,
+            source_label,
             default_model_for_provider: value.default_model_for_provider,
             has_local_override: value.has_local_override,
             display_name: value.display_name,

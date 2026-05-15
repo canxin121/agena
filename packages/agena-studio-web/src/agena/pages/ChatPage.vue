@@ -5,7 +5,7 @@ import { permissionActionView, permissionExplainability, permissionReplyPreview,
 import { openGlobalCommandPalette } from '@/agena/lib/commandPaletteRegistry'
 import ChatPageContent from './ChatPageContent.vue'
 import { createChatPageContentState } from './chatPageContentModel'
-import { messageBlocks, messageTags, messageUsageFacts, readPayloadMessageId } from './chatRenderModel'
+import { messageBlocks, messageTags, messageUsageFacts, readPayloadMessageId, readPayloadPartId } from './chatRenderModel'
 import { useChatCommandState } from './useChatCommandState'
 import { useChatDerivedState } from './useChatDerivedState'
 import { useChatSessionActions } from './useChatSessionActions'
@@ -278,6 +278,7 @@ const pageContent = createChatPageContentState({
   modelVariantOptions,
   providers,
   readPayloadMessageId,
+  readPayloadPartId,
   readUserAnswer,
   refreshConversation,
   renameCurrentSession,

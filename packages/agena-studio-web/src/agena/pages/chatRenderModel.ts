@@ -130,3 +130,7 @@ export function messageUsageFacts(message: MessageResource): string[] {
 export function readPayloadMessageId(payload: Record<string, unknown>): number | null {
   return readFiniteNumber(payload.message_id)
 }
+
+export function readPayloadPartId(payload: Record<string, unknown>): number | null {
+  return readFiniteNumber(payload.part_id)
+}

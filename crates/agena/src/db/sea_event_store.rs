@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use chrono::TimeZone;
 use sea_orm::sea_query::{Expr, Order};
 use sea_orm::{
-    ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, TransactionTrait, DbErr,
+    ActiveValue, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, TransactionTrait,
 };
 use uuid::Uuid;
 
@@ -29,8 +29,7 @@ pub struct SeaEventStore<K> {
 
 fn is_duplicate_seq_global_error(err: &DbErr) -> bool {
     let message = err.to_string();
-    message.contains("idx_agena_events_seq_global")
-        || message.contains("agena_events.seq_global")
+    message.contains("idx_agena_events_seq_global") || message.contains("agena_events.seq_global")
 }
 
 impl<K> SeaEventStore<K> {

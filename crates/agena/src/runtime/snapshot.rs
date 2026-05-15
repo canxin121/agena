@@ -222,10 +222,8 @@ impl RuntimeSnapshot {
             ModelCatalogStore::new(ModelCatalogConfig::for_workspace_root(workspace_root)),
         )?);
         let mut catalog_snapshot = model_catalog.snapshot();
-        if catalog_snapshot.official.providers.is_empty() {
-            if let Ok(snapshot) = model_catalog.refresh().await {
-                catalog_snapshot = snapshot;
-            }
+        if let Ok(snapshot) = model_catalog.refresh_if_stale_on_startup().await {
+            catalog_snapshot = snapshot;
         }
         let providers = Arc::new(
             resolution

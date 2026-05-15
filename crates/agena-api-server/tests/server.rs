@@ -1004,6 +1004,29 @@ async fn message_detail_routes_return_message_and_parts() {
     );
 
     let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/messages/{}/parts?mode=full", message.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        value
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("content"))
+            .and_then(|content| content.get("text"))
+            .and_then(|text| text.as_str()),
+        Some("hello")
+    );
+
+    let response = app
         .oneshot(
             Request::builder()
                 .uri(format!("/api/v1/message-parts/{}", part.id))

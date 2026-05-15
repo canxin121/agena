@@ -871,7 +871,9 @@ impl SessionManager {
                 state.cache_policy(),
             )
             .await?
-            .ok_or_else(|| AppError::Internal(format!("session {} has no goal", request.session_id)))?;
+            .ok_or_else(|| {
+                AppError::Internal(format!("session {} has no goal", request.session_id))
+            })?;
         let goal = updated.goal.clone().ok_or_else(|| {
             AppError::Internal(format!(
                 "goal missing after update for session {}",
@@ -2176,9 +2178,7 @@ impl SessionManager {
                 Ok(result) => {
                     let turn_id = result.turn_id;
                     let terminal_error = result.terminal_error;
-                    if terminal_error
-                        .as_ref()
-                        .is_some_and(is_user_cancelled_error)
+                    if terminal_error.as_ref().is_some_and(is_user_cancelled_error)
                         && control.is_superseded()
                     {
                         return Ok(session);
@@ -9355,10 +9355,11 @@ mod tests {
         let request = recorded
             .last()
             .expect("goal continuation request should be recorded");
-        assert!(request
-            .messages
-            .iter()
-            .any(|message| message.as_text_lossy().contains("Externally supplied objective")));
+        assert!(request.messages.iter().any(|message| {
+            message
+                .as_text_lossy()
+                .contains("Externally supplied objective")
+        }));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -9384,8 +9385,13 @@ mod tests {
             .await
             .expect("create session");
         let session_id = created.id;
-        persist_goal_without_auto_run(&first, session_id, "Resume this goal after restart", Some(100))
-            .await;
+        persist_goal_without_auto_run(
+            &first,
+            session_id,
+            "Resume this goal after restart",
+            Some(100),
+        )
+        .await;
         drop(first);
 
         let second = build_manager_with_provider_on_db(
@@ -9414,10 +9420,11 @@ mod tests {
         let request = recorded
             .last()
             .expect("goal continuation request should be recorded after restart");
-        assert!(request
-            .messages
-            .iter()
-            .any(|message| message.as_text_lossy().contains("Resume this goal after restart")));
+        assert!(request.messages.iter().any(|message| {
+            message
+                .as_text_lossy()
+                .contains("Resume this goal after restart")
+        }));
     }
 
     #[tokio::test]
@@ -9461,10 +9468,12 @@ mod tests {
         )
         .await;
         resume_event_sequence(&second).await;
-        assert!(second
-            .clear_goal(created.id)
-            .await
-            .expect("external clear goal should succeed"));
+        assert!(
+            second
+                .clear_goal(created.id)
+                .await
+                .expect("external clear goal should succeed")
+        );
 
         let _ = first
             .continue_session(SessionContinueRequest {
@@ -9533,7 +9542,9 @@ mod tests {
             .get_session(created.id)
             .await
             .expect("reload cached session");
-        let goal = refreshed.goal.expect("cached session should refresh its goal");
+        let goal = refreshed
+            .goal
+            .expect("cached session should refresh its goal");
         assert_eq!(goal.objective, "Refresh the cached session goal");
     }
 

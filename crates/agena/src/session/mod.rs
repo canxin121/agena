@@ -22,9 +22,9 @@ pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
     SessionGoalCreateRequest, SessionGoalUpdateRequest, SessionManager, SessionManagerConfig,
-    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
-    SessionSubtaskRequest, SessionSubtaskResponse, SessionUnrewindRequest,
-    SessionUserInputReplyRequest, SessionUserTurnRequest,
+    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionSubtaskRequest,
+    SessionSubtaskResponse, SessionUnrewindRequest, SessionUserInputReplyRequest,
+    SessionUserTurnRequest,
 };
 pub use model::{
     GoalStatus, MAX_SESSION_GOAL_OBJECTIVE_CHARS, PlanState, PromptTokenRuntime,

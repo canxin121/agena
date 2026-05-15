@@ -3,6 +3,7 @@ import type { Ref } from 'vue'
 import type {
   ModelCatalogEntry,
   ModelCatalogEntryWriteRequest,
+  ProviderModel,
   ProviderModelVariant,
 } from '../lib/agenaApi'
 import {
@@ -74,14 +75,7 @@ export const MODEL_FAMILY_OPTIONS = [
   'command',
 ] as const
 
-export const MODEL_LIFECYCLE_OPTIONS = [
-  'active',
-  'preview',
-  'beta',
-  'alpha',
-  'experimental',
-  'deprecated',
-] as const
+export const MODEL_LIFECYCLE_OPTIONS = ['active', 'preview', 'beta', 'alpha', 'experimental', 'deprecated'] as const
 
 function normalizeOptionalText(value: string): string | null {
   const normalized = String(value || '').trim()
@@ -120,11 +114,30 @@ function stringifyJson(value: Record<string, unknown> | null | undefined): strin
 }
 
 function readCapabilityFlag(
-  entry: Pick<ModelCatalogEntry, 'capabilities'>,
+  entry: { capabilities?: Record<string, unknown> | null },
   key: 'tool_calling' | 'streaming' | 'reasoning' | 'structured_output' | 'temperature_supported',
 ): boolean {
   const value = entry.capabilities?.[key]
-  return value === 'supported' || value === true
+  if (value === 'supported' || value === true) return true
+
+  const compactKey = key === 'temperature_supported' ? 'temperature' : key
+  const features = entry.capabilities?.features
+  if (Array.isArray(features)) {
+    return features.includes(compactKey)
+  }
+  if (features && typeof features === 'object' && !Array.isArray(features)) {
+    const supported = (features as Record<string, unknown>).supported
+    return Array.isArray(supported) && supported.includes(compactKey)
+  }
+  return false
+}
+
+type ProviderModelVariantWithDisabled = ProviderModelVariant & {
+  disabled?: boolean
+}
+
+type ProviderModelVariantWriteValue = ProviderModelVariant & {
+  disabled?: boolean
 }
 
 export function createEmptyModelCatalogDraft(providerId = '', modelId = ''): ModelCatalogEditableDraft {
@@ -145,14 +158,6 @@ export function createEmptyModelCatalogDraft(providerId = '', modelId = ''): Mod
     temperature_supported: false,
     variants: [],
   }
-}
-
-type ProviderModelVariantWithDisabled = ProviderModelVariant & {
-  disabled?: boolean
-}
-
-type ProviderModelVariantWriteValue = ProviderModelVariant & {
-  disabled?: boolean
 }
 
 export function createEmptyModelCatalogVariantDraft(name = ''): ModelCatalogVariantEditableDraft {
@@ -178,6 +183,14 @@ function createModelCatalogVariantDraftFromEntry(
   }
 }
 
+function createModelCatalogVariantDrafts(
+  variants: Record<string, ProviderModelVariant> | null | undefined,
+): ModelCatalogVariantEditableDraft[] {
+  return Object.entries(variants || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, variant]) => createModelCatalogVariantDraftFromEntry(name, variant as ProviderModelVariantWithDisabled))
+}
+
 export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): ModelCatalogEditableDraft {
   return {
     provider_id: entry.provider_id,
@@ -194,10 +207,48 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     reasoning: readCapabilityFlag(entry, 'reasoning'),
     structured_output: readCapabilityFlag(entry, 'structured_output'),
     temperature_supported: readCapabilityFlag(entry, 'temperature_supported'),
-    variants: Object.entries(entry.variants || {})
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, variant]) => createModelCatalogVariantDraftFromEntry(name, variant as ProviderModelVariantWithDisabled)),
+    variants: createModelCatalogVariantDrafts(entry.variants),
   }
+}
+
+export function createModelCatalogDraftFromProviderModel(model: ProviderModel): ModelCatalogEditableDraft {
+  return {
+    provider_id: model.provider_id,
+    model_id: model.id,
+    set_default_for_provider: false,
+    family: String(model.metadata?.family || ''),
+    lifecycle: String(model.metadata?.lifecycle || ''),
+    context_window_tokens:
+      model.metadata?.limits?.context_window_tokens == null ? '' : String(model.metadata.limits.context_window_tokens),
+    max_output_tokens:
+      model.metadata?.limits?.max_output_tokens == null ? '' : String(model.metadata.limits.max_output_tokens),
+    display_name: String(model.display_name || ''),
+    description: String(model.metadata?.description || ''),
+    tool_calling: readCapabilityFlag(model, 'tool_calling'),
+    streaming: readCapabilityFlag(model, 'streaming'),
+    reasoning: readCapabilityFlag(model, 'reasoning'),
+    structured_output: readCapabilityFlag(model, 'structured_output'),
+    temperature_supported: readCapabilityFlag(model, 'temperature_supported'),
+    variants: createModelCatalogVariantDrafts(model.variants),
+  }
+}
+
+export function findCatalogEntryForProviderModel(
+  entries: ModelCatalogEntry[],
+  model: ProviderModel,
+): ModelCatalogEntry | null {
+  const matches = entries.filter((entry) => entry.provider_id === model.provider_id && entry.model_id === model.id)
+  return matches.find((entry) => entry.kind === 'custom') || matches[0] || null
+}
+
+export function createModelCatalogDraftFromProviderSelection(
+  entries: ModelCatalogEntry[],
+  model: ProviderModel,
+): ModelCatalogEditableDraft {
+  const matchingEntry = findCatalogEntryForProviderModel(entries, model)
+  return matchingEntry
+    ? createModelCatalogDraftFromEntry(matchingEntry)
+    : createModelCatalogDraftFromProviderModel(model)
 }
 
 function buildModelCatalogVariants(

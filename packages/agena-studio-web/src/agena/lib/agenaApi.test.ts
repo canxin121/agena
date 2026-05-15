@@ -33,19 +33,31 @@ describe('deleteModelCatalogEntry', () => {
 })
 
 describe('listProviderModels', () => {
-  test('reads the backend provider models response envelope instead of assuming a raw array', async () => {
+  test('unwraps the provider models response envelope', async () => {
     let capturedUrl = ''
 
     globalThis.fetch = (async (input: string | URL | Request) => {
       capturedUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
       return new Response(
         JSON.stringify({
-          provider_id: 'gateway',
+          provider_id: 'openai',
           models: [
             {
-              provider_id: 'gateway',
-              id: 'openai/gpt-5',
+              provider_id: 'openai',
+              id: 'gpt-5',
               display_name: 'GPT-5',
+              metadata: {
+                family: 'gpt',
+                lifecycle: 'active',
+                limits: {
+                  context_window_tokens: 400000,
+                  max_output_tokens: 16384,
+                },
+              },
+              capabilities: {
+                tool_calling: 'supported',
+                streaming: 'supported',
+              },
             },
           ],
         }),
@@ -56,15 +68,26 @@ describe('listProviderModels', () => {
       )
     }) as typeof fetch
 
-    const models = await listProviderModels('gateway')
+    const models = await listProviderModels('openai')
 
-    expect(capturedUrl).toContain('/api/v1/providers/gateway/models')
-    expect(Array.isArray(models)).toBe(true)
+    expect(capturedUrl).toContain('/api/v1/providers/openai/models')
     expect(models).toEqual([
       {
-        provider_id: 'gateway',
-        id: 'openai/gpt-5',
+        provider_id: 'openai',
+        id: 'gpt-5',
         display_name: 'GPT-5',
+        metadata: {
+          family: 'gpt',
+          lifecycle: 'active',
+          limits: {
+            context_window_tokens: 400000,
+            max_output_tokens: 16384,
+          },
+        },
+        capabilities: {
+          tool_calling: 'supported',
+          streaming: 'supported',
+        },
       },
     ])
   })

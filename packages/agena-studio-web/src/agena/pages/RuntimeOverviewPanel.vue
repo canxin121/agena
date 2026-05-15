@@ -15,6 +15,8 @@ import {
   createEmptyModelCatalogDraft,
   createEmptyModelCatalogVariantDraft,
   createModelCatalogDraftFromEntry,
+  createModelCatalogDraftFromProviderSelection,
+  findCatalogEntryForProviderModel,
   useRuntimeModelCatalogActions,
   type ModelCatalogEditableDraft,
 } from './useRuntimeModelCatalogActions'
@@ -100,6 +102,14 @@ function formatVariantThinking(value: Record<string, unknown> | null | undefined
   return text.length > 96 ? `${text.slice(0, 93)}...` : text
 }
 
+function loadProviderModelDraft(model: ProviderModel) {
+  const matchingEntry = findCatalogEntryForProviderModel(catalogEntriesState.value, model)
+  draft.value = createModelCatalogDraftFromProviderSelection(catalogEntriesState.value, model)
+  editingEntryKey.value = matchingEntry ? makeEntryKey(matchingEntry.provider_id, matchingEntry.model_id) : ''
+  actionError.value = ''
+  actionMessage.value = `Loaded ${model.provider_id}/${model.id} into the draft editor.`
+}
+
 async function saveDraft() {
   submitting.value = true
   try {
@@ -169,8 +179,16 @@ function isEntrySelected(entry: ModelCatalogEntry) {
       <section class="card">
         <h3>Maintenance</h3>
         <div v-if="props.runtime" class="stack">
-          <div><strong>Reload:</strong> {{ props.runtime.reload.enabled ? 'enabled' : 'disabled' }} ({{ props.runtime.reload.interval_secs }}s)</div>
-          <div><strong>Janitor:</strong> {{ props.runtime.janitor.enabled ? 'enabled' : 'disabled' }} ({{ props.runtime.janitor.interval_secs }}s)</div>
+          <div>
+            <strong>Reload:</strong> {{ props.runtime.reload.enabled ? 'enabled' : 'disabled' }} ({{
+              props.runtime.reload.interval_secs
+            }}s)
+          </div>
+          <div>
+            <strong>Janitor:</strong> {{ props.runtime.janitor.enabled ? 'enabled' : 'disabled' }} ({{
+              props.runtime.janitor.interval_secs
+            }}s)
+          </div>
           <div><strong>Watch Paths:</strong></div>
           <div v-if="props.runtime.watch_paths.length" class="list">
             <div v-for="path in props.runtime.watch_paths" :key="path" class="list-item mono">{{ path }}</div>
@@ -188,9 +206,13 @@ function isEntrySelected(entry: ModelCatalogEntry) {
           <div v-for="job in props.runtime.automation.recent_jobs" :key="job.id" class="list-item">
             <div class="page-header" style="align-items: flex-start">
               <div>
-                <div><strong>{{ job.kind }}</strong> <span class="muted mono">{{ job.id }}</span></div>
+                <div>
+                  <strong>{{ job.kind }}</strong> <span class="muted mono">{{ job.id }}</span>
+                </div>
                 <div class="muted">session {{ job.owner_session_id ?? 'n/a' }}</div>
-                <div v-if="job.last_run" class="muted">{{ job.last_run.status }} · triggered {{ job.last_run.triggered_at }}</div>
+                <div v-if="job.last_run" class="muted">
+                  {{ job.last_run.status }} · triggered {{ job.last_run.triggered_at }}
+                </div>
                 <div v-else-if="job.next_fire_at" class="muted">next {{ job.next_fire_at }}</div>
                 <div v-if="job.last_run?.error_message" class="muted">{{ job.last_run.error_message }}</div>
               </div>
@@ -205,24 +227,47 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         <div class="page-header" style="align-items: flex-start">
           <div>
             <h3>Provider Defaults</h3>
-            <p class="muted">Provider-visible models usually follow the runtime adapter routing, often as <span class="mono">&lt;adapter&gt;/&lt;model&gt;</span>.</p>
+            <p class="muted">
+              Provider-visible models usually follow the runtime adapter routing, often as
+              <span class="mono">&lt;adapter&gt;/&lt;model&gt;</span>.
+            </p>
           </div>
         </div>
         <div v-if="props.providers.length" class="list">
           <div v-for="provider in props.providers" :key="provider.provider_id" class="list-item">
             <div class="page-header" style="align-items: flex-start">
               <div>
-                <div><strong>{{ provider.provider_id }}</strong></div>
-                <div class="muted">Default model: {{ provider.default_model || 'unset' }}</div>
-                <div v-if="provider.catalog_default_model" class="muted">Catalog default: {{ provider.catalog_default_model }}</div>
-                <div class="muted mono">{{ provider.default_model_ref || 'n/a' }}</div>
-                <div class="muted">
-                  Models:
-                  {{ (props.providerModels[provider.provider_id] || []).map((model) => props.formatProviderModel(model)).join(', ') || 'none' }}
+                <div>
+                  <strong>{{ provider.provider_id }}</strong>
                 </div>
+                <div class="muted">Default model: {{ provider.default_model || 'unset' }}</div>
+                <div v-if="provider.catalog_default_model" class="muted">
+                  Catalog default: {{ provider.catalog_default_model }}
+                </div>
+                <div class="muted mono">{{ provider.default_model_ref || 'n/a' }}</div>
+                <div class="muted" style="margin-top: 8px">Live models:</div>
+                <div
+                  v-if="(props.providerModels[provider.provider_id] || []).length"
+                  class="button-row"
+                  style="margin-top: 8px; flex-wrap: wrap"
+                >
+                  <button
+                    v-for="model in props.providerModels[provider.provider_id] || []"
+                    :key="model.id"
+                    class="button"
+                    :disabled="submitting"
+                    :title="`${model.provider_id}/${model.id}`"
+                    @click="loadProviderModelDraft(model)"
+                  >
+                    Bring to Draft: {{ props.formatProviderModel(model) }}
+                  </button>
+                </div>
+                <div v-else class="muted">No live models loaded.</div>
               </div>
               <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
-                <button class="button" :disabled="submitting" @click="resetEditor(provider.provider_id)">Add Override</button>
+                <button class="button" :disabled="submitting" @click="resetEditor(provider.provider_id)">
+                  Blank Draft
+                </button>
               </div>
             </div>
           </div>
@@ -246,25 +291,37 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         <div class="page-header" style="align-items: flex-start">
           <div>
             <h3>Model Catalog</h3>
-            <p class="muted">Refresh the runtime catalog, create or edit local overrides, delete local overrides, and set the provider default model.</p>
+            <p class="muted">
+              Refresh the runtime catalog, pull a live provider model into the draft editor, save local overrides,
+              delete local overrides, and set the provider default model.
+            </p>
           </div>
           <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
-            <button class="button" :disabled="submitting" @click="resetEditor()">New Override</button>
+            <button class="button" :disabled="submitting" @click="resetEditor()">Blank Override</button>
             <button class="button primary" :disabled="submitting" @click="refreshCatalog">Refresh Catalog</button>
           </div>
         </div>
 
         <div v-if="props.runtime?.model_catalog" class="stack" style="margin-top: 12px">
-          <div><strong>Remote:</strong> <span class="mono">{{ props.runtime.model_catalog.remote_url }}</span></div>
-          <div><strong>Fallback:</strong> <span class="mono">{{ props.runtime.model_catalog.fallback_url }}</span></div>
+          <div>
+            <strong>Remote:</strong> <span class="mono">{{ props.runtime.model_catalog.remote_url }}</span>
+          </div>
+          <div>
+            <strong>Fallback:</strong> <span class="mono">{{ props.runtime.model_catalog.fallback_url }}</span>
+          </div>
           <div><strong>Last Source:</strong> {{ props.runtime.model_catalog.last_successful_source || 'none' }}</div>
           <div><strong>Last Refresh:</strong> {{ props.runtime.model_catalog.last_refresh_at || 'never' }}</div>
-          <div v-if="props.runtime.model_catalog.last_error" class="muted">{{ props.runtime.model_catalog.last_error }}</div>
+          <div v-if="props.runtime.model_catalog.last_error" class="muted">
+            {{ props.runtime.model_catalog.last_error }}
+          </div>
         </div>
         <p v-else class="muted" style="margin-top: 12px">Model catalog is not available in the runtime snapshot yet.</p>
 
         <p v-if="actionMessage" class="muted" style="margin-top: 12px">{{ actionMessage }}</p>
         <p v-if="actionError" class="muted" style="margin-top: 8px">{{ actionError }}</p>
+        <p class="muted" style="margin-top: 12px">
+          Use the live model buttons above for the fastest draft path, then adjust any fields below before saving.
+        </p>
 
         <div class="grid two" style="margin-top: 16px">
           <div class="field">
@@ -297,17 +354,31 @@ function isEntrySelected(entry: ModelCatalogEntry) {
             <label class="label" for="catalog-lifecycle">Lifecycle</label>
             <select id="catalog-lifecycle" v-model="draft.lifecycle" class="select">
               <option value="">Unset</option>
-              <option v-for="lifecycle in MODEL_LIFECYCLE_OPTIONS" :key="lifecycle" :value="lifecycle">{{ lifecycle }}</option>
+              <option v-for="lifecycle in MODEL_LIFECYCLE_OPTIONS" :key="lifecycle" :value="lifecycle">
+                {{ lifecycle }}
+              </option>
             </select>
           </div>
           <div class="field">
             <label class="label" for="catalog-context-window">Context Window Tokens</label>
-            <input id="catalog-context-window" v-model="draft.context_window_tokens" class="input mono" inputmode="numeric" placeholder="128000" />
+            <input
+              id="catalog-context-window"
+              v-model="draft.context_window_tokens"
+              class="input mono"
+              inputmode="numeric"
+              placeholder="128000"
+            />
           </div>
 
           <div class="field">
             <label class="label" for="catalog-max-output">Max Output Tokens</label>
-            <input id="catalog-max-output" v-model="draft.max_output_tokens" class="input mono" inputmode="numeric" placeholder="8192" />
+            <input
+              id="catalog-max-output"
+              v-model="draft.max_output_tokens"
+              class="input mono"
+              inputmode="numeric"
+              placeholder="8192"
+            />
           </div>
           <div class="field" style="display: flex; align-items: end">
             <label class="muted" for="catalog-default-toggle" style="display: flex; gap: 8px; align-items: center">
@@ -319,7 +390,13 @@ function isEntrySelected(entry: ModelCatalogEntry) {
 
         <div class="field" style="margin-top: 12px">
           <label class="label" for="catalog-description">Description</label>
-          <textarea id="catalog-description" v-model="draft.description" class="input" rows="3" placeholder="Optional model notes or behavior summary." />
+          <textarea
+            id="catalog-description"
+            v-model="draft.description"
+            class="input"
+            rows="3"
+            placeholder="Optional model notes or behavior summary."
+          />
         </div>
 
         <div class="grid two" style="margin-top: 12px">
@@ -339,7 +416,11 @@ function isEntrySelected(entry: ModelCatalogEntry) {
             <input id="catalog-capability-structured" v-model="draft.structured_output" type="checkbox" />
             Structured output
           </label>
-          <label class="muted" for="catalog-capability-temperature" style="display: flex; gap: 8px; align-items: center">
+          <label
+            class="muted"
+            for="catalog-capability-temperature"
+            style="display: flex; gap: 8px; align-items: center"
+          >
             <input id="catalog-capability-temperature" v-model="draft.temperature_supported" type="checkbox" />
             Temperature supported
           </label>
@@ -436,7 +517,10 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         <div class="page-header" style="align-items: flex-start">
           <div>
             <h3>Catalog Entries</h3>
-            <p class="muted">Entries are shown as one merged catalog. Saving writes or updates the local override for that provider/model, and delete removes only the local override.</p>
+            <p class="muted">
+              Entries are shown as one merged catalog. Bring a live model into the draft editor, save a local override,
+              and delete only the local override.
+            </p>
           </div>
           <span class="badge">{{ sortedCatalogEntries.length }}</span>
         </div>
@@ -450,13 +534,19 @@ function isEntrySelected(entry: ModelCatalogEntry) {
           >
             <div class="page-header" style="align-items: flex-start">
               <div>
-                <div><strong>{{ entry.provider_id }}/{{ entry.model_id }}</strong></div>
-                <div class="muted">{{ entry.display_name || 'Unnamed model' }}</div>
+                <div>
+                  <strong>{{ entry.provider_id }}/{{ entry.model_id }}</strong>
+                </div>
+                <div class="muted">
+                  {{ entry.display_name || 'Unnamed model' }} · {{ entry.kind }} · {{ entry.source }}
+                </div>
                 <div v-if="entry.has_local_override" class="muted">Local override saved for this model.</div>
                 <div v-if="entry.family || entry.lifecycle" class="muted">
                   {{ entry.family || 'family unset' }} · {{ entry.lifecycle || 'lifecycle unset' }}
                 </div>
-                <div v-if="entry.default_model_for_provider" class="muted">Provider default: {{ entry.default_model_for_provider }}</div>
+                <div v-if="entry.default_model_for_provider" class="muted">
+                  Provider default: {{ entry.default_model_for_provider }}
+                </div>
                 <div v-if="entry.description" class="muted">{{ entry.description }}</div>
                 <div v-if="entry.context_window_tokens || entry.max_output_tokens" class="muted mono">
                   ctx={{ entry.context_window_tokens ?? 'n/a' }} · max_out={{ entry.max_output_tokens ?? 'n/a' }}

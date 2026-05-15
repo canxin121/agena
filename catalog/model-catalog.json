@@ -205,6 +205,57 @@
         }
       }
     },
+    "bedrock": {
+      "default_model": "amazon_bedrock/amazon.nova-pro-v1:0",
+      "models": {
+        "amazon_bedrock/amazon.nova-pro-v1:0": {
+          "family": "nova",
+          "lifecycle": "active",
+          "display_name": "Amazon Nova Pro",
+          "description": "Amazon Bedrock OpenAI-compatible route for Nova Pro.",
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "temperature"
+            ]
+          }
+        },
+        "amazon_bedrock/anthropic.claude-sonnet-4-5": {
+          "family": "claude",
+          "lifecycle": "active",
+          "display_name": "Claude Sonnet 4.5",
+          "description": "Anthropic Claude Sonnet 4.5 via Amazon Bedrock.",
+          "input": {
+            "supported": [
+              "image",
+              "document"
+            ]
+          },
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning",
+              "temperature"
+            ]
+          }
+        },
+        "amazon_bedrock/meta.llama3-70b-instruct": {
+          "family": "llama",
+          "lifecycle": "active",
+          "display_name": "Llama 3 70B Instruct",
+          "description": "Meta Llama 3 70B Instruct via Amazon Bedrock.",
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "temperature"
+            ]
+          }
+        }
+      }
+    },
     "gitlab": {
       "default_model": "gitlab/claude-sonnet-4-5",
       "models": {

@@ -284,6 +284,11 @@ export type ProviderModel = {
   variants?: Record<string, ProviderModelVariant>
 }
 
+export type ProviderModelsResponse = {
+  provider_id: string
+  models: ProviderModel[]
+}
+
 export type ProviderModelVariant = {
   display_name?: string | null
   description?: string | null
@@ -875,7 +880,10 @@ export async function listProviders(): Promise<ProviderSummary[]> {
 }
 
 export async function listProviderModels(providerId: string): Promise<ProviderModel[]> {
-  return await apiJson<ProviderModel[]>(`/api/v1/providers/${encodeURIComponent(providerId)}/models`)
+  const response = await apiJson<ProviderModelsResponse>(
+    `/api/v1/providers/${encodeURIComponent(providerId)}/models`,
+  )
+  return response.models ?? []
 }
 
 export async function listAuthProviders(): Promise<AuthProvider[]> {

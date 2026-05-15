@@ -17,7 +17,6 @@ use crate::{
         auth::AuthData,
         prompt_cache, sse, utils, wire_message,
         remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
-        sse, utils, wire_message,
     },
     role::Role,
 };
@@ -490,7 +489,7 @@ impl ModelProvider for AnthropicProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let endpoint = self.models_endpoint();
+        let endpoint = self.models_endpoint()?;
         let source = RemoteModelCatalogSource::new(
             PROVIDER_ID,
             endpoint.as_str(),
@@ -504,6 +503,7 @@ impl ModelProvider for AnthropicProvider {
                             .get(endpoint.as_str())
                             .header("anthropic-version", ANTHROPIC_VERSION),
                         api_key,
+                        None,
                     )
                 })
                 .await?;

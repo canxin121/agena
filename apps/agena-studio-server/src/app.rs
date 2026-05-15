@@ -208,6 +208,12 @@ struct CompatSessionStatusQuery {
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+struct CompatSessionLocateQuery {
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct CompatSessionMessagesQuery {
     offset: Option<usize>,
     limit: Option<usize>,
@@ -3778,6 +3784,62 @@ async fn compat_session_list(
     .into_response())
 }
 
+async fn compat_opencode_studio_session_locate(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Query(query): Query<CompatSessionLocateQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let session_id_raw = query.session_id.trim();
+    if session_id_raw.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "sessionId is required" })),
+        )
+            .into_response());
+    }
+
+    let Ok(session_id) = session_id_raw.parse::<i64>() else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "session not found" })),
+        )
+            .into_response());
+    };
+
+    let Some(session) = state
+        .compat_api_service
+        .get_session(session_id)
+        .await
+        .map_err(|error| compat_internal(format!("{error:?}")))?
+    else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "session not found" })),
+        )
+            .into_response());
+    };
+
+    let workspace = state
+        .compat_api_service
+        .get_workspace(session.workspace_id)
+        .await
+        .map_err(|error| compat_internal(format!("{error:?}")))?
+        .ok_or_else(|| {
+            compat_internal(format!(
+                "workspace {} not found for session {}",
+                session.workspace_id, session.id
+            ))
+        })?;
+
+    Ok(Json(json!({
+        "sessionId": session.id.to_string(),
+        "projectId": workspace.id.to_string(),
+        "projectPath": workspace.path,
+        "directory": workspace.path,
+        "session": compat_session_resource_value(&session),
+    }))
+    .into_response())
+}
+
 async fn compat_session_create(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(body): Json<CompatSessionCreateBody>,
@@ -5205,6 +5267,10 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             get(compat_session_list).post(compat_session_create),
         )
         .route("/api/session-activity", get(compat_session_activity))
+        .route(
+            "/api/opencode-studio/session-locate",
+            get(compat_opencode_studio_session_locate),
+        )
         .route("/api/session/status", get(compat_session_status))
         .route(
             "/api/session/{session_id}",
@@ -6872,6 +6938,74 @@ include_global = true
             .and_then(Value::as_str)
             .expect("id should be present");
         assert!(returned_id == first.id.to_string() || returned_id == second.id.to_string());
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_opencode_studio_session_locate_route_returns_workspace_and_session() {
+        let (state, _db, _config, workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "locate me".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route(
+                "/api/opencode-studio/session-locate",
+                get(compat_opencode_studio_session_locate),
+            )
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/opencode-studio/session-locate?sessionId={}",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        let workspace_path = workspace.path().display().to_string();
+        assert_eq!(
+            payload.get("sessionId").and_then(Value::as_str),
+            Some(session.id.to_string().as_str())
+        );
+        assert_eq!(
+            payload.get("projectPath").and_then(Value::as_str),
+            Some(workspace_path.as_str())
+        );
+        assert_eq!(
+            payload.get("directory").and_then(Value::as_str),
+            Some(workspace_path.as_str())
+        );
+        assert_eq!(
+            payload
+                .get("session")
+                .and_then(|value| value.get("id"))
+                .and_then(Value::as_str),
+            Some(session.id.to_string().as_str())
+        );
 
         state.runtime.shutdown();
     }

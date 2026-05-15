@@ -16,6 +16,8 @@ use crate::{
         StreamResumePolicy, ThinkingRequest,
         auth::AuthData,
         prompt_cache, sse, utils, wire_message,
+        remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
+        sse, utils, wire_message,
     },
     role::Role,
 };
@@ -488,30 +490,39 @@ impl ModelProvider for AnthropicProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            self.apply_headers(
-                self.client
-                    .get(self.models_endpoint().expect("models endpoint should resolve"))
-                    .header("anthropic-version", ANTHROPIC_VERSION),
-                api_key,
-                None,
-            )
-        })
-        .await?;
+        let endpoint = self.models_endpoint();
+        let source = RemoteModelCatalogSource::new(
+            PROVIDER_ID,
+            endpoint.as_str(),
+            self.api_key.prompt_cache_scope(),
+        );
+        RemoteModelCatalogCache::default()
+            .get_or_fetch(&source, || async {
+                let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+                    self.apply_headers(
+                        self.client
+                            .get(endpoint.as_str())
+                            .header("anthropic-version", ANTHROPIC_VERSION),
+                        api_key,
+                    )
+                })
+                .await?;
 
-        let payload: AnthropicModelListResponse =
-            utils::parse_json_response(self.id.as_str(), response).await?;
-        Ok(payload
-            .into_items()
-            .into_iter()
-            .map(|m| {
-                let mut model = ProviderModel::new(self.id.as_str(), m.id);
-                let capabilities = self.model_capabilities(&model.id);
-                model = model.with_capabilities(capabilities);
-                model.display_name = m.display_name.or(m.name);
-                model
+                let payload: AnthropicModelListResponse =
+                    utils::parse_json_response(PROVIDER_ID, response).await?;
+                Ok(payload
+                    .into_items()
+                    .into_iter()
+                    .map(|m| {
+                        let mut model = ProviderModel::new(PROVIDER_ID, m.id);
+                        let capabilities = self.model_capabilities(&model.id);
+                        model = model.with_capabilities(capabilities);
+                        model.display_name = m.display_name.or(m.name);
+                        model
+                    })
+                    .collect())
             })
-            .collect())
+            .await
     }
 
     #[tracing::instrument(skip_all, fields(provider = tracing::field::Empty, model = %request.model))]
@@ -1309,12 +1320,51 @@ struct AnthropicToolCallState {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, OnceLock};
+
     use futures_util::StreamExt;
 
     use super::*;
     use crate::message::Message;
     use crate::provider::CompletionRequest;
     use crate::tool::{EntryBehavior, EntryDefinition};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: tests serialize env mutation through `env_lock()`.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::set_var(self.key, previous);
+                }
+            } else {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     fn sample_tool_definition() -> EntryDefinition {
         EntryDefinition::plugin(
@@ -1457,6 +1507,64 @@ mod tests {
         assert!(!provider.extra_headers.contains_key("anthropic-beta"));
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].eager_input_streaming, None);
+    }
+
+    #[tokio::test]
+    async fn anthropic_list_models_uses_disk_cache_after_first_fetch() {
+        let _env_lock = env_lock().lock().expect("env lock should succeed");
+        let dir = tempfile::tempdir().expect("tempdir should create");
+        let _cache_dir =
+            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
+
+        let mut server = mockito::Server::new_async().await;
+        {
+            let _mock = server
+                .mock("GET", "/models")
+                .match_header("anthropic-version", ANTHROPIC_VERSION)
+                .match_header("x-api-key", "ak-test")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "data": [{
+                            "id": "claude-sonnet-4-5",
+                            "display_name": "Claude Sonnet 4.5"
+                        }]
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let provider = AnthropicProvider::new(
+                reqwest::Client::new(),
+                "ak-test",
+                server.url(),
+                "claude-sonnet-4-5",
+            );
+            let models = provider
+                .list_models()
+                .await
+                .expect("initial list_models should succeed");
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].id.as_str(), "claude-sonnet-4-5");
+            assert_eq!(models[0].display_name.as_deref(), Some("Claude Sonnet 4.5"));
+        }
+
+        let provider = AnthropicProvider::new(
+            reqwest::Client::new(),
+            "ak-test",
+            server.url(),
+            "claude-sonnet-4-5",
+        );
+        let models = provider
+            .list_models()
+            .await
+            .expect("cached list_models should succeed");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "claude-sonnet-4-5");
+        assert_eq!(models[0].display_name.as_deref(), Some("Claude Sonnet 4.5"));
     }
 
     #[test]

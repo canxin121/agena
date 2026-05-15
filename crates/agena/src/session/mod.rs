@@ -38,6 +38,7 @@ pub use model::{
 };
 pub use processor::SessionProcessor;
 
+pub use history::ProjectedMessageHeader;
 /// Audit-only payload carried by `RewindCheckpoint` system notices.
 /// Exposed publicly so callers of `SessionManager::list_rewind_checkpoints`
 /// can name the return type.

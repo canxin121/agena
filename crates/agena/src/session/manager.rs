@@ -620,6 +620,13 @@ impl SessionManager {
             .await
     }
 
+    pub async fn list_projected_message_headers(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<crate::session::ProjectedMessageHeader>, AppError> {
+        self.store.list_projected_message_headers(session_id).await
+    }
+
     pub async fn find_projected_message(
         &self,
         session_id: i64,
@@ -628,6 +635,16 @@ impl SessionManager {
     ) -> Result<Option<Message>, AppError> {
         self.store
             .find_projected_message(session_id, message_id, include_full_parts)
+            .await
+    }
+
+    pub async fn find_projected_message_header(
+        &self,
+        session_id: i64,
+        message_id: i64,
+    ) -> Result<Option<crate::session::ProjectedMessageHeader>, AppError> {
+        self.store
+            .find_projected_message_header(session_id, message_id)
             .await
     }
 

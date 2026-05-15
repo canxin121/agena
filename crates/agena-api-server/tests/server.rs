@@ -36,7 +36,7 @@ use agena_api_server::{AppState, dispatch::{dispatch_command, dispatch_query}, r
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use sea_orm::Database;
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database};
 use tower::ServiceExt;
 
 struct TestProvider;
@@ -894,6 +894,100 @@ async fn message_list_summary_omits_part_content_while_detail_full_keeps_it() {
             .and_then(|content| content.get("text"))
             .and_then(|text| text.as_str()),
         Some("summary hello")
+    );
+}
+
+#[tokio::test]
+async fn message_none_mode_uses_projected_part_count_without_part_rows() {
+    let (state, _manager, workspace_root) = build_state().await;
+    let app = router(state.clone());
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "none mode source".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let db = state.service().clone_db();
+    let created_at = chrono::Utc::now().timestamp_millis();
+    let message_id = 9101;
+
+    agena::db::entities::activity_message::ActiveModel {
+        message_id: Set(message_id),
+        session_id: Set(session.id),
+        role: Set(agena::role::Role::Assistant),
+        state: Set(agena::message::ExecutionStatus::Completed),
+        created_at_ms: Set(created_at),
+        updated_at_ms: Set(created_at),
+        metadata: Set(agena::message::MessageMetadata::default()),
+        usage: Set(None),
+        finish: Set(None),
+        part_count: Set(4),
+        is_compacted: Set(false),
+    }
+    .insert(db.as_ref())
+    .await
+    .expect("activity message projection should insert");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/sessions/{}/messages?parts=none",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let first = value
+        .get("items")
+        .and_then(|items| items.as_array())
+        .and_then(|items| items.first())
+        .expect("first list item");
+    assert_eq!(first.get("id").and_then(|id| id.as_i64()), Some(message_id));
+    assert!(first.get("parts").is_none(), "none list should omit parts");
+    assert_eq!(
+        first.get("part_count").and_then(|count| count.as_u64()),
+        Some(4)
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/messages/{}?parts=none", message_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        value.get("parts").is_none(),
+        "none detail should omit parts"
+    );
+    assert_eq!(
+        value.get("part_count").and_then(|count| count.as_u64()),
+        Some(4)
     );
 }
 

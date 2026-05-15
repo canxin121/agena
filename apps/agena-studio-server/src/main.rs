@@ -6,6 +6,7 @@ use clap::{Parser, ValueEnum};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod app;
+mod terminal_ui_state;
 mod ui_auth;
 pub(crate) use app::AppState;
 

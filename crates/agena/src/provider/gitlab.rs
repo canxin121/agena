@@ -11,10 +11,17 @@ use std::{
 use crate::{
     error::AppError,
     model::{ModelId, ProviderId},
+    model_catalog::{
+        DEFAULT_GITHUB_FALLBACK_URL, DEFAULT_REMOTE_URL, ModelCatalogDocument,
+        ModelCatalogProviderRecord, bundled_catalog_document,
+        catalog_definition_to_provider_definition,
+    },
     provider::{
         AnthropicProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ManagedCredential, ModelProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderModel,
-        auth::AuthData, should_retry_credential, utils,
+        auth::AuthData,
+        remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
+        should_retry_credential, utils,
     },
 };
 
@@ -23,6 +30,8 @@ const DEFAULT_INSTANCE_URL: &str = "https://gitlab.com";
 const DEFAULT_AI_GATEWAY_URL: &str = "https://cloud.gitlab.com";
 const DEFAULT_MODEL: &str = "claude-sonnet-4-5";
 const DIRECT_ACCESS_CACHE_TTL: Duration = Duration::from_secs(25 * 60);
+const GITLAB_MODEL_CATALOG_URL_ENV: &str = "AGENA_GITLAB_MODELS_URL";
+const GITLAB_MODEL_CATALOG_FALLBACK_URL_ENV: &str = "AGENA_GITLAB_MODELS_FALLBACK_URL";
 
 #[derive(Debug, Clone)]
 pub struct GitlabProviderConfig {
@@ -191,6 +200,96 @@ impl GitlabProvider {
 
     fn use_responses_api(model: &str) -> bool {
         model.to_ascii_lowercase().contains("codex")
+    }
+
+    fn model_catalog_remote_url() -> String {
+        std::env::var(GITLAB_MODEL_CATALOG_URL_ENV)
+            .ok()
+            .and_then(|value| utils::normalize_optional_text(Some(value)))
+            .unwrap_or_else(|| DEFAULT_REMOTE_URL.to_owned())
+    }
+
+    fn model_catalog_fallback_url() -> String {
+        std::env::var(GITLAB_MODEL_CATALOG_FALLBACK_URL_ENV)
+            .ok()
+            .and_then(|value| utils::normalize_optional_text(Some(value)))
+            .unwrap_or_else(|| DEFAULT_GITHUB_FALLBACK_URL.to_owned())
+    }
+
+    fn local_model_id_from_catalog(model_id: &str) -> &str {
+        model_id
+            .trim()
+            .strip_prefix("gitlab/")
+            .unwrap_or(model_id.trim())
+    }
+
+    fn models_from_catalog_provider(
+        &self,
+        provider: ModelCatalogProviderRecord,
+    ) -> Vec<ProviderModel> {
+        provider
+            .models
+            .into_iter()
+            .map(|(catalog_model_id, definition)| {
+                let local_model_id =
+                    ModelId::new(Self::local_model_id_from_catalog(catalog_model_id.as_str()));
+                let capability_fallback = self.model_capabilities(&local_model_id);
+                let metadata_fallback = self.model_metadata(&local_model_id);
+                let mut model = catalog_definition_to_provider_definition(&definition)
+                    .apply_to_model(
+                        ProviderModel::new(PROVIDER_ID, local_model_id.clone())
+                            .with_capabilities(capability_fallback.clone())
+                            .with_metadata(metadata_fallback.clone()),
+                        &capability_fallback,
+                        &metadata_fallback,
+                    );
+                if let Some(display_name) = definition.display_name {
+                    model.display_name = Some(display_name);
+                }
+                if let Some(family) = definition.family {
+                    model.metadata = model.metadata.with_family(family);
+                }
+                model
+            })
+            .collect()
+    }
+
+    async fn fetch_catalog_document(&self, url: &str) -> Result<ModelCatalogDocument, AppError> {
+        let response = self.client.get(url).send().await?;
+        if !response.status().is_success() {
+            return Err(AppError::Config(format!(
+                "GET {url} returned {}",
+                response.status()
+            )));
+        }
+        let text = response.text().await?;
+        serde_json::from_str(&text).map_err(|err| {
+            AppError::Config(format!("parse gitlab model catalog from {url}: {err}"))
+        })
+    }
+
+    async fn catalog_provider_record(&self) -> Result<ModelCatalogProviderRecord, AppError> {
+        let remote_url = Self::model_catalog_remote_url();
+        let fallback_url = Self::model_catalog_fallback_url();
+
+        let remote_result = self.fetch_catalog_document(remote_url.as_str()).await;
+        let document = match remote_result {
+            Ok(document) => document,
+            Err(remote_error) => match self.fetch_catalog_document(fallback_url.as_str()).await {
+                Ok(document) => document,
+                Err(fallback_error) => bundled_catalog_document().map_err(|bundled_error| {
+                    AppError::Config(format!(
+                        "gitlab model catalog unavailable: remote: {remote_error}; fallback: {fallback_error}; bundled: {bundled_error}"
+                    ))
+                })?,
+            },
+        };
+
+        document.providers.get(PROVIDER_ID).cloned().ok_or_else(|| {
+            AppError::Config(format!(
+                "gitlab model catalog does not contain provider `{PROVIDER_ID}`"
+            ))
+        })
     }
 
     async fn get_direct_access_token(
@@ -477,11 +576,17 @@ impl ModelProvider for GitlabProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        Ok(vec![
-            ProviderModel::new(PROVIDER_ID, self.default_model.clone())
-                .with_display_name("GitLab Duo model")
-                .with_capabilities(self.model_capabilities(&self.default_model)),
-        ])
+        let source = RemoteModelCatalogSource::new(
+            PROVIDER_ID,
+            Self::model_catalog_remote_url(),
+            self.api_key.prompt_cache_scope(),
+        );
+        RemoteModelCatalogCache::default()
+            .get_or_fetch(&source, || async {
+                let provider = self.catalog_provider_record().await?;
+                Ok(self.models_from_catalog_provider(provider))
+            })
+            .await
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
@@ -632,9 +737,138 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, OnceLock};
+
     use futures_util::StreamExt;
 
     use super::*;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: tests serialize env mutation through `env_lock()`.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::set_var(self.key, previous);
+                }
+            } else {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn gitlab_list_models_uses_remote_catalog_and_disk_cache() {
+        let _env_lock = env_lock().lock().expect("env lock should succeed");
+        let dir = tempfile::tempdir().expect("tempdir should create");
+        let _cache_dir =
+            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
+
+        let mut server = mockito::Server::new_async().await;
+        let remote_url = format!("{}/catalog.json", server.url());
+        let fallback_url = format!("{}/fallback.json", server.url());
+        let _remote = EnvVarGuard::set(GITLAB_MODEL_CATALOG_URL_ENV, remote_url.as_str());
+        let _fallback =
+            EnvVarGuard::set(GITLAB_MODEL_CATALOG_FALLBACK_URL_ENV, fallback_url.as_str());
+
+        {
+            let _mock = server
+                .mock("GET", "/catalog.json")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "providers": {
+                            "gitlab": {
+                                "models": {
+                                    "gitlab/duo-chat-sonnet-4-5": {
+                                        "display_name": "GitLab Duo Chat Sonnet 4.5",
+                                        "family": "claude",
+                                        "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
+                                    },
+                                    "gitlab/duo-chat-gpt-5-codex": {
+                                        "display_name": "GitLab Duo Chat GPT-5 Codex",
+                                        "family": "gpt",
+                                        "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
+                                    }
+                                }
+                            }
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let provider = GitlabProvider::from_token(
+                reqwest::Client::new(),
+                "gl-token",
+                Some("https://gitlab.example.com".to_owned()),
+            )
+            .expect("gitlab provider should be created from token");
+
+            let models = provider
+                .list_models()
+                .await
+                .expect("initial list_models should succeed");
+            assert!(
+                models
+                    .iter()
+                    .any(|model| model.id.as_str() == "duo-chat-sonnet-4-5")
+            );
+            assert!(
+                models
+                    .iter()
+                    .any(|model| model.id.as_str() == "duo-chat-gpt-5-codex")
+            );
+        }
+
+        let provider = GitlabProvider::from_token(
+            reqwest::Client::new(),
+            "gl-token",
+            Some("https://gitlab.example.com".to_owned()),
+        )
+        .expect("gitlab provider should be created from token");
+
+        let models = provider
+            .list_models()
+            .await
+            .expect("cached list_models should succeed");
+        assert!(
+            models
+                .iter()
+                .any(|model| model.id.as_str() == "duo-chat-sonnet-4-5")
+        );
+        assert!(
+            models
+                .iter()
+                .any(|model| model.id.as_str() == "duo-chat-gpt-5-codex")
+        );
+    }
 
     #[tokio::test]
     async fn complete_stream_uses_direct_access_and_openai_proxy() {

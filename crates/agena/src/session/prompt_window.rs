@@ -98,6 +98,7 @@ pub(crate) struct PromptRequestOptions<'a> {
     pub provider_id: &'a str,
     pub model_id: &'a str,
     pub system: Option<&'a str>,
+    pub goal_context: Option<&'a str>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub tools: &'a [EntryDefinition],
@@ -389,6 +390,25 @@ pub(crate) fn normalize_prompt_messages(messages: &[Message]) -> Vec<Message> {
     normalized
 }
 
+fn goal_context_message(goal_context: &str) -> Option<Message> {
+    let goal_context = goal_context.trim();
+    if goal_context.is_empty() {
+        return None;
+    }
+    Some(Message::prompt_text(
+        Role::User,
+        format!("<goal_context>\n{goal_context}\n</goal_context>"),
+    ))
+}
+
+fn prompt_messages_for_request(messages: &[Message], goal_context: Option<&str>) -> Vec<Message> {
+    let mut prompt_messages = normalize_prompt_messages(messages);
+    if let Some(goal_message) = goal_context.and_then(goal_context_message) {
+        prompt_messages.push(goal_message);
+    }
+    prompt_messages
+}
+
 fn append_normalized_prompt_tool_messages(
     normalized: &mut Vec<Message>,
     message: &Message,
@@ -491,6 +511,7 @@ pub(crate) fn prompt_request_fingerprints(
         request_options_fingerprint: fingerprint_request_options(
             options.provider_id,
             options.model_id,
+            options.goal_context,
             options.temperature,
             options.max_output_tokens,
             options.tools,
@@ -504,6 +525,7 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
     messages: &[Message],
     system_fingerprint: &str,
     request_options_fingerprint: &str,
+    goal_context: Option<&str>,
 ) -> Option<PromptTokenEstimate> {
     let runtime = &session.runtime.prompt_tokens;
     if !runtime.matches_request(
@@ -516,7 +538,7 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
 
     let last_successful_total_tokens = runtime.total_tokens()?;
     let assistant_message_id = runtime.last_successful_assistant_message_id?;
-    let prompt_messages = normalize_prompt_messages(messages);
+    let prompt_messages = prompt_messages_for_request(messages, goal_context);
     let anchor_index = prompt_messages
         .iter()
         .position(|message| message.id == assistant_message_id)?;
@@ -770,7 +792,7 @@ pub(crate) fn build_prepared_prompt(
     options: PromptRequestOptions<'_>,
 ) -> PreparedPrompt {
     let active_messages = active_prompt_messages(session);
-    let prompt_messages = normalize_prompt_messages(active_messages.as_slice());
+    let prompt_messages = prompt_messages_for_request(active_messages.as_slice(), options.goal_context);
     let provider_request_shape = options.provider_request_shape.cloned();
     let PromptRequestFingerprint {
         system_fingerprint,
@@ -1441,6 +1463,7 @@ struct SummarySections {
 fn fingerprint_request_options(
     provider_id: &str,
     model_id: &str,
+    goal_context: Option<&str>,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
     tools: &[EntryDefinition],
@@ -1451,6 +1474,7 @@ fn fingerprint_request_options(
         prompt_request_shape_version: u32,
         provider_id: &'a str,
         model_id: &'a str,
+        goal_context_fingerprint: Option<String>,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
         tools: &'a [EntryDefinition],
@@ -1459,11 +1483,13 @@ fn fingerprint_request_options(
 
     let provider_request_shape_fingerprint =
         provider_request_shape.map(PromptCacheShape::fingerprint);
+    let goal_context_fingerprint = goal_context.map(|value| fingerprint_optional_text(Some(value)));
 
     fingerprint_value(&RequestOptionsFingerprint {
         prompt_request_shape_version: PROMPT_REQUEST_SHAPE_VERSION,
         provider_id,
         model_id,
+        goal_context_fingerprint,
         temperature,
         max_output_tokens,
         tools,
@@ -1547,6 +1573,7 @@ mod tests {
                     request_options_fingerprint: fingerprint_request_options(
                         "openai",
                         "gpt-5",
+                        None,
                         Some(0.2),
                         Some(256),
                         &[],
@@ -1560,6 +1587,7 @@ mod tests {
             .collect(),
             loaded_deferred_tools: Vec::new(),
             execution: Default::default(),
+            goal: Default::default(),
             plan: None,
         };
 
@@ -1569,6 +1597,7 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: Some("system"),
+                goal_context: None,
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],
@@ -1611,7 +1640,7 @@ mod tests {
             2,
             Some(4_096),
             fingerprint_optional_text(Some("system")),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None),
+            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None),
             transcript_digest,
         );
 
@@ -1620,8 +1649,9 @@ mod tests {
             &session,
             active_messages.as_slice(),
             fingerprint_optional_text(Some("system")).as_str(),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None)
+            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None)
                 .as_str(),
+            None,
         )
         .expect("runtime prompt token estimate should be available");
 
@@ -1656,7 +1686,7 @@ mod tests {
             2,
             Some(4_096),
             fingerprint_optional_text(Some("system")),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None),
+            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None),
             transcript_digest,
         );
 
@@ -1665,8 +1695,9 @@ mod tests {
             &session,
             active_messages.as_slice(),
             fingerprint_optional_text(Some("different system")).as_str(),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None)
+            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None)
                 .as_str(),
+            None,
         );
 
         assert!(estimate.is_none());
@@ -1697,6 +1728,7 @@ mod tests {
                     request_options_fingerprint: fingerprint_request_options(
                         "openai",
                         "gpt-5",
+                        None,
                         Some(0.2),
                         Some(256),
                         &[],
@@ -1713,6 +1745,7 @@ mod tests {
             .collect(),
             loaded_deferred_tools: Vec::new(),
             execution: Default::default(),
+            goal: Default::default(),
             plan: None,
         };
 
@@ -1722,6 +1755,7 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: Some("system"),
+                goal_context: None,
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],
@@ -1762,7 +1796,7 @@ mod tests {
             2,
             Some(4_096),
             fingerprint_optional_text(Some("system")),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None),
+            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None),
             prompt_transcript_digest(&[Message::prompt_text(Role::Assistant, "different")]),
         );
 
@@ -1771,8 +1805,9 @@ mod tests {
             &session,
             active_messages.as_slice(),
             fingerprint_optional_text(Some("system")).as_str(),
-            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None)
+            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None)
                 .as_str(),
+            None,
         );
 
         assert!(estimate.is_none());
@@ -2367,6 +2402,7 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: None,
+                goal_context: None,
                 temperature: None,
                 max_output_tokens: None,
                 tools: &[],
@@ -2380,6 +2416,7 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: None,
+                goal_context: None,
                 temperature: None,
                 max_output_tokens: None,
                 tools: &[tool],
@@ -2395,17 +2432,70 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_request_options_changes_when_goal_context_changes() {
+        let baseline = fingerprint_request_options(
+            "openai",
+            "gpt-5",
+            Some("continue working"),
+            None,
+            None,
+            &[],
+            None,
+        );
+        let changed = fingerprint_request_options(
+            "openai",
+            "gpt-5",
+            Some("wrap up and stop"),
+            None,
+            None,
+            &[],
+            None,
+        );
+
+        assert_ne!(baseline, changed);
+    }
+
+    #[test]
     fn fingerprint_request_options_changes_when_provider_shape_changes() {
         let baseline_shape =
             PromptCacheShape::new("openai").with_string("base_url", "https://api.openai.com/v1");
         let changed_shape =
             PromptCacheShape::new("openai").with_string("base_url", "https://proxy.example/v1");
         let baseline =
-            fingerprint_request_options("openai", "gpt-5", None, None, &[], Some(&baseline_shape));
+            fingerprint_request_options("openai", "gpt-5", None, None, None, &[], Some(&baseline_shape));
         let changed =
-            fingerprint_request_options("openai", "gpt-5", None, None, &[], Some(&changed_shape));
+            fingerprint_request_options("openai", "gpt-5", None, None, None, &[], Some(&changed_shape));
 
         assert_ne!(baseline, changed);
+    }
+
+    #[test]
+    fn build_prepared_prompt_appends_hidden_goal_context_message() {
+        let session = Session::new(1, 1, "goal", Utc::now())
+            .with_messages(vec![Message::prompt_text(Role::User, "hello")]);
+
+        let prepared = build_prepared_prompt(
+            &session,
+            PromptRequestOptions {
+                provider_id: "openai",
+                model_id: "gpt-5",
+                system: Some("system"),
+                goal_context: Some("continue working toward the objective"),
+                temperature: Some(0.2),
+                max_output_tokens: Some(256),
+                tools: &[],
+                provider_request_shape: None,
+                continuation_supported: false,
+            },
+        );
+
+        assert_eq!(prepared.messages.len(), 2);
+        let goal_message = prepared.messages.last().expect("goal message");
+        assert_eq!(goal_message.role, Role::User);
+        assert!(
+            goal_message.as_text_lossy().contains("<goal_context>"),
+            "expected hidden goal context wrapper in synthesized prompt message"
+        );
     }
 
     #[test]
@@ -2440,6 +2530,7 @@ mod tests {
                     request_options_fingerprint: fingerprint_request_options(
                         "openai",
                         "gpt-5",
+                        None,
                         Some(0.2),
                         Some(256),
                         &[],
@@ -2453,6 +2544,7 @@ mod tests {
             .collect(),
             loaded_deferred_tools: Vec::new(),
             execution: Default::default(),
+            goal: Default::default(),
             plan: None,
         };
 
@@ -2462,6 +2554,7 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: Some("system"),
+                goal_context: None,
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],
@@ -2496,6 +2589,7 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: Some("system"),
+                goal_context: None,
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],

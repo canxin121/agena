@@ -311,6 +311,20 @@ pub struct WorkflowPromptToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct GetGoalToolInput {}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateGoalStatus {
+    Complete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct UpdateGoalToolInput {
+    pub status: UpdateGoalStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 pub struct EnterWorktreeToolInput {
     /// Optional name; when absent a slug is generated from the timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]

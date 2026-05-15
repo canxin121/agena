@@ -45,8 +45,8 @@ use super::history::{
     TurnAborted, TurnCompleted, TurnId as HistoryTurnId, TurnStarted, UserMessageAppended,
 };
 use super::model::{
-    GoalStatus, MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionGoal, SessionListRequest,
-    SessionPendingTool, SessionStatus, SessionSummary,
+    GoalSteeringKind, GoalStatus, MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionGoal,
+    SessionListRequest, SessionPendingTool, SessionStatus, SessionSummary,
 };
 use super::cost::SessionCostSummary;
 use super::processor::SessionRunRequest;
@@ -221,6 +221,20 @@ pub struct SessionGoalCreateRequest {
     pub session_id: i64,
     pub objective: String,
     pub token_budget: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GoalTurnDirectiveKind {
+    ObjectiveUpdated,
+    Continuation,
+    BudgetLimit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GoalTurnDirective {
+    goal_id: i64,
+    kind: GoalTurnDirectiveKind,
+    prompt: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -749,6 +763,21 @@ impl SessionManager {
                 request.session_id
             ))
         })?;
+        let mut updated = updated;
+        updated.runtime.goal.clear();
+        updated
+            .runtime
+            .goal
+            .set_pending_steering(goal.id, GoalSteeringKind::ObjectiveUpdated);
+        self.persist_session_changes(updated, Vec::new(), Vec::new(), None, state.clone())
+            .await?;
+        let updated = self.get_session(request.session_id).await?;
+        let goal = updated.goal.clone().ok_or_else(|| {
+            AppError::Internal(format!(
+                "goal missing after runtime update for session {}",
+                request.session_id
+            ))
+        })?;
         self.publish_goal_event(&goal, request.session_id).await?;
         Ok(goal)
     }
@@ -769,9 +798,19 @@ impl SessionManager {
             .complete_goal(session_id, state.cache_policy())
             .await?
             .ok_or_else(|| AppError::Internal(format!("session {session_id} has no goal")))?;
-        let goal = updated.goal.clone().ok_or_else(|| {
+        updated.goal.as_ref().ok_or_else(|| {
             AppError::Internal(format!(
                 "goal missing after completion for session {session_id}"
+            ))
+        })?;
+        let mut updated = updated;
+        updated.runtime.goal.clear();
+        self.persist_session_changes(updated, Vec::new(), Vec::new(), None, state.clone())
+            .await?;
+        let updated = self.get_session(session_id).await?;
+        let goal = updated.goal.clone().ok_or_else(|| {
+            AppError::Internal(format!(
+                "goal missing after runtime completion cleanup for session {session_id}"
             ))
         })?;
         self.publish_goal_event(&goal, session_id).await?;
@@ -786,6 +825,13 @@ impl SessionManager {
         }
         let cleared = self.store.clear_goal(session_id, state.cache_policy()).await?;
         if cleared {
+            let mut updated = self.get_session(session_id).await?;
+            if !updated.runtime.goal.is_empty() {
+                updated.runtime.goal.clear();
+                let _ = self
+                    .persist_session_changes(updated, Vec::new(), Vec::new(), None, state.clone())
+                    .await?;
+            }
             self.publisher
                 .publish(
                     crate::event::PublishContext::for_session(session_id),
@@ -944,7 +990,7 @@ impl SessionManager {
             .append_history_items(session, user_history_items, state.cache_policy())
             .await?;
 
-        self.run_until_stable(session, &request.options, state, control, steer_rx)
+        self.run_until_stable(session, &request.options, false, state, control, steer_rx)
             .await
     }
 
@@ -964,7 +1010,7 @@ impl SessionManager {
             .await?;
         let options = self.apply_execution_context_to_run_options(&session, request.options)?;
         let result = self
-            .run_until_stable(session, &options, state, control.clone(), steer_rx)
+            .run_until_stable(session, &options, true, state, control.clone(), steer_rx)
             .await;
         self.turn_registry
             .unregister_if_matches(session_id, &control)
@@ -1525,7 +1571,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let (control, steer_rx) = self.turn_registry.register(session_id).await;
         let result = self
-            .run_until_stable(session, options, state, control.clone(), steer_rx)
+            .run_until_stable(session, options, false, state, control.clone(), steer_rx)
             .await;
         self.turn_registry
             .unregister_if_matches(session_id, &control)
@@ -1537,6 +1583,7 @@ impl SessionManager {
         &self,
         mut session: Session,
         options: &SessionRunOptions,
+        allow_goal_continuation: bool,
         state: Arc<SessionManagerState>,
         control: Arc<TurnControl>,
         mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
@@ -1544,9 +1591,8 @@ impl SessionManager {
         let max_turn_loops = options
             .max_turn_loops
             .unwrap_or(state.config.max_turn_loops);
+        let mut continuation_available = allow_goal_continuation;
         for _ in 0..max_turn_loops {
-            // External cancel — surface as the same TurnAborted shape we
-            // use elsewhere so the projection sees a clean boundary.
             if control.cancel.is_cancelled() {
                 self.persist_run_failed_event(
                     session.id,
@@ -1557,10 +1603,6 @@ impl SessionManager {
                 return Ok(session);
             }
 
-            // Drain any steer messages that arrived since the last
-            // iteration. Each becomes a User message appended to the
-            // transcript before the next model turn — so the model sees
-            // the new input on its next step.
             session = self
                 .drain_steer_input(session, &mut steer_rx, options, state.clone())
                 .await?;
@@ -1570,12 +1612,10 @@ impl SessionManager {
                 return Ok(session);
             }
 
-            if session
-                .goal
-                .as_ref()
-                .is_some_and(|goal| goal.status == GoalStatus::BudgetLimited)
-            {
-                return Ok(session);
+            if self.reconcile_goal_runtime(&mut session) {
+                session = self
+                    .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                    .await?;
             }
 
             if let Some(hit) =
@@ -1601,73 +1641,82 @@ impl SessionManager {
                 continue;
             }
 
+            let goal_turn_directive =
+                self.goal_turn_directive(&session, continuation_available);
             match session.status() {
                 SessionStatus::Idle => {
-                    // Plugin hook: agent.stop. Plugins can inspect the final
-                    // assistant message and optionally inject a follow-up turn.
-                    let last_assistant_text = session
-                        .messages
-                        .iter()
-                        .rev()
-                        .find(|m| m.role == crate::role::Role::Assistant)
-                        .map(|m| m.as_text_lossy());
-                    let stop_input = crate::plugin::AgentStopInput {
-                        session_id: session.id,
-                        stop_hook_active: false,
-                        last_assistant_message: last_assistant_text,
-                    };
-                    match state
-                        .tool_executor
-                        .plugin_manager()
-                        .dispatch_agent_stop(stop_input)
-                        .await
-                    {
-                        Ok(patch) if patch.continue_with_message.is_some() => {
-                            // Inject the follow-up message and loop again.
-                            let follow_up = patch.continue_with_message.unwrap_or_default();
-                            let ids = self.store.reserve_message_ids(1).await?;
-                            let user_message = build_message(
-                                ids,
-                                Role::User,
-                                MessageStatus::Completed,
-                                vec![PartContent::text(follow_up)],
-                                MessageMetadata {
-                                    source: MessageSource::System,
-                                    parent_message_id: session
-                                        .last_conversation_message()
-                                        .map(|m| m.id),
-                                    generated_by_call_id: None,
-                                    model_provider_id: options.model.provider_id.to_string(),
-                                    model_id: options.model.model_id.to_string(),
-                                    model_variant: options.variant.clone(),
-                                    provider_metadata: None,
-                                    tags: Vec::new(),
-                                },
-                            );
-                            session.messages.push(user_message.clone());
-                            session = self
-                                .persist_session_changes(
-                                    session,
-                                    vec![user_message],
-                                    Vec::new(),
-                                    None,
-                                    state.clone(),
-                                )
-                                .await?;
-                            // Don't return — let the loop continue so the model
-                            // handles the injected message.
-                        }
-                        Ok(_) => return Ok(session),
-                        Err(err) => {
-                            tracing::warn!(
-                                target: "agena_plugin_host::agent_stop",
-                                "agent.stop hook failed (stopping normally): {err}"
-                            );
-                            return Ok(session);
+                    if goal_turn_directive.is_none() {
+                        let last_assistant_text = session
+                            .messages
+                            .iter()
+                            .rev()
+                            .find(|m| m.role == crate::role::Role::Assistant)
+                            .map(|m| m.as_text_lossy());
+                        let stop_input = crate::plugin::AgentStopInput {
+                            session_id: session.id,
+                            stop_hook_active: false,
+                            last_assistant_message: last_assistant_text,
+                        };
+                        match state
+                            .tool_executor
+                            .plugin_manager()
+                            .dispatch_agent_stop(stop_input)
+                            .await
+                        {
+                            Ok(patch) if patch.continue_with_message.is_some() => {
+                                let follow_up = patch.continue_with_message.unwrap_or_default();
+                                let ids = self.store.reserve_message_ids(1).await?;
+                                let user_message = build_message(
+                                    ids,
+                                    Role::User,
+                                    MessageStatus::Completed,
+                                    vec![PartContent::text(follow_up)],
+                                    MessageMetadata {
+                                        source: MessageSource::System,
+                                        parent_message_id: session
+                                            .last_conversation_message()
+                                            .map(|m| m.id),
+                                        generated_by_call_id: None,
+                                        model_provider_id: options.model.provider_id.to_string(),
+                                        model_id: options.model.model_id.to_string(),
+                                        model_variant: options.variant.clone(),
+                                        provider_metadata: None,
+                                        tags: Vec::new(),
+                                    },
+                                );
+                                session.messages.push(user_message.clone());
+                                session = self
+                                    .persist_session_changes(
+                                        session,
+                                        vec![user_message],
+                                        Vec::new(),
+                                        None,
+                                        state.clone(),
+                                    )
+                                    .await?;
+                                continue;
+                            }
+                            Ok(_) => return Ok(session),
+                            Err(err) => {
+                                tracing::warn!(
+                                    target: "agena_plugin_host::agent_stop",
+                                    "agent.stop hook failed (stopping normally): {err}"
+                                );
+                                return Ok(session);
+                            }
                         }
                     }
                 }
-                SessionStatus::AwaitingModel => {}
+                SessionStatus::AwaitingModel => {
+                    if session
+                        .goal
+                        .as_ref()
+                        .is_some_and(|goal| goal.status == GoalStatus::BudgetLimited)
+                        && goal_turn_directive.is_none()
+                    {
+                        return Ok(session);
+                    }
+                }
             }
 
             let session_id = session.id;
@@ -1685,10 +1734,35 @@ impl SessionManager {
                 .await;
 
             match self
-                .run_model_turn(session, options, state.clone(), control.clone())
+                .run_model_turn(
+                    session,
+                    options,
+                    goal_turn_directive.as_ref().map(|directive| directive.prompt.as_str()),
+                    state.clone(),
+                    control.clone(),
+                )
                 .await
             {
-                Ok(next_session) => {
+                Ok(mut next_session) => {
+                    if goal_turn_directive
+                        .as_ref()
+                        .is_some_and(|directive| directive.kind == GoalTurnDirectiveKind::Continuation)
+                    {
+                        continuation_available = false;
+                    }
+                    if let Some(directive) = goal_turn_directive.as_ref()
+                        && self.apply_goal_turn_directive(&mut next_session, directive)
+                    {
+                        next_session = self
+                            .persist_session_changes(
+                                next_session,
+                                Vec::new(),
+                                Vec::new(),
+                                None,
+                                state.clone(),
+                            )
+                            .await?;
+                    }
                     session = next_session;
                     let post_turn_input = crate::plugin::PostTurnInput {
                         session_id: session.id,
@@ -1728,6 +1802,7 @@ impl SessionManager {
         &self,
         mut session: Session,
         options: &SessionRunOptions,
+        goal_context: Option<&str>,
         state: Arc<SessionManagerState>,
         control: Arc<TurnControl>,
     ) -> Result<Session, AppError> {
@@ -1758,6 +1833,7 @@ impl SessionManager {
                 provider_id: options.model.provider_id.as_str(),
                 model_id: options.model.model_id.as_str(),
                 system: options.system.as_deref(),
+                goal_context,
                 temperature: options.temperature,
                 max_output_tokens: options.max_output_tokens,
                 tools: tools.as_slice(),
@@ -1771,6 +1847,7 @@ impl SessionManager {
                 active_messages.as_slice(),
                 prompt_fingerprints.system_fingerprint.as_str(),
                 prompt_fingerprints.request_options_fingerprint.as_str(),
+                goal_context,
             )
             .is_some_and(|estimate| estimate.total_tokens > prompt_budget.max_prompt_tokens);
             if let Some(plan) =
@@ -1839,6 +1916,7 @@ impl SessionManager {
                 provider_request_shape_change_keys = ?provider_shape_change_keys,
                 prompt_message_count = prepared.messages.len(),
                 system_included = prepared.system.is_some(),
+                goal_context_present = goal_context.is_some(),
                 "prepared prompt for session turn"
             );
 
@@ -1883,10 +1961,6 @@ impl SessionManager {
                 )
                 .await?;
 
-            // Sub-task B: pre-allocate the turn id and emit a TurnStarted
-            // boundary event before invoking the processor. The processor
-            // currently mints its own TurnId internally; we use the one from
-            // its result to wrap the matching TurnCompleted/TurnAborted.
             let turn_started_at = Instant::now();
             let processor_fut = state.processor.run_turn(run).instrument(turn_span.clone());
             let turn_outcome = tokio::select! {
@@ -1936,6 +2010,7 @@ impl SessionManager {
                         provider_id: options.model.provider_id.as_str(),
                         model_id: options.model.model_id.as_str(),
                         system: options.system.as_deref(),
+                        goal_context,
                         temperature: options.temperature,
                         max_output_tokens: options.max_output_tokens,
                         tools: request_tools.as_slice(),
@@ -1990,9 +2065,6 @@ impl SessionManager {
                         )
                         .await?;
 
-                    // Sub-task B cutover: thread the processor's append-only
-                    // history events through the store, wrapped with turn
-                    // boundary markers so SessionViewBuilder can group them.
                     let mut turn_events: Vec<EventKind> = Vec::new();
                     turn_events.push(EventKind::TurnStarted(TurnStarted {
                         turn_id,
@@ -3255,6 +3327,175 @@ impl SessionManager {
                 state.cache_policy(),
             )
             .await
+    }
+
+    fn reconcile_goal_runtime(&self, session: &mut Session) -> bool {
+        let Some(goal) = session.goal.as_ref() else {
+            if session.runtime.goal.is_empty() {
+                return false;
+            }
+            session.runtime.goal.clear();
+            return true;
+        };
+
+        if goal.status == GoalStatus::Completed {
+            if session.runtime.goal.is_empty() {
+                return false;
+            }
+            session.runtime.goal.clear();
+            return true;
+        }
+
+        let mut changed = false;
+        if session
+            .runtime
+            .goal
+            .pending_steering()
+            .is_some_and(|pending| pending.goal_id != goal.id)
+        {
+            session.runtime.goal.clear_pending_steering();
+            changed = true;
+        }
+
+        match goal.status {
+            GoalStatus::Active => {
+                if session
+                    .runtime
+                    .goal
+                    .pending_steering()
+                    .is_some_and(|pending| pending.kind == GoalSteeringKind::BudgetLimit)
+                {
+                    session.runtime.goal.clear_pending_steering();
+                    changed = true;
+                }
+                if session.runtime.goal.budget_limit_reported_goal_id.is_some() {
+                    session.runtime.goal.budget_limit_reported_goal_id = None;
+                    changed = true;
+                }
+            }
+            GoalStatus::BudgetLimited => {
+                if !session.runtime.goal.budget_limit_reported(goal.id)
+                    && !session
+                        .runtime
+                        .goal
+                        .pending_steering()
+                        .is_some_and(|pending| pending.kind == GoalSteeringKind::BudgetLimit)
+                {
+                    session
+                        .runtime
+                        .goal
+                        .set_pending_steering(goal.id, GoalSteeringKind::BudgetLimit);
+                    changed = true;
+                }
+            }
+            GoalStatus::Completed => {}
+        }
+
+        changed
+    }
+
+    fn goal_turn_directive(
+        &self,
+        session: &Session,
+        allow_continuation: bool,
+    ) -> Option<GoalTurnDirective> {
+        let goal = session.goal.as_ref()?;
+        match goal.status {
+            GoalStatus::Completed => None,
+            GoalStatus::BudgetLimited => {
+                let pending = session.runtime.goal.pending_steering()?;
+                if pending.goal_id != goal.id || pending.kind != GoalSteeringKind::BudgetLimit {
+                    return None;
+                }
+                Some(GoalTurnDirective {
+                    goal_id: goal.id,
+                    kind: GoalTurnDirectiveKind::BudgetLimit,
+                    prompt: self.render_goal_context(goal, GoalTurnDirectiveKind::BudgetLimit),
+                })
+            }
+            GoalStatus::Active => {
+                if let Some(pending) = session.runtime.goal.pending_steering()
+                    && pending.goal_id == goal.id
+                    && pending.kind == GoalSteeringKind::ObjectiveUpdated
+                {
+                    return Some(GoalTurnDirective {
+                        goal_id: goal.id,
+                        kind: GoalTurnDirectiveKind::ObjectiveUpdated,
+                        prompt: self
+                            .render_goal_context(goal, GoalTurnDirectiveKind::ObjectiveUpdated),
+                    });
+                }
+                if allow_continuation && session.status() == SessionStatus::Idle {
+                    return Some(GoalTurnDirective {
+                        goal_id: goal.id,
+                        kind: GoalTurnDirectiveKind::Continuation,
+                        prompt: self.render_goal_context(goal, GoalTurnDirectiveKind::Continuation),
+                    });
+                }
+                None
+            }
+        }
+    }
+
+    fn apply_goal_turn_directive(&self, session: &mut Session, directive: &GoalTurnDirective) -> bool {
+        match directive.kind {
+            GoalTurnDirectiveKind::Continuation => false,
+            GoalTurnDirectiveKind::ObjectiveUpdated => {
+                if session
+                    .runtime
+                    .goal
+                    .pending_steering()
+                    .is_some_and(|pending| {
+                        pending.goal_id == directive.goal_id
+                            && pending.kind == GoalSteeringKind::ObjectiveUpdated
+                    })
+                {
+                    session.runtime.goal.clear_pending_steering();
+                    return true;
+                }
+                false
+            }
+            GoalTurnDirectiveKind::BudgetLimit => {
+                let already_reported = session.runtime.goal.budget_limit_reported(directive.goal_id);
+                let had_pending = session.runtime.goal.pending_steering().is_some_and(|pending| {
+                    pending.goal_id == directive.goal_id
+                        && pending.kind == GoalSteeringKind::BudgetLimit
+                });
+                if had_pending {
+                    session.runtime.goal.clear_pending_steering();
+                }
+                if !already_reported {
+                    session
+                        .runtime
+                        .goal
+                        .mark_budget_limit_reported(directive.goal_id);
+                }
+                had_pending || !already_reported
+            }
+        }
+    }
+
+    fn render_goal_context(
+        &self,
+        goal: &SessionGoal,
+        kind: GoalTurnDirectiveKind,
+    ) -> String {
+        let objective = goal.objective.trim();
+        let budget_line = goal
+            .token_budget
+            .map(|budget| format!("Token budget: {}/{}", goal.tokens_used, budget))
+            .unwrap_or_else(|| format!("Tokens used: {}", goal.tokens_used));
+        match kind {
+            GoalTurnDirectiveKind::ObjectiveUpdated => format!(
+                "An active runtime goal has been set or updated.\nObjective:\n{objective}\n\n{budget_line}\nContinue making concrete progress toward this goal without waiting for additional user input. Use tools when needed, keep the work grounded in the current workspace, and call `update_goal` with `status = complete` once the objective is actually finished."
+            ),
+            GoalTurnDirectiveKind::Continuation => format!(
+                "Continue working toward the active runtime goal.\nObjective:\n{objective}\n\n{budget_line}\nDo not wait for the user just because the last turn ended. Make the next concrete move toward finishing the objective, explain the blocker if you are truly blocked, and call `update_goal` with `status = complete` once the objective is actually done."
+            ),
+            GoalTurnDirectiveKind::BudgetLimit => format!(
+                "The active runtime goal has reached its token budget.\nObjective:\n{objective}\n\n{budget_line}\nStop autonomous work after this turn. Briefly summarize current progress, what remains, and that the goal hit its budget limit."
+            ),
+        }
     }
 
     async fn publish_goal_event(&self, goal: &SessionGoal, session_id: i64) -> Result<(), AppError> {
@@ -8043,7 +8284,7 @@ mod tests {
             .expect("submit turn");
 
         let goal = completed.goal.expect("goal should still exist");
-        assert_eq!(goal.tokens_used, 13);
+        assert_eq!(goal.tokens_used, 26);
         assert_eq!(goal.time_used_seconds, 0);
         assert_eq!(goal.status, GoalStatus::BudgetLimited);
 
@@ -8051,7 +8292,10 @@ mod tests {
             .lock()
             .expect("recording requests lock should succeed")
             .len();
-        assert_eq!(request_count_after_first_turn, 1);
+        assert_eq!(
+            request_count_after_first_turn, 2,
+            "budget-limited goals should receive one hidden wrap-up turn in the same run"
+        );
 
         let resumed = service
             .continue_session(SessionContinueRequest {
@@ -8062,14 +8306,14 @@ mod tests {
             .expect("continue session");
         let resumed_goal = resumed.goal.expect("goal should remain present");
         assert_eq!(resumed_goal.status, GoalStatus::BudgetLimited);
-        assert_eq!(resumed_goal.tokens_used, 13);
+        assert_eq!(resumed_goal.tokens_used, 26);
         assert_eq!(
             requests
                 .lock()
                 .expect("recording requests lock should succeed")
                 .len(),
-            1,
-            "budget-limited goal should stop additional model turns"
+            2,
+            "once the hidden wrap-up turn has been used, later continue calls should stop"
         );
 
         let completed_goal = service
@@ -8077,7 +8321,7 @@ mod tests {
             .await
             .expect("budget-limited goal should still be completable");
         assert_eq!(completed_goal.status, GoalStatus::Completed);
-        assert_eq!(completed_goal.tokens_used, 13);
+        assert_eq!(completed_goal.tokens_used, 26);
         assert_eq!(completed_goal.time_used_seconds, 0);
         assert!(completed_goal.completed_at.is_some());
     }
@@ -8145,6 +8389,192 @@ mod tests {
             .expect("goal should persist");
         assert_eq!(persisted.tokens_used, 5);
         assert_eq!(persisted.time_used_seconds, goal.time_used_seconds);
+    }
+
+    #[tokio::test]
+    async fn create_goal_persists_objective_updated_runtime_state() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "goal-runtime-state".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let goal = service
+            .create_goal(SessionGoalCreateRequest {
+                session_id: created.id,
+                objective: "ship the feature".to_string(),
+                token_budget: Some(42),
+            })
+            .await
+            .expect("create goal");
+
+        let session = service
+            .get_session(created.id)
+            .await
+            .expect("load session after goal create");
+        let pending = session
+            .runtime
+            .goal
+            .pending_steering()
+            .expect("goal runtime should queue objective-updated steering");
+        assert_eq!(pending.goal_id, goal.id);
+        assert_eq!(pending.kind, GoalSteeringKind::ObjectiveUpdated);
+    }
+
+    #[tokio::test]
+    async fn goal_turn_directive_only_allows_hidden_continuation_when_enabled() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "goal-continuation-gate".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        service
+            .create_goal(SessionGoalCreateRequest {
+                session_id: created.id,
+                objective: "keep going".to_string(),
+                token_budget: None,
+            })
+            .await
+            .expect("create goal");
+
+        let mut session = service
+            .get_session(created.id)
+            .await
+            .expect("load session after goal create");
+        session.runtime.goal.clear_pending_steering();
+
+        assert!(
+            service.goal_turn_directive(&session, false).is_none(),
+            "ordinary user turns should not auto-continue indefinitely"
+        );
+        let continuation = service
+            .goal_turn_directive(&session, true)
+            .expect("continue_session should unlock one hidden continuation");
+        assert_eq!(continuation.kind, GoalTurnDirectiveKind::Continuation);
+        assert!(continuation.prompt.contains("Continue working toward the active runtime goal."));
+    }
+
+    #[tokio::test]
+    async fn run_model_turn_injects_hidden_goal_context_into_provider_request() {
+        let workspace = TempWorkspace::new();
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let service = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "goal-hidden-context".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        service
+            .create_goal(SessionGoalCreateRequest {
+                session_id: created.id,
+                objective: "finish the migration".to_string(),
+                token_budget: None,
+            })
+            .await
+            .expect("create goal");
+
+        let options = recording_run_options();
+        let state = service.execution_state();
+        let mut session = service
+            .get_session(created.id)
+            .await
+            .expect("load session before manual model turn");
+        let ids = service
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve ids");
+        let user_message = build_message(
+            ids,
+            Role::User,
+            MessageStatus::Completed,
+            vec![PartContent::text("start working")],
+            MessageMetadata {
+                source: MessageSource::User,
+                parent_message_id: None,
+                generated_by_call_id: None,
+                model_provider_id: options.model.provider_id.to_string(),
+                model_id: options.model.model_id.to_string(),
+                model_variant: options.variant.clone(),
+                provider_metadata: None,
+                tags: Vec::new(),
+            },
+        );
+        session.messages.push(user_message.clone());
+        session = service
+            .persist_session_changes(session, vec![user_message], Vec::new(), None, state.clone())
+            .await
+            .expect("persist manual user message");
+
+        let directive = service
+            .goal_turn_directive(&session, false)
+            .expect("objective-updated directive should be queued");
+        assert_eq!(directive.kind, GoalTurnDirectiveKind::ObjectiveUpdated);
+        let (control, _steer_rx) = service.turn_registry.register(created.id).await;
+        let completed = service
+            .run_model_turn(
+                session,
+                &options,
+                Some(directive.prompt.as_str()),
+                state,
+                control.clone(),
+            )
+            .await
+            .expect("run one model turn");
+        service
+            .turn_registry
+            .unregister_if_matches(created.id, &control)
+            .await;
+
+        let requests = requests
+            .lock()
+            .expect("recording provider request lock should succeed");
+        let request = requests.last().expect("recorded request");
+        let hidden_goal_message = request
+            .messages
+            .iter()
+            .find(|message| message.as_text_lossy().contains("<goal_context>"))
+            .expect("provider request should include synthesized goal context");
+        assert_eq!(hidden_goal_message.role, Role::User);
+        assert!(hidden_goal_message
+            .as_text_lossy()
+            .contains("finish the migration"));
+        assert!(
+            !completed
+                .messages
+                .iter()
+                .any(|message| message.as_text_lossy().contains("<goal_context>")),
+            "hidden goal context must not be persisted into session history"
+        );
     }
 
     /// Cancel a turn while the provider stream is still pending. The

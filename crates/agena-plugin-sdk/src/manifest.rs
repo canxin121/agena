@@ -144,6 +144,7 @@ pub enum HostCapability {
     AskUser,
     SpawnSubtask,
     ListTools,
+    GoalRegistry,
     MonitorRegistry,
     ReadConfig,
     InvokeTool,

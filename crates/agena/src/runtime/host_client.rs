@@ -19,22 +19,23 @@ use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentListResponse,
     HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostCallbackContext,
     HostClient, HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostLspDiagnostic, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest,
-    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse, HostGoal, HostGoalStatus,
+    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest,
+    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
+    HostMcpServerSpec, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
+    HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse,
+    HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostStorageDeleteRequest,
     HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest,
     HostStorageListResponse, HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus,
-    HostTodoWriteRequest, HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
-    current_host_callback_context,
+    HostTodoWriteRequest, HostUpdateGoalRequest, HostUpdateGoalResponse, HostWorktreeEntry,
+    HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -442,6 +443,22 @@ fn todo_item_from_host(item: HostTodoItem) -> TodoItem {
     }
 }
 
+fn host_goal_from_session_goal(goal: crate::session::SessionGoal) -> HostGoal {
+    HostGoal {
+        id: goal.id,
+        objective: goal.objective,
+        status: match goal.status {
+            crate::session::GoalStatus::Active => HostGoalStatus::Active,
+            crate::session::GoalStatus::BudgetLimited => HostGoalStatus::BudgetLimited,
+            crate::session::GoalStatus::Completed => HostGoalStatus::Completed,
+        },
+        token_budget: goal.token_budget,
+        tokens_used: goal.tokens_used,
+        time_used_seconds: goal.time_used_seconds,
+        completed_at_ms: goal.completed_at.map(|value| value.timestamp_millis()),
+    }
+}
+
 fn workflow_first_party_output(
     executor: &crate::tool::ToolExecutor,
     input: FirstPartyToolInput,
@@ -739,6 +756,43 @@ impl HostClient for RuntimeHostClient {
             context.call_id.filter(|id| *id >= 0),
             session_context.as_ref(),
         )
+    }
+
+    async fn get_goal(&self, _req: HostGetGoalRequest) -> Result<HostGetGoalResponse, PluginError> {
+        let session_id = self.callback_context()?.session_id.ok_or_else(|| {
+            host_unavailable("host callback context is missing session_id for get_goal")
+        })?;
+        let goal = self
+            .session_manager()?
+            .get_goal(session_id)
+            .await
+            .map_err(|err| PluginError::new(err.to_string()))?
+            .map(host_goal_from_session_goal);
+        Ok(HostGetGoalResponse { goal })
+    }
+
+    async fn update_goal(
+        &self,
+        req: HostUpdateGoalRequest,
+    ) -> Result<HostUpdateGoalResponse, PluginError> {
+        let session_id = self.callback_context()?.session_id.ok_or_else(|| {
+            host_unavailable("host callback context is missing session_id for update_goal")
+        })?;
+        let goal = match req.status {
+            HostGoalStatus::Completed => self
+                .session_manager()?
+                .complete_goal(session_id)
+                .await
+                .map_err(|err| PluginError::new(err.to_string()))?,
+            HostGoalStatus::Active | HostGoalStatus::BudgetLimited => {
+                return Err(PluginError::invalid_params(
+                    "update_goal currently only supports status = complete",
+                ));
+            }
+        };
+        Ok(HostUpdateGoalResponse {
+            goal: host_goal_from_session_goal(goal),
+        })
     }
 
     async fn enter_plan_mode(

@@ -272,6 +272,57 @@ pub enum GoalStatus {
     Completed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalSteeringKind {
+    ObjectiveUpdated,
+    BudgetLimit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+pub struct GoalSteeringState {
+    pub goal_id: i64,
+    pub kind: GoalSteeringKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+pub struct GoalRuntimeState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_steering: Option<GoalSteeringState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_limit_reported_goal_id: Option<i64>,
+}
+
+impl GoalRuntimeState {
+    pub fn is_empty(&self) -> bool {
+        self.pending_steering.is_none() && self.budget_limit_reported_goal_id.is_none()
+    }
+
+    pub fn pending_steering(&self) -> Option<&GoalSteeringState> {
+        self.pending_steering.as_ref()
+    }
+
+    pub fn set_pending_steering(&mut self, goal_id: i64, kind: GoalSteeringKind) {
+        self.pending_steering = Some(GoalSteeringState { goal_id, kind });
+    }
+
+    pub fn clear_pending_steering(&mut self) {
+        self.pending_steering = None;
+    }
+
+    pub fn budget_limit_reported(&self, goal_id: i64) -> bool {
+        self.budget_limit_reported_goal_id == Some(goal_id)
+    }
+
+    pub fn mark_budget_limit_reported(&mut self, goal_id: i64) {
+        self.budget_limit_reported_goal_id = Some(goal_id);
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
 pub struct SessionGoal {
     pub id: i64,
@@ -323,6 +374,8 @@ pub struct SessionRuntimeState {
     pub loaded_deferred_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "SessionExecutionContext::is_empty")]
     pub execution: SessionExecutionContext,
+    #[serde(default, skip_serializing_if = "GoalRuntimeState::is_empty")]
+    pub goal: GoalRuntimeState,
     /// When `Some`, the session is in plan mode: writes/mutating tools
     /// are blocked, the LLM is expected to draft its plan into the
     /// referenced file, and `ExitPlanMode` then asks the user to approve

@@ -9,14 +9,16 @@ use async_trait::async_trait;
 use crate::entry::{FirstPartyExecution, ToolExecutionView, ask_user, tool_search};
 use crate::message::{
     AskUserToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
-    ExitWorktreeToolInput, FirstPartyToolOutput, TaskToolInput, TodoItem, TodoPriority, TodoStatus,
-    TodoWriteToolInput, ToolSearchToolInput, WorkflowPromptToolInput,
+    ExitWorktreeToolInput, FirstPartyToolOutput, GetGoalToolInput, TaskToolInput, TodoItem,
+    TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput, UpdateGoalStatus,
+    UpdateGoalToolInput, WorkflowPromptToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
     HostClient, HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
+    HostExitWorktreeRequest, HostGetGoalRequest, HostGoal, HostGoalStatus, HostTodoItem,
+    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
     SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
@@ -137,6 +139,67 @@ impl WorkflowPlugin {
                 TodoPriority::Low => HostTodoPriority::Low,
             },
         }
+    }
+
+    fn goal_payload_text(payload: &serde_json::Value) -> String {
+        serde_json::to_string_pretty(payload).unwrap_or_else(|_| payload.to_string())
+    }
+
+    fn goal_summary(goal: &HostGoal) -> String {
+        let budget = goal
+            .token_budget
+            .map(|value| format!("{}/{}", goal.tokens_used, value))
+            .unwrap_or_else(|| goal.tokens_used.to_string());
+        format!(
+            "Goal {} is {}. Tokens: {}.",
+            goal.id,
+            match goal.status {
+                HostGoalStatus::Active => "active",
+                HostGoalStatus::BudgetLimited => "budget_limited",
+                HostGoalStatus::Completed => "completed",
+            },
+            budget,
+        )
+    }
+
+    async fn invoke_get_goal(&self, _input: &GetGoalToolInput) -> SdkResult<ToolInvokeOutput> {
+        let response = self.host()?.get_goal(HostGetGoalRequest::default()).await?;
+        let payload =
+            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
+        let text = match response.goal.as_ref() {
+            Some(goal) => format!(
+                "{}\n\n{}",
+                Self::goal_summary(goal),
+                Self::goal_payload_text(&payload)
+            ),
+            None => Self::goal_payload_text(&payload),
+        };
+        Ok(ToolInvokeOutput::text(text)
+            .with_title("goal")
+            .with_payload(payload))
+    }
+
+    async fn invoke_update_goal(
+        &self,
+        input: &UpdateGoalToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let response = self
+            .host()?
+            .update_goal(HostUpdateGoalRequest {
+                status: match input.status {
+                    UpdateGoalStatus::Complete => HostGoalStatus::Completed,
+                },
+            })
+            .await?;
+        let payload =
+            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(ToolInvokeOutput::text(format!(
+            "{}\n\n{}",
+            Self::goal_summary(&response.goal),
+            Self::goal_payload_text(&payload)
+        ))
+        .with_title("goal")
+        .with_payload(payload))
     }
 
     async fn invoke_ask_user(&self, input: &AskUserToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -293,6 +356,11 @@ impl Plugin for WorkflowPlugin {
                     })
                     .await
             }
+            "get_goal" => self.invoke_get_goal(&serde_json::from_value(input.input)?).await,
+            "update_goal" => {
+                self.invoke_update_goal(&serde_json::from_value(input.input)?)
+                    .await
+            }
             "ask_user" => {
                 self.invoke_ask_user(&serde_json::from_value(input.input)?)
                     .await
@@ -435,6 +503,24 @@ fn entries() -> Vec<PluginEntryDecl> {
         .search_terms(["plan", "todo", "track progress"])
         .always_load(),
         PluginEntryDecl::new(
+            "get_goal",
+            crate::entry::definition::json_schema_for::<GetGoalToolInput>(),
+        )
+        .description("Read the current runtime goal for this session, including status and budget usage.")
+        .behavior(SdkEntryBehavior::ReadOnly)
+        .search_terms(["goal", "objective", "budget", "status"])
+        .always_load()
+        .host_capability(HostCapability::GoalRegistry),
+        PluginEntryDecl::new(
+            "update_goal",
+            crate::entry::definition::json_schema_for::<UpdateGoalToolInput>(),
+        )
+        .description("Update the current runtime goal. Currently supports `status = complete`.")
+        .behavior(SdkEntryBehavior::Mutating)
+        .search_terms(["goal", "complete goal", "finish objective"])
+        .always_load()
+        .host_capability(HostCapability::GoalRegistry),
+        PluginEntryDecl::new(
             "ask_user",
             crate::entry::definition::json_schema_for::<AskUserToolInput>(),
         )
@@ -512,7 +598,8 @@ mod tests {
     use super::*;
     use crate::plugin::sdk::host_api::{
         EventSubscription, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
-        HostExitPlanModeRequest, HostExitWorktreeRequest, LogLevel,
+        HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
+        HostGoal, HostGoalStatus, HostUpdateGoalRequest, HostUpdateGoalResponse, LogLevel,
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
 
@@ -610,6 +697,38 @@ mod tests {
                     ),
                 ),
             )
+        }
+
+        async fn get_goal(&self, _req: HostGetGoalRequest) -> SdkResult<HostGetGoalResponse> {
+            Ok(HostGetGoalResponse {
+                goal: Some(HostGoal {
+                    id: 7,
+                    objective: "ship it".to_string(),
+                    status: HostGoalStatus::Active,
+                    token_budget: Some(128),
+                    tokens_used: 32,
+                    time_used_seconds: 5,
+                    completed_at_ms: None,
+                }),
+            })
+        }
+
+        async fn update_goal(
+            &self,
+            req: HostUpdateGoalRequest,
+        ) -> SdkResult<HostUpdateGoalResponse> {
+            assert_eq!(req.status, HostGoalStatus::Completed);
+            Ok(HostUpdateGoalResponse {
+                goal: HostGoal {
+                    id: 7,
+                    objective: "ship it".to_string(),
+                    status: HostGoalStatus::Completed,
+                    token_budget: Some(128),
+                    tokens_used: 48,
+                    time_used_seconds: 8,
+                    completed_at_ms: Some(123),
+                },
+            })
         }
 
         async fn enter_plan_mode(
@@ -744,6 +863,47 @@ mod tests {
             }
             other => panic!("unexpected output: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn get_goal_invokes_host_without_executor_context() {
+        let plugin = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_input("get_goal", GetGoalToolInput::default()))
+            .await
+            .expect("get_goal host invoke");
+
+        assert!(output.output_text.contains("Goal 7 is active"));
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload["goal"]["objective"].as_str()),
+            Some("ship it")
+        );
+    }
+
+    #[tokio::test]
+    async fn update_goal_invokes_host_without_executor_context() {
+        let plugin = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_input(
+                "update_goal",
+                UpdateGoalToolInput {
+                    status: UpdateGoalStatus::Complete,
+                },
+            ))
+            .await
+            .expect("update_goal host invoke");
+
+        assert!(output.output_text.contains("Goal 7 is completed"));
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload["goal"]["status"].as_str()),
+            Some("completed")
+        );
     }
 
     #[tokio::test]

@@ -15,9 +15,9 @@ use super::{
     ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
     ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderGoogleAdcAuthConfig,
     ProviderSapAiCoreAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig,
-    ResolvedProviderModelConfig, RuntimeConfig, StreamTransportMode, TelemetryConfig,
-    TracingConfig, UiConfig, WebToolsConfig, SharedGatewayEndpointLayout,
+    ResolvedProviderConfig, ResolvedProviderModelConfig, RuntimeConfig,
+    SharedGatewayEndpointLayout, StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig,
+    WebToolsConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -1353,12 +1353,12 @@ fn resolve_provider_auth<'a>(
                 session_token: normalize_optional(raw_auth.session_token),
             }))
         }
-        ProviderAuthMode::GoogleAdc => Ok(ProviderAuthConfig::GoogleAdc(
-            ProviderGoogleAdcAuthConfig {
+        ProviderAuthMode::GoogleAdc => {
+            Ok(ProviderAuthConfig::GoogleAdc(ProviderGoogleAdcAuthConfig {
                 base_url: required_string(provider_id, "base_url", raw_auth.base_url)?,
                 endpoint_layout: raw_auth.endpoint_layout.unwrap_or_default(),
-            },
-        )),
+            }))
+        }
         ProviderAuthMode::SapAiCore => {
             Ok(ProviderAuthConfig::SapAiCore(ProviderSapAiCoreAuthConfig {
                 api: ProviderApiAuthConfig {

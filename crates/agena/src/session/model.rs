@@ -268,6 +268,7 @@ impl PromptTokenRuntime {
 pub enum GoalStatus {
     #[default]
     Active,
+    Paused,
     BudgetLimited,
     Completed,
 }

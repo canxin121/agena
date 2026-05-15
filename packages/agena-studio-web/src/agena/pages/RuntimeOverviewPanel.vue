@@ -1,12 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
-import type { ModelCatalogEntry, ProviderModel, ProviderSummary, RuntimeStatus } from '@/agena/lib/agenaApi'
+import type {
+  ModelCatalogEntry,
+  ProviderModel,
+  ProviderModelVariant,
+  ProviderSummary,
+  RuntimeStatus,
+} from '@/agena/lib/agenaApi'
 
 import {
   MODEL_FAMILY_OPTIONS,
   MODEL_LIFECYCLE_OPTIONS,
   createEmptyModelCatalogDraft,
+  createEmptyModelCatalogVariantDraft,
   createModelCatalogDraftFromEntry,
   useRuntimeModelCatalogActions,
   type ModelCatalogEditableDraft,
@@ -67,6 +74,30 @@ function resetEditor(providerId = '', modelId = '') {
 function editEntry(entry: ModelCatalogEntry) {
   draft.value = createModelCatalogDraftFromEntry(entry)
   editingEntryKey.value = makeEntryKey(entry.provider_id, entry.model_id)
+}
+
+type ProviderModelVariantWithDisabled = ProviderModelVariant & {
+  disabled?: boolean
+}
+
+function addVariantDraft() {
+  draft.value.variants.push(createEmptyModelCatalogVariantDraft())
+}
+
+function removeVariantDraft(index: number) {
+  draft.value.variants.splice(index, 1)
+}
+
+function entryVariantItems(entry: ModelCatalogEntry): Array<[string, ProviderModelVariantWithDisabled]> {
+  return Object.entries(entry.variants || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, variant]) => [name, variant as ProviderModelVariantWithDisabled])
+}
+
+function formatVariantThinking(value: Record<string, unknown> | null | undefined) {
+  if (!value) return ''
+  const text = JSON.stringify(value)
+  return text.length > 96 ? `${text.slice(0, 93)}...` : text
 }
 
 async function saveDraft() {
@@ -314,6 +345,85 @@ function isEntrySelected(entry: ModelCatalogEntry) {
           </label>
         </div>
 
+        <div class="page-header" style="margin-top: 16px; align-items: flex-start">
+          <div>
+            <h4 style="margin: 0">Variants</h4>
+            <p class="muted" style="margin: 4px 0 0">
+              Add a few provider/model variants with optional labels, descriptions, disabled state, and raw thinking JSON.
+            </p>
+          </div>
+          <button class="button" :disabled="submitting" @click="addVariantDraft">Add Variant</button>
+        </div>
+
+        <div v-if="draft.variants.length" class="stack" style="margin-top: 12px">
+          <div
+            v-for="(variant, index) in draft.variants"
+            :key="`${variant.name || 'variant'}-${index}`"
+            class="list-item"
+            style="padding: 12px"
+          >
+            <div class="page-header" style="align-items: flex-start">
+              <strong>{{ variant.name.trim() || `Variant ${index + 1}` }}</strong>
+              <button class="button danger" :disabled="submitting" @click="removeVariantDraft(index)">Remove</button>
+            </div>
+
+            <div class="grid two" style="margin-top: 12px">
+              <div class="field">
+                <label class="label" :for="`catalog-variant-name-${index}`">Variant Name</label>
+                <input
+                  :id="`catalog-variant-name-${index}`"
+                  v-model="variant.name"
+                  class="input mono"
+                  placeholder="deep"
+                />
+              </div>
+              <div class="field">
+                <label class="label" :for="`catalog-variant-display-name-${index}`">Display Name</label>
+                <input
+                  :id="`catalog-variant-display-name-${index}`"
+                  v-model="variant.display_name"
+                  class="input"
+                  placeholder="Deep Thinking"
+                />
+              </div>
+            </div>
+
+            <div class="field" style="margin-top: 12px">
+              <label class="label" :for="`catalog-variant-description-${index}`">Description</label>
+              <textarea
+                :id="`catalog-variant-description-${index}`"
+                v-model="variant.description"
+                class="input"
+                rows="2"
+                placeholder="Optional behavior notes for this variant."
+              />
+            </div>
+
+            <div class="field" style="margin-top: 12px">
+              <label class="label" :for="`catalog-variant-thinking-${index}`">Thinking JSON</label>
+              <textarea
+                :id="`catalog-variant-thinking-${index}`"
+                v-model="variant.thinking_json"
+                class="input mono"
+                rows="4"
+                placeholder='{"type":"budget","budget_tokens":20000}'
+              />
+              <div class="muted" style="margin-top: 6px">
+                Accepts the backend thinking payload, for example
+                <span class="mono">{"type":"budget","budget_tokens":20000}</span>
+                or
+                <span class="mono">{"type":"effort","effort":"medium"}</span>.
+              </div>
+            </div>
+
+            <label class="muted" :for="`catalog-variant-disabled-${index}`" style="display: flex; gap: 8px; align-items: center; margin-top: 12px">
+              <input :id="`catalog-variant-disabled-${index}`" v-model="variant.disabled" type="checkbox" />
+              Disable this variant
+            </label>
+          </div>
+        </div>
+        <p v-else class="muted" style="margin-top: 12px">No variants configured for this draft.</p>
+
         <div class="button-row" style="margin-top: 16px; flex-wrap: wrap">
           <button class="button primary" :disabled="submitting" @click="saveDraft">
             {{ editingEntryKey ? 'Save Override' : 'Create Override' }}
@@ -350,6 +460,23 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                 <div v-if="entry.description" class="muted">{{ entry.description }}</div>
                 <div v-if="entry.context_window_tokens || entry.max_output_tokens" class="muted mono">
                   ctx={{ entry.context_window_tokens ?? 'n/a' }} · max_out={{ entry.max_output_tokens ?? 'n/a' }}
+                </div>
+                <div v-if="entryVariantItems(entry).length" class="stack" style="margin-top: 8px">
+                  <div class="muted">Variants:</div>
+                  <div
+                    v-for="[variantName, variant] in entryVariantItems(entry)"
+                    :key="variantName"
+                    class="list-item"
+                    style="padding: 8px 10px"
+                  >
+                    <div>
+                      <strong>{{ variantName }}</strong>
+                      <span v-if="variant.display_name" class="muted"> · {{ variant.display_name }}</span>
+                      <span v-if="variant.disabled" class="badge" style="margin-left: 8px">disabled</span>
+                    </div>
+                    <div v-if="variant.description" class="muted">{{ variant.description }}</div>
+                    <div v-if="variant.thinking" class="muted mono">thinking {{ formatVariantThinking(variant.thinking) }}</div>
+                  </div>
                 </div>
               </div>
               <span v-if="entry.has_local_override" class="badge">override</span>

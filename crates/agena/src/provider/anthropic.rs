@@ -15,8 +15,9 @@ use crate::{
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
         StreamResumePolicy, ThinkingRequest,
         auth::AuthData,
-        prompt_cache, sse, utils, wire_message,
+        prompt_cache,
         remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
+        sse, utils, wire_message,
     },
     role::Role,
 };
@@ -173,7 +174,8 @@ impl AnthropicProvider {
     }
 
     fn resolved_base_url(&self) -> Result<String, AppError> {
-        if self.profile != AnthropicProfile::GithubCopilot || !self.configured_public_copilot_base_url()
+        if self.profile != AnthropicProfile::GithubCopilot
+            || !self.configured_public_copilot_base_url()
         {
             return Ok(self.base_url.clone());
         }
@@ -202,7 +204,10 @@ impl AnthropicProvider {
 
     fn models_endpoint(&self) -> Result<String, AppError> {
         Ok(self.models_url.clone().unwrap_or_else(|| {
-            format!("{}/models", self.prompt_cache_base_url().trim_end_matches('/'))
+            format!(
+                "{}/models",
+                self.prompt_cache_base_url().trim_end_matches('/')
+            )
         }))
     }
 
@@ -494,7 +499,8 @@ impl ModelProvider for AnthropicProvider {
             PROVIDER_ID,
             endpoint.as_str(),
             self.api_key.prompt_cache_scope(),
-        );
+        )
+        .with_catalog_provider_id("anthropic");
         RemoteModelCatalogCache::default()
             .get_or_fetch(&source, || async {
                 let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
@@ -711,7 +717,10 @@ impl ModelProvider for AnthropicProvider {
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             self.apply_headers(
                 self.client
-                    .post(self.messages_endpoint().expect("messages endpoint should resolve"))
+                    .post(
+                        self.messages_endpoint()
+                            .expect("messages endpoint should resolve"),
+                    )
                     .header("anthropic-version", ANTHROPIC_VERSION)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
                 api_key,

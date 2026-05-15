@@ -10,17 +10,17 @@ use crate::{
     message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
     model::{ModelId, ProviderId},
     provider::{
-        CapabilityFamily,
-        CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        StreamResumePolicy,
+        CapabilityFamily, CompletionFinishReason, CompletionRequest, CompletionResponse,
+        CompletionStreamEvent, CompletionToolCall, CompletionUsage, ManagedCredential,
+        ModelProvider, ProviderModel, StreamResumePolicy,
         auth::AuthData,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
         },
+        prompt_cache,
         remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
-        prompt_cache, sse, utils, wire_message,
+        sse, utils, wire_message,
     },
     role::Role,
 };
@@ -209,7 +209,8 @@ impl OpenAiProvider {
     }
 
     fn resolved_base_url(&self) -> Result<String, AppError> {
-        if self.profile != OpenAiProfile::GithubCopilot || !self.configured_public_copilot_base_url()
+        if self.profile != OpenAiProfile::GithubCopilot
+            || !self.configured_public_copilot_base_url()
         {
             return Ok(self.base_url.clone());
         }
@@ -238,7 +239,10 @@ impl OpenAiProvider {
 
     fn model_endpoint(&self) -> Result<String, AppError> {
         Ok(self.models_url.clone().unwrap_or_else(|| {
-            format!("{}/models", self.prompt_cache_base_url().trim_end_matches('/'))
+            format!(
+                "{}/models",
+                self.prompt_cache_base_url().trim_end_matches('/')
+            )
         }))
     }
 
@@ -335,8 +339,8 @@ impl OpenAiProvider {
             ))
         })?;
 
-        let auth_header_name =
-            http::header::HeaderName::from_bytes(self.auth_header.as_bytes()).map_err(|err| {
+        let auth_header_name = http::header::HeaderName::from_bytes(self.auth_header.as_bytes())
+            .map_err(|err| {
                 AppError::Config(format!("openai auth header name is invalid: {err}"))
             })?;
         let auth_header_value = http::header::HeaderValue::from_str(
@@ -1062,7 +1066,10 @@ impl OpenAiProvider {
         }
     }
 
-    fn chat_messages_for_request(&self, request: &CompletionRequest) -> Vec<chat_wire::ChatMessage> {
+    fn chat_messages_for_request(
+        &self,
+        request: &CompletionRequest,
+    ) -> Vec<chat_wire::ChatMessage> {
         let mut messages = request_to_chat_messages(request);
         if matches!(self.profile, OpenAiProfile::GithubCopilot) {
             apply_chat_prompt_cache_hints(messages.as_mut_slice());
@@ -1240,14 +1247,14 @@ impl OpenAiProvider {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 if !id.trim().is_empty() && !name.trim().is_empty() {
                                     input.push(OpenAiResponsesInputItem::FunctionCall(
-                                    OpenAiFunctionCallItem {
-                                        kind: "function_call",
-                                        call_id: id,
-                                        name,
-                                        arguments: arguments_json,
-                                        copilot_cache_control: None,
-                                    },
-                                ));
+                                        OpenAiFunctionCallItem {
+                                            kind: "function_call",
+                                            call_id: id,
+                                            name,
+                                            arguments: arguments_json,
+                                            copilot_cache_control: None,
+                                        },
+                                    ));
                                 }
                             }
                             wire_message::WirePart::ToolResult {
@@ -1258,13 +1265,13 @@ impl OpenAiProvider {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 if !tool_call_id.trim().is_empty() {
                                     input.push(OpenAiResponsesInputItem::FunctionCallOutput(
-                                    OpenAiFunctionCallOutputItem {
-                                        kind: "function_call_output",
-                                        call_id: tool_call_id,
-                                        output: serde_json::Value::String(output_json),
-                                        copilot_cache_control: None,
-                                    },
-                                ));
+                                        OpenAiFunctionCallOutputItem {
+                                            kind: "function_call_output",
+                                            call_id: tool_call_id,
+                                            output: serde_json::Value::String(output_json),
+                                            copilot_cache_control: None,
+                                        },
+                                    ));
                                 }
                             }
                         }
@@ -1304,13 +1311,13 @@ impl OpenAiProvider {
                                         });
                                     } else {
                                         input.push(OpenAiResponsesInputItem::FunctionCallOutput(
-                                        OpenAiFunctionCallOutputItem {
-                                            kind: "function_call_output",
-                                            call_id: tool_call_id,
-                                            output: serde_json::Value::String(output_json),
-                                            copilot_cache_control: None,
-                                        },
-                                    ));
+                                            OpenAiFunctionCallOutputItem {
+                                                kind: "function_call_output",
+                                                call_id: tool_call_id,
+                                                output: serde_json::Value::String(output_json),
+                                                copilot_cache_control: None,
+                                            },
+                                        ));
                                     }
                                 }
                                 other => buffered_parts.push(other),
@@ -1620,18 +1627,29 @@ impl ModelProvider for OpenAiProvider {
             ]);
         }
 
-        let source = RemoteModelCatalogSource::new(
+        let mut source = RemoteModelCatalogSource::new(
             self.id.as_str(),
             self.model_endpoint()?,
             self.api_key.prompt_cache_scope(),
         );
+        source = match self.capability_family {
+            CapabilityFamily::OpenAi => source.with_catalog_provider_id("openai"),
+            CapabilityFamily::OpenAiCompatible => source.with_catalog_provider_id("openai"),
+            CapabilityFamily::Anthropic => source.with_catalog_provider_id("anthropic"),
+            CapabilityFamily::Gemini => source.with_catalog_provider_id("gemini"),
+            CapabilityFamily::Bedrock => source.with_catalog_provider_id("bedrock"),
+            CapabilityFamily::Gitlab => source.with_catalog_provider_id("gitlab"),
+        };
         RemoteModelCatalogCache::default()
             .get_or_fetch(&source, || async {
                 let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
                     let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
                     self.apply_headers(
                         self.client
-                            .get(self.model_endpoint().expect("model endpoint should resolve"))
+                            .get(
+                                self.model_endpoint()
+                                    .expect("model endpoint should resolve"),
+                            )
                             .header(self.auth_header.as_str(), auth_value),
                         RequestHeaderContext::none(),
                     )
@@ -1790,7 +1808,10 @@ impl ModelProvider for OpenAiProvider {
             let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
             self.apply_headers(
                 self.client
-                    .post(self.responses_endpoint().expect("responses endpoint should resolve"))
+                    .post(
+                        self.responses_endpoint()
+                            .expect("responses endpoint should resolve"),
+                    )
                     .header(self.auth_header.as_str(), auth_value)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
                 RequestHeaderContext::from_request(&request),
@@ -2273,9 +2294,7 @@ fn clear_responses_prompt_cache_hints(input: &mut [OpenAiResponsesInputItem]) {
         match item {
             OpenAiResponsesInputItem::Message(message) => message.copilot_cache_control = None,
             OpenAiResponsesInputItem::FunctionCall(item) => item.copilot_cache_control = None,
-            OpenAiResponsesInputItem::FunctionCallOutput(item) => {
-                item.copilot_cache_control = None
-            }
+            OpenAiResponsesInputItem::FunctionCallOutput(item) => item.copilot_cache_control = None,
         }
     }
 }
@@ -2887,21 +2906,23 @@ mod tests {
                 system: None,
                 messages: vec![Message::prompt_parts(
                     crate::role::Role::User,
-                    vec![crate::message::PartContent::attachments(vec![AttachmentItem {
-                        kind: AttachmentKind::Image,
-                        mime: "image/png".to_owned(),
-                        source: AttachmentSource::DataUrl {
-                            url: sample_png_data_url().to_owned(),
+                    vec![crate::message::PartContent::attachments(vec![
+                        AttachmentItem {
+                            kind: AttachmentKind::Image,
+                            mime: "image/png".to_owned(),
+                            source: AttachmentSource::DataUrl {
+                                url: sample_png_data_url().to_owned(),
+                            },
+                            filename: Some("image.png".to_owned()),
+                            title: None,
+                            size_bytes: Some(68),
+                            sha256: None,
+                            width: Some(1),
+                            height: Some(1),
+                            duration_ms: None,
+                            page_count: None,
                         },
-                        filename: Some("image.png".to_owned()),
-                        title: None,
-                        size_bytes: Some(68),
-                        sha256: None,
-                        width: Some(1),
-                        height: Some(1),
-                        duration_ms: None,
-                        page_count: None,
-                    }])],
+                    ])],
                 )],
                 tools: Vec::new(),
                 temperature: None,

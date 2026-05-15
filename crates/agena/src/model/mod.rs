@@ -709,7 +709,9 @@ mod tests {
 
     #[test]
     fn model_ref_parses_provider_and_model() {
-        let parsed: ModelRef = "openai/openai/gpt-5".parse().expect("model ref should parse");
+        let parsed: ModelRef = "openai/openai/gpt-5"
+            .parse()
+            .expect("model ref should parse");
         assert_eq!(parsed.provider_id.as_str(), "openai");
         assert_eq!(parsed.model_id.as_str(), "openai/gpt-5");
     }

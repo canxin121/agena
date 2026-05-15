@@ -18,14 +18,14 @@ use crate::message::{
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentListResponse,
     HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostCallbackContext,
-    HostClient, HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse, HostGoal, HostGoalStatus,
-    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostMcpServerSpec, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse,
-    HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostClient, HostCreateGoalRequest, HostCreateGoalResponse, HostEnterPlanModeRequest,
+    HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest,
+    HostGetGoalResponse, HostGoal, HostGoalStatus, HostLspDiagnostic,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
@@ -449,6 +449,7 @@ fn host_goal_from_session_goal(goal: crate::session::SessionGoal) -> HostGoal {
         objective: goal.objective,
         status: match goal.status {
             crate::session::GoalStatus::Active => HostGoalStatus::Active,
+            crate::session::GoalStatus::Paused => HostGoalStatus::Paused,
             crate::session::GoalStatus::BudgetLimited => HostGoalStatus::BudgetLimited,
             crate::session::GoalStatus::Completed => HostGoalStatus::Completed,
         },
@@ -456,6 +457,18 @@ fn host_goal_from_session_goal(goal: crate::session::SessionGoal) -> HostGoal {
         tokens_used: goal.tokens_used,
         time_used_seconds: goal.time_used_seconds,
         completed_at_ms: goal.completed_at.map(|value| value.timestamp_millis()),
+    }
+}
+
+fn map_create_goal_error(err: crate::AppError) -> PluginError {
+    match err {
+        crate::AppError::Internal(message)
+            if message.contains("goal objective must not be empty")
+                || message.contains("already has an active goal") =>
+        {
+            PluginError::invalid_params(message)
+        }
+        other => PluginError::new(other.to_string()),
     }
 }
 
@@ -771,6 +784,44 @@ impl HostClient for RuntimeHostClient {
         Ok(HostGetGoalResponse { goal })
     }
 
+    async fn create_goal(
+        &self,
+        req: HostCreateGoalRequest,
+    ) -> Result<HostCreateGoalResponse, PluginError> {
+        let session_id = self.callback_context()?.session_id.ok_or_else(|| {
+            host_unavailable("host callback context is missing session_id for create_goal")
+        })?;
+        if req.objective.trim().is_empty() {
+            return Err(PluginError::invalid_params(
+                "goal objective must not be empty",
+            ));
+        }
+
+        let manager = self.session_manager()?;
+        if manager
+            .get_goal(session_id)
+            .await
+            .map_err(|err| PluginError::new(err.to_string()))?
+            .is_some()
+        {
+            return Err(PluginError::invalid_params(format!(
+                "session {session_id} already has an active goal"
+            )));
+        }
+
+        let goal = manager
+            .create_goal(crate::session::SessionGoalCreateRequest {
+                session_id,
+                objective: req.objective,
+                token_budget: req.token_budget,
+            })
+            .await
+            .map_err(map_create_goal_error)?;
+        Ok(HostCreateGoalResponse {
+            goal: host_goal_from_session_goal(goal),
+        })
+    }
+
     async fn update_goal(
         &self,
         req: HostUpdateGoalRequest,
@@ -784,7 +835,7 @@ impl HostClient for RuntimeHostClient {
                 .complete_goal(session_id)
                 .await
                 .map_err(|err| PluginError::new(err.to_string()))?,
-            HostGoalStatus::Active | HostGoalStatus::BudgetLimited => {
+            HostGoalStatus::Active | HostGoalStatus::Paused | HostGoalStatus::BudgetLimited => {
                 return Err(PluginError::invalid_params(
                     "update_goal currently only supports status = complete",
                 ));
@@ -1782,6 +1833,12 @@ mod active_invocations {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use crate::config::LoadConfigRequest;
+    use crate::plugin::sdk::host_api::with_host_callback_context;
+    use crate::session::{GoalStatus, SessionCreateRequest, SessionGoal};
+    use chrono::Utc;
 
     /// `noop_host_client` returns a working trait object that does not panic
     /// on `Display` / `Debug` access. Acts as a smoke test that the
@@ -1791,5 +1848,205 @@ mod tests {
         let client: Arc<dyn HostClient> = noop_host_client();
         // Poke the Arc to make sure the vtable resolves.
         assert!(Arc::strong_count(&client) >= 1);
+    }
+
+    #[test]
+    fn host_goal_from_session_goal_preserves_paused_status() {
+        let now = Utc::now();
+        let goal = host_goal_from_session_goal(SessionGoal {
+            id: 7,
+            session_id: 11,
+            objective: "ship the feature".to_string(),
+            status: GoalStatus::Paused,
+            token_budget: Some(42),
+            tokens_used: 9,
+            time_used_seconds: 3,
+            created_at: now,
+            updated_at: now,
+            completed_at: None,
+        });
+
+        assert_eq!(goal.status, HostGoalStatus::Paused);
+    }
+
+    #[tokio::test]
+    async fn create_goal_persists_for_session_and_rejects_duplicates() {
+        let tempdir = tempfile::tempdir().expect("tempdir should create");
+        let config_path = tempdir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+        )
+        .expect("config should be written");
+
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(config_path),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(tempdir.path())
+            .with_database_url("sqlite::memory:")
+            .build()
+            .await
+            .expect("runtime should build");
+        let manager = runtime
+            .session_manager()
+            .expect("session manager should be available");
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "goal host client".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+        let client = RuntimeHostClient {
+            runtime: runtime.clone(),
+        };
+
+        let created = with_host_callback_context(
+            HostCallbackContext {
+                session_id: Some(session.id),
+                ..HostCallbackContext::default()
+            },
+            async {
+                <RuntimeHostClient as HostClient>::create_goal(
+                    &client,
+                    HostCreateGoalRequest {
+                        objective: "ship the feature".to_string(),
+                        token_budget: Some(42),
+                    },
+                )
+                .await
+            },
+        )
+        .await
+        .expect("create_goal should succeed");
+        assert_eq!(created.goal.objective, "ship the feature");
+        assert_eq!(created.goal.token_budget, Some(42));
+        assert_eq!(created.goal.status, HostGoalStatus::Active);
+
+        let loaded = manager
+            .get_goal(session.id)
+            .await
+            .expect("goal lookup should succeed")
+            .expect("goal should persist");
+        assert_eq!(loaded.objective, "ship the feature");
+        assert_eq!(loaded.token_budget, Some(42));
+
+        let err = with_host_callback_context(
+            HostCallbackContext {
+                session_id: Some(session.id),
+                ..HostCallbackContext::default()
+            },
+            async {
+                <RuntimeHostClient as HostClient>::create_goal(
+                    &client,
+                    HostCreateGoalRequest {
+                        objective: "second goal".to_string(),
+                        token_budget: None,
+                    },
+                )
+                .await
+            },
+        )
+        .await
+        .expect_err("duplicate goal should be rejected");
+        assert_eq!(err.code, crate::plugin::sdk::PluginErrorCode::InvalidParams);
+        assert!(
+            err.message.contains("already has an active goal"),
+            "unexpected error: {err:?}"
+        );
+
+        runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn create_goal_sets_objective_updated_runtime_steering() {
+        let tempdir = tempfile::tempdir().expect("tempdir should create");
+        let config_path = tempdir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+        )
+        .expect("config should be written");
+
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(config_path),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(tempdir.path())
+            .with_database_url("sqlite::memory:")
+            .build()
+            .await
+            .expect("runtime should build");
+        let manager = runtime
+            .session_manager()
+            .expect("session manager should be available");
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "goal steering".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should be created");
+        let client = RuntimeHostClient {
+            runtime: runtime.clone(),
+        };
+
+        let created = with_host_callback_context(
+            HostCallbackContext {
+                session_id: Some(session.id),
+                ..HostCallbackContext::default()
+            },
+            async {
+                <RuntimeHostClient as HostClient>::create_goal(
+                    &client,
+                    HostCreateGoalRequest {
+                        objective: "queue hidden steering".to_string(),
+                        token_budget: Some(7),
+                    },
+                )
+                .await
+            },
+        )
+        .await
+        .expect("create_goal should succeed");
+
+        let session = manager
+            .get_session(session.id)
+            .await
+            .expect("session load should succeed");
+        let pending = session
+            .runtime
+            .goal
+            .pending_steering()
+            .expect("goal runtime should queue steering after create_goal");
+        assert_eq!(pending.goal_id, created.goal.id);
+        assert_eq!(format!("{:?}", pending.kind), "ObjectiveUpdated");
+
+        runtime.shutdown();
     }
 }

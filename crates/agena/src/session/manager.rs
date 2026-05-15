@@ -39,16 +39,16 @@ use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
 use super::compaction_worker::CompactionWorker;
 use super::control::{TurnControl, TurnControlError, TurnRegistry};
+use super::cost::SessionCostSummary;
 use super::history::{
     FinishReason, MessageId as HistoryMessageId, MessageRevised, RevisionKind, ToolCallCompleted,
     ToolCallId as HistoryToolCallId, TranscriptContent, TranscriptToolOutput, TurnAbortReason,
     TurnAborted, TurnCompleted, TurnId as HistoryTurnId, TurnStarted, UserMessageAppended,
 };
 use super::model::{
-    GoalSteeringKind, GoalStatus, MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionGoal,
+    GoalStatus, GoalSteeringKind, MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionGoal,
     SessionListRequest, SessionPendingTool, SessionStatus, SessionSummary,
 };
-use super::cost::SessionCostSummary;
 use super::processor::SessionRunRequest;
 use super::prompt_window::{self, PromptRequestOptions};
 use super::store::{ReservedMessageIds, SessionCommit, SessionStore};
@@ -296,6 +296,17 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    fn background_handle(&self) -> Self {
+        Self {
+            store: Arc::clone(&self.store),
+            publisher: Arc::clone(&self.publisher),
+            bus: Arc::clone(&self.bus),
+            execution: ArcSwap::from(self.execution.load_full()),
+            turn_registry: Arc::clone(&self.turn_registry),
+            host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
+        }
+    }
+
     pub fn new(
         db: sea_orm::DatabaseConnection,
         processor: SessionProcessor,
@@ -634,11 +645,41 @@ impl SessionManager {
             .await
     }
 
+    pub async fn list_projected_messages_page(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<(Vec<Message>, bool, Option<(i64, i64)>), AppError> {
+        self.store
+            .list_projected_messages_page(session_id, include_full_parts, cursor, limit)
+            .await
+    }
+
     pub async fn list_projected_message_headers(
         &self,
         session_id: i64,
     ) -> Result<Vec<crate::session::ProjectedMessageHeader>, AppError> {
         self.store.list_projected_message_headers(session_id).await
+    }
+
+    pub async fn list_projected_message_headers_page(
+        &self,
+        session_id: i64,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<
+        (
+            Vec<crate::session::ProjectedMessageHeader>,
+            bool,
+            Option<(i64, i64)>,
+        ),
+        AppError,
+    > {
+        self.store
+            .list_projected_message_headers_page(session_id, cursor, limit)
+            .await
     }
 
     pub async fn find_projected_message(
@@ -728,7 +769,9 @@ impl SessionManager {
 
     pub async fn goal_cost_summary(&self, session_id: i64) -> Result<SessionCostSummary, AppError> {
         let state = self.execution_state();
-        self.store.goal_cost_summary(session_id, state.cache_policy()).await
+        self.store
+            .goal_cost_summary(session_id, state.cache_policy())
+            .await
     }
 
     pub async fn create_goal(
@@ -778,6 +821,7 @@ impl SessionManager {
                 request.session_id
             ))
         })?;
+        self.spawn_idle_goal_run_if_needed(request.session_id, false);
         self.publish_goal_event(&goal, request.session_id).await?;
         Ok(goal)
     }
@@ -823,7 +867,10 @@ impl SessionManager {
         if existing.goal.is_none() {
             return Ok(false);
         }
-        let cleared = self.store.clear_goal(session_id, state.cache_policy()).await?;
+        let cleared = self
+            .store
+            .clear_goal(session_id, state.cache_policy())
+            .await?;
         if cleared {
             let mut updated = self.get_session(session_id).await?;
             if !updated.runtime.goal.is_empty() {
@@ -1007,6 +1054,9 @@ impl SessionManager {
             .await?;
         let session = self
             .apply_requested_agent_profile(session, &mut request.options, state.clone())
+            .await?;
+        let session = self
+            .resume_paused_goal_if_needed(session, state.clone())
             .await?;
         let options = self.apply_execution_context_to_run_options(&session, request.options)?;
         let result = self
@@ -1579,6 +1629,92 @@ impl SessionManager {
         result
     }
 
+    fn spawn_idle_goal_run_if_needed(&self, session_id: i64, allow_goal_continuation: bool) {
+        let manager = self.background_handle();
+        tokio::spawn(async move {
+            if manager.turn_registry.is_active(session_id).await {
+                return;
+            }
+
+            let state = manager.execution_state();
+            let session = match manager
+                .store
+                .load_session(session_id, state.cache_policy())
+                .await
+            {
+                Ok(session) => session,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "agena::session::goal_runtime",
+                        session_id,
+                        error = %err,
+                        "failed to load session for idle goal continuation"
+                    );
+                    return;
+                }
+            };
+
+            if session.status() != SessionStatus::Idle {
+                return;
+            }
+            let Some(goal) = session.goal.as_ref() else {
+                return;
+            };
+            if matches!(goal.status, GoalStatus::Completed | GoalStatus::Paused) {
+                return;
+            }
+            if manager
+                .goal_turn_directive(&session, allow_goal_continuation)
+                .is_none()
+            {
+                return;
+            }
+
+            let options = match manager.resolve_scheduled_run_options(session_id).await {
+                Ok(options) => options,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "agena::session::goal_runtime",
+                        session_id,
+                        error = %err,
+                        "failed to resolve options for idle goal continuation"
+                    );
+                    return;
+                }
+            };
+
+            let Some((control, steer_rx)) = manager
+                .turn_registry
+                .try_register_if_inactive(session_id)
+                .await
+            else {
+                return;
+            };
+            let result = manager
+                .run_until_stable(
+                    session,
+                    &options,
+                    allow_goal_continuation,
+                    state,
+                    control.clone(),
+                    steer_rx,
+                )
+                .await;
+            if let Err(err) = result {
+                tracing::warn!(
+                    target: "agena::session::goal_runtime",
+                    session_id,
+                    error = %err,
+                    "idle goal continuation failed"
+                );
+            }
+            manager
+                .turn_registry
+                .unregister_if_matches(session_id, &control)
+                .await;
+        });
+    }
+
     async fn run_until_stable(
         &self,
         mut session: Session,
@@ -1600,6 +1736,12 @@ impl SessionManager {
                     state.clone(),
                 )
                 .await?;
+                if let Some(paused) = self
+                    .pause_active_goal_if_needed(session.id, state.clone())
+                    .await?
+                {
+                    return Ok(paused);
+                }
                 return Ok(session);
             }
 
@@ -1641,8 +1783,7 @@ impl SessionManager {
                 continue;
             }
 
-            let goal_turn_directive =
-                self.goal_turn_directive(&session, continuation_available);
+            let goal_turn_directive = self.goal_turn_directive(&session, continuation_available);
             match session.status() {
                 SessionStatus::Idle => {
                     if goal_turn_directive.is_none() {
@@ -1737,17 +1878,18 @@ impl SessionManager {
                 .run_model_turn(
                     session,
                     options,
-                    goal_turn_directive.as_ref().map(|directive| directive.prompt.as_str()),
+                    goal_turn_directive
+                        .as_ref()
+                        .map(|directive| directive.prompt.as_str()),
                     state.clone(),
                     control.clone(),
                 )
                 .await
             {
                 Ok(mut next_session) => {
-                    if goal_turn_directive
-                        .as_ref()
-                        .is_some_and(|directive| directive.kind == GoalTurnDirectiveKind::Continuation)
-                    {
+                    if goal_turn_directive.as_ref().is_some_and(|directive| {
+                        directive.kind == GoalTurnDirectiveKind::Continuation
+                    }) {
                         continuation_available = false;
                     }
                     if let Some(directive) = goal_turn_directive.as_ref()
@@ -2098,6 +2240,14 @@ impl SessionManager {
                         .await?;
 
                     if let Some(err) = terminal_error {
+                        if is_user_cancelled_error(&err) {
+                            if let Some(paused) = self
+                                .pause_active_goal_if_needed(persisted_session.id, state.clone())
+                                .await?
+                            {
+                                persisted_session = paused;
+                            }
+                        }
                         self.persist_run_failed_event(persisted_session.id, err.to_string(), state)
                             .await?;
                         return Err(err);
@@ -2126,6 +2276,11 @@ impl SessionManager {
                         .await?;
                 }
                 Err(err) => {
+                    if is_user_cancelled_error(&err) {
+                        let _ = self
+                            .pause_active_goal_if_needed(session.id, state.clone())
+                            .await?;
+                    }
                     self.persist_run_failed_event(session.id, err.to_string(), state)
                         .await?;
                     return Err(err);
@@ -3373,6 +3528,7 @@ impl SessionManager {
                     changed = true;
                 }
             }
+            GoalStatus::Paused => {}
             GoalStatus::BudgetLimited => {
                 if !session.runtime.goal.budget_limit_reported(goal.id)
                     && !session
@@ -3402,6 +3558,7 @@ impl SessionManager {
         let goal = session.goal.as_ref()?;
         match goal.status {
             GoalStatus::Completed => None,
+            GoalStatus::Paused => None,
             GoalStatus::BudgetLimited => {
                 let pending = session.runtime.goal.pending_steering()?;
                 if pending.goal_id != goal.id || pending.kind != GoalSteeringKind::BudgetLimit {
@@ -3437,7 +3594,11 @@ impl SessionManager {
         }
     }
 
-    fn apply_goal_turn_directive(&self, session: &mut Session, directive: &GoalTurnDirective) -> bool {
+    fn apply_goal_turn_directive(
+        &self,
+        session: &mut Session,
+        directive: &GoalTurnDirective,
+    ) -> bool {
         match directive.kind {
             GoalTurnDirectiveKind::Continuation => false,
             GoalTurnDirectiveKind::ObjectiveUpdated => {
@@ -3456,11 +3617,18 @@ impl SessionManager {
                 false
             }
             GoalTurnDirectiveKind::BudgetLimit => {
-                let already_reported = session.runtime.goal.budget_limit_reported(directive.goal_id);
-                let had_pending = session.runtime.goal.pending_steering().is_some_and(|pending| {
-                    pending.goal_id == directive.goal_id
-                        && pending.kind == GoalSteeringKind::BudgetLimit
-                });
+                let already_reported = session
+                    .runtime
+                    .goal
+                    .budget_limit_reported(directive.goal_id);
+                let had_pending = session
+                    .runtime
+                    .goal
+                    .pending_steering()
+                    .is_some_and(|pending| {
+                        pending.goal_id == directive.goal_id
+                            && pending.kind == GoalSteeringKind::BudgetLimit
+                    });
                 if had_pending {
                     session.runtime.goal.clear_pending_steering();
                 }
@@ -3475,11 +3643,7 @@ impl SessionManager {
         }
     }
 
-    fn render_goal_context(
-        &self,
-        goal: &SessionGoal,
-        kind: GoalTurnDirectiveKind,
-    ) -> String {
+    fn render_goal_context(&self, goal: &SessionGoal, kind: GoalTurnDirectiveKind) -> String {
         let objective = goal.objective.trim();
         let budget_line = goal
             .token_budget
@@ -3498,7 +3662,11 @@ impl SessionManager {
         }
     }
 
-    async fn publish_goal_event(&self, goal: &SessionGoal, session_id: i64) -> Result<(), AppError> {
+    async fn publish_goal_event(
+        &self,
+        goal: &SessionGoal,
+        session_id: i64,
+    ) -> Result<(), AppError> {
         self.publisher
             .publish(
                 crate::event::PublishContext::for_session(session_id),
@@ -3508,6 +3676,7 @@ impl SessionManager {
                     objective: Some(goal.objective.clone()),
                     status: Some(match goal.status {
                         GoalStatus::Active => "active".to_string(),
+                        GoalStatus::Paused => "paused".to_string(),
                         GoalStatus::BudgetLimited => "budget_limited".to_string(),
                         GoalStatus::Completed => "completed".to_string(),
                     }),
@@ -3564,7 +3733,10 @@ impl SessionManager {
             return Ok(session);
         };
         let goal_after = updated.goal.as_ref().ok_or_else(|| {
-            AppError::Internal(format!("goal missing after usage accounting for session {}", session.id))
+            AppError::Internal(format!(
+                "goal missing after usage accounting for session {}",
+                session.id
+            ))
         })?;
         if goal_after != goal_before {
             self.publish_goal_event(goal_after, session.id).await?;
@@ -3800,6 +3972,55 @@ impl SessionManager {
             }
             _ => {}
         }
+    }
+
+    async fn pause_active_goal_if_needed(
+        &self,
+        session_id: i64,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Option<Session>, AppError> {
+        let Some(updated) = self
+            .store
+            .pause_goal_if_active(session_id, state.cache_policy())
+            .await?
+        else {
+            return Ok(None);
+        };
+        let goal = updated.goal.as_ref().ok_or_else(|| {
+            AppError::Internal(format!("goal missing after pause for session {session_id}"))
+        })?;
+        self.publish_goal_event(goal, session_id).await?;
+        Ok(Some(updated))
+    }
+
+    async fn resume_paused_goal_if_needed(
+        &self,
+        session: Session,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        if !session
+            .goal
+            .as_ref()
+            .is_some_and(|goal| goal.status == GoalStatus::Paused)
+        {
+            return Ok(session);
+        }
+
+        let session_id = session.id;
+        let Some(updated) = self
+            .store
+            .resume_goal_if_paused(session_id, state.cache_policy())
+            .await?
+        else {
+            return Ok(session);
+        };
+        let goal = updated.goal.as_ref().ok_or_else(|| {
+            AppError::Internal(format!(
+                "goal missing after resume for session {session_id}"
+            ))
+        })?;
+        self.publish_goal_event(goal, session_id).await?;
+        Ok(updated)
     }
 
     async fn persist_run_failed_event(
@@ -4079,6 +4300,10 @@ fn turn_control_to_app_error(err: TurnControlError) -> AppError {
             AppError::Internal("steer channel closed for session".to_string())
         }
     }
+}
+
+fn is_user_cancelled_error(err: &AppError) -> bool {
+    matches!(err, AppError::Internal(message) if message == "turn cancelled by user")
 }
 
 fn build_message(
@@ -5865,6 +6090,157 @@ mod tests {
                 _ => None,
             })
             .expect("session should contain a pending permission request")
+    }
+
+    struct InterruptibleProvider {
+        call_count: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ModelProvider for InterruptibleProvider {
+        fn id(&self) -> &str {
+            "interruptible"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            static MODEL: std::sync::LazyLock<ModelId> =
+                std::sync::LazyLock::new(|| ModelId::new("interruptible-model"));
+            &MODEL
+        }
+
+        async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+            Ok(vec![ProviderModel::new(
+                "interruptible",
+                "interruptible-model",
+            )])
+        }
+
+        async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, AppError> {
+            Err(AppError::Provider("streaming only".to_string()))
+        }
+
+        async fn complete_stream(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+            AppError,
+        > {
+            let call_index = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call_index == 0 {
+                let stream = async_stream::stream! {
+                    yield Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: ProviderId::new("interruptible"),
+                        model: ModelId::new("interruptible-model"),
+                        delta: "thinking".to_string(),
+                    });
+                    std::future::pending::<()>().await;
+                };
+                return Ok(Box::pin(stream));
+            }
+
+            Ok(Box::pin(stream::iter(vec![
+                Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: ProviderId::new("interruptible"),
+                    model: ModelId::new("interruptible-model"),
+                    delta: "resumed work".to_string(),
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id: ProviderId::new("interruptible"),
+                    model: ModelId::new("interruptible-model"),
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                }),
+            ])))
+        }
+    }
+
+    fn interruptible_options() -> SessionRunOptions {
+        SessionRunOptions {
+            model: ModelRef::new("interruptible", "interruptible-model"),
+            variant: None,
+            thinking: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: Some(64),
+            agent_profile: None,
+            max_turn_loops: None,
+        }
+    }
+
+    async fn wait_for_active_turn(manager: &SessionManager, session_id: i64) {
+        let registered = async {
+            for _ in 0..500 {
+                if manager.is_turn_active(session_id).await {
+                    return true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            false
+        }
+        .await;
+        assert!(registered, "turn should register within 10s");
+    }
+
+    async fn wait_for_provider_calls(
+        call_count: &std::sync::atomic::AtomicUsize,
+        expected_at_least: usize,
+    ) {
+        let started = async {
+            for _ in 0..500 {
+                if call_count.load(std::sync::atomic::Ordering::SeqCst) >= expected_at_least {
+                    return true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            false
+        }
+        .await;
+        assert!(
+            started,
+            "provider should be invoked at least {expected_at_least} time(s) within 10s"
+        );
+    }
+
+    async fn cancel_running_turn(
+        manager: Arc<SessionManager>,
+        session_id: i64,
+        call_count: &std::sync::atomic::AtomicUsize,
+    ) {
+        let submit_manager = Arc::clone(&manager);
+        let submit = tokio::spawn(async move {
+            submit_manager
+                .submit_user_turn(SessionUserTurnRequest {
+                    session_id,
+                    options: interruptible_options(),
+                    parts: vec![PartContent::text("start work")],
+                })
+                .await
+        });
+
+        wait_for_active_turn(manager.as_ref(), session_id).await;
+        wait_for_provider_calls(call_count, 1).await;
+        for attempt in 0..3 {
+            match manager.cancel_active_turn(session_id).await {
+                Ok(()) => break,
+                Err(_) if attempt < 2 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(err) => panic!("cancel should find active turn: {err}"),
+            }
+        }
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(15), submit)
+            .await
+            .expect("submit should complete after cancel")
+            .expect("join");
+        assert!(
+            result.is_err(),
+            "expected turn to be reported as failed/cancelled"
+        );
     }
 
     #[tokio::test]
@@ -8175,7 +8551,9 @@ mod tests {
             .await
             .expect("create session");
 
-        let mut subscription = service.event_bus().subscribe(EventFilter::new(Scope::Global));
+        let mut subscription = service
+            .event_bus()
+            .subscribe(EventFilter::new(Scope::Global));
 
         let created_goal = service
             .create_goal(SessionGoalCreateRequest {
@@ -8231,7 +8609,11 @@ mod tests {
         };
         let _ = tokio::time::timeout(std::time::Duration::from_millis(200), drain).await;
 
-        assert_eq!(statuses.len(), 3, "expected 3 goal events, got {statuses:?}");
+        assert_eq!(
+            statuses.len(),
+            3,
+            "expected 3 goal events, got {statuses:?}"
+        );
         assert_eq!(statuses[0].as_deref(), Some("active"));
         assert_eq!(statuses[1].as_deref(), Some("completed"));
         assert_eq!(statuses[2], None);
@@ -8470,7 +8852,11 @@ mod tests {
             .goal_turn_directive(&session, true)
             .expect("continue_session should unlock one hidden continuation");
         assert_eq!(continuation.kind, GoalTurnDirectiveKind::Continuation);
-        assert!(continuation.prompt.contains("Continue working toward the active runtime goal."));
+        assert!(
+            continuation
+                .prompt
+                .contains("Continue working toward the active runtime goal.")
+        );
     }
 
     #[tokio::test]
@@ -8565,15 +8951,250 @@ mod tests {
             .find(|message| message.as_text_lossy().contains("<goal_context>"))
             .expect("provider request should include synthesized goal context");
         assert_eq!(hidden_goal_message.role, Role::User);
-        assert!(hidden_goal_message
-            .as_text_lossy()
-            .contains("finish the migration"));
+        assert!(
+            hidden_goal_message
+                .as_text_lossy()
+                .contains("finish the migration")
+        );
         assert!(
             !completed
                 .messages
                 .iter()
                 .any(|message| message.as_text_lossy().contains("<goal_context>")),
             "hidden goal context must not be persisted into session history"
+        );
+    }
+
+    #[tokio::test]
+    async fn canceling_a_running_turn_pauses_an_active_goal() {
+        let workspace = TempWorkspace::new();
+        let call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = Arc::new(
+            build_manager_with_provider(
+                &workspace.root,
+                PermissionPolicy::allow_all(),
+                SessionManagerConfig::default(),
+                ContextPolicy::default(),
+                InterruptibleProvider {
+                    call_count: Arc::clone(&call_count),
+                },
+            )
+            .await,
+        );
+
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "goal-pause-on-cancel".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        manager
+            .create_goal(SessionGoalCreateRequest {
+                session_id: created.id,
+                objective: "keep working".to_string(),
+                token_budget: None,
+            })
+            .await
+            .expect("create goal");
+
+        cancel_running_turn(Arc::clone(&manager), created.id, call_count.as_ref()).await;
+
+        let goal = manager
+            .get_goal(created.id)
+            .await
+            .expect("load goal after cancel")
+            .expect("goal should remain present");
+        assert_eq!(goal.status, GoalStatus::Paused);
+    }
+
+    #[tokio::test]
+    async fn continue_session_resumes_a_paused_goal_to_active() {
+        let workspace = TempWorkspace::new();
+        let call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = Arc::new(
+            build_manager_with_provider(
+                &workspace.root,
+                PermissionPolicy::allow_all(),
+                SessionManagerConfig::default(),
+                ContextPolicy::default(),
+                InterruptibleProvider {
+                    call_count: Arc::clone(&call_count),
+                },
+            )
+            .await,
+        );
+
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "goal-resume-after-cancel".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        manager
+            .create_goal(SessionGoalCreateRequest {
+                session_id: created.id,
+                objective: "keep working".to_string(),
+                token_budget: None,
+            })
+            .await
+            .expect("create goal");
+
+        cancel_running_turn(Arc::clone(&manager), created.id, call_count.as_ref()).await;
+        let paused = manager
+            .get_goal(created.id)
+            .await
+            .expect("load paused goal")
+            .expect("goal should remain present");
+        assert_eq!(paused.status, GoalStatus::Paused);
+
+        let resumed = manager
+            .continue_session(SessionContinueRequest {
+                session_id: created.id,
+                options: interruptible_options(),
+            })
+            .await
+            .expect("continue paused session");
+        let resumed_goal = resumed.goal.expect("goal should remain present");
+        assert_eq!(resumed_goal.status, GoalStatus::Active);
+
+        let persisted = manager
+            .get_goal(created.id)
+            .await
+            .expect("reload resumed goal")
+            .expect("goal should remain present");
+        assert_eq!(persisted.status, GoalStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn create_goal_on_idle_session_starts_one_hidden_goal_turn() {
+        let workspace = TempWorkspace::new();
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let manager = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "goal-auto-start".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let state = manager.execution_state();
+        let mut seeded = manager
+            .get_session(created.id)
+            .await
+            .expect("reload session to seed execution overrides");
+        seeded.runtime.execution.system_prompt_override = Some("system".to_string());
+        seeded.runtime.execution.agent_run = crate::agent::AgentRunConfig {
+            temperature: Some(crate::agent::AgentTemperature(0.2)),
+            max_output_tokens: Some(256),
+            steps: None,
+        };
+        let _ = manager
+            .persist_session_changes(seeded, Vec::new(), Vec::new(), None, state)
+            .await
+            .expect("persist seeded execution overrides");
+
+        manager
+            .create_goal(SessionGoalCreateRequest {
+                session_id: created.id,
+                objective: "keep shipping".to_string(),
+                token_budget: None,
+            })
+            .await
+            .expect("create goal");
+
+        let started = async {
+            for _ in 0..500 {
+                if requests
+                    .lock()
+                    .expect("recording provider request lock should succeed")
+                    .len()
+                    >= 1
+                {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            false
+        }
+        .await;
+        assert!(started, "idle goal creation should start one hidden turn");
+
+        let final_session = async {
+            for _ in 0..500 {
+                let session = manager
+                    .get_session(created.id)
+                    .await
+                    .expect("reload session during hidden goal turn");
+                if session.status() == SessionStatus::Idle
+                    && !manager.is_turn_active(created.id).await
+                    && session
+                        .messages
+                        .iter()
+                        .any(|message| message.role == Role::Assistant)
+                {
+                    return session;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            panic!("hidden goal turn should settle within 10s");
+        }
+        .await;
+
+        let recorded = requests
+            .lock()
+            .expect("recording provider request lock should succeed");
+        assert_eq!(
+            recorded.len(),
+            1,
+            "goal creation should trigger exactly one hidden goal turn"
+        );
+        let request = &recorded[0];
+        assert_eq!(request.system.as_deref(), Some("system"));
+        assert_eq!(request.temperature, Some(0.2));
+        assert_eq!(request.max_output_tokens, Some(256));
+
+        let hidden_goal_message = request
+            .messages
+            .iter()
+            .find(|message| message.role == Role::User)
+            .expect("provider request should include hidden goal context");
+        let hidden_goal_text = hidden_goal_message.as_text_lossy();
+        assert!(
+            hidden_goal_text.contains("An active runtime goal has been set or updated."),
+            "unexpected hidden goal prompt: {}",
+            hidden_goal_text
+        );
+        assert!(
+            hidden_goal_text.contains("keep shipping"),
+            "hidden goal prompt should include the objective"
+        );
+
+        assert_eq!(
+            final_session
+                .messages
+                .iter()
+                .filter(|message| message.role == Role::User)
+                .count(),
+            0,
+            "hidden goal context must not be persisted into session history"
+        );
+        assert_eq!(
+            final_session
+                .messages
+                .iter()
+                .filter(|message| message.role == Role::Assistant)
+                .count(),
+            1
         );
     }
 

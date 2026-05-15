@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr,
-    EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
+    DbErr, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 
 use crate::db::entities::{activity_message, activity_part, session_snapshot};
@@ -141,13 +141,7 @@ impl SessionHistoryStore {
         session_id: i64,
         include_full_parts: bool,
     ) -> Result<Vec<Message>, DbErr> {
-        let message_rows = activity_message::Entity::find()
-            .filter(activity_message::Column::SessionId.eq(session_id))
-            .filter(activity_message::Column::IsCompacted.eq(false))
-            .order_by_asc(activity_message::Column::CreatedAtMs)
-            .order_by_asc(activity_message::Column::MessageId)
-            .all(&self.db)
-            .await?;
+        let message_rows = self.list_projected_message_rows(session_id).await?;
 
         if message_rows.is_empty() {
             return Ok(Vec::new());
@@ -157,75 +151,9 @@ impl SessionHistoryStore {
             .iter()
             .map(|row| row.message_id)
             .collect::<Vec<_>>();
-        let part_rows = if include_full_parts {
-            activity_part::Entity::find()
-                .filter(activity_part::Column::MessageId.is_in(message_ids))
-                .order_by_asc(activity_part::Column::MessageId)
-                .order_by_asc(activity_part::Column::PartIndex)
-                .all(&self.db)
-                .await?
-                .into_iter()
-                .map(|row| {
-                    Ok(MessagePart {
-                        id: row.part_id,
-                        message_id: row.message_id,
-                        part_index: row.part_index,
-                        status: row.status,
-                        kind: row.kind,
-                        name: row.name,
-                        summary: row.summary,
-                        has_detail: row.has_detail,
-                        operation_id: row.operation_id,
-                        created_at: timestamp_millis_to_utc(row.created_at_ms)?,
-                        content: row.content,
-                    })
-                })
-                .collect::<Result<Vec<_>, DbErr>>()?
-        } else {
-            activity_part::Entity::find()
-                .select_only()
-                .column(activity_part::Column::PartId)
-                .column(activity_part::Column::MessageId)
-                .column(activity_part::Column::PartIndex)
-                .column(activity_part::Column::Status)
-                .column(activity_part::Column::Kind)
-                .column(activity_part::Column::Name)
-                .column(activity_part::Column::Summary)
-                .column(activity_part::Column::HasDetail)
-                .column(activity_part::Column::OperationId)
-                .column(activity_part::Column::CreatedAtMs)
-                .filter(activity_part::Column::MessageId.is_in(message_ids))
-                .order_by_asc(activity_part::Column::MessageId)
-                .order_by_asc(activity_part::Column::PartIndex)
-                .into_model::<ProjectedPartSummaryRow>()
-                .all(&self.db)
-                .await?
-                .into_iter()
-                .map(|row| {
-                    Ok(MessagePart {
-                        id: row.part_id,
-                        message_id: row.message_id,
-                        part_index: row.part_index,
-                        status: row.status,
-                        kind: row.kind,
-                        name: row.name,
-                        summary: row.summary,
-                        has_detail: row.has_detail,
-                        operation_id: row.operation_id,
-                        created_at: timestamp_millis_to_utc(row.created_at_ms)?,
-                        content: None,
-                    })
-                })
-                .collect::<Result<Vec<_>, DbErr>>()?
-        };
-
-        let mut parts_by_message = std::collections::BTreeMap::<i64, Vec<MessagePart>>::new();
-        for part in part_rows {
-            parts_by_message
-                .entry(part.message_id)
-                .or_default()
-                .push(part);
-        }
+        let mut parts_by_message = self
+            .load_projected_parts_for_messages(message_ids.as_slice(), include_full_parts)
+            .await?;
 
         message_rows
             .into_iter()
@@ -239,20 +167,68 @@ impl SessionHistoryStore {
             .collect()
     }
 
+    pub(crate) async fn list_projected_messages_page(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<(Vec<Message>, bool, Option<(i64, i64)>), DbErr> {
+        let (message_rows, has_more, next_cursor) = self
+            .list_projected_message_rows_page(session_id, cursor, limit)
+            .await?;
+
+        if message_rows.is_empty() {
+            return Ok((Vec::new(), has_more, next_cursor));
+        }
+
+        let message_ids = message_rows
+            .iter()
+            .map(|row| row.message_id)
+            .collect::<Vec<_>>();
+        let mut parts_by_message = self
+            .load_projected_parts_for_messages(message_ids.as_slice(), include_full_parts)
+            .await?;
+
+        let messages = message_rows
+            .into_iter()
+            .map(|row| {
+                let message_id = row.message_id;
+                projected_message_from_row(
+                    row,
+                    parts_by_message.remove(&message_id).unwrap_or_default(),
+                )
+            })
+            .collect::<Result<Vec<_>, DbErr>>()?;
+
+        Ok((messages, has_more, next_cursor))
+    }
+
     pub(crate) async fn list_projected_message_headers(
         &self,
         session_id: i64,
     ) -> Result<Vec<ProjectedMessageHeader>, DbErr> {
-        activity_message::Entity::find()
-            .filter(activity_message::Column::SessionId.eq(session_id))
-            .filter(activity_message::Column::IsCompacted.eq(false))
-            .order_by_asc(activity_message::Column::CreatedAtMs)
-            .order_by_asc(activity_message::Column::MessageId)
-            .all(&self.db)
+        self.list_projected_message_rows(session_id)
             .await?
             .into_iter()
             .map(projected_message_header_from_row)
             .collect()
+    }
+
+    pub(crate) async fn list_projected_message_headers_page(
+        &self,
+        session_id: i64,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<(Vec<ProjectedMessageHeader>, bool, Option<(i64, i64)>), DbErr> {
+        let (message_rows, has_more, next_cursor) = self
+            .list_projected_message_rows_page(session_id, cursor, limit)
+            .await?;
+        let messages = message_rows
+            .into_iter()
+            .map(projected_message_header_from_row)
+            .collect::<Result<Vec<_>, DbErr>>()?;
+        Ok((messages, has_more, next_cursor))
     }
 
     pub(crate) async fn find_projected_message(
@@ -407,6 +383,146 @@ impl SessionHistoryStore {
             .filter(session_snapshot::Column::SessionId.eq(session_id))
             .one(&self.db)
             .await
+    }
+
+    async fn list_projected_message_rows(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<activity_message::Model>, DbErr> {
+        activity_message::Entity::find()
+            .filter(activity_message::Column::SessionId.eq(session_id))
+            .filter(activity_message::Column::IsCompacted.eq(false))
+            .order_by_asc(activity_message::Column::CreatedAtMs)
+            .order_by_asc(activity_message::Column::MessageId)
+            .all(&self.db)
+            .await
+    }
+
+    async fn list_projected_message_rows_page(
+        &self,
+        session_id: i64,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<(Vec<activity_message::Model>, bool, Option<(i64, i64)>), DbErr> {
+        let limit = usize::try_from(limit)
+            .map_err(|_| DbErr::Custom(format!("page limit too large: {limit}")))?;
+        let fetch_limit = limit
+            .checked_add(1)
+            .ok_or_else(|| DbErr::Custom(format!("page limit overflow: {limit}")))?;
+
+        let mut statement = activity_message::Entity::find()
+            .filter(activity_message::Column::SessionId.eq(session_id))
+            .filter(activity_message::Column::IsCompacted.eq(false))
+            .order_by_desc(activity_message::Column::CreatedAtMs)
+            .order_by_desc(activity_message::Column::MessageId);
+
+        if let Some((created_at_ms, message_id)) = cursor {
+            statement = statement.filter(
+                Condition::any()
+                    .add(activity_message::Column::CreatedAtMs.lt(created_at_ms))
+                    .add(
+                        Condition::all()
+                            .add(activity_message::Column::CreatedAtMs.eq(created_at_ms))
+                            .add(activity_message::Column::MessageId.lt(message_id)),
+                    ),
+            );
+        }
+
+        let mut rows = statement
+            .limit(
+                u64::try_from(fetch_limit)
+                    .map_err(|_| DbErr::Custom(format!("page limit too large: {fetch_limit}")))?,
+            )
+            .all(&self.db)
+            .await?;
+        let has_more = rows.len() > limit;
+        if has_more {
+            rows.truncate(limit);
+        }
+        let next_cursor = rows.last().map(|row| (row.created_at_ms, row.message_id));
+        rows.reverse();
+        Ok((rows, has_more, next_cursor))
+    }
+
+    async fn load_projected_parts_for_messages(
+        &self,
+        message_ids: &[i64],
+        include_full_parts: bool,
+    ) -> Result<std::collections::BTreeMap<i64, Vec<MessagePart>>, DbErr> {
+        if message_ids.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+
+        let part_rows = if include_full_parts {
+            activity_part::Entity::find()
+                .filter(activity_part::Column::MessageId.is_in(message_ids.iter().copied()))
+                .order_by_asc(activity_part::Column::MessageId)
+                .order_by_asc(activity_part::Column::PartIndex)
+                .all(&self.db)
+                .await?
+                .into_iter()
+                .map(|row| {
+                    Ok(MessagePart {
+                        id: row.part_id,
+                        message_id: row.message_id,
+                        part_index: row.part_index,
+                        status: row.status,
+                        kind: row.kind,
+                        name: row.name,
+                        summary: row.summary,
+                        has_detail: row.has_detail,
+                        operation_id: row.operation_id,
+                        created_at: timestamp_millis_to_utc(row.created_at_ms)?,
+                        content: row.content,
+                    })
+                })
+                .collect::<Result<Vec<_>, DbErr>>()?
+        } else {
+            activity_part::Entity::find()
+                .select_only()
+                .column(activity_part::Column::PartId)
+                .column(activity_part::Column::MessageId)
+                .column(activity_part::Column::PartIndex)
+                .column(activity_part::Column::Status)
+                .column(activity_part::Column::Kind)
+                .column(activity_part::Column::Name)
+                .column(activity_part::Column::Summary)
+                .column(activity_part::Column::HasDetail)
+                .column(activity_part::Column::OperationId)
+                .column(activity_part::Column::CreatedAtMs)
+                .filter(activity_part::Column::MessageId.is_in(message_ids.iter().copied()))
+                .order_by_asc(activity_part::Column::MessageId)
+                .order_by_asc(activity_part::Column::PartIndex)
+                .into_model::<ProjectedPartSummaryRow>()
+                .all(&self.db)
+                .await?
+                .into_iter()
+                .map(|row| {
+                    Ok(MessagePart {
+                        id: row.part_id,
+                        message_id: row.message_id,
+                        part_index: row.part_index,
+                        status: row.status,
+                        kind: row.kind,
+                        name: row.name,
+                        summary: row.summary,
+                        has_detail: row.has_detail,
+                        operation_id: row.operation_id,
+                        created_at: timestamp_millis_to_utc(row.created_at_ms)?,
+                        content: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, DbErr>>()?
+        };
+
+        let mut parts_by_message = std::collections::BTreeMap::<i64, Vec<MessagePart>>::new();
+        for part in part_rows {
+            parts_by_message
+                .entry(part.message_id)
+                .or_default()
+                .push(part);
+        }
+        Ok(parts_by_message)
     }
 
     async fn write_snapshot(

@@ -327,10 +327,7 @@ impl TerminalSession {
         });
     }
 
-    fn spawn_wait_task(
-        session: Arc<Self>,
-        mut child: Box<dyn portable_pty::Child + Send + Sync>,
-    ) {
+    fn spawn_wait_task(session: Arc<Self>, mut child: Box<dyn portable_pty::Child + Send + Sync>) {
         tokio::task::spawn_blocking(move || {
             let exit_code = child.wait().ok().map(|status| status.exit_code() as i32);
             let _ = session.exit_state.send(true);
@@ -392,7 +389,12 @@ impl TerminalManager {
         }
     }
 
-    async fn create(&self, cwd: String, cols: u16, rows: u16) -> Result<TerminalCreateResponse, TerminalError> {
+    async fn create(
+        &self,
+        cwd: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalCreateResponse, TerminalError> {
         validate_working_directory(cwd.as_str())
             .await
             .map_err(|_| TerminalError::InvalidWorkingDirectory)?;
@@ -445,7 +447,10 @@ impl TerminalManager {
         })
     }
 
-    async fn ensure_running(&self, session_id: &str) -> Result<Arc<TerminalSession>, TerminalError> {
+    async fn ensure_running(
+        &self,
+        session_id: &str,
+    ) -> Result<Arc<TerminalSession>, TerminalError> {
         let sid = session_id.trim();
         if sid.is_empty() {
             return Err(TerminalError::NotFound);
@@ -465,8 +470,8 @@ impl TerminalManager {
             .await
             .map_err(|_| TerminalError::InvalidWorkingDirectory)?;
 
-        let session =
-            TerminalSession::spawn(entry.cwd.clone(), entry.cols, entry.rows).map_err(TerminalError::Spawn)?;
+        let session = TerminalSession::spawn(entry.cwd.clone(), entry.cols, entry.rows)
+            .map_err(TerminalError::Spawn)?;
         self.sessions.insert(sid.to_string(), session.clone());
         self.track_session_exit(sid.to_string(), session.clone());
         self.store
@@ -610,11 +615,7 @@ fn terminal_error_response(error: TerminalError) -> Response {
 async fn validate_working_directory(raw: &str) -> Result<PathBuf, ()> {
     let path = tokio::fs::canonicalize(raw).await.map_err(|_| ())?;
     let metadata = tokio::fs::metadata(&path).await.map_err(|_| ())?;
-    if metadata.is_dir() {
-        Ok(path)
-    } else {
-        Err(())
-    }
+    if metadata.is_dir() { Ok(path) } else { Err(()) }
 }
 
 fn default_shell() -> String {
@@ -915,7 +916,10 @@ pub(crate) async fn terminal_resize(
     if let Err(error) = session.resize(cols, rows) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
     }
-    if let Err(error) = manager.remember_dimensions(session_id.as_str(), cols, rows).await {
+    if let Err(error) = manager
+        .remember_dimensions(session_id.as_str(), cols, rows)
+        .await
+    {
         return terminal_error_response(error);
     }
 
@@ -1137,30 +1141,12 @@ mod tests {
                 "/api/terminal/{session_id}",
                 get(terminal_get).delete(terminal_delete),
             )
-            .route(
-                "/api/terminal/{session_id}/stream",
-                get(terminal_stream),
-            )
-            .route(
-                "/api/terminal/{session_id}/input",
-                post(terminal_input),
-            )
-            .route(
-                "/api/terminal/{session_id}/resize",
-                post(terminal_resize),
-            )
-            .route(
-                "/api/terminal/{session_id}/start",
-                post(terminal_start),
-            )
-            .route(
-                "/api/terminal/{session_id}/stop",
-                post(terminal_stop),
-            )
-            .route(
-                "/api/terminal/{session_id}/restart",
-                post(terminal_restart),
-            )
+            .route("/api/terminal/{session_id}/stream", get(terminal_stream))
+            .route("/api/terminal/{session_id}/input", post(terminal_input))
+            .route("/api/terminal/{session_id}/resize", post(terminal_resize))
+            .route("/api/terminal/{session_id}/start", post(terminal_start))
+            .route("/api/terminal/{session_id}/stop", post(terminal_stop))
+            .route("/api/terminal/{session_id}/restart", post(terminal_restart))
             .with_state(state)
     }
 

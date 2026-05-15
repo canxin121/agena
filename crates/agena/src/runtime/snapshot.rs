@@ -15,7 +15,7 @@ use crate::{
     model::ModelRef,
     model_catalog::{
         ModelCatalogConfig, ModelCatalogResponse, ModelCatalogService, ModelCatalogSnapshot,
-        ModelCatalogStore,
+        ModelCatalogStore, decorate_provider_models,
     },
     plugin::PluginHost,
     provider::ProviderRegistry,
@@ -350,7 +350,24 @@ impl RuntimeSnapshot {
         &self,
         provider_id: &str,
     ) -> Result<Vec<crate::provider::ProviderModel>, AppError> {
-        self.services.providers.list_models(provider_id).await
+        let models = self.services.providers.list_models(provider_id).await?;
+        let Some(provider_record) = self
+            .services
+            .model_catalog
+            .effective_provider_record(provider_id)
+        else {
+            return Ok(models);
+        };
+        let provider = self
+            .services
+            .providers
+            .get(provider_id)
+            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
+        Ok(decorate_provider_models(
+            provider.as_ref(),
+            &provider_record,
+            models,
+        ))
     }
 
     pub fn resolve_model_target(

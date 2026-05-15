@@ -792,7 +792,8 @@ pub(crate) fn build_prepared_prompt(
     options: PromptRequestOptions<'_>,
 ) -> PreparedPrompt {
     let active_messages = active_prompt_messages(session);
-    let prompt_messages = prompt_messages_for_request(active_messages.as_slice(), options.goal_context);
+    let prompt_messages =
+        prompt_messages_for_request(active_messages.as_slice(), options.goal_context);
     let provider_request_shape = options.provider_request_shape.cloned();
     let PromptRequestFingerprint {
         system_fingerprint,
@@ -2461,10 +2462,24 @@ mod tests {
             PromptCacheShape::new("openai").with_string("base_url", "https://api.openai.com/v1");
         let changed_shape =
             PromptCacheShape::new("openai").with_string("base_url", "https://proxy.example/v1");
-        let baseline =
-            fingerprint_request_options("openai", "gpt-5", None, None, None, &[], Some(&baseline_shape));
-        let changed =
-            fingerprint_request_options("openai", "gpt-5", None, None, None, &[], Some(&changed_shape));
+        let baseline = fingerprint_request_options(
+            "openai",
+            "gpt-5",
+            None,
+            None,
+            None,
+            &[],
+            Some(&baseline_shape),
+        );
+        let changed = fingerprint_request_options(
+            "openai",
+            "gpt-5",
+            None,
+            None,
+            None,
+            &[],
+            Some(&changed_shape),
+        );
 
         assert_ne!(baseline, changed);
     }

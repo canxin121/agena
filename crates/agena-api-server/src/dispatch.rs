@@ -4,11 +4,12 @@
 
 use std::collections::HashMap;
 
+use crate::local_api::dto::MessageResource as HttpMessageResource;
 use crate::local_api::{
-    ModelCatalogEntryResource as HttpModelCatalogEntryResource,
-    ModelCatalogResponse as HttpModelCatalogResponse, PermissionRuleListQuery,
-    PermissionRuleResource as HttpPermissionRuleResource, PermissionRuleWriteRequest,
-    SessionAutomationResource as HttpSessionAutomationResource,
+    MessageListQuery, ModelCatalogEntryResource as HttpModelCatalogEntryResource,
+    ModelCatalogResponse as HttpModelCatalogResponse, PartLoadMode as HttpPartLoadMode,
+    PermissionRuleListQuery, PermissionRuleResource as HttpPermissionRuleResource,
+    PermissionRuleWriteRequest, SessionAutomationResource as HttpSessionAutomationResource,
     SessionCreateRequest as HttpSessionCreateRequest,
     SessionExecutionContextResource as HttpSessionExecutionContextResource,
     SessionExecutionResource as HttpSessionExecutionResource,
@@ -135,6 +136,30 @@ fn session_goal_from_http(value: HttpSessionGoalResource) -> SessionGoalResource
         created_at: value.created_at,
         updated_at: value.updated_at,
         completed_at: value.completed_at,
+    }
+}
+
+fn message_resource_from_http(value: HttpMessageResource) -> agena_api::resource::MessageResource {
+    agena_api::resource::MessageResource {
+        id: value.id,
+        session_id: value.session_id,
+        role: value.role,
+        state: value.state,
+        created_at: value.created_at,
+        updated_at: value.updated_at,
+        metadata: value.metadata,
+        usage: value.usage,
+        finish: value.finish,
+        part_count: value.part_count,
+        parts: value.parts,
+    }
+}
+
+fn part_load_mode_to_http(mode: agena_api::resource::PartLoadMode) -> HttpPartLoadMode {
+    match mode {
+        agena_api::resource::PartLoadMode::None => HttpPartLoadMode::None,
+        agena_api::resource::PartLoadMode::Summary => HttpPartLoadMode::Summary,
+        agena_api::resource::PartLoadMode::Full => HttpPartLoadMode::Full,
     }
 }
 
@@ -1083,35 +1108,28 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             Ok(QueryResult::Session(session_from_http(session)))
         }
         Query::ListMessages(ListMessagesParams {
-            session_id, parts, ..
+            session_id,
+            cursor,
+            limit,
+            parts,
         }) => {
-            let items: Vec<_> = match parts {
-                agena_api::resource::PartLoadMode::None => manager
-                    .list_projected_message_headers(session_id)
-                    .await?
-                    .iter()
-                    .map(|m| message_resource_from_projected_header(session_id, m))
-                    .collect(),
-                agena_api::resource::PartLoadMode::Summary
-                | agena_api::resource::PartLoadMode::Full => {
-                    let include_full_parts = parts == agena_api::resource::PartLoadMode::Full;
-                    manager
-                        .list_projected_messages(session_id, include_full_parts)
-                        .await?
-                        .iter()
-                        .map(|m| message_resource_from_projected_message(session_id, m, parts))
-                        .collect()
-                }
-            };
-            let returned = items.len() as u64;
-            Ok(QueryResult::Messages(PaginatedResponse {
-                items,
-                page: PageInfo {
-                    next_cursor: None,
-                    has_more: false,
-                    returned,
-                },
-            }))
+            let page = state
+                .service()
+                .list_messages(
+                    manager.as_ref(),
+                    session_id,
+                    MessageListQuery {
+                        cursor,
+                        limit,
+                        parts: part_load_mode_to_http(parts),
+                    },
+                )
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(QueryResult::Messages(page_from_http(
+                page,
+                message_resource_from_http,
+            )))
         }
         Query::GetMessage(GetMessageParams { message_id, parts }) => {
             let session_id = manager
@@ -1335,6 +1353,53 @@ mod tests {
         (AppState::new(runtime, db), workspace_root)
     }
 
+    async fn insert_projected_message_with_text_part(
+        state: &AppState,
+        session_id: i64,
+        message_id: i64,
+        part_id: i64,
+        created_at_ms: i64,
+        summary: &str,
+        text: &str,
+    ) {
+        let db = state.service().clone_db();
+
+        activity_message::ActiveModel {
+            message_id: Set(message_id),
+            session_id: Set(session_id),
+            role: Set(agena::role::Role::Assistant),
+            state: Set(ExecutionStatus::Completed),
+            created_at_ms: Set(created_at_ms),
+            updated_at_ms: Set(created_at_ms),
+            metadata: Set(MessageMetadata::default()),
+            usage: Set(None),
+            finish: Set(None),
+            part_count: Set(1),
+            is_compacted: Set(false),
+        }
+        .insert(db.as_ref())
+        .await
+        .expect("activity message projection should insert");
+
+        activity_part::ActiveModel {
+            part_id: Set(part_id),
+            message_id: Set(message_id),
+            session_id: Set(session_id),
+            part_index: Set(0),
+            status: Set(ExecutionStatus::Completed),
+            kind: Set(PartKind::Text),
+            name: Set(None),
+            summary: Set(Some(summary.to_string())),
+            has_detail: Set(true),
+            operation_id: Set(None),
+            created_at_ms: Set(created_at_ms),
+            content: Set(Some(PartContent::text(text))),
+        }
+        .insert(db.as_ref())
+        .await
+        .expect("activity part projection should insert");
+    }
+
     #[tokio::test]
     async fn message_queries_respect_none_parts_mode() {
         let (state, workspace_root) = test_state_with_config(
@@ -1510,6 +1575,208 @@ enabled = true
         assert_eq!(message.id, message_id);
         assert!(message.parts.is_none(), "none mode should omit parts");
         assert_eq!(message.part_count, 3);
+    }
+
+    #[tokio::test]
+    async fn list_messages_query_uses_paginated_service_metadata() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+            "message-pagination-dispatch",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "message pagination").await;
+        let created_at = chrono::Utc::now().timestamp_millis();
+
+        insert_projected_message_with_text_part(
+            &state,
+            session_id,
+            7201,
+            7301,
+            created_at,
+            "older summary",
+            "older body",
+        )
+        .await;
+        insert_projected_message_with_text_part(
+            &state,
+            session_id,
+            7202,
+            7302,
+            created_at + 1,
+            "newer summary",
+            "newer body",
+        )
+        .await;
+
+        let result = dispatch_query(
+            &state,
+            Query::ListMessages(ListMessagesParams {
+                session_id,
+                cursor: None,
+                limit: Some(1),
+                parts: agena_api::resource::PartLoadMode::Summary,
+            }),
+        )
+        .await
+        .expect("first list messages query should succeed");
+        let QueryResult::Messages(first_page) = result else {
+            panic!("expected message list result");
+        };
+        assert_eq!(first_page.items.len(), 1);
+        assert_eq!(first_page.page.returned, 1);
+        assert!(
+            first_page.page.has_more,
+            "first page should report more rows"
+        );
+        let next_cursor = first_page
+            .page
+            .next_cursor
+            .clone()
+            .expect("first page should include a cursor");
+        assert_eq!(first_page.items[0].id, 7202);
+
+        let first_part = first_page.items[0]
+            .parts
+            .as_ref()
+            .and_then(|parts| parts.first())
+            .expect("summary mode should include part headers");
+        assert_eq!(first_part.summary.as_deref(), Some("newer summary"));
+        assert!(
+            first_part.content.is_none(),
+            "summary mode should omit full content"
+        );
+
+        let result = dispatch_query(
+            &state,
+            Query::ListMessages(ListMessagesParams {
+                session_id,
+                cursor: Some(next_cursor),
+                limit: Some(1),
+                parts: agena_api::resource::PartLoadMode::Summary,
+            }),
+        )
+        .await
+        .expect("second list messages query should succeed");
+        let QueryResult::Messages(second_page) = result else {
+            panic!("expected message list result");
+        };
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(second_page.items[0].id, 7201);
+        assert!(
+            !second_page.page.has_more,
+            "cursor should advance to the final page"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_messages_query_preserves_parts_modes() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+            "message-parts-dispatch",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "message parts").await;
+        let created_at = chrono::Utc::now().timestamp_millis();
+
+        insert_projected_message_with_text_part(
+            &state,
+            session_id,
+            7401,
+            7501,
+            created_at,
+            "dispatch summary",
+            "dispatch full text",
+        )
+        .await;
+
+        let result = dispatch_query(
+            &state,
+            Query::ListMessages(ListMessagesParams {
+                session_id,
+                cursor: None,
+                limit: Some(1),
+                parts: agena_api::resource::PartLoadMode::None,
+            }),
+        )
+        .await
+        .expect("none list messages query should succeed");
+        let QueryResult::Messages(none_page) = result else {
+            panic!("expected message list result");
+        };
+        assert!(
+            none_page.items[0].parts.is_none(),
+            "none mode should omit parts"
+        );
+        assert_eq!(none_page.items[0].part_count, 1);
+
+        let result = dispatch_query(
+            &state,
+            Query::ListMessages(ListMessagesParams {
+                session_id,
+                cursor: None,
+                limit: Some(1),
+                parts: agena_api::resource::PartLoadMode::Summary,
+            }),
+        )
+        .await
+        .expect("summary list messages query should succeed");
+        let QueryResult::Messages(summary_page) = result else {
+            panic!("expected message list result");
+        };
+        let summary_part = summary_page.items[0]
+            .parts
+            .as_ref()
+            .and_then(|parts| parts.first())
+            .expect("summary mode should include part headers");
+        assert_eq!(summary_part.summary.as_deref(), Some("dispatch summary"));
+        assert!(
+            summary_part.content.is_none(),
+            "summary mode should omit full content"
+        );
+
+        let result = dispatch_query(
+            &state,
+            Query::ListMessages(ListMessagesParams {
+                session_id,
+                cursor: None,
+                limit: Some(1),
+                parts: agena_api::resource::PartLoadMode::Full,
+            }),
+        )
+        .await
+        .expect("full list messages query should succeed");
+        let QueryResult::Messages(full_page) = result else {
+            panic!("expected message list result");
+        };
+        let full_part = full_page.items[0]
+            .parts
+            .as_ref()
+            .and_then(|parts| parts.first())
+            .expect("full mode should include full parts");
+        assert_eq!(full_part.summary.as_deref(), Some("dispatch summary"));
+        assert_eq!(full_part.text(), Some("dispatch full text"));
     }
 
     #[tokio::test]

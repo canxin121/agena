@@ -100,6 +100,11 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Create a new persisted session goal.
+    async fn create_goal(&self, _req: HostCreateGoalRequest) -> Result<HostCreateGoalResponse> {
+        Err(unavailable())
+    }
+
     /// Mutate the current persisted session goal.
     async fn update_goal(&self, _req: HostUpdateGoalRequest) -> Result<HostUpdateGoalResponse> {
         Err(unavailable())
@@ -609,6 +614,7 @@ pub struct HostTodoWriteRequest {
 #[serde(rename_all = "snake_case")]
 pub enum HostGoalStatus {
     Active,
+    Paused,
     BudgetLimited,
     Completed,
 }
@@ -635,6 +641,18 @@ pub struct HostGetGoalRequest {}
 pub struct HostGetGoalResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<HostGoal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostCreateGoalRequest {
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostCreateGoalResponse {
+    pub goal: HostGoal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

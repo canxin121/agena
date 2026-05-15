@@ -48,6 +48,15 @@ export type ModelCatalogEditableDraft = {
   reasoning: boolean
   structured_output: boolean
   temperature_supported: boolean
+  variants: ModelCatalogVariantEditableDraft[]
+}
+
+export type ModelCatalogVariantEditableDraft = {
+  name: string
+  display_name: string
+  description: string
+  disabled: boolean
+  thinking_json: string
 }
 
 export const MODEL_FAMILY_OPTIONS = [
@@ -87,6 +96,29 @@ function normalizeOptionalInteger(value: string): number | null {
   return Math.floor(parsed)
 }
 
+function normalizeOptionalJsonObject(value: string, fieldLabel: string): Record<string, unknown> | null {
+  const normalized = String(value || '').trim()
+  if (!normalized) return null
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(normalized)
+  } catch {
+    throw new Error(`${fieldLabel} must be valid JSON.`)
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${fieldLabel} must be a JSON object.`)
+  }
+
+  return parsed as Record<string, unknown>
+}
+
+function stringifyJson(value: Record<string, unknown> | null | undefined): string {
+  if (!value) return ''
+  return JSON.stringify(value, null, 2)
+}
+
 function readCapabilityFlag(
   entry: Pick<ModelCatalogEntry, 'capabilities'>,
   key: 'tool_calling' | 'streaming' | 'reasoning' | 'structured_output' | 'temperature_supported',
@@ -111,6 +143,38 @@ export function createEmptyModelCatalogDraft(providerId = '', modelId = ''): Mod
     reasoning: false,
     structured_output: false,
     temperature_supported: false,
+    variants: [],
+  }
+}
+
+type ProviderModelVariantWithDisabled = ProviderModelVariant & {
+  disabled?: boolean
+}
+
+type ProviderModelVariantWriteValue = ProviderModelVariant & {
+  disabled?: boolean
+}
+
+export function createEmptyModelCatalogVariantDraft(name = ''): ModelCatalogVariantEditableDraft {
+  return {
+    name,
+    display_name: '',
+    description: '',
+    disabled: false,
+    thinking_json: '',
+  }
+}
+
+function createModelCatalogVariantDraftFromEntry(
+  name: string,
+  variant: ProviderModelVariantWithDisabled,
+): ModelCatalogVariantEditableDraft {
+  return {
+    name,
+    display_name: String(variant.display_name || ''),
+    description: String(variant.description || ''),
+    disabled: Boolean(variant.disabled),
+    thinking_json: stringifyJson(variant.thinking || null),
   }
 }
 
@@ -130,7 +194,45 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     reasoning: readCapabilityFlag(entry, 'reasoning'),
     structured_output: readCapabilityFlag(entry, 'structured_output'),
     temperature_supported: readCapabilityFlag(entry, 'temperature_supported'),
+    variants: Object.entries(entry.variants || {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, variant]) => createModelCatalogVariantDraftFromEntry(name, variant as ProviderModelVariantWithDisabled)),
   }
+}
+
+function buildModelCatalogVariants(
+  variants: ModelCatalogVariantEditableDraft[],
+): Record<string, ProviderModelVariant> | undefined {
+  const normalized: Record<string, ProviderModelVariantWriteValue> = {}
+  const seenNames = new Set<string>()
+
+  for (const variant of variants) {
+    const name = String(variant.name || '').trim()
+    const displayName = normalizeOptionalText(variant.display_name)
+    const description = normalizeOptionalText(variant.description)
+    const thinking = normalizeOptionalJsonObject(variant.thinking_json, `Variant ${name || '(unnamed)'} thinking`)
+    const disabled = Boolean(variant.disabled)
+    const hasDetails = Boolean(displayName || description || thinking || disabled)
+
+    if (!name) {
+      if (!hasDetails) continue
+      throw new Error('Variant name is required when variant details are provided.')
+    }
+
+    if (seenNames.has(name)) {
+      throw new Error(`Variant ${name} is listed more than once.`)
+    }
+    seenNames.add(name)
+
+    const nextVariant: ProviderModelVariantWriteValue = {}
+    if (displayName) nextVariant.display_name = displayName
+    if (description) nextVariant.description = description
+    if (thinking) nextVariant.thinking = thinking
+    if (disabled) nextVariant.disabled = true
+    normalized[name] = nextVariant
+  }
+
+  return Object.keys(normalized).length ? (normalized as Record<string, ProviderModelVariant>) : undefined
 }
 
 export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft): ModelCatalogEntryWriteRequest {
@@ -151,7 +253,7 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
     max_output_tokens: normalizeOptionalInteger(draft.max_output_tokens),
     display_name: normalizeOptionalText(draft.display_name),
     description: normalizeOptionalText(draft.description),
-    variants: {} satisfies Record<string, ProviderModelVariant>,
+    variants: buildModelCatalogVariants(draft.variants),
     capabilities,
   }
 }
@@ -178,15 +280,15 @@ export function useRuntimeModelCatalogActions(
   }
 
   async function saveCatalogEntryAction(draft: ModelCatalogEditableDraft) {
-    const request = buildModelCatalogWriteRequest(draft)
-    if (!request.provider_id || !request.model_id) {
-      input.actionError.value = 'provider_id and model_id are required.'
-      return
-    }
-
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
+      const request = buildModelCatalogWriteRequest(draft)
+      if (!request.provider_id || !request.model_id) {
+        input.actionError.value = 'provider_id and model_id are required.'
+        return
+      }
+
       const response = await deps.upsertModelCatalogEntry(request)
       replaceEntries(response.entries ?? [])
       input.actionMessage.value = `Saved catalog entry ${request.provider_id}/${request.model_id}.`

@@ -6,7 +6,7 @@
 
 use std::{process::Command as ProcessCommand, sync::Arc};
 
-use agena::model::{ModelId, ModelRef, ProviderId};
+use agena::model::{ModelId, ModelLifecycle, ModelRef, ProviderId};
 use agena::{
     agent::Agent,
     config::LoadConfigRequest,
@@ -32,7 +32,11 @@ use agena_api::{
     subscribe::SubscribeRequest,
     ws::{ClientMessage, ServerMessage},
 };
-use agena_api_server::{AppState, dispatch::{dispatch_command, dispatch_query}, router};
+use agena_api_server::{
+    AppState,
+    dispatch::{dispatch_command, dispatch_query},
+    router,
+};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -91,6 +95,10 @@ fn test_run_options() -> SessionRunOptions {
 }
 
 async fn build_state() -> (AppState, Arc<SessionManager>, String) {
+    build_state_with_config("").await
+}
+
+async fn build_state_with_config(config_text: &str) -> (AppState, Arc<SessionManager>, String) {
     let db = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
     agena::db::init_schema(db.as_ref()).await.unwrap();
     let workspace_root = format!("/tmp/api-server-workspace-{}", uuid::Uuid::new_v4());
@@ -119,7 +127,7 @@ async fn build_state() -> (AppState, Arc<SessionManager>, String) {
         "agena-api-server-test-{}.toml",
         uuid::Uuid::new_v4()
     ));
-    std::fs::write(&config_path, "").expect("test config should be written");
+    std::fs::write(&config_path, config_text).expect("test config should be written");
 
     let runtime = agena::runtime::AgenaRuntime::builder()
         .with_load_request(LoadConfigRequest {
@@ -134,6 +142,59 @@ async fn build_state() -> (AppState, Arc<SessionManager>, String) {
 
     let state = AppState::new(runtime, Arc::clone(&db)).with_manager_override(Arc::clone(&manager));
     (state, manager, workspace_root)
+}
+
+async fn insert_projected_message(
+    db: &sea_orm::DatabaseConnection,
+    session_id: i64,
+    message_id: i64,
+    created_at_ms: i64,
+    part_count: i64,
+) {
+    agena::db::entities::activity_message::ActiveModel {
+        message_id: Set(message_id),
+        session_id: Set(session_id),
+        role: Set(agena::role::Role::Assistant),
+        state: Set(agena::message::ExecutionStatus::Completed),
+        created_at_ms: Set(created_at_ms),
+        updated_at_ms: Set(created_at_ms),
+        metadata: Set(agena::message::MessageMetadata::default()),
+        usage: Set(None),
+        finish: Set(None),
+        part_count: Set(part_count),
+        is_compacted: Set(false),
+    }
+    .insert(db)
+    .await
+    .expect("activity message projection should insert");
+}
+
+async fn insert_projected_text_part(
+    db: &sea_orm::DatabaseConnection,
+    session_id: i64,
+    message_id: i64,
+    part_id: i64,
+    part_index: i32,
+    created_at_ms: i64,
+    text: &str,
+) {
+    agena::db::entities::activity_part::ActiveModel {
+        part_id: Set(part_id),
+        message_id: Set(message_id),
+        session_id: Set(session_id),
+        part_index: Set(part_index),
+        status: Set(agena::message::ExecutionStatus::Completed),
+        kind: Set(agena::message::PartKind::Text),
+        name: Set(None),
+        summary: Set(Some(format!("summary {text}"))),
+        has_detail: Set(true),
+        operation_id: Set(None),
+        created_at_ms: Set(created_at_ms),
+        content: Set(Some(agena::message::PartContent::text(text))),
+    }
+    .insert(db)
+    .await
+    .expect("activity part projection should insert");
 }
 
 #[tokio::test]
@@ -253,6 +314,213 @@ async fn model_catalog_delete_accepts_visible_model_ids_with_slashes() {
                     == Some("openai/google/gemini-2.5-pro")
         }),
         "deleted entry should not remain in catalog payload: {value:?}"
+    );
+}
+
+#[tokio::test]
+async fn provider_models_endpoint_decorates_listed_models_from_effective_catalog() {
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        .match_header("authorization", "Bearer sk-test")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "data": [{ "id": "gpt-upstream" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let config = format!(
+        r#"
+[providers.gateway]
+default_model = "openai/gpt-upstream"
+
+[providers.gateway.auth]
+mode = "api"
+base_url = "{base_url}"
+api_key = "sk-test"
+
+[providers.gateway.adapters.openai]
+enabled = true
+"#,
+        base_url = server.url()
+    );
+
+    let (state, _, _) = build_state_with_config(config.as_str()).await;
+    state
+        .runtime()
+        .current_snapshot()
+        .model_catalog()
+        .upsert_custom_entry(
+            "gateway",
+            "openai/gpt-upstream",
+            CatalogModelDefinition {
+                display_name: Some("Decorated GPT".to_owned()),
+                description: Some("Catalog description".to_owned()),
+                lifecycle: Some(ModelLifecycle::Preview),
+                context_window_tokens: Some(123_456),
+                max_output_tokens: Some(7_890),
+                ..CatalogModelDefinition::default()
+            },
+            false,
+        )
+        .expect("custom catalog entry should be written");
+
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/providers/gateway/models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let models = value
+        .get("models")
+        .and_then(|models| models.as_array())
+        .expect("provider models response should include models");
+    let model = models
+        .iter()
+        .find(|model| model.get("id").and_then(|value| value.as_str()) == Some("openai/gpt-upstream"))
+        .expect("decorated upstream model should be present");
+
+    assert_eq!(
+        model.get("display_name").and_then(|value| value.as_str()),
+        Some("Decorated GPT")
+    );
+    assert_eq!(
+        model.pointer("/metadata/description")
+            .and_then(|value| value.as_str()),
+        Some("Catalog description")
+    );
+    assert_eq!(
+        model.pointer("/metadata/lifecycle")
+            .and_then(|value| value.as_str()),
+        Some("preview")
+    );
+    assert_eq!(
+        model.pointer("/metadata/limits/context_window_tokens")
+            .and_then(|value| value.as_u64()),
+        Some(123_456)
+    );
+    assert_eq!(
+        model.pointer("/metadata/limits/max_output_tokens")
+            .and_then(|value| value.as_u64()),
+        Some(7_890)
+    );
+}
+
+#[tokio::test]
+async fn provider_models_endpoint_appends_catalog_only_models_missing_upstream() {
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        .match_header("authorization", "Bearer sk-test")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "data": [{ "id": "gpt-upstream" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let config = format!(
+        r#"
+[providers.gateway]
+default_model = "openai/gpt-upstream"
+
+[providers.gateway.auth]
+mode = "api"
+base_url = "{base_url}"
+api_key = "sk-test"
+
+[providers.gateway.adapters.openai]
+enabled = true
+"#,
+        base_url = server.url()
+    );
+
+    let (state, _, _) = build_state_with_config(config.as_str()).await;
+    state
+        .runtime()
+        .current_snapshot()
+        .model_catalog()
+        .upsert_custom_entry(
+            "gateway",
+            "openai/gpt-catalog-only",
+            CatalogModelDefinition {
+                display_name: Some("Catalog Only GPT".to_owned()),
+                description: Some("Only in catalog".to_owned()),
+                lifecycle: Some(ModelLifecycle::Preview),
+                context_window_tokens: Some(222_222),
+                max_output_tokens: Some(3_333),
+                ..CatalogModelDefinition::default()
+            },
+            false,
+        )
+        .expect("custom catalog entry should be written");
+
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/providers/gateway/models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let models = value
+        .get("models")
+        .and_then(|models| models.as_array())
+        .expect("provider models response should include models");
+    assert!(
+        models.iter().any(|model| {
+            model.get("id").and_then(|value| value.as_str()) == Some("openai/gpt-upstream")
+        }),
+        "upstream listed model should remain present: {value:?}"
+    );
+
+    let catalog_only = models
+        .iter()
+        .find(|model| {
+            model.get("id").and_then(|value| value.as_str()) == Some("openai/gpt-catalog-only")
+        })
+        .expect("catalog-only model should be appended");
+
+    assert_eq!(
+        catalog_only
+            .get("display_name")
+            .and_then(|value| value.as_str()),
+        Some("Catalog Only GPT")
+    );
+    assert_eq!(
+        catalog_only
+            .pointer("/metadata/description")
+            .and_then(|value| value.as_str()),
+        Some("Only in catalog")
+    );
+    assert_eq!(
+        catalog_only
+            .pointer("/metadata/lifecycle")
+            .and_then(|value| value.as_str()),
+        Some("preview")
     );
 }
 
@@ -536,9 +804,14 @@ async fn goal_command_and_query_round_trip() {
     assert_eq!(goal.tokens_used, 0);
     assert_eq!(goal.time_used_seconds, 0);
 
-    let queried = dispatch_query(&state, Query::GetSessionGoal(GetSessionParams { session_id: session.id }))
-        .await
-        .expect("goal query should succeed");
+    let queried = dispatch_query(
+        &state,
+        Query::GetSessionGoal(GetSessionParams {
+            session_id: session.id,
+        }),
+    )
+    .await
+    .expect("goal query should succeed");
     let QueryResult::SessionGoal(Some(goal)) = queried else {
         panic!("expected session goal query result");
     };
@@ -988,6 +1261,289 @@ async fn message_none_mode_uses_projected_part_count_without_part_rows() {
     assert_eq!(
         value.get("part_count").and_then(|count| count.as_u64()),
         Some(4)
+    );
+}
+
+#[tokio::test]
+async fn message_list_none_paginates_newest_first_and_returns_each_page_ascending() {
+    let (state, _manager, workspace_root) = build_state().await;
+    let app = router(state.clone());
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "paged none".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let db = state.service().clone_db();
+    let created_at = chrono::Utc::now().timestamp_millis();
+    for message_id in 9_501..=9_505 {
+        insert_projected_message(db.as_ref(), session.id, message_id, created_at, 0).await;
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/sessions/{}/messages?parts=none&limit=2",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let items = value
+        .get("items")
+        .and_then(|items| items.as_array())
+        .expect("first page items");
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.get("id").and_then(|id| id.as_i64()).unwrap())
+            .collect::<Vec<_>>(),
+        vec![9_504, 9_505]
+    );
+    assert!(
+        items.iter().all(|item| item.get("parts").is_none()),
+        "none mode should omit parts: {value:?}"
+    );
+    assert_eq!(
+        value
+            .get("page")
+            .and_then(|page| page.get("has_more"))
+            .and_then(|has_more| has_more.as_bool()),
+        Some(true)
+    );
+    let cursor = value
+        .get("page")
+        .and_then(|page| page.get("next_cursor"))
+        .and_then(|cursor| cursor.as_str())
+        .expect("first page cursor")
+        .to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/sessions/{}/messages?parts=none&limit=2&cursor={cursor}",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let items = value
+        .get("items")
+        .and_then(|items| items.as_array())
+        .expect("second page items");
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.get("id").and_then(|id| id.as_i64()).unwrap())
+            .collect::<Vec<_>>(),
+        vec![9_502, 9_503]
+    );
+    assert_eq!(
+        value
+            .get("page")
+            .and_then(|page| page.get("has_more"))
+            .and_then(|has_more| has_more.as_bool()),
+        Some(true)
+    );
+    let cursor = value
+        .get("page")
+        .and_then(|page| page.get("next_cursor"))
+        .and_then(|cursor| cursor.as_str())
+        .expect("second page cursor")
+        .to_string();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/sessions/{}/messages?parts=none&limit=2&cursor={cursor}",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let items = value
+        .get("items")
+        .and_then(|items| items.as_array())
+        .expect("third page items");
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.get("id").and_then(|id| id.as_i64()).unwrap())
+            .collect::<Vec<_>>(),
+        vec![9_501]
+    );
+    assert_eq!(
+        value
+            .get("page")
+            .and_then(|page| page.get("has_more"))
+            .and_then(|has_more| has_more.as_bool()),
+        Some(false)
+    );
+}
+
+#[tokio::test]
+async fn message_list_summary_and_full_paginate_with_expected_part_payloads() {
+    let (state, _manager, workspace_root) = build_state().await;
+    let app = router(state.clone());
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "paged summary/full".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let db = state.service().clone_db();
+    let created_at = chrono::Utc::now().timestamp_millis();
+    for (offset, (message_id, part_id, text)) in [
+        (0_i64, (9_601_i64, 9_701_i64, "first page oldest")),
+        (1_i64, (9_602_i64, 9_702_i64, "first page newest")),
+        (2_i64, (9_603_i64, 9_703_i64, "second page only")),
+    ] {
+        let created_at_ms = created_at + offset;
+        insert_projected_message(db.as_ref(), session.id, message_id, created_at_ms, 1).await;
+        insert_projected_text_part(
+            db.as_ref(),
+            session.id,
+            message_id,
+            part_id,
+            0,
+            created_at_ms,
+            text,
+        )
+        .await;
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/sessions/{}/messages?parts=summary&limit=2",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let items = value
+        .get("items")
+        .and_then(|items| items.as_array())
+        .expect("summary page items");
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.get("id").and_then(|id| id.as_i64()).unwrap())
+            .collect::<Vec<_>>(),
+        vec![9_602, 9_603]
+    );
+    assert!(
+        items.iter().all(|item| {
+            item.get("parts")
+                .and_then(|parts| parts.as_array())
+                .and_then(|parts| parts.first())
+                .and_then(|part| part.get("content"))
+                .is_none()
+        }),
+        "summary mode should omit part content: {value:?}"
+    );
+    let cursor = value
+        .get("page")
+        .and_then(|page| page.get("next_cursor"))
+        .and_then(|cursor| cursor.as_str())
+        .expect("summary page cursor")
+        .to_string();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/sessions/{}/messages?parts=full&limit=2&cursor={cursor}",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let items = value
+        .get("items")
+        .and_then(|items| items.as_array())
+        .expect("full page items");
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.get("id").and_then(|id| id.as_i64()).unwrap())
+            .collect::<Vec<_>>(),
+        vec![9_601]
+    );
+    assert_eq!(
+        items[0]
+            .get("parts")
+            .and_then(|parts| parts.as_array())
+            .and_then(|parts| parts.first())
+            .and_then(|part| part.get("content"))
+            .and_then(|content| content.get("text"))
+            .and_then(|text| text.as_str()),
+        Some("first page oldest")
+    );
+    assert_eq!(
+        value
+            .get("page")
+            .and_then(|page| page.get("has_more"))
+            .and_then(|has_more| has_more.as_bool()),
+        Some(false)
     );
 }
 

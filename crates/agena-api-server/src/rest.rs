@@ -58,6 +58,12 @@ pub struct SessionEventListCompatQuery {
     pub after_seq: Option<i64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelCatalogEntryDeleteQuery {
+    pub provider_id: String,
+    pub model_id: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SessionForkRequestBody {
     /// Fork point. `None` clones the entire history; otherwise clones
@@ -348,12 +354,12 @@ pub async fn set_model_catalog_provider_default(
 
 pub async fn delete_model_catalog_entry(
     State(state): State<AppState>,
-    Path((provider_id, model_id)): Path<(String, String)>,
+    AxumQuery(query): AxumQuery<ModelCatalogEntryDeleteQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     let snapshot = state.runtime().current_snapshot();
     snapshot
         .model_catalog()
-        .remove_custom_entry(provider_id.as_str(), model_id.as_str())
+        .remove_custom_entry(query.provider_id.as_str(), query.model_id.as_str())
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
     get_model_catalog(State(state)).await

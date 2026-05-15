@@ -85,15 +85,12 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/model-catalog/entries",
-                axum::routing::put(rest::upsert_model_catalog_entry),
+                axum::routing::put(rest::upsert_model_catalog_entry)
+                    .delete(rest::delete_model_catalog_entry),
             )
             .route(
                 "/api/v1/model-catalog/default-model",
                 post(rest::set_model_catalog_provider_default),
-            )
-            .route(
-                "/api/v1/model-catalog/providers/{provider_id}/models/{model_id}",
-                axum::routing::delete(rest::delete_model_catalog_entry),
             )
             .route("/api/v1/git/status", get(rest::get_git_status))
             .route("/api/v1/project/git/init", post(rest::init_git_repository))

@@ -12,6 +12,7 @@ use agena::{
     config::LoadConfigRequest,
     event::{EventKind, PublishContext},
     message::PartContent,
+    model_catalog::CatalogModelDefinition,
     permission::PermissionPolicy,
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, ModelProvider,
@@ -206,6 +207,52 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             .and_then(|value| value.as_array())
             .is_some(),
         "catalog payload should include entries array: {catalog_value:?}"
+    );
+}
+
+#[tokio::test]
+async fn model_catalog_delete_accepts_visible_model_ids_with_slashes() {
+    let (state, _, _) = build_state().await;
+    state
+        .runtime()
+        .current_snapshot()
+        .model_catalog()
+        .upsert_custom_entry(
+            "openai",
+            "openai/google/gemini-2.5-pro",
+            CatalogModelDefinition::default(),
+            false,
+        )
+        .expect("custom catalog entry should be written");
+
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(
+                    "/api/v1/model-catalog/entries?provider_id=openai&model_id=openai%2Fgoogle%2Fgemini-2.5-pro",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let entries = value
+        .get("entries")
+        .and_then(|entries| entries.as_array())
+        .expect("catalog response should include entries");
+    assert!(
+        !entries.iter().any(|entry| {
+            entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
+                && entry.get("model_id").and_then(|value| value.as_str())
+                    == Some("openai/google/gemini-2.5-pro")
+        }),
+        "deleted entry should not remain in catalog payload: {value:?}"
     );
 }
 

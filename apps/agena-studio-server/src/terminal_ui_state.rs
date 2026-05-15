@@ -1,19 +1,27 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    convert::Infallible,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use async_stream::stream;
 use axum::{
     Json,
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex as AsyncMutex, RwLock};
+use tokio::sync::{Mutex as AsyncMutex, RwLock, broadcast};
 
 const DEFAULT_FOLDER_ID: &str = "terminal-default";
 const DEFAULT_FOLDER_NAME: &str = "Default";
@@ -24,6 +32,12 @@ const TERMINAL_UI_STATE_FILENAME: &str = "terminal-ui-state.json";
 pub(crate) struct TerminalUiFolder {
     pub id: String,
     pub name: String,
+}
+
+#[derive(Debug, Clone)]
+struct SequencedTerminalUiStateEvent {
+    seq: u64,
+    payload: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -76,14 +90,19 @@ struct TerminalUiStateStore {
     path: PathBuf,
     cache: RwLock<Option<TerminalUiState>>,
     put_lock: AsyncMutex<()>,
+    tx: broadcast::Sender<SequencedTerminalUiStateEvent>,
+    next_seq: AtomicU64,
 }
 
 impl TerminalUiStateStore {
     fn new(path: PathBuf) -> Self {
+        let (tx, _) = broadcast::channel(1024);
         Self {
             path,
             cache: RwLock::new(None),
             put_lock: AsyncMutex::new(()),
+            tx,
+            next_seq: AtomicU64::new(1),
         }
     }
 
@@ -115,6 +134,7 @@ impl TerminalUiStateStore {
 
         self.persist_to_disk(&next).await?;
         self.write_cache(next.clone()).await;
+        self.publish_state_replace(&next);
         Ok(next)
     }
 
@@ -151,6 +171,30 @@ impl TerminalUiStateStore {
     async fn write_cache(&self, state: TerminalUiState) {
         let mut guard = self.cache.write().await;
         *guard = Some(state);
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<SequencedTerminalUiStateEvent> {
+        self.tx.subscribe()
+    }
+
+    fn publish_state_replace(&self, state: &TerminalUiState) {
+        let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
+        let payload = serde_json::to_string(&serde_json::json!({
+            "type": "terminal-ui-state.patch",
+            "seq": seq,
+            "ts": now_millis(),
+            "properties": {
+                "ops": [
+                    {
+                        "type": "state.replace",
+                        "state": state,
+                    }
+                ]
+            }
+        }))
+        .unwrap_or_else(|_| "{}".to_string());
+
+        let _ = self.tx.send(SequencedTerminalUiStateEvent { seq, payload });
     }
 }
 
@@ -313,6 +357,19 @@ fn sanitize_state(input: TerminalUiState) -> TerminalUiState {
     }
 }
 
+fn snapshot_payload(state: &TerminalUiState) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "type": "terminal-ui-state.snapshot",
+        "state": state,
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct TerminalUiStateEventsQuery {
+    pub since: Option<String>,
+}
+
 pub(crate) async fn terminal_ui_state_get(State(state): State<Arc<crate::AppState>>) -> Response {
     let store = store_for_workspace(state.runtime.workspace_root());
     Json(store.read().await).into_response()
@@ -331,6 +388,42 @@ pub(crate) async fn terminal_ui_state_put(
         )
             .into_response(),
     }
+}
+
+pub(crate) async fn terminal_ui_state_events(
+    State(state): State<Arc<crate::AppState>>,
+    Query(query): Query<TerminalUiStateEventsQuery>,
+) -> Response {
+    let _ = query.since;
+    let store = store_for_workspace(state.runtime.workspace_root());
+    let mut rx = store.subscribe();
+    let initial = snapshot_payload(&store.read().await);
+
+    let sse_stream = stream! {
+        yield Ok::<Event, Infallible>(Event::default().data(initial));
+
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    yield Ok::<Event, Infallible>(
+                        Event::default()
+                            .id(event.seq.to_string())
+                            .data(event.payload),
+                    );
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => break,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    Sse::new(sse_stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("heartbeat"),
+        )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -371,7 +464,21 @@ mod tests {
                 "/api/ui/terminal/state",
                 get(terminal_ui_state_get).put(terminal_ui_state_put),
             )
+            .route(
+                "/api/ui/terminal/state/events",
+                get(terminal_ui_state_events),
+            )
             .with_state(state)
+    }
+
+    async fn next_event_chunk(body: &mut Body) -> String {
+        let frame = tokio::time::timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("stream frame should arrive")
+            .expect("stream should yield frame")
+            .expect("stream should not error");
+        let data = frame.into_data().expect("frame should contain data");
+        String::from_utf8(data.to_vec()).expect("frame should be utf8")
     }
 
     #[tokio::test]
@@ -505,5 +612,86 @@ mod tests {
         let get_payload: TerminalUiState =
             serde_json::from_slice(&get_body).expect("response should be valid json");
         assert_eq!(get_payload, payload);
+    }
+
+    #[tokio::test]
+    async fn terminal_ui_state_events_route_streams_snapshot_and_patch() {
+        let temp = tempdir().expect("tempdir should be created");
+        let state = test_state(temp.path()).await;
+        let router = test_router(state);
+
+        let events_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ui/terminal/state/events")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(events_response.status(), StatusCode::OK);
+        assert_eq!(
+            events_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        let mut events_body = events_response.into_body();
+        let snapshot_chunk = next_event_chunk(&mut events_body).await;
+        assert!(
+            snapshot_chunk.contains("terminal-ui-state.snapshot"),
+            "unexpected snapshot chunk: {snapshot_chunk:?}"
+        );
+        assert!(
+            snapshot_chunk.contains("\"version\":0"),
+            "unexpected snapshot chunk: {snapshot_chunk:?}"
+        );
+
+        let put_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/ui/terminal/state")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "activeSessionId": "alpha",
+                            "sessionIds": ["alpha"],
+                            "sessionMetaById": {
+                                "alpha": {
+                                    "name": "Alpha"
+                                }
+                            },
+                            "folders": []
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let patch_chunk = next_event_chunk(&mut events_body).await;
+        assert!(
+            patch_chunk.contains("id:1") || patch_chunk.contains("id: 1"),
+            "unexpected patch chunk: {patch_chunk:?}"
+        );
+        assert!(
+            patch_chunk.contains("terminal-ui-state.patch"),
+            "unexpected patch chunk: {patch_chunk:?}"
+        );
+        assert!(
+            patch_chunk.contains("\"type\":\"state.replace\""),
+            "unexpected patch chunk: {patch_chunk:?}"
+        );
+        assert!(
+            patch_chunk.contains("\"sessionIds\":[\"alpha\"]"),
+            "unexpected patch chunk: {patch_chunk:?}"
+        );
     }
 }

@@ -16,8 +16,7 @@ use crate::session::SessionRuntimeState;
 
 use super::{
     FinishReason, MessageRevised, RevisionKind, SessionView, SessionViewBuilder, SystemNoticeKind,
-    TurnAbortReason, TurnAborted, TurnId, TurnStarted,
-    fold_history,
+    TurnAbortReason, TurnAborted, TurnId, TurnStarted, fold_history,
 };
 use crate::role::Role;
 
@@ -41,6 +40,18 @@ struct ProjectedPartSummaryRow {
     has_detail: bool,
     operation_id: Option<String>,
     created_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectedMessageHeader {
+    pub id: i64,
+    pub role: crate::role::Role,
+    pub state: crate::message::ExecutionStatus,
+    pub created_at: DateTime<Utc>,
+    pub metadata: crate::message::MessageMetadata,
+    pub usage: Option<crate::message::MessageUsage>,
+    pub finish: Option<String>,
+    pub part_count: u64,
 }
 
 #[derive(Clone)]
@@ -208,26 +219,39 @@ impl SessionHistoryStore {
                 .collect::<Result<Vec<_>, DbErr>>()?
         };
 
-        let mut parts_by_message =
-            std::collections::BTreeMap::<i64, Vec<MessagePart>>::new();
+        let mut parts_by_message = std::collections::BTreeMap::<i64, Vec<MessagePart>>::new();
         for part in part_rows {
-            parts_by_message.entry(part.message_id).or_default().push(part);
+            parts_by_message
+                .entry(part.message_id)
+                .or_default()
+                .push(part);
         }
 
         message_rows
             .into_iter()
             .map(|row| {
-                Ok(Message {
-                    id: row.message_id,
-                    role: row.role,
-                    state: row.state,
-                    parts: parts_by_message.remove(&row.message_id).unwrap_or_default(),
-                    created_at: timestamp_millis_to_utc(row.created_at_ms)?,
-                    metadata: row.metadata,
-                    usage: row.usage,
-                    finish: row.finish,
-                })
+                let message_id = row.message_id;
+                projected_message_from_row(
+                    row,
+                    parts_by_message.remove(&message_id).unwrap_or_default(),
+                )
             })
+            .collect()
+    }
+
+    pub(crate) async fn list_projected_message_headers(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<ProjectedMessageHeader>, DbErr> {
+        activity_message::Entity::find()
+            .filter(activity_message::Column::SessionId.eq(session_id))
+            .filter(activity_message::Column::IsCompacted.eq(false))
+            .order_by_asc(activity_message::Column::CreatedAtMs)
+            .order_by_asc(activity_message::Column::MessageId)
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(projected_message_header_from_row)
             .collect()
     }
 
@@ -248,16 +272,20 @@ impl SessionHistoryStore {
         let parts = self
             .list_projected_parts(message_id, include_full_parts)
             .await?;
-        Ok(Some(Message {
-            id: row.message_id,
-            role: row.role,
-            state: row.state,
-            parts,
-            created_at: timestamp_millis_to_utc(row.created_at_ms)?,
-            metadata: row.metadata,
-            usage: row.usage,
-            finish: row.finish,
-        }))
+        Ok(Some(projected_message_from_row(row, parts)?))
+    }
+
+    pub(crate) async fn find_projected_message_header(
+        &self,
+        session_id: i64,
+        message_id: i64,
+    ) -> Result<Option<ProjectedMessageHeader>, DbErr> {
+        let row = activity_message::Entity::find_by_id(message_id)
+            .filter(activity_message::Column::SessionId.eq(session_id))
+            .filter(activity_message::Column::IsCompacted.eq(false))
+            .one(&self.db)
+            .await?;
+        row.map(projected_message_header_from_row).transpose()
     }
 
     pub(crate) async fn list_projected_parts(
@@ -326,8 +354,13 @@ impl SessionHistoryStore {
         }
     }
 
-    pub(crate) async fn find_projected_part(&self, part_id: i64) -> Result<Option<MessagePart>, DbErr> {
-        let row = activity_part::Entity::find_by_id(part_id).one(&self.db).await?;
+    pub(crate) async fn find_projected_part(
+        &self,
+        part_id: i64,
+    ) -> Result<Option<MessagePart>, DbErr> {
+        let row = activity_part::Entity::find_by_id(part_id)
+            .one(&self.db)
+            .await?;
         row.map(|row| {
             Ok(MessagePart {
                 id: row.part_id,
@@ -356,8 +389,13 @@ impl SessionHistoryStore {
         Ok(row.map(|row| row.session_id))
     }
 
-    pub(crate) async fn find_session_id_for_part(&self, part_id: i64) -> Result<Option<i64>, DbErr> {
-        let row = activity_part::Entity::find_by_id(part_id).one(&self.db).await?;
+    pub(crate) async fn find_session_id_for_part(
+        &self,
+        part_id: i64,
+    ) -> Result<Option<i64>, DbErr> {
+        let row = activity_part::Entity::find_by_id(part_id)
+            .one(&self.db)
+            .await?;
         Ok(row.map(|row| row.session_id))
     }
 
@@ -524,7 +562,8 @@ impl SessionHistoryStore {
             .publish_batch(built)
             .await
             .map_err(|err| DbErr::Custom(format!("publish history batch failed: {err}")))?;
-        self.apply_projection_events(session_id, built.as_slice()).await?;
+        self.apply_projection_events(session_id, built.as_slice())
+            .await?;
         Ok(built)
     }
 
@@ -550,7 +589,8 @@ impl SessionHistoryStore {
             .append_batch_silent(built)
             .await
             .map_err(|err| DbErr::Custom(format!("append silent history batch failed: {err}")))?;
-        self.apply_projection_events(session_id, built.as_slice()).await?;
+        self.apply_projection_events(session_id, built.as_slice())
+            .await?;
         Ok(built)
     }
 
@@ -580,9 +620,8 @@ impl SessionHistoryStore {
         let mut active: activity_message::ActiveModel = message_row.into();
         active.state = ActiveValue::Set(update.message_state);
         active.updated_at_ms = ActiveValue::Set(update.ts_ms);
-        active.part_count = ActiveValue::Set(
-            count_parts_for_message(&self.db, update.message_id).await? as i64,
-        );
+        active.part_count =
+            ActiveValue::Set(count_parts_for_message(&self.db, update.message_id).await? as i64);
         active.update(&self.db).await?;
         Ok(())
     }
@@ -595,10 +634,8 @@ impl SessionHistoryStore {
         for event in events {
             match &event.kind {
                 EventKind::UserMessageAppended(payload) => {
-                    let metadata = with_source_if_missing(
-                        payload.metadata.clone(),
-                        MessageSource::User,
-                    );
+                    let metadata =
+                        with_source_if_missing(payload.metadata.clone(), MessageSource::User);
                     upsert_message_projection(
                         &self.db,
                         activity_message::Model {
@@ -621,10 +658,8 @@ impl SessionHistoryStore {
                     }
                 }
                 EventKind::AssistantMessageCompleted(payload) => {
-                    let metadata = with_source_if_missing(
-                        payload.metadata.clone(),
-                        MessageSource::Assistant,
-                    );
+                    let metadata =
+                        with_source_if_missing(payload.metadata.clone(), MessageSource::Assistant);
                     upsert_message_projection(
                         &self.db,
                         activity_message::Model {
@@ -682,9 +717,12 @@ impl SessionHistoryStore {
                             usage: None,
                             finish: None,
                             part_count: 1,
-                            is_compacted: matches!(payload.kind, SystemNoticeKind::RewindCheckpoint)
-                                .then_some(true)
-                                .unwrap_or(false),
+                            is_compacted: matches!(
+                                payload.kind,
+                                SystemNoticeKind::RewindCheckpoint
+                            )
+                            .then_some(true)
+                            .unwrap_or(false),
                         },
                     )
                     .await?;
@@ -739,16 +777,51 @@ fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<chrono::DateTime<Utc>, D
         .ok_or_else(|| DbErr::Custom(format!("timestamp out of range: {timestamp_ms}")))
 }
 
+fn projected_message_from_row(
+    row: activity_message::Model,
+    parts: Vec<MessagePart>,
+) -> Result<Message, DbErr> {
+    Ok(Message {
+        id: row.message_id,
+        role: row.role,
+        state: row.state,
+        parts,
+        created_at: timestamp_millis_to_utc(row.created_at_ms)?,
+        metadata: row.metadata,
+        usage: row.usage,
+        finish: row.finish,
+    })
+}
+
+fn projected_message_header_from_row(
+    row: activity_message::Model,
+) -> Result<ProjectedMessageHeader, DbErr> {
+    let part_count = u64::try_from(row.part_count)
+        .map_err(|_| DbErr::Custom(format!("negative projected part count: {}", row.part_count)))?;
+    Ok(ProjectedMessageHeader {
+        id: row.message_id,
+        role: row.role,
+        state: row.state,
+        created_at: timestamp_millis_to_utc(row.created_at_ms)?,
+        metadata: row.metadata,
+        usage: row.usage,
+        finish: row.finish,
+        part_count,
+    })
+}
+
 fn finish_reason_label(reason: FinishReason) -> Option<String> {
-    Some(match reason {
-        FinishReason::Stop => "stop",
-        FinishReason::ToolCalls => "tool_calls",
-        FinishReason::MaxTokens => "max_tokens",
-        FinishReason::ContentFilter => "content_filter",
-        FinishReason::Error => "error",
-        FinishReason::Other => "other",
-    }
-    .to_string())
+    Some(
+        match reason {
+            FinishReason::Stop => "stop",
+            FinishReason::ToolCalls => "tool_calls",
+            FinishReason::MaxTokens => "max_tokens",
+            FinishReason::ContentFilter => "content_filter",
+            FinishReason::Error => "error",
+            FinishReason::Other => "other",
+        }
+        .to_string(),
+    )
 }
 
 fn with_source_if_missing(
@@ -848,9 +921,7 @@ async fn count_parts_for_message(db: &DatabaseConnection, message_id: i64) -> Re
         .await?)
 }
 
-fn project_system_notice_part(
-    payload: &super::SystemNoticeAppended,
-) -> MessagePart {
+fn project_system_notice_part(payload: &super::SystemNoticeAppended) -> MessagePart {
     let mut part = MessagePart::with_content(
         payload.message_id.raw(),
         payload.message_id.raw(),
@@ -862,9 +933,7 @@ fn project_system_notice_part(
     part
 }
 
-fn project_tool_result_part(
-    payload: &super::ToolCallCompleted,
-) -> Result<MessagePart, DbErr> {
+fn project_tool_result_part(payload: &super::ToolCallCompleted) -> Result<MessagePart, DbErr> {
     let summary = match &payload.output {
         super::transcript::TranscriptToolOutput::Text { text } => text.clone(),
         super::transcript::TranscriptToolOutput::Pruned { replacement } => replacement.clone(),

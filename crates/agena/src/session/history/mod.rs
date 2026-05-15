@@ -16,6 +16,7 @@ pub(crate) use event::{
 pub use event::{RewindCheckpoint, RewindCheckpointEntry};
 #[allow(unused_imports)]
 pub(crate) use projection::{HistoryFold, fold_history};
+pub use store::ProjectedMessageHeader;
 pub(crate) use store::SessionHistoryStore;
 #[allow(unused_imports)]
 pub(crate) use transcript::{

@@ -31,7 +31,7 @@ use agena::{
     model::ModelRef,
     permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
     provider::ProviderRegistry,
-    session::{Session, SessionGoal, SessionManager},
+    session::{ProjectedMessageHeader, Session, SessionGoal, SessionManager},
 };
 
 use super::{
@@ -534,46 +534,86 @@ impl ApiService {
         query: MessageListQuery,
     ) -> ApiResult<PaginatedResponse<MessageResource>> {
         self.ensure_session_exists(session_id).await?;
-        let include_full_parts = query.parts == PartLoadMode::Full;
-        let messages = manager
-            .list_projected_messages(session_id, include_full_parts)
-            .await
-            .map_err(api_error_from_app)?;
-
         let limit = normalize_limit(query.limit);
         let cursor = query
             .cursor
             .as_deref()
             .map(decode_cursor::<MessageCursor>)
             .transpose()?;
+        match query.parts {
+            PartLoadMode::None => {
+                let messages = manager
+                    .list_projected_message_headers(session_id)
+                    .await
+                    .map_err(api_error_from_app)?;
 
-        // Project messages newest-first to match the original SQL ordering,
-        // then apply cursor + limit.
-        let mut all: Vec<&Message> = messages.iter().collect();
-        all.sort_by(|a, b| {
-            (b.created_at.timestamp_millis(), b.id).cmp(&(a.created_at.timestamp_millis(), a.id))
-        });
-        if let Some(cursor) = cursor {
-            all.retain(|m| {
-                let key = (m.created_at.timestamp_millis(), m.id);
-                key < (cursor.created_at_ms, cursor.id)
-            });
+                // Project messages newest-first to match the original SQL ordering,
+                // then apply cursor + limit.
+                let mut all: Vec<&ProjectedMessageHeader> = messages.iter().collect();
+                all.sort_by(|a, b| {
+                    (b.created_at.timestamp_millis(), b.id)
+                        .cmp(&(a.created_at.timestamp_millis(), a.id))
+                });
+                if let Some(cursor) = cursor {
+                    all.retain(|m| {
+                        let key = (m.created_at.timestamp_millis(), m.id);
+                        key < (cursor.created_at_ms, cursor.id)
+                    });
+                }
+
+                let has_more = all.len() > limit as usize;
+                let mut slice: Vec<&ProjectedMessageHeader> =
+                    all.into_iter().take(limit as usize).collect();
+                let next_cursor = slice.last().map(|m| MessageCursor {
+                    created_at_ms: m.created_at.timestamp_millis(),
+                    id: m.id,
+                });
+                slice.reverse();
+
+                let items: Vec<MessageResource> = slice
+                    .iter()
+                    .map(|m| message_resource_from_header(session_id, m))
+                    .collect();
+
+                build_page(items, has_more, next_cursor, PageOrder::Asc, limit)
+            }
+            PartLoadMode::Summary | PartLoadMode::Full => {
+                let include_full_parts = query.parts == PartLoadMode::Full;
+                let messages = manager
+                    .list_projected_messages(session_id, include_full_parts)
+                    .await
+                    .map_err(api_error_from_app)?;
+
+                // Project messages newest-first to match the original SQL ordering,
+                // then apply cursor + limit.
+                let mut all: Vec<&Message> = messages.iter().collect();
+                all.sort_by(|a, b| {
+                    (b.created_at.timestamp_millis(), b.id)
+                        .cmp(&(a.created_at.timestamp_millis(), a.id))
+                });
+                if let Some(cursor) = cursor {
+                    all.retain(|m| {
+                        let key = (m.created_at.timestamp_millis(), m.id);
+                        key < (cursor.created_at_ms, cursor.id)
+                    });
+                }
+
+                let has_more = all.len() > limit as usize;
+                let mut slice: Vec<&Message> = all.into_iter().take(limit as usize).collect();
+                let next_cursor = slice.last().map(|m| MessageCursor {
+                    created_at_ms: m.created_at.timestamp_millis(),
+                    id: m.id,
+                });
+                slice.reverse();
+
+                let items: Vec<MessageResource> = slice
+                    .iter()
+                    .map(|m| message_resource_from_message(session_id, m, query.parts))
+                    .collect();
+
+                build_page(items, has_more, next_cursor, PageOrder::Asc, limit)
+            }
         }
-
-        let has_more = all.len() > limit as usize;
-        let mut slice: Vec<&Message> = all.into_iter().take(limit as usize).collect();
-        let next_cursor = slice.last().map(|m| MessageCursor {
-            created_at_ms: m.created_at.timestamp_millis(),
-            id: m.id,
-        });
-        slice.reverse();
-
-        let items: Vec<MessageResource> = slice
-            .iter()
-            .map(|m| message_resource_from_message(session_id, m, query.parts))
-            .collect();
-
-        build_page(items, has_more, next_cursor, PageOrder::Asc, limit)
     }
 
     pub async fn get_message(
@@ -589,14 +629,27 @@ impl ApiService {
         else {
             return Ok(None);
         };
-        let include_full_parts = parts == PartLoadMode::Full;
-        let message = manager
-            .find_projected_message(session_id, message_id, include_full_parts)
-            .await
-            .map_err(api_error_from_app)?;
-        Ok(message
-            .as_ref()
-            .map(|m| message_resource_from_message(session_id, m, parts)))
+        match parts {
+            PartLoadMode::None => {
+                let message = manager
+                    .find_projected_message_header(session_id, message_id)
+                    .await
+                    .map_err(api_error_from_app)?;
+                Ok(message
+                    .as_ref()
+                    .map(|m| message_resource_from_header(session_id, m)))
+            }
+            PartLoadMode::Summary | PartLoadMode::Full => {
+                let include_full_parts = parts == PartLoadMode::Full;
+                let message = manager
+                    .find_projected_message(session_id, message_id, include_full_parts)
+                    .await
+                    .map_err(api_error_from_app)?;
+                Ok(message
+                    .as_ref()
+                    .map(|m| message_resource_from_message(session_id, m, parts)))
+            }
+        }
     }
 
     pub async fn list_message_parts(
@@ -1793,6 +1846,25 @@ fn message_resource_from_message(
         finish: message.finish.clone(),
         part_count,
         parts,
+    }
+}
+
+fn message_resource_from_header(
+    session_id: i64,
+    message: &ProjectedMessageHeader,
+) -> MessageResource {
+    MessageResource {
+        id: message.id,
+        session_id,
+        role: message.role,
+        state: message.state,
+        created_at: message.created_at,
+        updated_at: message.created_at,
+        metadata: message.metadata.clone(),
+        usage: message.usage.clone(),
+        finish: message.finish.clone(),
+        part_count: message.part_count,
+        parts: None,
     }
 }
 

@@ -203,6 +203,16 @@ impl SessionStore {
             .await?)
     }
 
+    pub(crate) async fn list_projected_message_headers(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<crate::session::history::ProjectedMessageHeader>, AppError> {
+        Ok(self
+            .history
+            .list_projected_message_headers(session_id)
+            .await?)
+    }
+
     pub(crate) async fn find_projected_message(
         &self,
         session_id: i64,
@@ -212,6 +222,17 @@ impl SessionStore {
         Ok(self
             .history
             .find_projected_message(session_id, message_id, include_full_parts)
+            .await?)
+    }
+
+    pub(crate) async fn find_projected_message_header(
+        &self,
+        session_id: i64,
+        message_id: i64,
+    ) -> Result<Option<crate::session::history::ProjectedMessageHeader>, AppError> {
+        Ok(self
+            .history
+            .find_projected_message_header(session_id, message_id)
             .await?)
     }
 
@@ -1897,7 +1918,9 @@ mod tests {
         role::Role,
         session::{
             Session,
-            history::{FinishReason, TranscriptContent, TurnCompleted, TurnStarted, UserMessageAppended},
+            history::{
+                FinishReason, TranscriptContent, TurnCompleted, TurnStarted, UserMessageAppended,
+            },
             ids::{MessageId, TurnId},
         },
     };
@@ -2006,20 +2029,14 @@ mod tests {
         let store = SessionStore::new(db, workspace_root.as_path(), publisher);
         let turn_id = TurnId::new();
         let created_at = Utc::now();
-        let workspace_id = workspace::ensure_workspace_id(
-            store.db(),
-            workspace_root.to_string_lossy().as_ref(),
-        )
-        .await
-        .expect("workspace should exist");
-        let session = session_crud::create_session(
-            store.db(),
-            workspace_id,
-            None,
-            "allocator history",
-        )
-        .await
-        .expect("session should exist");
+        let workspace_id =
+            workspace::ensure_workspace_id(store.db(), workspace_root.to_string_lossy().as_ref())
+                .await
+                .expect("workspace should exist");
+        let session =
+            session_crud::create_session(store.db(), workspace_id, None, "allocator history")
+                .await
+                .expect("session should exist");
         let session_id = session.id;
         let message_id = 7;
         let part_id = 55;

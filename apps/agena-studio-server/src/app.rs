@@ -1461,6 +1461,15 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             "/api/ui/terminal/state/events",
             get(crate::terminal_ui_state::terminal_ui_state_events),
         )
+        .route(
+            "/api/terminal/create",
+            post(crate::terminal_sessions::terminal_create),
+        )
+        .route(
+            "/api/terminal/{session_id}",
+            get(crate::terminal_sessions::terminal_get)
+                .delete(crate::terminal_sessions::terminal_delete),
+        )
         .with_state(shared_state.clone())
         .layer(middleware::from_fn_with_state(
             shared_state.clone(),

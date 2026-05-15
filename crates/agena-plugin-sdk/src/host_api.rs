@@ -95,6 +95,16 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Read the current persisted session goal, if any.
+    async fn get_goal(&self, _req: HostGetGoalRequest) -> Result<HostGetGoalResponse> {
+        Err(unavailable())
+    }
+
+    /// Mutate the current persisted session goal.
+    async fn update_goal(&self, _req: HostUpdateGoalRequest) -> Result<HostUpdateGoalResponse> {
+        Err(unavailable())
+    }
+
     /// Enter plan mode for the current session.
     async fn enter_plan_mode(&self, _req: HostEnterPlanModeRequest) -> Result<ToolInvokeOutput> {
         Err(unavailable())
@@ -593,6 +603,48 @@ pub struct HostTodoItem {
 pub struct HostTodoWriteRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<HostTodoItem>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostGoalStatus {
+    Active,
+    BudgetLimited,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostGoal {
+    pub id: i64,
+    pub objective: String,
+    pub status: HostGoalStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u64>,
+    #[serde(default)]
+    pub tokens_used: u64,
+    #[serde(default)]
+    pub time_used_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostGetGoalRequest {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostGetGoalResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<HostGoal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostUpdateGoalRequest {
+    pub status: HostGoalStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostUpdateGoalResponse {
+    pub goal: HostGoal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

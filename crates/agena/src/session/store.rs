@@ -1082,6 +1082,7 @@ impl SessionStore {
         if !meta.runtime_state.prompt_tokens.is_empty()
             || !meta.runtime_state.provider_anchors.is_empty()
             || !meta.runtime_state.execution.is_empty()
+            || !meta.runtime_state.goal.is_empty()
             || meta.runtime_state.prompt_window.generation > 0
         {
             let runtime = meta.runtime_state.clone();
@@ -1234,10 +1235,12 @@ impl SessionStore {
 
         let cache = Arc::clone(&self.cache);
         let session_for_cache = session.clone();
+        let session_goal = session.goal.clone();
         let session_runtime = session.runtime.clone();
         let (updated_session, persisted_rule_for_event) =
             with_transaction_and_effects(&self.db, move |txn, effects| {
                 let cache = Arc::clone(&cache);
+                let session_goal = session_goal.clone();
                 Box::pin(async move {
                     let persisted_rule_for_event = if let Some(rule) = persisted_rule.as_ref() {
                         let (model, created) = permission_rule::upsert_rule(txn, rule).await?;
@@ -1256,7 +1259,10 @@ impl SessionStore {
                             .ok_or_else(|| {
                                 DbErr::Custom(format!("session not found: {session_id}"))
                             })?;
-                    let updated_session = session_from_model_db(updated_session)?;
+                    let mut updated_session = session_from_model_db(updated_session)?;
+                    if updated_session.goal.is_none() {
+                        updated_session.goal = session_goal;
+                    }
 
                     let updated_session_for_cache = updated_session.clone();
                     effects.push(async move {
@@ -1882,6 +1888,7 @@ fn rewind_runtime_state(
     let mut next = crate::session::SessionRuntimeState::default();
     next.prompt_window.generation = next_generation;
     next.execution = runtime.execution;
+    next.goal = runtime.goal;
     next.plan = runtime.plan;
     next.loaded_deferred_tools = runtime.loaded_deferred_tools;
     next

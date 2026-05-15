@@ -230,13 +230,16 @@ export type ProviderSummary = {
   catalog_default_model?: string | null
 }
 
-export type ModelCatalogSourceKind = 'remote' | 'fallback' | 'cache'
+export type ModelCatalogSourceKind = 'remote' | 'fallback' | 'cache' | 'custom'
+export type ModelCatalogEntryKind = 'official' | 'custom'
 
 export type ModelCatalogEntry = {
   provider_id: string
   model_id: string
+  kind: ModelCatalogEntryKind
+  source: ModelCatalogSourceKind
+  source_label?: string | null
   default_model_for_provider?: string | null
-  has_local_override?: boolean
   display_name?: string | null
   family?: string | null
   lifecycle?: string | null

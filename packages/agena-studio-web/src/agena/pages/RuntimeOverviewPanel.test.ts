@@ -98,4 +98,61 @@ describe('RuntimeOverviewPanel', () => {
     expect(html.includes('Use the live model buttons above for the fastest draft path')).toBe(true)
     expect(html.match(/Bring to Draft:/g)?.length).toBe(2)
   })
+
+  test('renders official and custom entries for the same provider/model with distinct actions', async () => {
+    const html = await renderVueSsr('/src/agena/pages/RuntimeOverviewPanel.vue', {
+      catalogEntries: [
+        {
+          provider_id: 'openai',
+          model_id: 'gpt-5',
+          kind: 'official',
+          source: 'remote',
+          source_label: 'remote catalog',
+          display_name: 'GPT-5 Official',
+        },
+        {
+          provider_id: 'openai',
+          model_id: 'gpt-5',
+          kind: 'custom',
+          source: 'custom',
+          source_label: 'workspace override',
+          display_name: 'GPT-5 Workspace',
+        },
+      ],
+      operatorCards: [{ label: 'Providers', value: '1' }],
+      runtimeSnapshotFacts: [{ label: 'Workspace Root', value: '/repo', mono: true }],
+      runtime: {
+        reload: { enabled: true, interval_secs: 10 },
+        janitor: { enabled: true, interval_secs: 60 },
+        watch_paths: ['src'],
+        automation: { recent_jobs: [], enabled: true, job_count: 0 },
+        model_catalog: {
+          remote_url: 'https://example.test/catalog.json',
+          fallback_url: 'https://example.test/fallback.json',
+          last_successful_source: 'remote',
+          last_refresh_at: '2026-05-15T00:00:00Z',
+          entries: [],
+        },
+      },
+      providers: [
+        {
+          provider_id: 'openai',
+          default_model: 'gpt-5',
+          default_model_ref: 'openai/gpt-5',
+          catalog_default_model: 'gpt-5',
+        },
+      ],
+      providerModels: { openai: [] },
+      sessionCacheFacts: [{ label: 'Entries', value: '2' }],
+      formatProviderModel: (model: { display_name?: string; id: string }) => model.display_name || model.id,
+      load: async () => {},
+    })
+
+    expect(html.includes('Create Custom Entry')).toBe(true)
+    expect(html.includes('Edit Custom Entry')).toBe(true)
+    expect(html.includes('Delete Custom Entry')).toBe(true)
+    expect(html.match(/Delete Custom Entry/g)?.length).toBe(1)
+    expect(html.includes('remote catalog')).toBe(true)
+    expect(html.includes('workspace override')).toBe(true)
+  })
 })

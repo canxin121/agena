@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use arc_swap::ArcSwap;
@@ -1874,6 +1874,7 @@ impl SessionManager {
             // boundary event before invoking the processor. The processor
             // currently mints its own TurnId internally; we use the one from
             // its result to wrap the matching TurnCompleted/TurnAborted.
+            let turn_started_at = Instant::now();
             let processor_fut = state.processor.run_turn(run).instrument(turn_span.clone());
             let turn_outcome = tokio::select! {
                 res = processor_fut => res,
@@ -1881,6 +1882,7 @@ impl SessionManager {
                     Err(AppError::Internal("turn cancelled by user".to_string()))
                 }
             };
+            let turn_elapsed_seconds = turn_started_at.elapsed().as_secs();
             match turn_outcome {
                 Ok(result) => {
                     let turn_id = result.turn_id;
@@ -2003,7 +2005,11 @@ impl SessionManager {
                         .append_history_items(persisted_session, turn_events, state.cache_policy())
                         .await?;
                     persisted_session = self
-                        .account_goal_usage_from_turn(persisted_session, state.as_ref())
+                        .account_goal_usage_from_turn(
+                            persisted_session,
+                            state.as_ref(),
+                            turn_elapsed_seconds,
+                        )
                         .await?;
 
                     if let Some(err) = terminal_error {
@@ -3267,6 +3273,7 @@ impl SessionManager {
         &self,
         session: Session,
         state: &SessionManagerState,
+        time_delta_seconds: u64,
     ) -> Result<Session, AppError> {
         let Some(goal_before) = session.goal.as_ref() else {
             return Ok(session);
@@ -3292,7 +3299,12 @@ impl SessionManager {
 
         let accounted = self
             .store
-            .account_goal_usage(session.id, token_delta, 0, state.cache_policy())
+            .account_goal_usage(
+                session.id,
+                token_delta,
+                time_delta_seconds,
+                state.cache_policy(),
+            )
             .await?;
         let Some(updated) = accounted else {
             return Ok(session);
@@ -4666,6 +4678,7 @@ mod tests {
         next_response_id: Arc<Mutex<u64>>,
         metadata: crate::provider::ModelMetadata,
         usage: Option<CompletionUsage>,
+        response_delay: Option<Duration>,
         current_prompt_cache_shape: Arc<Mutex<Option<crate::provider::PromptCacheShape>>>,
         dynamic_prompt_cache_shape: Option<crate::provider::PromptCacheShape>,
     }
@@ -4701,6 +4714,7 @@ mod tests {
                 next_response_id: Arc::new(Mutex::new(0)),
                 metadata: crate::provider::ModelMetadata::default(),
                 usage: None,
+                response_delay: None,
                 current_prompt_cache_shape: Arc::new(Mutex::new(None)),
                 dynamic_prompt_cache_shape: None,
             }
@@ -4724,6 +4738,11 @@ mod tests {
         #[allow(dead_code)]
         fn with_usage(mut self, usage: CompletionUsage) -> Self {
             self.usage = Some(usage);
+            self
+        }
+
+        fn with_response_delay(mut self, delay: Duration) -> Self {
+            self.response_delay = Some(delay);
             self
         }
 
@@ -6088,6 +6107,9 @@ mod tests {
                 .lock()
                 .expect("recording provider request lock should succeed")
                 .push(request);
+            if let Some(delay) = self.response_delay {
+                tokio::time::sleep(delay).await;
+            }
             if let Some(shape) = self.dynamic_prompt_cache_shape.clone() {
                 *self
                     .current_prompt_cache_shape
@@ -8045,6 +8067,71 @@ mod tests {
         assert_eq!(completed_goal.tokens_used, 13);
         assert_eq!(completed_goal.time_used_seconds, 0);
         assert!(completed_goal.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn goal_accounting_tracks_turn_runtime_seconds() {
+        let workspace = TempWorkspace::new();
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let service = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests))
+                .with_usage(CompletionUsage {
+                    input_tokens: 3,
+                    output_tokens: 2,
+                    reasoning_tokens: 0,
+                    cache_write_tokens: 0,
+                    cache_read_tokens: 0,
+                    total_cost: 0.0,
+                })
+                .with_response_delay(Duration::from_millis(1_200)),
+        )
+        .await;
+
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "goal-runtime-accounting".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        service
+            .create_goal(SessionGoalCreateRequest {
+                session_id: created.id,
+                objective: "measure real runtime".to_string(),
+                token_budget: None,
+            })
+            .await
+            .expect("create goal");
+
+        let completed = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+                parts: vec![PartContent::text("measure elapsed runtime")],
+            })
+            .await
+            .expect("submit turn");
+
+        let goal = completed.goal.expect("goal should still exist");
+        assert_eq!(goal.tokens_used, 5);
+        assert!(
+            goal.time_used_seconds >= 1,
+            "expected at least one second of recorded turn time, got {}",
+            goal.time_used_seconds
+        );
+
+        let persisted = service
+            .get_goal(created.id)
+            .await
+            .expect("load goal")
+            .expect("goal should persist");
+        assert_eq!(persisted.tokens_used, 5);
+        assert_eq!(persisted.time_used_seconds, goal.time_used_seconds);
     }
 
     /// Cancel a turn while the provider stream is still pending. The

@@ -21,14 +21,16 @@ pub use cost::{ModelCostBreakdown, SessionCostSummary};
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
-    SessionGoalCreateRequest, SessionManager, SessionManagerConfig, SessionPermissionReplyRequest,
-    SessionRewindRequest, SessionRunOptions, SessionSubtaskRequest, SessionSubtaskResponse,
-    SessionUnrewindRequest, SessionUserInputReplyRequest, SessionUserTurnRequest,
+    SessionGoalCreateRequest, SessionGoalUpdateRequest, SessionManager, SessionManagerConfig,
+    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
+    SessionSubtaskRequest, SessionSubtaskResponse, SessionUnrewindRequest,
+    SessionUserInputReplyRequest, SessionUserTurnRequest,
 };
 pub use model::{
-    GoalStatus, PlanState, PromptTokenRuntime, PromptTokenUsageSnapshot, PromptWindowRuntime,
-    ProviderPromptAnchor, Session, SessionExecutionContext, SessionGoal, SessionListRequest,
-    SessionRuntimeState, SessionRuntimeStatus, SessionStatus, SessionSummary,
+    GoalStatus, MAX_SESSION_GOAL_OBJECTIVE_CHARS, PlanState, PromptTokenRuntime,
+    PromptTokenUsageSnapshot, PromptWindowRuntime, ProviderPromptAnchor, Session,
+    SessionExecutionContext, SessionGoal, SessionListRequest, SessionRuntimeState,
+    SessionRuntimeStatus, SessionStatus, SessionSummary, validate_session_goal_objective,
 };
 #[allow(unused_imports)]
 pub(crate) use model::{

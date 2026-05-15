@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { MessagePart, MessageResource } from '@/agena/lib/agenaApi'
 
-import { messageBlocks, messageTags, messageUsageFacts, readPayloadMessageId } from './chatRenderModel'
+import { messageBlocks, messageTags, messageUsageFacts, readPayloadMessageId, readPayloadPartId } from './chatRenderModel'
 
 function messagePart(id: number, overrides?: Partial<MessagePart>): MessagePart {
   return {
@@ -80,7 +80,7 @@ describe('chatRenderModel', () => {
     expect(messageBlocks(summaryOnly)).toEqual([{ body: 'Awaiting permission: Need to inspect git status', kind: 'text' }])
   })
 
-  test('extracts tags, usage facts, and timeline message ids', () => {
+  test('extracts tags, usage facts, and timeline message-part ids', () => {
     const tagged = message(3, {
       metadata: { tags: ['tool', '', 'review'] },
       usage: {
@@ -104,5 +104,7 @@ describe('chatRenderModel', () => {
     ])
     expect(readPayloadMessageId({ message_id: 42 })).toBe(42)
     expect(readPayloadMessageId({ message_id: '42' })).toBe(null)
+    expect(readPayloadPartId({ part_id: 7 })).toBe(7)
+    expect(readPayloadPartId({ part_id: '7' })).toBe(null)
   })
 })

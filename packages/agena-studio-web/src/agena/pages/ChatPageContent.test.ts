@@ -238,11 +238,12 @@ function createChatPageContentState() {
         session_id: 11,
         created_at: '2026-05-11T01:03:00Z',
         kind: 'tool',
-        payload: { summary: 'Ran git status', message_id: 101 },
+        payload: { summary: 'Ran git status', message_id: 101, part_id: 301 },
       },
     ]),
     readPayloadMessageId: (payload: Record<string, unknown>) =>
       typeof payload.message_id === 'number' ? payload.message_id : null,
+    readPayloadPartId: (payload: Record<string, unknown>) => (typeof payload.part_id === 'number' ? payload.part_id : null),
     scrollToMessage: () => {},
     permissionActionView: () => ({ title: 'bash · git status *', details: ['kind=builtin_tool'] }),
     permissionRiskLabel: () => 'mutable tool execution',
@@ -285,6 +286,9 @@ describe('ChatPageContent', () => {
     expect(html.includes('Messages')).toBe(true)
     expect(html.includes('Message Inspector')).toBe(true)
     expect(html.includes('Timeline')).toBe(true)
+    expect(html.includes('Inspect Activity')).toBe(true)
+    expect(html.includes('Jump to Message')).toBe(true)
+    expect(html.includes('part_id=301')).toBe(true)
     expect(html.includes('Pending Permissions')).toBe(true)
     expect(html.includes('Pending User Input')).toBe(true)
     expect(html.includes('Composer')).toBe(true)

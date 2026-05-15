@@ -133,6 +133,8 @@ const props = defineProps<{
         :format-message-time="props.state.formatMessageTime"
         :format-event-time="props.state.formatEventTime"
         :read-payload-message-id="props.state.readPayloadMessageId"
+        :read-payload-part-id="props.state.readPayloadPartId"
+        :inspect-message="props.state.inspectMessage"
         :scroll-to-message="props.state.scrollToMessage"
       />
 

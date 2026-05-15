@@ -1452,6 +1452,11 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
     );
     let compat_routes = compat_fs_router::<Arc<AppState>>()
         .route("/api/git/status", get(compat_git_status))
+        .route(
+            "/api/ui/terminal/state",
+            get(crate::terminal_ui_state::terminal_ui_state_get)
+                .put(crate::terminal_ui_state::terminal_ui_state_put),
+        )
         .with_state(shared_state.clone())
         .layer(middleware::from_fn_with_state(
             shared_state.clone(),

@@ -33,8 +33,9 @@ use agena_api::{
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
         ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, SubmitTurnParams, UnrewindSessionParams,
-        UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        RevokePermissionRuleParams, RewindSessionParams, SetSessionGoalParams, SubmitTurnParams,
+        UnrewindSessionParams, UpdateSessionParams, UpdateWorkspaceParams,
+        UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
@@ -706,6 +707,60 @@ pub async fn dispatch_command(
                     token_budget,
                 })
                 .await?;
+            let session = manager.get_session(session_id).await?;
+            let resource = state
+                .service()
+                .session_goal_resource(manager.as_ref(), &session, &goal)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::SessionGoal(session_goal_from_http(resource)))
+        }
+        Command::SetSessionGoal(SetSessionGoalParams {
+            session_id,
+            objective,
+            status,
+            token_budget,
+            clear,
+        }) => {
+            if clear {
+                let cleared = manager.clear_goal(session_id).await?;
+                if !cleared {
+                    return Err(ServerError::NotFound(format!(
+                        "session {session_id} goal not found"
+                    )));
+                }
+                return Ok(CommandResult::SessionGoalCleared { session_id });
+            }
+
+            let goal = if manager.get_goal(session_id).await?.is_some() {
+                manager
+                    .update_goal(agena::session::SessionGoalUpdateRequest {
+                        session_id,
+                        objective,
+                        status,
+                        token_budget,
+                        expected_goal_id: None,
+                    })
+                    .await?
+            } else {
+                if !matches!(status, None | Some(agena::session::GoalStatus::Active)) {
+                    return Err(ServerError::BadRequest(format!(
+                        "session {session_id} goal must be created with status active"
+                    )));
+                }
+                let objective = objective.ok_or_else(|| {
+                    ServerError::BadRequest(format!(
+                        "session {session_id} goal objective is required when creating a goal"
+                    ))
+                })?;
+                manager
+                    .create_goal(agena::session::SessionGoalCreateRequest {
+                        session_id,
+                        objective,
+                        token_budget: token_budget.flatten(),
+                    })
+                    .await?
+            };
             let session = manager.get_session(session_id).await?;
             let resource = state
                 .service()

@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use agena::session::GoalStatus;
+
 use crate::resource::{
     MessagePartContent, PermissionMode, PermissionReply, RunOptions, SessionExecutionResource,
     SessionGoalResource, SessionResource, UserInputReply, WorkspaceResource,
@@ -25,6 +27,7 @@ pub enum Command {
     CreateSession(CreateSessionParams),
     UpdateSession(UpdateSessionParams),
     DeleteSession(DeleteSessionParams),
+    SetSessionGoal(SetSessionGoalParams),
     CreateSessionGoal(CreateSessionGoalParams),
     CompleteSessionGoal(CompleteSessionGoalParams),
     ClearSessionGoal(ClearSessionGoalParams),
@@ -134,6 +137,19 @@ pub struct CreateSessionGoalParams {
     pub objective: String,
     #[serde(default)]
     pub token_budget: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SetSessionGoalParams {
+    pub session_id: i64,
+    #[serde(default)]
+    pub objective: Option<String>,
+    #[serde(default)]
+    pub status: Option<GoalStatus>,
+    #[serde(default)]
+    pub token_budget: Option<Option<u64>>,
+    #[serde(default)]
+    pub clear: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -52,15 +52,24 @@ where
         .map_err(|_| DbErr::Custom("goal token budget exceeds i64".to_string()))?;
 
     if let Some(existing) = get_by_session_id(db, session_id).await? {
+        let existing_status =
+            goal_status_from_label(existing.status.as_str()).ok_or_else(|| {
+                DbErr::Custom(format!(
+                    "invalid goal status for session {} goal {}: {}",
+                    session_id, existing.id, existing.status
+                ))
+            })?;
+        let tokens_used = existing.tokens_used;
         let mut active: entities::session_goal::ActiveModel = existing.into();
         active.objective = Set(objective);
-        active.status = Set(
-            goal_status_label(goal_status_after_budget_limit(GoalStatus::Active, 0, token_budget))
-                .to_string(),
-        );
+        active.status = Set(goal_status_label(goal_status_after_update(
+            existing_status,
+            Some(GoalStatus::Active),
+            tokens_used,
+            token_budget,
+        ))
+        .to_string());
         active.token_budget = Set(token_budget_i64);
-        active.tokens_used = Set(0);
-        active.time_used_seconds = Set(0);
         active.updated_at_ms = Set(now_ms);
         active.completed_at_ms = Set(None);
         return active.update(db).await;
@@ -69,10 +78,12 @@ where
     entities::session_goal::ActiveModel {
         session_id: Set(session_id),
         objective: Set(objective),
-        status: Set(
-            goal_status_label(goal_status_after_budget_limit(GoalStatus::Active, 0, token_budget))
-                .to_string(),
-        ),
+        status: Set(goal_status_label(goal_status_after_budget_limit(
+            GoalStatus::Active,
+            0,
+            token_budget,
+        ))
+        .to_string()),
         token_budget: Set(token_budget_i64),
         tokens_used: Set(0),
         time_used_seconds: Set(0),
@@ -238,7 +249,9 @@ where
     let time_delta_seconds = i64::try_from(time_delta_seconds)
         .map_err(|_| DbErr::Custom("goal time delta exceeds i64".to_string()))?;
     let new_tokens_used = existing.tokens_used.saturating_add(token_delta);
-    let new_time_used_seconds = existing.time_used_seconds.saturating_add(time_delta_seconds);
+    let new_time_used_seconds = existing
+        .time_used_seconds
+        .saturating_add(time_delta_seconds);
     let token_budget = existing_goal_token_budget(&existing)?;
     let next_status =
         goal_status_after_accounting(existing_status, new_tokens_used, token_budget, mode);

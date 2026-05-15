@@ -391,6 +391,15 @@ impl ModelCatalogService {
         self.snapshot().merged_provider(provider_id)
     }
 
+    pub async fn refresh_if_stale_on_startup(&self) -> Result<ModelCatalogSnapshot, AppError> {
+        let snapshot = self.snapshot();
+        if self.snapshot_needs_startup_refresh(&snapshot) {
+            self.refresh().await
+        } else {
+            Ok(snapshot)
+        }
+    }
+
     pub async fn refresh(&self) -> Result<ModelCatalogSnapshot, AppError> {
         let config = self.store.config().clone();
         let remote_result = self.fetch_document(config.remote_url.as_str()).await;
@@ -543,6 +552,21 @@ impl ModelCatalogService {
             .duration_since(fetched)
             .map(|age| age.as_secs() <= self.store.config.cache_max_age_secs)
             .unwrap_or(false)
+    }
+
+    fn snapshot_needs_startup_refresh(&self, snapshot: &ModelCatalogSnapshot) -> bool {
+        if snapshot.official.providers.is_empty() {
+            return true;
+        }
+
+        let Some(last_refresh_at) = snapshot.last_refresh_at else {
+            return true;
+        };
+
+        match SystemTime::now().duration_since(last_refresh_at.into()) {
+            Ok(age) => age.as_secs() > self.store.config.cache_max_age_secs,
+            Err(_) => false,
+        }
     }
 
     fn replace_snapshot(&self, snapshot: ModelCatalogSnapshot) {
@@ -698,6 +722,8 @@ fn provider_model_variants(
 mod tests {
     use super::*;
     use crate::{model::CapabilitySupport, provider::ConfiguredModelVariant};
+    use mockito::Server;
+    use tempfile::tempdir;
 
     #[test]
     fn merged_provider_prefers_custom_default_and_models() {
@@ -839,5 +865,106 @@ mod tests {
             .get("gitlab")
             .expect("gitlab provider should exist");
         assert!(gitlab.models.contains_key("gitlab/duo-chat-sonnet-4-5"));
+    }
+
+    #[tokio::test]
+    async fn startup_refresh_reuses_fresh_cached_catalog() {
+        let dir = tempdir().expect("tempdir should create");
+        let store = ModelCatalogStore::new(ModelCatalogConfig {
+            remote_url: "https://example.invalid/catalog.json".to_owned(),
+            fallback_url: "https://example.invalid/fallback.json".to_owned(),
+            cache_path: dir.path().join("model-catalog-cache.json"),
+            custom_path: dir.path().join("model-catalog-custom.json"),
+            cache_max_age_secs: 60,
+        });
+        let cached_document = model_catalog_document("openai", "cached-model");
+        store
+            .write_cached_official(&CachedOfficialCatalog {
+                remote_url: store.config().remote_url.clone(),
+                fallback_url: store.config().fallback_url.clone(),
+                fetched_at_unix_ms: now_unix_ms(),
+                source: ModelCatalogEntrySourceKind::Remote,
+                document: cached_document.clone(),
+            })
+            .expect("cache should be written");
+
+        let service =
+            ModelCatalogService::new(reqwest::Client::new(), store).expect("service should load");
+
+        let snapshot = service
+            .refresh_if_stale_on_startup()
+            .await
+            .expect("fresh startup snapshot should succeed");
+
+        assert_eq!(snapshot.official, cached_document);
+        assert_eq!(
+            snapshot.last_successful_source,
+            Some(ModelCatalogEntrySourceKind::Remote)
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_refresh_updates_stale_cached_catalog() {
+        let dir = tempdir().expect("tempdir should create");
+        let mut server = Server::new_async().await;
+        let remote_document = model_catalog_document("openai", "fresh-model");
+        let remote_body =
+            serde_json::to_string(&remote_document).expect("remote document should serialize");
+        let remote_mock = server
+            .mock("GET", "/catalog.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(remote_body)
+            .create();
+
+        let store = ModelCatalogStore::new(ModelCatalogConfig {
+            remote_url: format!("{}/catalog.json", server.url()),
+            fallback_url: format!("{}/fallback.json", server.url()),
+            cache_path: dir.path().join("model-catalog-cache.json"),
+            custom_path: dir.path().join("model-catalog-custom.json"),
+            cache_max_age_secs: 1,
+        });
+        store
+            .write_cached_official(&CachedOfficialCatalog {
+                remote_url: store.config().remote_url.clone(),
+                fallback_url: store.config().fallback_url.clone(),
+                fetched_at_unix_ms: now_unix_ms() - 5_000,
+                source: ModelCatalogEntrySourceKind::Remote,
+                document: model_catalog_document("openai", "stale-model"),
+            })
+            .expect("stale cache should be written");
+
+        let service =
+            ModelCatalogService::new(reqwest::Client::new(), store).expect("service should load");
+
+        let snapshot = service
+            .refresh_if_stale_on_startup()
+            .await
+            .expect("stale startup refresh should succeed");
+
+        remote_mock.assert();
+        assert_eq!(snapshot.official, remote_document);
+        assert_eq!(
+            snapshot.last_successful_source,
+            Some(ModelCatalogEntrySourceKind::Remote)
+        );
+    }
+
+    fn model_catalog_document(provider_id: &str, model_id: &str) -> ModelCatalogDocument {
+        ModelCatalogDocument {
+            providers: BTreeMap::from([(
+                provider_id.to_owned(),
+                ModelCatalogProviderRecord {
+                    default_model: Some(model_id.to_owned()),
+                    models: BTreeMap::from([(
+                        model_id.to_owned(),
+                        CatalogModelDefinition {
+                            display_name: Some(model_id.to_owned()),
+                            ..CatalogModelDefinition::default()
+                        },
+                    )]),
+                },
+            )]),
+        }
     }
 }

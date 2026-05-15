@@ -9,7 +9,7 @@ pub use message::{Message, MessageStateTransitionError, MessageStatus};
 pub use metadata::{MessageMetadata, MessageSource};
 pub use part::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentItem, AttachmentKind, AttachmentPart,
-    AttachmentSource, BashToolInput, CommandExecutionPart, CreateGoalToolInput,
+    AttachmentSource, BashToolInput, ClearGoalToolInput, CommandExecutionPart, CreateGoalToolInput,
     CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput, CustomToolOutput,
     EnterPlanModeToolInput, EnterWorktreeToolInput, ErrorPart, ExecutionStatus,
     ExitPlanModeToolInput, ExitWorktreeToolInput, FileChangeEntry, FileChangeKind, FileChangePart,

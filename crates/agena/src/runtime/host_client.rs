@@ -18,11 +18,12 @@ use crate::message::{
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentListResponse,
     HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostCallbackContext,
-    HostClient, HostCreateGoalRequest, HostCreateGoalResponse, HostEnterPlanModeRequest,
-    HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest,
-    HostGetGoalResponse, HostGoal, HostGoalStatus, HostLspDiagnostic,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostClearGoalRequest, HostClearGoalResponse, HostClient, HostCreateGoalRequest,
+    HostCreateGoalResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
+    HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
+    HostGoal, HostGoalStatus, HostLspDiagnostic, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
     HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest,
     HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
@@ -852,6 +853,21 @@ impl HostClient for RuntimeHostClient {
         Ok(HostUpdateGoalResponse {
             goal: host_goal_from_session_goal(goal),
         })
+    }
+
+    async fn clear_goal(
+        &self,
+        _req: HostClearGoalRequest,
+    ) -> Result<HostClearGoalResponse, PluginError> {
+        let session_id = self.callback_context()?.session_id.ok_or_else(|| {
+            host_unavailable("host callback context is missing session_id for clear_goal")
+        })?;
+        let cleared = self
+            .session_manager()?
+            .clear_goal(session_id)
+            .await
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(HostClearGoalResponse { cleared })
     }
 
     async fn enter_plan_mode(

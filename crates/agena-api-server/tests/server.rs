@@ -26,7 +26,10 @@ use agena::{
 };
 use agena_api::{
     PROTOCOL_VERSION, Scope,
-    commands::{Command, CommandResult, CompleteSessionGoalParams, CreateSessionGoalParams},
+    commands::{
+        Command, CommandResult, CompleteSessionGoalParams, CreateSessionGoalParams,
+        SetSessionGoalParams,
+    },
     notifications::Notification,
     queries::{GetSessionParams, PaginatedEvents, Query, QueryResult},
     subscribe::SubscribeRequest,
@@ -390,7 +393,9 @@ enabled = true
         .expect("provider models response should include models");
     let model = models
         .iter()
-        .find(|model| model.get("id").and_then(|value| value.as_str()) == Some("openai/gpt-upstream"))
+        .find(|model| {
+            model.get("id").and_then(|value| value.as_str()) == Some("openai/gpt-upstream")
+        })
         .expect("decorated upstream model should be present");
 
     assert_eq!(
@@ -398,22 +403,26 @@ enabled = true
         Some("Decorated GPT")
     );
     assert_eq!(
-        model.pointer("/metadata/description")
+        model
+            .pointer("/metadata/description")
             .and_then(|value| value.as_str()),
         Some("Catalog description")
     );
     assert_eq!(
-        model.pointer("/metadata/lifecycle")
+        model
+            .pointer("/metadata/lifecycle")
             .and_then(|value| value.as_str()),
         Some("preview")
     );
     assert_eq!(
-        model.pointer("/metadata/limits/context_window_tokens")
+        model
+            .pointer("/metadata/limits/context_window_tokens")
             .and_then(|value| value.as_u64()),
         Some(123_456)
     );
     assert_eq!(
-        model.pointer("/metadata/limits/max_output_tokens")
+        model
+            .pointer("/metadata/limits/max_output_tokens")
             .and_then(|value| value.as_u64()),
         Some(7_890)
     );
@@ -836,6 +845,165 @@ async fn goal_command_and_query_round_trip() {
     assert!(goal.completed_at.is_some());
     assert_eq!(goal.tokens_used, 0);
     assert_eq!(goal.time_used_seconds, 0);
+}
+
+#[tokio::test]
+async fn set_goal_command_creates_updates_and_clears_goal() {
+    let (state, _manager, workspace_root) = build_state().await;
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "set goal route".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let created = dispatch_command(
+        &state,
+        Command::SetSessionGoal(SetSessionGoalParams {
+            session_id: session.id,
+            objective: Some("ship the API slice".to_string()),
+            status: None,
+            token_budget: Some(Some(256)),
+            clear: false,
+        }),
+    )
+    .await
+    .expect("set goal create should succeed");
+    let CommandResult::SessionGoal(goal) = created else {
+        panic!("expected goal result");
+    };
+    assert_eq!(goal.objective, "ship the API slice");
+    assert_eq!(goal.status, agena::session::GoalStatus::Active);
+    assert_eq!(goal.token_budget, Some(256));
+
+    let updated = dispatch_command(
+        &state,
+        Command::SetSessionGoal(SetSessionGoalParams {
+            session_id: session.id,
+            objective: Some("ship the narrower API slice".to_string()),
+            status: Some(agena::session::GoalStatus::Paused),
+            token_budget: Some(None),
+            clear: false,
+        }),
+    )
+    .await
+    .expect("set goal update should succeed");
+    let CommandResult::SessionGoal(goal) = updated else {
+        panic!("expected updated goal result");
+    };
+    assert_eq!(goal.objective, "ship the narrower API slice");
+    assert_eq!(goal.status, agena::session::GoalStatus::Paused);
+    assert_eq!(goal.token_budget, None);
+
+    let cleared = dispatch_command(
+        &state,
+        Command::SetSessionGoal(SetSessionGoalParams {
+            session_id: session.id,
+            objective: None,
+            status: None,
+            token_budget: None,
+            clear: true,
+        }),
+    )
+    .await
+    .expect("set goal clear should succeed");
+    let CommandResult::SessionGoalCleared { session_id } = cleared else {
+        panic!("expected cleared result");
+    };
+    assert_eq!(session_id, session.id);
+
+    let queried = dispatch_query(
+        &state,
+        Query::GetSessionGoal(GetSessionParams {
+            session_id: session.id,
+        }),
+    )
+    .await
+    .expect("goal query after clear should succeed");
+    let QueryResult::SessionGoal(goal) = queried else {
+        panic!("expected session goal query result");
+    };
+    assert!(goal.is_none(), "goal should be cleared");
+}
+
+#[tokio::test]
+async fn set_goal_update_preserves_usage_counters() {
+    let (state, _manager, workspace_root) = build_state().await;
+
+    let workspace = state
+        .service()
+        .resolve_workspace(agena_api_server::local_api::WorkspaceResolveRequest {
+            path: workspace_root,
+            create_if_missing: false,
+        })
+        .await
+        .expect("workspace should resolve");
+    let session = state
+        .service()
+        .create_session(agena_api_server::local_api::SessionCreateRequest {
+            workspace_id: workspace.id,
+            title: "set goal usage".to_string(),
+            parent_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    dispatch_command(
+        &state,
+        Command::SetSessionGoal(SetSessionGoalParams {
+            session_id: session.id,
+            objective: Some("preserve usage".to_string()),
+            status: None,
+            token_budget: Some(Some(100)),
+            clear: false,
+        }),
+    )
+    .await
+    .expect("initial goal create should succeed");
+
+    let db = state.service().clone_db();
+    agena::db::crud::session_goal::account_usage(
+        db.as_ref(),
+        session.id,
+        17,
+        3,
+        agena::db::crud::session_goal::GoalAccountingMode::ActiveOnly,
+        None,
+    )
+    .await
+    .expect("goal usage should persist");
+
+    let updated = dispatch_command(
+        &state,
+        Command::SetSessionGoal(SetSessionGoalParams {
+            session_id: session.id,
+            objective: Some("preserve usage after update".to_string()),
+            status: Some(agena::session::GoalStatus::Active),
+            token_budget: Some(Some(200)),
+            clear: false,
+        }),
+    )
+    .await
+    .expect("goal update should succeed");
+    let CommandResult::SessionGoal(goal) = updated else {
+        panic!("expected updated goal result");
+    };
+    assert_eq!(goal.objective, "preserve usage after update");
+    assert_eq!(goal.token_budget, Some(200));
+    assert_eq!(goal.tokens_used, 17);
+    assert_eq!(goal.time_used_seconds, 3);
 }
 
 #[tokio::test]

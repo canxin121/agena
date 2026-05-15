@@ -203,9 +203,11 @@ impl WorkflowPlugin {
         let response = self
             .host()?
             .update_goal(HostUpdateGoalRequest {
-                status: match input.status {
+                objective: None,
+                status: Some(match input.status {
                     UpdateGoalStatus::Complete => HostGoalStatus::Completed,
-                },
+                }),
+                token_budget: None,
             })
             .await?;
         let payload =
@@ -772,7 +774,9 @@ mod tests {
             &self,
             req: HostUpdateGoalRequest,
         ) -> SdkResult<HostUpdateGoalResponse> {
-            assert_eq!(req.status, HostGoalStatus::Completed);
+            assert_eq!(req.objective, None);
+            assert_eq!(req.status, Some(HostGoalStatus::Completed));
+            assert_eq!(req.token_budget, None);
             Ok(HostUpdateGoalResponse {
                 goal: HostGoal {
                     id: 7,

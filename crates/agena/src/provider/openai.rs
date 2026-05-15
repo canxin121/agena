@@ -1619,14 +1619,6 @@ impl ModelProvider for OpenAiProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
-            return Ok(vec![
-                ProviderModel::new(self.id.as_str(), self.default_model.clone())
-                    .with_display_name("ChatGPT Codex model")
-                    .with_capabilities(self.model_capabilities(&self.default_model)),
-            ]);
-        }
-
         let mut source = RemoteModelCatalogSource::new(
             self.id.as_str(),
             self.model_endpoint()?,
@@ -4260,5 +4252,72 @@ mod tests {
             .expect("cached list_models should succeed");
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id.as_str(), "gpt-5");
+    }
+
+    #[tokio::test]
+    async fn chatgpt_codex_list_models_uses_live_models_endpoint() {
+        let _env_lock = env_lock().lock().expect("env lock should succeed");
+        let dir = tempfile::tempdir().expect("tempdir should create");
+        let _cache_dir =
+            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
+
+        let auth_data = Arc::new(tokio::sync::Mutex::new(
+            crate::provider::auth::AuthData::OAuth {
+                issuer: Some(crate::provider::auth::CredentialIssuer::OpenaiChatgpt),
+                refresh: "refresh".to_owned(),
+                access: "access-token".to_owned(),
+                expires_at_ms: 0,
+                account_id: Some("acct-123".to_owned()),
+                enterprise_url: None,
+            },
+        ));
+
+        let mut server = mockito::Server::new_async().await;
+        let _models = server
+            .mock("GET", "/models")
+            .match_header("authorization", "Bearer access-token")
+            .match_header("chatgpt-account-id", "acct-123")
+            .match_header("originator", CHATGPT_CODEX_ORIGINATOR)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "data": [
+                        { "id": "gpt-5.3-codex", "name": "GPT-5.3 Codex" },
+                        { "id": "gpt-5-codex-mini", "name": "GPT-5 Codex Mini" }
+                    ]
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = OpenAiProvider::new_managed_with_id(
+            "openai_chatgpt",
+            reqwest::Client::new(),
+            crate::provider::ManagedCredential::auth_data_shared(
+                "openai_chatgpt api key",
+                "openai_chatgpt",
+                auth_data.clone(),
+                crate::provider::AuthSecretSelector::AccessOrApiKey,
+                crate::provider::AuthRefreshStrategy::OpenAiOAuth,
+            ),
+            server.url(),
+            "gpt-5.3-codex",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex)
+        .with_auth_data(auth_data);
+
+        let models = provider
+            .list_models()
+            .await
+            .expect("chatgpt codex list_models should succeed");
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id.as_str(), "gpt-5.3-codex");
+        assert_eq!(models[0].display_name.as_deref(), Some("GPT-5.3 Codex"));
+        assert_eq!(models[1].id.as_str(), "gpt-5-codex-mini");
+        assert_eq!(models[1].display_name.as_deref(), Some("GPT-5 Codex Mini"));
     }
 }

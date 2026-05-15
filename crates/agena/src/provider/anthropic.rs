@@ -500,7 +500,8 @@ impl ModelProvider for AnthropicProvider {
             endpoint.as_str(),
             self.api_key.prompt_cache_scope(),
         )
-        .with_catalog_provider_id("anthropic");
+        .with_catalog_provider_id("anthropic")
+        .with_catalog_visible_model_prefix("anthropic");
         RemoteModelCatalogCache::default()
             .get_or_fetch(&source, || async {
                 let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {

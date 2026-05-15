@@ -591,7 +591,8 @@ pub fn decorate_provider_models(
 
     for model in &mut models {
         listed.insert(model.id.to_string());
-        *model = decorate_provider_model(provider, provider_record, model.id.clone(), model.clone());
+        *model =
+            decorate_provider_model(provider, provider_record, model.id.clone(), model.clone());
     }
 
     for model_id in provider_record.models.keys() {
@@ -602,8 +603,16 @@ pub fn decorate_provider_models(
         let model_id = ModelId::new(model_id.clone());
         let base = Model::new(provider.id(), model_id.as_str())
             .with_capabilities(provider.model_capabilities(&model_id))
-            .with_metadata(provider_model_metadata(provider, provider_record, &model_id))
-            .with_variants(provider_model_variants(provider, provider_record, &model_id));
+            .with_metadata(provider_model_metadata(
+                provider,
+                provider_record,
+                &model_id,
+            ))
+            .with_variants(provider_model_variants(
+                provider,
+                provider_record,
+                &model_id,
+            ));
         models.push(decorate_provider_model(
             provider,
             provider_record,
@@ -808,7 +817,22 @@ mod tests {
         assert!(provider_ids.iter().any(|id| id == "openai"));
         assert!(provider_ids.iter().any(|id| id == "anthropic"));
         assert!(provider_ids.iter().any(|id| id == "gemini"));
+        assert!(provider_ids.iter().any(|id| id == "bedrock"));
         assert!(provider_ids.iter().any(|id| id == "gitlab"));
+
+        let bedrock = document
+            .providers
+            .get("bedrock")
+            .expect("bedrock provider should exist");
+        assert_eq!(
+            bedrock.default_model.as_deref(),
+            Some("amazon_bedrock/amazon.nova-pro-v1:0")
+        );
+        assert!(
+            bedrock
+                .models
+                .contains_key("amazon_bedrock/amazon.nova-pro-v1:0")
+        );
 
         let gitlab = document
             .providers

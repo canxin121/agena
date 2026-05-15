@@ -32,6 +32,8 @@ pub(crate) struct RemoteModelCatalogSource {
     pub auth_scope: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub catalog_provider_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub catalog_visible_model_prefix: String,
 }
 
 impl RemoteModelCatalogSource {
@@ -45,6 +47,7 @@ impl RemoteModelCatalogSource {
             endpoint: endpoint.into().trim().to_owned(),
             auth_scope: auth_scope.into().trim().to_owned(),
             catalog_provider_id: String::new(),
+            catalog_visible_model_prefix: String::new(),
         }
     }
 
@@ -53,6 +56,23 @@ impl RemoteModelCatalogSource {
         catalog_provider_id: impl Into<String>,
     ) -> Self {
         self.catalog_provider_id = catalog_provider_id.into().trim().to_owned();
+        self
+    }
+
+    pub(crate) fn with_catalog_visible_model_prefix(
+        mut self,
+        catalog_visible_model_prefix: impl Into<String>,
+    ) -> Self {
+        let prefix = catalog_visible_model_prefix
+            .into()
+            .trim()
+            .trim_end_matches('/')
+            .to_owned();
+        self.catalog_visible_model_prefix = if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{prefix}/")
+        };
         self
     }
 }
@@ -174,11 +194,7 @@ impl RemoteModelCatalogCache {
 
         match fetch_catalog_document(catalog_fallback_url().as_str()).await {
             Ok(document) => {
-                if let Some(models) = catalog_models_from_document(
-                    source.provider_id.as_str(),
-                    catalog_provider_id,
-                    &document,
-                ) {
+                if let Some(models) = catalog_models_from_document(source, &document) {
                     return Ok(Some(models));
                 }
             }
@@ -193,11 +209,7 @@ impl RemoteModelCatalogCache {
         }
 
         match bundled_catalog_document() {
-            Ok(document) => Ok(catalog_models_from_document(
-                source.provider_id.as_str(),
-                catalog_provider_id,
-                &document,
-            )),
+            Ok(document) => Ok(catalog_models_from_document(source, &document)),
             Err(error) => {
                 tracing::warn!(
                     provider_id = %source.provider_id,
@@ -333,17 +345,22 @@ async fn fetch_catalog_document(url: &str) -> Result<ModelCatalogDocument, AppEr
 }
 
 fn catalog_models_from_document(
-    provider_id: &str,
-    catalog_provider_id: &str,
+    source: &RemoteModelCatalogSource,
     document: &ModelCatalogDocument,
 ) -> Option<Vec<Model>> {
-    let provider = document.providers.get(catalog_provider_id)?;
+    let provider = document.providers.get(source.catalog_provider_id.trim())?;
     Some(
         provider
             .models
             .iter()
             .map(|(model_id, definition)| {
-                let mut model = Model::new(provider_id, model_id.as_str());
+                let mut model = Model::new(
+                    source.provider_id.as_str(),
+                    adapter_model_id_from_catalog(
+                        model_id.as_str(),
+                        source.catalog_visible_model_prefix.as_str(),
+                    ),
+                );
                 if let Some(display_name) = definition.display_name.clone() {
                     model = model.with_display_name(display_name);
                 }
@@ -359,6 +376,21 @@ fn catalog_models_from_document(
             })
             .collect(),
     )
+}
+
+fn adapter_model_id_from_catalog<'a>(
+    visible_model_id: &'a str,
+    visible_model_prefix: &str,
+) -> &'a str {
+    let visible_model_id = visible_model_id.trim();
+    let visible_model_prefix = visible_model_prefix.trim();
+    if visible_model_prefix.is_empty() {
+        return visible_model_id;
+    }
+
+    visible_model_id
+        .strip_prefix(visible_model_prefix)
+        .unwrap_or(visible_model_id)
 }
 
 #[cfg(test)]
@@ -499,9 +531,9 @@ mod tests {
                 serde_json::json!({
                     "providers": {
                         "openai": {
-                            "default_model": "gpt-5",
+                            "default_model": "openai/gpt-5",
                             "models": {
-                                "gpt-5": {
+                                "openai/gpt-5": {
                                     "display_name": "GPT-5",
                                     "family": "gpt",
                                     "context_window_tokens": 400000,
@@ -523,7 +555,8 @@ mod tests {
             "https://gateway.example/v1/models",
             "scope-a",
         )
-        .with_catalog_provider_id("openai");
+        .with_catalog_provider_id("openai")
+        .with_catalog_visible_model_prefix("openai");
 
         let models = cache
             .get_or_fetch(&source, || async {
@@ -536,7 +569,10 @@ mod tests {
         assert_eq!(models[0].provider_id.as_str(), "shared-openai");
         assert_eq!(models[0].id.as_str(), "gpt-5");
         assert_eq!(models[0].display_name.as_deref(), Some("GPT-5"));
-        assert_eq!(models[0].metadata.limits.context_window_tokens, Some(400000));
+        assert_eq!(
+            models[0].metadata.limits.context_window_tokens,
+            Some(400000)
+        );
         assert_eq!(models[0].metadata.limits.max_output_tokens, Some(128000));
 
         let cached = cache
@@ -548,5 +584,73 @@ mod tests {
             .await
             .expect("fallback-seeded cache should be reused");
         assert_eq!(cached, models);
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_catalog_when_fetch_fails_without_cache_for_bedrock_visible_ids() {
+        let _env_lock = env_lock().lock().expect("env lock should succeed");
+        let dir = tempdir().expect("tempdir should create");
+        let _cache_dir = EnvVarGuard::set(CACHE_DIR_ENV, dir.path().as_os_str());
+        let mut server = Server::new_async().await;
+        let fallback_url = format!("{}/catalog.json", server.url());
+        let _fallback_url = EnvVarGuard::set(CATALOG_FALLBACK_URL_ENV, fallback_url.as_str());
+        let _mock = server
+            .mock("GET", "/catalog.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "providers": {
+                        "bedrock": {
+                            "default_model": "amazon_bedrock/amazon.nova-pro-v1:0",
+                            "models": {
+                                "amazon_bedrock/amazon.nova-pro-v1:0": {
+                                    "display_name": "Amazon Nova Pro",
+                                    "family": "nova"
+                                },
+                                "amazon_bedrock/anthropic.claude-sonnet-4-5": {
+                                    "display_name": "Claude Sonnet 4.5",
+                                    "family": "claude"
+                                }
+                            }
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let cache = RemoteModelCatalogCache::default();
+        let source = RemoteModelCatalogSource::new(
+            "amazon-bedrock",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/models",
+            "scope-bedrock",
+        )
+        .with_catalog_provider_id("bedrock")
+        .with_catalog_visible_model_prefix("amazon_bedrock");
+
+        let models = cache
+            .get_or_fetch(&source, || async {
+                Err(AppError::Provider("boom".to_owned()))
+            })
+            .await
+            .expect("bedrock catalog fallback should succeed");
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].provider_id.as_str(), "amazon-bedrock");
+        assert_eq!(models[0].id.as_str(), "amazon.nova-pro-v1:0");
+        assert_eq!(models[0].display_name.as_deref(), Some("Amazon Nova Pro"));
+        assert_eq!(
+            models[0].metadata.family,
+            Some(crate::model::ModelFamily::Nova)
+        );
+        assert_eq!(models[1].id.as_str(), "anthropic.claude-sonnet-4-5");
+        assert_eq!(models[1].display_name.as_deref(), Some("Claude Sonnet 4.5"));
+        assert_eq!(
+            models[1].metadata.family,
+            Some(crate::model::ModelFamily::Claude)
+        );
     }
 }

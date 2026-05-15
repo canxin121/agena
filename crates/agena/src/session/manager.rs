@@ -1730,6 +1730,9 @@ impl SessionManager {
         let mut continuation_available = allow_goal_continuation;
         for _ in 0..max_turn_loops {
             if control.cancel.is_cancelled() {
+                if control.is_superseded() {
+                    return Ok(session);
+                }
                 self.persist_run_failed_event(
                     session.id,
                     "turn cancelled by user".to_string(),
@@ -2116,6 +2119,13 @@ impl SessionManager {
                 Ok(result) => {
                     let turn_id = result.turn_id;
                     let terminal_error = result.terminal_error;
+                    if terminal_error
+                        .as_ref()
+                        .is_some_and(is_user_cancelled_error)
+                        && control.is_superseded()
+                    {
+                        return Ok(session);
+                    }
                     let assistant_message = result
                         .state
                         .into_iter()
@@ -2196,6 +2206,10 @@ impl SessionManager {
                     }
 
                     let client_events = result.client_events;
+                    let goal_token_delta = assistant_message
+                        .usage
+                        .as_ref()
+                        .map_or(0, |usage| usage.total_tokens());
                     session.messages.push(assistant_message.clone());
                     let mut persisted_session = self
                         .persist_session_changes(
@@ -2234,6 +2248,7 @@ impl SessionManager {
                     persisted_session = self
                         .account_goal_usage_from_turn(
                             persisted_session,
+                            goal_token_delta,
                             state.as_ref(),
                             turn_elapsed_seconds,
                         )
@@ -2241,6 +2256,9 @@ impl SessionManager {
 
                     if let Some(err) = terminal_error {
                         if is_user_cancelled_error(&err) {
+                            if control.is_superseded() {
+                                return Ok(persisted_session);
+                            }
                             if let Some(paused) = self
                                 .pause_active_goal_if_needed(persisted_session.id, state.clone())
                                 .await?
@@ -2277,6 +2295,9 @@ impl SessionManager {
                 }
                 Err(err) => {
                     if is_user_cancelled_error(&err) {
+                        if control.is_superseded() {
+                            return Ok(session);
+                        }
                         let _ = self
                             .pause_active_goal_if_needed(session.id, state.clone())
                             .await?;
@@ -3695,28 +3716,14 @@ impl SessionManager {
     async fn account_goal_usage_from_turn(
         &self,
         session: Session,
+        token_delta: u64,
         state: &SessionManagerState,
         time_delta_seconds: u64,
     ) -> Result<Session, AppError> {
         let Some(goal_before) = session.goal.as_ref() else {
             return Ok(session);
         };
-        let Some(usage) = session
-            .messages
-            .iter()
-            .rev()
-            .find(|message| {
-                message.role == Role::Assistant
-                    && message.state == MessageStatus::Completed
-                    && message.usage.is_some()
-            })
-            .and_then(|message| message.usage.as_ref())
-        else {
-            return Ok(session);
-        };
-
-        let token_delta = usage.total_tokens();
-        if token_delta == 0 {
+        if token_delta == 0 && time_delta_seconds == 0 {
             return Ok(session);
         }
 
@@ -3727,8 +3734,8 @@ impl SessionManager {
                 token_delta,
                 time_delta_seconds,
                 state.cache_policy(),
-            )
-            .await?;
+        )
+        .await?;
         let Some(updated) = accounted else {
             return Ok(session);
         };

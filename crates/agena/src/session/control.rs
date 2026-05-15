@@ -9,7 +9,13 @@
 //! This is intentionally an in-process structure — when the API server
 //! lives on a different host this gets fronted by a remote-control RPC.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -29,6 +35,25 @@ pub enum TurnControlError {
 pub struct TurnControl {
     pub cancel: CancellationToken,
     pub steer_tx: mpsc::UnboundedSender<Vec<PartContent>>,
+    superseded: AtomicBool,
+}
+
+impl TurnControl {
+    fn new(steer_tx: mpsc::UnboundedSender<Vec<PartContent>>) -> Self {
+        Self {
+            cancel: CancellationToken::new(),
+            steer_tx,
+            superseded: AtomicBool::new(false),
+        }
+    }
+
+    fn mark_superseded(&self) {
+        self.superseded.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_superseded(&self) -> bool {
+        self.superseded.load(Ordering::SeqCst)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -50,12 +75,10 @@ impl TurnRegistry {
         session_id: i64,
     ) -> (Arc<TurnControl>, mpsc::UnboundedReceiver<Vec<PartContent>>) {
         let (tx, rx) = mpsc::unbounded_channel();
-        let control = Arc::new(TurnControl {
-            cancel: CancellationToken::new(),
-            steer_tx: tx,
-        });
+        let control = Arc::new(TurnControl::new(tx));
         let mut guard = self.inner.lock().await;
         if let Some(prev) = guard.insert(session_id, Arc::clone(&control)) {
+            prev.mark_superseded();
             prev.cancel.cancel();
         }
         (control, rx)
@@ -68,10 +91,7 @@ impl TurnRegistry {
         session_id: i64,
     ) -> Option<(Arc<TurnControl>, mpsc::UnboundedReceiver<Vec<PartContent>>)> {
         let (tx, rx) = mpsc::unbounded_channel();
-        let control = Arc::new(TurnControl {
-            cancel: CancellationToken::new(),
-            steer_tx: tx,
-        });
+        let control = Arc::new(TurnControl::new(tx));
         let mut guard = self.inner.lock().await;
         if guard.contains_key(&session_id) {
             return None;

@@ -31,7 +31,9 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy,
-        prompt_cache, sse, utils, wire_message,
+        prompt_cache,
+        remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
+        sse, utils, wire_message,
     },
     role::Role,
 };
@@ -213,6 +215,33 @@ impl AmazonBedrockProvider {
 
     fn models_endpoint(&self) -> String {
         format!("{}/models", self.base_url)
+    }
+
+    fn models_cache_auth_scope(&self) -> String {
+        let mut shape = crate::provider::PromptCacheShape::new(PROVIDER_ID)
+            .with_string("auth_mode", "sigv4")
+            .with_string("region", self.region.as_str());
+
+        match &self.auth_mode {
+            BedrockAuthMode::SigV4 {
+                profile,
+                static_credentials,
+            } => {
+                if let Some(profile) = Self::prompt_cache_sigv4_profile(profile.as_deref()) {
+                    shape.insert_string("sigv4.profile", profile);
+                }
+                if let Some(static_credentials) = static_credentials.as_ref() {
+                    shape.extend_prefixed(
+                        "sigv4.static",
+                        &Self::prompt_cache_sigv4_static_credentials_shape(static_credentials),
+                    );
+                } else if let Some(env_shape) = Self::prompt_cache_sigv4_env_shape() {
+                    shape.extend_prefixed("sigv4.env", &env_shape);
+                }
+            }
+        }
+
+        format!("prompt_cache_shape={}", shape.fingerprint())
     }
 
     fn completions_endpoint(&self) -> String {
@@ -1286,15 +1315,27 @@ impl ModelProvider for AmazonBedrockProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        match &self.auth_mode {
-            BedrockAuthMode::SigV4 {
-                profile,
-                static_credentials,
-            } => {
-                self.list_models_sigv4(profile.as_deref(), static_credentials.as_ref())
-                    .await
-            }
-        }
+        let endpoint = self.models_endpoint();
+        let source = RemoteModelCatalogSource::new(
+            PROVIDER_ID,
+            endpoint.as_str(),
+            self.models_cache_auth_scope(),
+        )
+        .with_catalog_provider_id("bedrock")
+        .with_catalog_visible_model_prefix("amazon_bedrock");
+        RemoteModelCatalogCache::default()
+            .get_or_fetch(&source, || async {
+                match &self.auth_mode {
+                    BedrockAuthMode::SigV4 {
+                        profile,
+                        static_credentials,
+                    } => {
+                        self.list_models_sigv4(profile.as_deref(), static_credentials.as_ref())
+                            .await
+                    }
+                }
+            })
+            .await
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
@@ -2366,12 +2407,55 @@ struct ToolCallState {
 
 #[cfg(test)]
 mod tests {
+    use std::{ffi::OsStr, sync::LazyLock};
+
     use aws_credential_types::Credentials;
     use futures_util::StreamExt;
     use mockito::Matcher;
 
     use super::*;
     use crate::tool::{EntryBehavior, EntryDefinition};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        &LOCK
+    }
+
+    struct EnvVarGuard {
+        key: String,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &str, value: impl AsRef<OsStr>) -> Self {
+            let key_string = key.to_owned();
+            let original = std::env::var_os(key);
+            // SAFETY: tests serialize env mutation through `env_lock()`.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                key: key_string,
+                original,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(original) = self.original.take() {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::set_var(&self.key, original);
+                }
+            } else {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::remove_var(&self.key);
+                }
+            }
+        }
+    }
 
     fn sample_tool_definition() -> EntryDefinition {
         EntryDefinition::plugin(
@@ -2732,6 +2816,120 @@ mod tests {
                 .get("x-amz-security-token")
                 .and_then(|value| value.to_str().ok()),
             Some("session-token-value")
+        );
+    }
+
+    #[tokio::test]
+    async fn bedrock_list_models_uses_disk_cache_after_first_fetch() {
+        let _env_lock = env_lock().lock().expect("env lock should succeed");
+        let dir = tempfile::tempdir().expect("tempdir should create");
+        let _cache_dir =
+            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
+
+        let mut server = mockito::Server::new_async().await;
+        {
+            let _mock = server
+                .mock("GET", "/models")
+                .match_header(
+                    "authorization",
+                    Matcher::Regex("^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/.*".to_owned()),
+                )
+                .match_header(
+                    "x-amz-date",
+                    Matcher::Regex("^[0-9]{8}T[0-9]{6}Z$".to_owned()),
+                )
+                .match_header("x-amz-security-token", "session-token-value")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "data": [{
+                            "id": "anthropic.claude-sonnet-4-5",
+                            "display_name": "Claude Sonnet 4.5"
+                        }]
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let provider = test_sigv4_provider(server.url(), "anthropic.claude-sonnet-4-5");
+            let models = provider
+                .list_models()
+                .await
+                .expect("initial list_models should succeed");
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].id.as_str(), "anthropic.claude-sonnet-4-5");
+            assert_eq!(models[0].display_name.as_deref(), Some("Claude Sonnet 4.5"));
+        }
+
+        let provider = test_sigv4_provider(server.url(), "anthropic.claude-sonnet-4-5");
+        let models = provider
+            .list_models()
+            .await
+            .expect("cached list_models should succeed");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "anthropic.claude-sonnet-4-5");
+        assert_eq!(models[0].display_name.as_deref(), Some("Claude Sonnet 4.5"));
+    }
+
+    #[tokio::test]
+    async fn bedrock_list_models_falls_back_to_bundled_catalog_when_live_fetch_fails() {
+        let _env_lock = env_lock().lock().expect("env lock should succeed");
+        let dir = tempfile::tempdir().expect("tempdir should create");
+        let _cache_dir =
+            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
+
+        let mut server = mockito::Server::new_async().await;
+        let fallback_url = format!("{}/catalog.json", server.url());
+        let _fallback_url = EnvVarGuard::set(
+            "AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL",
+            fallback_url.as_str(),
+        );
+
+        let _models = server
+            .mock("GET", "/models")
+            .match_header(
+                "authorization",
+                Matcher::Regex("^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/.*".to_owned()),
+            )
+            .match_header(
+                "x-amz-date",
+                Matcher::Regex("^[0-9]{8}T[0-9]{6}Z$".to_owned()),
+            )
+            .match_header("x-amz-security-token", "session-token-value")
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error":"bedrock unavailable"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let _fallback = server
+            .mock("GET", "/catalog.json")
+            .with_status(500)
+            .with_header("content-type", "text/plain")
+            .with_body("fallback unavailable")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = test_sigv4_provider(server.url(), "amazon.nova-pro-v1:0");
+        let models = provider
+            .list_models()
+            .await
+            .expect("bundled catalog fallback should succeed");
+
+        assert!(
+            models
+                .iter()
+                .any(|model| model.id.as_str() == "amazon.nova-pro-v1:0"
+                    && model.display_name.as_deref() == Some("Amazon Nova Pro"))
+        );
+        assert!(
+            models
+                .iter()
+                .any(|model| model.id.as_str() == "anthropic.claude-sonnet-4-5")
         );
     }
 

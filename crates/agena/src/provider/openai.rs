@@ -1633,8 +1633,12 @@ impl ModelProvider for OpenAiProvider {
             self.api_key.prompt_cache_scope(),
         );
         source = match self.capability_family {
-            CapabilityFamily::OpenAi => source.with_catalog_provider_id("openai"),
-            CapabilityFamily::OpenAiCompatible => source.with_catalog_provider_id("openai"),
+            CapabilityFamily::OpenAi => source
+                .with_catalog_provider_id("openai")
+                .with_catalog_visible_model_prefix("openai"),
+            CapabilityFamily::OpenAiCompatible => source
+                .with_catalog_provider_id("openai")
+                .with_catalog_visible_model_prefix("openai"),
             CapabilityFamily::Anthropic => source.with_catalog_provider_id("anthropic"),
             CapabilityFamily::Gemini => source.with_catalog_provider_id("gemini"),
             CapabilityFamily::Bedrock => source.with_catalog_provider_id("bedrock"),

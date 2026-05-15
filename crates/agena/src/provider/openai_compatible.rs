@@ -694,17 +694,19 @@ impl ModelProvider for OpenAiCompatibleProvider {
             endpoint.as_str(),
             self.api_key.prompt_cache_scope(),
         );
-        if let Some(catalog_provider_id) =
-            self.capability_family().and_then(|family| match family {
-                crate::provider::CapabilityFamily::OpenAi => Some("openai"),
-                crate::provider::CapabilityFamily::OpenAiCompatible => Some("openai"),
-                crate::provider::CapabilityFamily::Anthropic => Some("anthropic"),
-                crate::provider::CapabilityFamily::Gemini => Some("gemini"),
-                crate::provider::CapabilityFamily::Gitlab => Some("gitlab"),
-                crate::provider::CapabilityFamily::Bedrock => Some("bedrock"),
+        if let Some((catalog_provider_id, visible_model_prefix)) =
+            self.capability_family().map(|family| match family {
+                crate::provider::CapabilityFamily::OpenAi => ("openai", "openai"),
+                crate::provider::CapabilityFamily::OpenAiCompatible => ("openai", "openai"),
+                crate::provider::CapabilityFamily::Anthropic => ("anthropic", "anthropic"),
+                crate::provider::CapabilityFamily::Gemini => ("gemini", "gemini"),
+                crate::provider::CapabilityFamily::Gitlab => ("gitlab", "gitlab"),
+                crate::provider::CapabilityFamily::Bedrock => ("bedrock", "amazon_bedrock"),
             })
         {
-            source = source.with_catalog_provider_id(catalog_provider_id);
+            source = source
+                .with_catalog_provider_id(catalog_provider_id)
+                .with_catalog_visible_model_prefix(visible_model_prefix);
         }
         RemoteModelCatalogCache::default()
             .get_or_fetch(&source, || async {

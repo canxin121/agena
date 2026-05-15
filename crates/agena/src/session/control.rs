@@ -61,6 +61,25 @@ impl TurnRegistry {
         (control, rx)
     }
 
+    /// Allocate a new control for `session_id` only when there is no current
+    /// in-flight turn. Returns `None` instead of cancelling a newer turn.
+    pub async fn try_register_if_inactive(
+        &self,
+        session_id: i64,
+    ) -> Option<(Arc<TurnControl>, mpsc::UnboundedReceiver<Vec<PartContent>>)> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let control = Arc::new(TurnControl {
+            cancel: CancellationToken::new(),
+            steer_tx: tx,
+        });
+        let mut guard = self.inner.lock().await;
+        if guard.contains_key(&session_id) {
+            return None;
+        }
+        guard.insert(session_id, Arc::clone(&control));
+        Some((control, rx))
+    }
+
     /// Remove the control for `session_id` if it still matches `expected`.
     /// Used by the turn task on completion so a parallel `register` (e.g.
     /// re-entry) doesn't get clobbered.
@@ -155,5 +174,15 @@ mod tests {
         assert!(reg.is_active(3).await);
         reg.unregister_if_matches(3, &ctrl2).await;
         assert!(!reg.is_active(3).await);
+    }
+
+    #[tokio::test]
+    async fn try_register_if_inactive_preserves_existing_turn() {
+        let reg = TurnRegistry::new();
+        let (ctrl1, _) = reg.register(5).await;
+
+        assert!(reg.try_register_if_inactive(5).await.is_none());
+        assert!(!ctrl1.cancel.is_cancelled());
+        assert!(reg.is_active(5).await);
     }
 }

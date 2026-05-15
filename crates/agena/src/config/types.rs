@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 use crate::provider::{
-    CapabilityFamily, ConfiguredModelDefinition, OpenAiApiMode, OpenAiBackend,
-    OpenAiStreamMode, ProviderHttpClientConfig,
-    ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
+    CapabilityFamily, ConfiguredModelDefinition, OpenAiApiMode, OpenAiBackend, OpenAiStreamMode,
+    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+    ProviderStreamReplayConfig,
     auth::{AuthData, CredentialIssuer},
 };
 

@@ -18,16 +18,16 @@ pub use content::PartContent;
 pub use message_part::{MessagePart, PartStateTransitionError};
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
-    ApplyPatchToolInput, AskUserToolInput, BashToolInput, CronCreateToolInput, CronDeleteToolInput,
-    CronJobSummary, CronListToolInput, CustomToolOutput, EnterPlanModeToolInput,
-    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, FilesystemAccess,
-    FilesystemEffect, FirstPartyToolInput, FirstPartyToolOutput, GetGoalToolInput, GlobToolInput,
-    GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
-    LspReferencesToolInput, McpToolOutput, MonitorEvent, MonitorStatus, MonitorStream,
-    MonitorSummary, MonitorToolInput, NotebookCellType, NotebookEditMode, NotebookEditToolInput,
-    PluginInvocation, PowerShellToolInput, ReadToolInput, RequestUserInputToolInput,
-    ScheduleWakeupToolInput, TaskSubagentType, TaskToolInput, TodoWriteToolInput,
-    ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock,
-    ToolSearchToolInput, UpdateGoalStatus, UpdateGoalToolInput, ViewFileToolInput,
+    ApplyPatchToolInput, AskUserToolInput, BashToolInput, CreateGoalToolInput, CronCreateToolInput,
+    CronDeleteToolInput, CronJobSummary, CronListToolInput, CustomToolOutput,
+    EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput,
+    FilesystemAccess, FilesystemEffect, FirstPartyToolInput, FirstPartyToolOutput,
+    GetGoalToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
+    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, McpToolOutput,
+    MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput, NotebookCellType,
+    NotebookEditMode, NotebookEditToolInput, PluginInvocation, PowerShellToolInput, ReadToolInput,
+    RequestUserInputToolInput, ScheduleWakeupToolInput, TaskSubagentType, TaskToolInput,
+    TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput,
+    ToolResultBlock, ToolSearchToolInput, UpdateGoalStatus, UpdateGoalToolInput, ViewFileToolInput,
     WebFetchToolInput, WebSearchHit, WebSearchToolInput, WorkflowPromptToolInput,
 };

@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::model::{
-    CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
-    ModelLifecycle, ModelMetadata, ModelVariant,
+    CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality, ModelLifecycle,
+    ModelMetadata, ModelVariant,
 };
 
 use super::{

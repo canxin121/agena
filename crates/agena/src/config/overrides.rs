@@ -18,15 +18,30 @@ pub enum ConfigOverride {
     RequestRetryMaxDelayMs(u64),
     StreamReplayMaxRetriesAfterOutput(u32),
     StreamReplayMaxTrackedEvents(usize),
-    ProviderDefaultModel { provider_id: String, value: String },
-    ProviderAuthBaseUrl { provider_id: String, value: String },
+    ProviderDefaultModel {
+        provider_id: String,
+        value: String,
+    },
+    ProviderAuthBaseUrl {
+        provider_id: String,
+        value: String,
+    },
     ProviderAuthEndpointLayout {
         provider_id: String,
         value: SharedGatewayEndpointLayout,
     },
-    ProviderAuthApiKey { provider_id: String, value: String },
-    ProviderAuthApiKeyEnv { provider_id: String, value: String },
-    ProviderEnabled { provider_id: String, value: bool },
+    ProviderAuthApiKey {
+        provider_id: String,
+        value: String,
+    },
+    ProviderAuthApiKeyEnv {
+        provider_id: String,
+        value: String,
+    },
+    ProviderEnabled {
+        provider_id: String,
+        value: bool,
+    },
 }
 
 impl FromStr for ConfigOverride {

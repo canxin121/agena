@@ -211,6 +211,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "hyper",
+ "mockito",
  "path-clean",
  "sea-orm",
  "semver",

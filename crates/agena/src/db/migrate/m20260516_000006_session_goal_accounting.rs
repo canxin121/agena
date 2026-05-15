@@ -74,10 +74,7 @@ async fn add_column_if_missing(
 async fn has_column(manager: &SchemaManager<'_>, expected_name: &str) -> Result<bool, DbErr> {
     let backend = manager.get_database_backend();
     let table_name = entities::session_goal::Entity.table_name().to_string();
-    let statement = Statement::from_string(
-        backend,
-        format!("PRAGMA table_info('{table_name}')"),
-    );
+    let statement = Statement::from_string(backend, format!("PRAGMA table_info('{table_name}')"));
     let rows = manager.get_connection().query_all(statement).await?;
     for row in rows {
         let name: String = row.try_get("", "name")?;

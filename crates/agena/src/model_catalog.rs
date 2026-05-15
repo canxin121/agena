@@ -11,8 +11,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AppError,
-    model::{ModelFamily, ModelId, ModelLifecycle},
-    provider::{ConfiguredModelDefinition, ConfiguredModelVariant, ModelCapabilityPatch},
+    model::{Model, ModelFamily, ModelId, ModelLifecycle},
+    provider::{
+        ConfiguredModelDefinition, ConfiguredModelVariant, ModelCapabilityPatch, ModelProvider,
+    },
 };
 
 pub const DEFAULT_REMOTE_URL: &str =
@@ -578,6 +580,109 @@ pub fn catalog_family_for_model(
         .models
         .get(model.as_str())
         .and_then(|entry| entry.family)
+}
+
+pub fn decorate_provider_models(
+    provider: &dyn ModelProvider,
+    provider_record: &ModelCatalogProviderRecord,
+    mut models: Vec<Model>,
+) -> Vec<Model> {
+    let mut listed = BTreeSet::new();
+
+    for model in &mut models {
+        listed.insert(model.id.to_string());
+        *model = decorate_provider_model(provider, provider_record, model.id.clone(), model.clone());
+    }
+
+    for model_id in provider_record.models.keys() {
+        if listed.contains(model_id.as_str()) {
+            continue;
+        }
+
+        let model_id = ModelId::new(model_id.clone());
+        let base = Model::new(provider.id(), model_id.as_str())
+            .with_capabilities(provider.model_capabilities(&model_id))
+            .with_metadata(provider_model_metadata(provider, provider_record, &model_id))
+            .with_variants(provider_model_variants(provider, provider_record, &model_id));
+        models.push(decorate_provider_model(
+            provider,
+            provider_record,
+            model_id,
+            base,
+        ));
+    }
+
+    models
+}
+
+fn decorate_provider_model(
+    provider: &dyn ModelProvider,
+    provider_record: &ModelCatalogProviderRecord,
+    model_id: ModelId,
+    mut model: Model,
+) -> Model {
+    if let Some(display_name) = provider_record
+        .models
+        .get(model_id.as_str())
+        .and_then(|definition| definition.display_name.clone())
+    {
+        model.display_name = Some(display_name);
+    }
+
+    if let Some(configured) = provider_record
+        .models
+        .get(model_id.as_str())
+        .map(catalog_definition_to_provider_definition)
+    {
+        configured.apply_to_model(
+            model,
+            &provider.model_capabilities(&model_id),
+            &provider_model_metadata(provider, provider_record, &model_id),
+        )
+    } else {
+        model
+    }
+}
+
+fn provider_model_metadata(
+    provider: &dyn ModelProvider,
+    provider_record: &ModelCatalogProviderRecord,
+    model: &ModelId,
+) -> crate::model::ModelMetadata {
+    let mut metadata = provider.model_metadata(model);
+    if let Some(family) = provider_record
+        .models
+        .get(model.as_str())
+        .and_then(|definition| definition.family)
+    {
+        metadata.family = Some(family);
+    }
+    metadata
+}
+
+fn provider_model_variants(
+    provider: &dyn ModelProvider,
+    provider_record: &ModelCatalogProviderRecord,
+    model: &ModelId,
+) -> BTreeMap<String, crate::model::ModelVariant> {
+    let mut variants = provider.model_variants(model);
+    if let Some(configured) = provider_record
+        .models
+        .get(model.as_str())
+        .map(catalog_definition_to_provider_definition)
+    {
+        for (name, configured_variant) in &configured.variants {
+            match configured_variant.apply_to_variant(variants.get(name)) {
+                Some(variant) => {
+                    variants.insert(name.clone(), variant);
+                }
+                None => {
+                    variants.remove(name);
+                }
+            }
+        }
+    }
+    variants
 }
 
 #[cfg(test)]

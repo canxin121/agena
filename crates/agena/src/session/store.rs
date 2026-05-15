@@ -203,6 +203,19 @@ impl SessionStore {
             .await?)
     }
 
+    pub(crate) async fn list_projected_messages_page(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<(Vec<Message>, bool, Option<(i64, i64)>), AppError> {
+        Ok(self
+            .history
+            .list_projected_messages_page(session_id, include_full_parts, cursor, limit)
+            .await?)
+    }
+
     pub(crate) async fn list_projected_message_headers(
         &self,
         session_id: i64,
@@ -210,6 +223,25 @@ impl SessionStore {
         Ok(self
             .history
             .list_projected_message_headers(session_id)
+            .await?)
+    }
+
+    pub(crate) async fn list_projected_message_headers_page(
+        &self,
+        session_id: i64,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<
+        (
+            Vec<crate::session::history::ProjectedMessageHeader>,
+            bool,
+            Option<(i64, i64)>,
+        ),
+        AppError,
+    > {
+        Ok(self
+            .history
+            .list_projected_message_headers_page(session_id, cursor, limit)
             .await?)
     }
 
@@ -509,7 +541,9 @@ impl SessionStore {
             Box::pin(async move {
                 session::get_session_by_id(txn, session_id)
                     .await?
-                    .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+                    .ok_or_else(|| {
+                        AppError::Internal(format!("session not found: {session_id}"))
+                    })?;
                 session_goal::upsert_goal(txn, session_id, objective, token_budget).await?;
                 let model = session::touch_session_updated_at(
                     txn,
@@ -548,6 +582,80 @@ impl SessionStore {
             let cache = Arc::clone(&cache);
             Box::pin(async move {
                 let Some(goal) = session_goal::mark_completed(txn, session_id).await? else {
+                    return Ok(None);
+                };
+                let model = session::touch_session_updated_at(
+                    txn,
+                    session_id,
+                    session::get_session_by_id(txn, session_id)
+                        .await?
+                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
+                        .runtime_state
+                        .unwrap_or_default(),
+                )
+                .await?
+                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+                let mut updated = session_from_model(model)?;
+                updated.goal = Some(session_goal_from_model(goal)?);
+                let session_for_cache = updated.clone();
+                effects.push(async move {
+                    with_cache(cache.as_ref(), |guard| {
+                        guard.insert(session_for_cache, cache_policy);
+                    });
+                });
+                Ok(Some(updated))
+            })
+        })
+        .await
+    }
+
+    pub(crate) async fn pause_goal_if_active(
+        &self,
+        session_id: i64,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Option<Session>, AppError> {
+        let cache = Arc::clone(&self.cache);
+        with_transaction_and_app_effects(&self.db, move |txn, effects| {
+            let cache = Arc::clone(&cache);
+            Box::pin(async move {
+                let Some(goal) = session_goal::pause_active(txn, session_id).await? else {
+                    return Ok(None);
+                };
+                let model = session::touch_session_updated_at(
+                    txn,
+                    session_id,
+                    session::get_session_by_id(txn, session_id)
+                        .await?
+                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
+                        .runtime_state
+                        .unwrap_or_default(),
+                )
+                .await?
+                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+                let mut updated = session_from_model(model)?;
+                updated.goal = Some(session_goal_from_model(goal)?);
+                let session_for_cache = updated.clone();
+                effects.push(async move {
+                    with_cache(cache.as_ref(), |guard| {
+                        guard.insert(session_for_cache, cache_policy);
+                    });
+                });
+                Ok(Some(updated))
+            })
+        })
+        .await
+    }
+
+    pub(crate) async fn resume_goal_if_paused(
+        &self,
+        session_id: i64,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Option<Session>, AppError> {
+        let cache = Arc::clone(&self.cache);
+        with_transaction_and_app_effects(&self.db, move |txn, effects| {
+            let cache = Arc::clone(&cache);
+            Box::pin(async move {
+                let Some(goal) = session_goal::resume_paused(txn, session_id).await? else {
                     return Ok(None);
                 };
                 let model = session::touch_session_updated_at(
@@ -670,7 +778,11 @@ impl SessionStore {
         let session_ids = self.list_workspace_session_ids().await?;
         for session_id in session_ids {
             let session = self.load_session(session_id, cache_policy).await?;
-            if session.messages.iter().any(|message| message.id == message_id) {
+            if session
+                .messages
+                .iter()
+                .any(|message| message.id == message_id)
+            {
                 return Ok(Some(session_id));
             }
         }
@@ -1652,13 +1764,14 @@ where
 fn session_goal_from_model(
     model: crate::db::entities::session_goal::Model,
 ) -> Result<SessionGoal, AppError> {
-        let status = match model.status.as_str() {
-            "active" => GoalStatus::Active,
-            "budget_limited" => GoalStatus::BudgetLimited,
-            "completed" => GoalStatus::Completed,
-            other => {
-                return Err(AppError::Internal(format!(
-                    "invalid goal status in persisted goal {}: {other}",
+    let status = match model.status.as_str() {
+        "active" => GoalStatus::Active,
+        "paused" => GoalStatus::Paused,
+        "budget_limited" => GoalStatus::BudgetLimited,
+        "completed" => GoalStatus::Completed,
+        other => {
+            return Err(AppError::Internal(format!(
+                "invalid goal status in persisted goal {}: {other}",
                 model.id
             )));
         }
@@ -1667,7 +1780,12 @@ fn session_goal_from_model(
         .token_budget
         .map(u64::try_from)
         .transpose()
-        .map_err(|_| AppError::Internal(format!("invalid negative token budget in goal {}", model.id)))?;
+        .map_err(|_| {
+            AppError::Internal(format!(
+                "invalid negative token budget in goal {}",
+                model.id
+            ))
+        })?;
     Ok(SessionGoal {
         id: model.id,
         session_id: model.session_id,

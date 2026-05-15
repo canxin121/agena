@@ -1,6 +1,6 @@
 //! First-party `agena.workflow` plugin: orchestration tools (task, tool_search,
-//! todo_write, ask_user, enter_plan_mode, exit_plan_mode, enter_worktree,
-//! exit_worktree).
+//! todo_write, create_goal, get_goal, update_goal, ask_user, enter_plan_mode,
+//! exit_plan_mode, enter_worktree, exit_worktree).
 
 use std::sync::{Arc, RwLock};
 
@@ -8,17 +8,17 @@ use async_trait::async_trait;
 
 use crate::entry::{FirstPartyExecution, ToolExecutionView, ask_user, tool_search};
 use crate::message::{
-    AskUserToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
-    ExitWorktreeToolInput, FirstPartyToolOutput, GetGoalToolInput, TaskToolInput, TodoItem,
-    TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput, UpdateGoalStatus,
-    UpdateGoalToolInput, WorkflowPromptToolInput,
+    AskUserToolInput, CreateGoalToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
+    ExitPlanModeToolInput, ExitWorktreeToolInput, FirstPartyToolOutput, GetGoalToolInput,
+    TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput,
+    UpdateGoalStatus, UpdateGoalToolInput, WorkflowPromptToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
-    HostClient, HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostGetGoalRequest, HostGoal, HostGoalStatus, HostTodoItem,
-    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
+    HostClient, HostCreateGoalRequest, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
+    HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGoal, HostGoalStatus,
+    HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
     SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
@@ -155,6 +155,7 @@ impl WorkflowPlugin {
             goal.id,
             match goal.status {
                 HostGoalStatus::Active => "active",
+                HostGoalStatus::Paused => "paused",
                 HostGoalStatus::BudgetLimited => "budget_limited",
                 HostGoalStatus::Completed => "completed",
             },
@@ -179,10 +180,26 @@ impl WorkflowPlugin {
             .with_payload(payload))
     }
 
-    async fn invoke_update_goal(
-        &self,
-        input: &UpdateGoalToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_create_goal(&self, input: &CreateGoalToolInput) -> SdkResult<ToolInvokeOutput> {
+        let response = self
+            .host()?
+            .create_goal(HostCreateGoalRequest {
+                objective: input.objective.clone(),
+                token_budget: input.token_budget,
+            })
+            .await?;
+        let payload =
+            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(ToolInvokeOutput::text(format!(
+            "{}\n\n{}",
+            Self::goal_summary(&response.goal),
+            Self::goal_payload_text(&payload)
+        ))
+        .with_title("goal")
+        .with_payload(payload))
+    }
+
+    async fn invoke_update_goal(&self, input: &UpdateGoalToolInput) -> SdkResult<ToolInvokeOutput> {
         let response = self
             .host()?
             .update_goal(HostUpdateGoalRequest {
@@ -356,7 +373,14 @@ impl Plugin for WorkflowPlugin {
                     })
                     .await
             }
-            "get_goal" => self.invoke_get_goal(&serde_json::from_value(input.input)?).await,
+            "create_goal" => {
+                self.invoke_create_goal(&serde_json::from_value(input.input)?)
+                    .await
+            }
+            "get_goal" => {
+                self.invoke_get_goal(&serde_json::from_value(input.input)?)
+                    .await
+            }
             "update_goal" => {
                 self.invoke_update_goal(&serde_json::from_value(input.input)?)
                     .await
@@ -503,6 +527,17 @@ fn entries() -> Vec<PluginEntryDecl> {
         .search_terms(["plan", "todo", "track progress"])
         .always_load(),
         PluginEntryDecl::new(
+            "create_goal",
+            crate::entry::definition::json_schema_for::<CreateGoalToolInput>(),
+        )
+        .description(
+            "Create a runtime goal for this session so work can continue autonomously toward a specific objective.",
+        )
+        .behavior(SdkEntryBehavior::Mutating)
+        .search_terms(["goal", "objective", "set goal", "budget"])
+        .always_load()
+        .host_capability(HostCapability::GoalRegistry),
+        PluginEntryDecl::new(
             "get_goal",
             crate::entry::definition::json_schema_for::<GetGoalToolInput>(),
         )
@@ -597,9 +632,10 @@ mod tests {
 
     use super::*;
     use crate::plugin::sdk::host_api::{
-        EventSubscription, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
-        HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
-        HostGoal, HostGoalStatus, HostUpdateGoalRequest, HostUpdateGoalResponse, LogLevel,
+        EventSubscription, HostCreateGoalRequest, HostCreateGoalResponse, HostEnterPlanModeRequest,
+        HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest,
+        HostGetGoalRequest, HostGetGoalResponse, HostGoal, HostGoalStatus, HostUpdateGoalRequest,
+        HostUpdateGoalResponse, LogLevel,
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
 
@@ -710,6 +746,25 @@ mod tests {
                     time_used_seconds: 5,
                     completed_at_ms: None,
                 }),
+            })
+        }
+
+        async fn create_goal(
+            &self,
+            req: HostCreateGoalRequest,
+        ) -> SdkResult<HostCreateGoalResponse> {
+            assert_eq!(req.objective, "ship it");
+            assert_eq!(req.token_budget, Some(128));
+            Ok(HostCreateGoalResponse {
+                goal: HostGoal {
+                    id: 7,
+                    objective: req.objective,
+                    status: HostGoalStatus::Active,
+                    token_budget: req.token_budget,
+                    tokens_used: 0,
+                    time_used_seconds: 0,
+                    completed_at_ms: None,
+                },
             })
         }
 
@@ -880,6 +935,52 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload["goal"]["objective"].as_str()),
             Some("ship it")
+        );
+    }
+
+    #[test]
+    fn goal_summary_renders_paused_status() {
+        let summary = WorkflowPlugin::goal_summary(&HostGoal {
+            id: 7,
+            objective: "ship it".to_string(),
+            status: HostGoalStatus::Paused,
+            token_budget: Some(128),
+            tokens_used: 32,
+            time_used_seconds: 5,
+            completed_at_ms: None,
+        });
+
+        assert_eq!(summary, "Goal 7 is paused. Tokens: 32/128.");
+    }
+
+    #[tokio::test]
+    async fn create_goal_invokes_host_without_executor_context() {
+        let plugin = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_input(
+                "create_goal",
+                CreateGoalToolInput {
+                    objective: "ship it".to_string(),
+                    token_budget: Some(128),
+                },
+            ))
+            .await
+            .expect("create_goal host invoke");
+
+        assert!(output.output_text.contains("Goal 7 is active"));
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload["goal"]["objective"].as_str()),
+            Some("ship it")
+        );
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload["goal"]["token_budget"].as_u64()),
+            Some(128)
         );
     }
 

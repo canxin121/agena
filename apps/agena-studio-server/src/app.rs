@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     convert::Infallible,
     env,
     io::Write as _,
@@ -20,7 +20,7 @@ use async_stream::stream;
 use axum::{
     Json, Router,
     body::Body,
-    extract::Query,
+    extract::{Path as AxumPath, Query},
     http::{
         HeaderValue, Method, StatusCode,
         header::{self, HeaderName},
@@ -38,6 +38,7 @@ use mime_guess::MimeGuess;
 use path_clean::PathClean;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tower_http::{
     cors::{AllowOrigin, Any, CorsLayer},
@@ -69,12 +70,17 @@ struct StudioHealthResponse {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct GitStatusCompatQuery {
     directory: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    scope: Option<String>,
     summary: Option<bool>,
+    include_diff_stats: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GitStatusCompatResponse {
     current: String,
@@ -91,9 +97,11 @@ struct GitStatusCompatResponse {
     limit: u64,
     has_more: bool,
     scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diff_stats: Option<HashMap<String, GitStatusCompatDiffStat>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct GitStatusCompatFile {
     path: String,
@@ -101,7 +109,62 @@ struct GitStatusCompatFile {
     working_dir: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+struct GitStatusCompatDiffStat {
+    insertions: u64,
+    deletions: u64,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionListQuery {
+    offset: Option<usize>,
+    limit: Option<usize>,
+    include_total: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionStatusQuery {
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionMessagesQuery {
+    offset: Option<usize>,
+    limit: Option<usize>,
+    include_total: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionListResponse {
+    sessions: Vec<Value>,
+    total: usize,
+    offset: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<usize>,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionMessageListResponse {
+    entries: Vec<Value>,
+    total: usize,
+    offset: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<usize>,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
 const MAX_COMPAT_FILE_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_COMPAT_CONFLICT_FILE_BYTES: u64 = 512 * 1024;
 const MAX_COMPAT_LIST_LIMIT: usize = 2000;
 const DEFAULT_COMPAT_READ_CHUNK_LIMIT: usize = 256 * 1024;
 const MAX_COMPAT_READ_CHUNK_LIMIT: usize = 2 * 1024 * 1024;
@@ -373,6 +436,22 @@ struct GitFileDiffCompatQuery {
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+struct GitCommitFileCompatQuery {
+    directory: Option<String>,
+    commit: Option<String>,
+    path: Option<String>,
+    context_lines: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GitCommitFileContentCompatQuery {
+    directory: Option<String>,
+    commit: Option<String>,
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct GitWatchCompatQuery {
     directory: Option<String>,
     interval_ms: Option<u64>,
@@ -382,6 +461,21 @@ struct GitWatchCompatQuery {
 struct GitPatchCompatBody {
     patch: Option<String>,
     mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct GitConflictResolveCompatBody {
+    path: Option<String>,
+    strategy: Option<String>,
+    stage: Option<bool>,
+    choices: Option<Vec<GitConflictResolveChoiceCompat>>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+struct GitConflictResolveChoiceCompat {
+    id: Option<usize>,
+    choice: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -405,6 +499,20 @@ struct GitBlameResponseCompat {
 struct GitFileDiffResponseCompat {
     original: String,
     modified: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+struct GitCommitFileDiffResponseCompat {
+    diff: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitFileContentResponseCompat {
+    content: String,
+    exists: bool,
+    binary: bool,
+    truncated: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -448,6 +556,28 @@ struct GitDiffResponseCompat {
     diff: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     meta: Option<GitDiffMetaCompat>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct GitConflictBlockCompat {
+    id: usize,
+    ours_label: Option<String>,
+    base_label: Option<String>,
+    theirs_label: Option<String>,
+    ours: String,
+    base: String,
+    theirs: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct GitConflictFileResponseCompat {
+    path: String,
+    text: String,
+    blocks: Vec<GitConflictBlockCompat>,
+    has_markers: bool,
+    is_unmerged: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -549,6 +679,185 @@ fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
     }
 
     (staged, unstaged, untracked, changed)
+}
+
+fn compat_parse_git_status_files(status: &str) -> Vec<GitStatusCompatFile> {
+    let mut files = Vec::new();
+
+    for line in status
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+    {
+        if line.len() < 3 {
+            continue;
+        }
+
+        let bytes = line.as_bytes();
+        let x = bytes.first().copied().unwrap_or(b' ') as char;
+        let y = bytes.get(1).copied().unwrap_or(b' ') as char;
+        if x == '!' && y == '!' {
+            continue;
+        }
+
+        let mut path = line.get(3..).unwrap_or("").trim();
+        if path.is_empty() {
+            continue;
+        }
+
+        if matches!(x, 'R' | 'C') || matches!(y, 'R' | 'C') {
+            if let Some((_, renamed)) = path.rsplit_once(" -> ") {
+                path = renamed.trim();
+            }
+        }
+
+        let index = if x == ' ' {
+            String::new()
+        } else {
+            x.to_string()
+        };
+        let working_dir = if y == ' ' {
+            String::new()
+        } else {
+            y.to_string()
+        };
+        let (index, working_dir) = if x == '?' && y == '?' {
+            ("?".to_string(), "?".to_string())
+        } else {
+            (index, working_dir)
+        };
+        if index.is_empty() && working_dir.is_empty() {
+            continue;
+        }
+
+        files.push(GitStatusCompatFile {
+            path: path.replace('\\', "/"),
+            index,
+            working_dir,
+        });
+    }
+
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    files
+}
+
+fn compat_git_status_is_merge(file: &GitStatusCompatFile) -> bool {
+    file.index.trim() == "U" || file.working_dir.trim() == "U"
+}
+
+fn compat_git_status_is_untracked(file: &GitStatusCompatFile) -> bool {
+    file.index.trim() == "?" && file.working_dir.trim() == "?"
+}
+
+fn compat_git_status_is_staged(file: &GitStatusCompatFile) -> bool {
+    if compat_git_status_is_merge(file) {
+        return false;
+    }
+    let index = file.index.trim();
+    !index.is_empty() && index != "?"
+}
+
+fn compat_git_status_is_unstaged(file: &GitStatusCompatFile) -> bool {
+    if compat_git_status_is_merge(file) || compat_git_status_is_untracked(file) {
+        return false;
+    }
+    !file.working_dir.trim().is_empty()
+}
+
+fn compat_count_git_status_files(files: &[GitStatusCompatFile]) -> (u64, u64, u64, u64, u64) {
+    let total_files = files.len() as u64;
+    let staged_count = files
+        .iter()
+        .filter(|file| compat_git_status_is_staged(file))
+        .count() as u64;
+    let unstaged_count = files
+        .iter()
+        .filter(|file| compat_git_status_is_unstaged(file))
+        .count() as u64;
+    let untracked_count = files
+        .iter()
+        .filter(|file| compat_git_status_is_untracked(file))
+        .count() as u64;
+    let merge_count = files
+        .iter()
+        .filter(|file| compat_git_status_is_merge(file))
+        .count() as u64;
+
+    (
+        staged_count,
+        unstaged_count,
+        untracked_count,
+        merge_count,
+        total_files,
+    )
+}
+
+fn compat_parse_git_numstat(raw: &str, map: &mut HashMap<String, GitStatusCompatDiffStat>) {
+    for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let parts = line.split('\t').collect::<Vec<_>>();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        let insertions = if parts[0] == "-" {
+            0
+        } else {
+            parts[0].parse::<u64>().unwrap_or(0)
+        };
+        let deletions = if parts[1] == "-" {
+            0
+        } else {
+            parts[1].parse::<u64>().unwrap_or(0)
+        };
+        let path = parts[2..].join("\t");
+        if path.is_empty() {
+            continue;
+        }
+
+        let entry = map.entry(path).or_insert(GitStatusCompatDiffStat {
+            insertions: 0,
+            deletions: 0,
+        });
+        entry.insertions = entry.insertions.saturating_add(insertions);
+        entry.deletions = entry.deletions.saturating_add(deletions);
+    }
+}
+
+async fn compat_estimate_new_file_lines(
+    repo_root: &Path,
+    file_rel: &str,
+) -> Option<GitStatusCompatDiffStat> {
+    let absolute = repo_root.join(file_rel);
+    let metadata = tokio::fs::metadata(&absolute).await.ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_COMPAT_FILE_BYTES {
+        return None;
+    }
+
+    let bytes = tokio::fs::read(&absolute).await.ok()?;
+    if bytes.contains(&0) {
+        return Some(GitStatusCompatDiffStat {
+            insertions: 0,
+            deletions: 0,
+        });
+    }
+
+    let content = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
+    if content.is_empty() {
+        return Some(GitStatusCompatDiffStat {
+            insertions: 0,
+            deletions: 0,
+        });
+    }
+
+    let mut insertions = content.split('\n').count() as u64;
+    if content.ends_with('\n') {
+        insertions = insertions.saturating_sub(1);
+    }
+
+    Some(GitStatusCompatDiffStat {
+        insertions,
+        deletions: 0,
+    })
 }
 
 fn compat_bad_request(message: impl Into<String>) -> (StatusCode, String) {
@@ -868,8 +1177,12 @@ async fn compat_normalize_scope_paths(
         }
 
         if metadata.is_dir() {
-            let nested =
-                compat_walk_workspace_files(&path, include_hidden, respect_gitignore, MAX_CONTENT_SCOPE_PATHS);
+            let nested = compat_walk_workspace_files(
+                &path,
+                include_hidden,
+                respect_gitignore,
+                MAX_CONTENT_SCOPE_PATHS,
+            );
             for file in nested {
                 if seen.insert(file.clone()) {
                     resolved.push(file);
@@ -887,7 +1200,8 @@ fn compat_walk_workspace_files(
     respect_gitignore: bool,
     limit: usize,
 ) -> Vec<PathBuf> {
-    let excluded: HashSet<&'static str> = COMPAT_FILE_SEARCH_EXCLUDED_DIRS.iter().copied().collect();
+    let excluded: HashSet<&'static str> =
+        COMPAT_FILE_SEARCH_EXCLUDED_DIRS.iter().copied().collect();
     let root_for_filter = root.to_path_buf();
     let mut builder = WalkBuilder::new(root);
     builder.hidden(!include_hidden);
@@ -1036,6 +1350,20 @@ fn compat_run_git(dir: &Path, args: &[&str]) -> Result<(i32, String, String), St
     ))
 }
 
+fn compat_run_git_bytes(dir: &Path, args: &[&str]) -> Result<(i32, Vec<u8>, String), String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(|error| error.to_string())?;
+    Ok((
+        output.status.code().unwrap_or(1),
+        output.stdout,
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    ))
+}
+
 fn compat_run_git_with_input(
     dir: &Path,
     args: &[&str],
@@ -1057,7 +1385,9 @@ fn compat_run_git_with_input(
             .map_err(|error| error.to_string())?;
     }
 
-    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     Ok((
         output.status.code().unwrap_or(1),
         String::from_utf8_lossy(&output.stdout).to_string(),
@@ -1066,8 +1396,8 @@ fn compat_run_git_with_input(
 }
 
 async fn compat_git_repo_root(directory: &Path) -> CompatResult<PathBuf> {
-    let (code, stdout, stderr) = compat_run_git(directory, &["rev-parse", "--show-toplevel"])
-        .map_err(compat_internal)?;
+    let (code, stdout, stderr) =
+        compat_run_git(directory, &["rev-parse", "--show-toplevel"]).map_err(compat_internal)?;
     if code != 0 {
         let message = stderr.trim();
         return Err(compat_bad_request(if message.is_empty() {
@@ -1258,6 +1588,145 @@ fn compat_git_text_from_spec(repo_root: &Path, spec: &str) -> String {
         Ok((0, stdout, _)) => stdout,
         _ => String::new(),
     }
+}
+
+async fn compat_git_path_is_unmerged(repo_root: &Path, path: &str) -> bool {
+    match compat_run_git(repo_root, &["ls-files", "-u", "--", path]) {
+        Ok((0, stdout, _)) => stdout.lines().any(|line| !line.trim().is_empty()),
+        _ => false,
+    }
+}
+
+fn compat_parse_conflict_markers(text: &str) -> Vec<GitConflictBlockCompat> {
+    let mut blocks = Vec::<GitConflictBlockCompat>::new();
+    let mut state = 0;
+    let mut ours = Vec::<String>::new();
+    let mut base = Vec::<String>::new();
+    let mut theirs = Vec::<String>::new();
+    let mut ours_label: Option<String> = None;
+    let mut base_label: Option<String> = None;
+    let mut id = 0usize;
+
+    for line in text.lines() {
+        if line.starts_with("<<<<<<<") {
+            state = 1;
+            ours.clear();
+            base.clear();
+            theirs.clear();
+            ours_label = line
+                .strip_prefix("<<<<<<<")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            base_label = None;
+            continue;
+        }
+
+        if state == 1 && line.starts_with("|||||||") {
+            state = 2;
+            base_label = line
+                .strip_prefix("|||||||")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            continue;
+        }
+
+        if (state == 1 || state == 2) && line.starts_with("=======") {
+            state = 3;
+            continue;
+        }
+
+        if state == 3 && line.starts_with(">>>>>>>") {
+            let theirs_label = line
+                .strip_prefix(">>>>>>>")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            blocks.push(GitConflictBlockCompat {
+                id,
+                ours_label: ours_label.clone(),
+                base_label: base_label.clone(),
+                theirs_label,
+                ours: ours.join("\n"),
+                base: base.join("\n"),
+                theirs: theirs.join("\n"),
+            });
+            id += 1;
+            state = 0;
+            continue;
+        }
+
+        match state {
+            1 => ours.push(line.to_string()),
+            2 => base.push(line.to_string()),
+            3 => theirs.push(line.to_string()),
+            _ => {}
+        }
+    }
+
+    blocks
+}
+
+fn compat_apply_conflict_choices(
+    text: &str,
+    choices: &HashMap<usize, String>,
+    default_choice: &str,
+) -> String {
+    let mut out = Vec::<String>::new();
+    let mut state = 0;
+    let mut ours = Vec::<String>::new();
+    let mut base = Vec::<String>::new();
+    let mut theirs = Vec::<String>::new();
+    let mut id = 0usize;
+
+    for line in text.lines() {
+        if line.starts_with("<<<<<<<") {
+            state = 1;
+            ours.clear();
+            base.clear();
+            theirs.clear();
+            continue;
+        }
+
+        if state == 1 && line.starts_with("|||||||") {
+            state = 2;
+            continue;
+        }
+
+        if (state == 1 || state == 2) && line.starts_with("=======") {
+            state = 3;
+            continue;
+        }
+
+        if state == 3 && line.starts_with(">>>>>>>") {
+            match choices
+                .get(&id)
+                .map(String::as_str)
+                .unwrap_or(default_choice)
+            {
+                "base" => out.extend(base.iter().cloned()),
+                "theirs" => out.extend(theirs.iter().cloned()),
+                "both" => {
+                    out.extend(ours.iter().cloned());
+                    out.extend(theirs.iter().cloned());
+                }
+                _ => out.extend(ours.iter().cloned()),
+            }
+            id += 1;
+            state = 0;
+            continue;
+        }
+
+        match state {
+            0 => out.push(line.to_string()),
+            1 => ours.push(line.to_string()),
+            2 => base.push(line.to_string()),
+            _ => theirs.push(line.to_string()),
+        }
+    }
+
+    format!("{}\n", out.join("\n"))
 }
 
 fn compat_fuzzy_match_score_normalized(query: &str, candidate: &str) -> Option<i32> {
@@ -1888,12 +2357,16 @@ async fn compat_fs_search_content(
         .unwrap_or(DEFAULT_CONTENT_SEARCH_CONTEXT_CHARS)
         .clamp(0, MAX_CONTENT_SEARCH_CONTEXT_CHARS);
 
-    let regex =
-        compat_build_content_regex(raw_query, is_regex, case_sensitive, whole_word)?;
+    let regex = compat_build_content_regex(raw_query, is_regex, case_sensitive, whole_word)?;
     let candidates = if let Some(paths) = body.paths.as_deref() {
         compat_normalize_scope_paths(&root, paths, include_hidden, respect_gitignore).await?
     } else {
-        compat_walk_workspace_files(&root, include_hidden, respect_gitignore, MAX_CONTENT_SCOPE_PATHS)
+        compat_walk_workspace_files(
+            &root,
+            include_hidden,
+            respect_gitignore,
+            MAX_CONTENT_SCOPE_PATHS,
+        )
     };
 
     let mut files = Vec::new();
@@ -1976,9 +2449,13 @@ async fn compat_fs_replace_content(
             return Err(compat_bad_request("Invalid match range"));
         }
 
-        let (_, absolute) = compat_resolve_scoped_path(Some(root.display().to_string().as_str()), Some(path)).await?;
+        let (_, absolute) =
+            compat_resolve_scoped_path(Some(root.display().to_string().as_str()), Some(path))
+                .await?;
         let Some(content) = compat_read_searchable_text(&absolute).await else {
-            return Err(compat_bad_request("Target file is not a searchable text file"));
+            return Err(compat_bad_request(
+                "Target file is not a searchable text file",
+            ));
         };
 
         if end_offset > content.len()
@@ -2033,12 +2510,16 @@ async fn compat_fs_replace_content(
     let case_sensitive = body.case_sensitive.unwrap_or(false);
     let whole_word = body.whole_word.unwrap_or(false);
 
-    let regex =
-        compat_build_content_regex(raw_query, is_regex, case_sensitive, whole_word)?;
+    let regex = compat_build_content_regex(raw_query, is_regex, case_sensitive, whole_word)?;
     let candidates = if let Some(paths) = body.paths.as_deref() {
         compat_normalize_scope_paths(&root, paths, true, false).await?
     } else {
-        compat_walk_workspace_files(&root, include_hidden, respect_gitignore, MAX_CONTENT_SCOPE_PATHS)
+        compat_walk_workspace_files(
+            &root,
+            include_hidden,
+            respect_gitignore,
+            MAX_CONTENT_SCOPE_PATHS,
+        )
     };
 
     let mut files = Vec::new();
@@ -2054,13 +2535,19 @@ async fn compat_fs_replace_content(
         if replacements == 0 {
             continue;
         }
-        let updated = regex.replace_all(&content, replacement.as_str()).into_owned();
+        let updated = regex
+            .replace_all(&content, replacement.as_str())
+            .into_owned();
         if updated == content {
             continue;
         }
         if let Err(error) = tokio::fs::write(&path, updated).await {
             skipped += 1;
-            tracing::warn!("compat_fs_replace_content failed to write {}: {}", path.display(), error);
+            tracing::warn!(
+                "compat_fs_replace_content failed to write {}: {}",
+                path.display(),
+                error
+            );
             continue;
         }
         replacement_count += replacements;
@@ -2102,6 +2589,284 @@ where
         .route("/api/fs/download", get(compat_fs_download))
 }
 
+fn compat_session_manager(
+    state: &AppState,
+) -> Result<Arc<agena::session::SessionManager>, (StatusCode, String)> {
+    state
+        .runtime
+        .session_manager()
+        .ok_or_else(|| compat_internal("Session runtime is unavailable"))
+}
+
+fn compat_parse_id(value: &str, label: &str) -> Result<i64, (StatusCode, String)> {
+    value
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| compat_bad_request(format!("{label} must be a non-empty numeric identifier")))
+}
+
+fn compat_session_summary_value(summary: &agena::session::SessionSummary) -> Value {
+    json!({
+        "id": summary.id.to_string(),
+        "parentID": summary.parent_id.map(|value| value.to_string()),
+        "rootID": summary.root_id.to_string(),
+        "title": summary.title.clone(),
+        "messageCount": summary.message_count,
+        "childSessionCount": summary.child_session_count,
+        "goal": summary.goal.as_ref().map(|goal| json!({
+            "id": goal.id.to_string(),
+            "objective": goal.objective.clone(),
+            "status": goal.status,
+        })),
+        "time": {
+            "created": summary.created_at.timestamp_millis(),
+            "updated": summary.updated_at.timestamp_millis(),
+        }
+    })
+}
+
+fn compat_message_part_value(session_id: i64, part: &agena::message::MessagePart) -> Value {
+    let mut value = json!({
+        "id": part.id.to_string(),
+        "sessionId": session_id.to_string(),
+        "sessionID": session_id.to_string(),
+        "messageId": part.message_id.to_string(),
+        "messageID": part.message_id.to_string(),
+        "partId": part.id.to_string(),
+        "partID": part.id.to_string(),
+        "type": part.kind.to_string(),
+        "status": part.status.to_string(),
+        "name": part.name.clone(),
+        "summary": part.summary.clone(),
+        "hasDetail": part.has_detail,
+        "operationId": part.operation_id.clone(),
+        "createdAt": part.created_at.timestamp_millis(),
+        "content": part.content.clone(),
+    });
+
+    if let Some(obj) = value.as_object_mut() {
+        match part.content.as_ref() {
+            Some(agena::message::PartContent::Text(text)) => {
+                obj.insert("text".to_string(), Value::String(text.text.clone()));
+            }
+            Some(agena::message::PartContent::Reasoning(reasoning)) => {
+                obj.insert(
+                    "text".to_string(),
+                    Value::String(reasoning.summary.join("\n")),
+                );
+            }
+            Some(agena::message::PartContent::ToolExecution(tool)) => {
+                obj.insert(
+                    "tool".to_string(),
+                    serde_json::to_value(tool).unwrap_or(Value::Null),
+                );
+            }
+            Some(agena::message::PartContent::CommandExecution(command)) => {
+                obj.insert("text".to_string(), Value::String(command.command.clone()));
+            }
+            _ => {}
+        }
+    }
+
+    value
+}
+
+fn compat_message_entry_value(session_id: i64, message: &agena::message::Message) -> Value {
+    let parts = message
+        .parts
+        .iter()
+        .map(|part| compat_message_part_value(session_id, part))
+        .collect::<Vec<_>>();
+    let model_id = message.metadata.model_id.trim();
+    let provider_id = message.metadata.model_provider_id.trim();
+
+    json!({
+        "info": {
+            "id": message.id.to_string(),
+            "sessionID": session_id.to_string(),
+            "role": message.role.to_string(),
+            "finish": message.finish.clone(),
+            "modelID": (!model_id.is_empty()).then_some(model_id),
+            "providerID": (!provider_id.is_empty()).then_some(provider_id),
+            "time": {
+                "created": message.created_at.timestamp_millis(),
+            }
+        },
+        "parts": parts,
+    })
+}
+
+async fn compat_session_list(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Query(query): Query<CompatSessionListQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let manager = compat_session_manager(state.as_ref())?;
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.map(|value| value.min(MAX_COMPAT_LIST_LIMIT));
+    let include_total = query.include_total.unwrap_or(false);
+    let fetch_limit = limit.map(|value| value.saturating_add(1) as u64);
+
+    let mut sessions = manager
+        .list_session_summaries(agena::session::SessionListRequest {
+            offset: offset as u64,
+            limit: fetch_limit,
+            include_subagents: false,
+        })
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+
+    let has_more = limit.is_some_and(|value| sessions.len() > value);
+    if let Some(limit) = limit {
+        sessions.truncate(limit);
+    }
+
+    let session_values = sessions
+        .iter()
+        .map(compat_session_summary_value)
+        .collect::<Vec<_>>();
+    if !include_total {
+        return Ok(Json(Value::Array(session_values)).into_response());
+    }
+
+    let total = manager
+        .list_session_summaries(agena::session::SessionListRequest {
+            offset: 0,
+            limit: None,
+            include_subagents: false,
+        })
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?
+        .len();
+
+    Ok(Json(CompatSessionListResponse {
+        sessions: session_values,
+        total,
+        offset,
+        limit,
+        has_more,
+        next_offset: has_more.then_some(offset.saturating_add(sessions.len())),
+    })
+    .into_response())
+}
+
+async fn compat_session_status(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Query(query): Query<CompatSessionStatusQuery>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let manager = compat_session_manager(state.as_ref())?;
+    let session_ids = if let Some(session_id) = query
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        vec![compat_parse_id(session_id, "sessionId")?]
+    } else {
+        manager
+            .list_session_summaries(agena::session::SessionListRequest::default())
+            .await
+            .map_err(|error| compat_internal(error.to_string()))?
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>()
+    };
+
+    let mut payload = serde_json::Map::new();
+    for session_id in session_ids {
+        let status = if manager.is_turn_active(session_id).await {
+            "busy"
+        } else {
+            let session = manager
+                .get_session(session_id)
+                .await
+                .map_err(|error| compat_internal(error.to_string()))?;
+            if session.blocked() || session.status() != agena::session::SessionStatus::Idle {
+                "busy"
+            } else {
+                "idle"
+            }
+        };
+        payload.insert(session_id.to_string(), json!({ "type": status }));
+    }
+
+    Ok(Json(Value::Object(payload)))
+}
+
+async fn compat_session_message_list(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+    Query(query): Query<CompatSessionMessagesQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let manager = compat_session_manager(state.as_ref())?;
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    manager
+        .get_session(session_id)
+        .await
+        .map_err(|error| compat_not_found(error.to_string()))?;
+
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.map(|value| value.min(MAX_COMPAT_LIST_LIMIT));
+    let include_total = query.include_total.unwrap_or(false);
+
+    let all_messages = manager
+        .list_projected_messages(session_id, true)
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+    let total = all_messages.len();
+
+    let mut newest_slice = all_messages
+        .into_iter()
+        .rev()
+        .skip(offset)
+        .take(limit.unwrap_or(usize::MAX))
+        .collect::<Vec<_>>();
+    newest_slice.reverse();
+
+    let entries = newest_slice
+        .iter()
+        .map(|message| compat_message_entry_value(session_id, message))
+        .collect::<Vec<_>>();
+
+    if !include_total {
+        return Ok(Json(Value::Array(entries)).into_response());
+    }
+
+    let has_more = offset.saturating_add(entries.len()) < total;
+    Ok(Json(CompatSessionMessageListResponse {
+        entries,
+        total,
+        offset,
+        limit,
+        has_more,
+        next_offset: has_more.then_some(offset.saturating_add(newest_slice.len())),
+    })
+    .into_response())
+}
+
+async fn compat_session_message_part_detail(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath((session_id, message_id, part_id)): AxumPath<(String, String, String)>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let manager = compat_session_manager(state.as_ref())?;
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    let message_id = compat_parse_id(&message_id, "message_id")?;
+    let part_id = compat_parse_id(&part_id, "part_id")?;
+
+    let message = manager
+        .find_projected_message(session_id, message_id, true)
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?
+        .ok_or_else(|| compat_not_found("message not found"))?;
+    let part = manager
+        .find_projected_part(part_id)
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?
+        .filter(|part| part.message_id == message.id)
+        .ok_or_else(|| compat_not_found("part not found"))?;
+
+    Ok(Json(compat_message_part_value(session_id, &part)))
+}
+
 async fn compat_git_status(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Query(query): Query<GitStatusCompatQuery>,
@@ -2111,36 +2876,19 @@ async fn compat_git_status(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+        .map(compat_resolve_path)
         .unwrap_or_else(|| state.runtime.workspace_root().to_path_buf());
     let summary_only = query.summary.unwrap_or(false);
-    let scope = if summary_only { "summary" } else { "full" }.to_string();
-
-    if !command_available("git") {
-        return Json(GitStatusCompatResponse {
-            current: String::new(),
-            tracking: None,
-            ahead: 0,
-            behind: 0,
-            files: Vec::new(),
-            total_files: 0,
-            staged_count: 0,
-            unstaged_count: 0,
-            untracked_count: 0,
-            merge_count: 0,
-            offset: 0,
-            limit: 0,
-            has_more: false,
-            scope,
-        });
-    }
-
-    let repo = git_output(&workspace_root, &["rev-parse", "--is-inside-work-tree"])
+    let scope = query
+        .scope
         .as_deref()
         .map(str::trim)
-        .is_some_and(|value| value == "true");
-    if !repo {
-        return Json(GitStatusCompatResponse {
+        .filter(|value| !value.is_empty())
+        .unwrap_or("all")
+        .to_ascii_lowercase();
+
+    let empty_response = || {
+        Json(GitStatusCompatResponse {
             current: String::new(),
             tracking: None,
             ahead: 0,
@@ -2154,13 +2902,24 @@ async fn compat_git_status(
             offset: 0,
             limit: 0,
             has_more: false,
-            scope,
-        });
+            scope: scope.clone(),
+            diff_stats: None,
+        })
+    };
+
+    if !command_available("git") {
+        return empty_response();
     }
 
-    let current = git_output(&workspace_root, &["branch", "--show-current"]).unwrap_or_default();
+    let Some(repo_root) = git_output(&workspace_root, &["rev-parse", "--show-toplevel"])
+        .map(|path| compat_resolve_path(path.as_str()))
+    else {
+        return empty_response();
+    };
+
+    let current = git_output(&repo_root, &["branch", "--show-current"]).unwrap_or_default();
     let tracking = git_output(
-        &workspace_root,
+        &repo_root,
         &[
             "rev-parse",
             "--abbrev-ref",
@@ -2174,30 +2933,149 @@ async fn compat_git_status(
     });
     let ahead_behind = tracking.as_ref().and_then(|_| {
         git_output(
-            &workspace_root,
+            &repo_root,
             &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
         )
     });
     let (ahead, behind) = parse_ahead_behind(ahead_behind.as_deref());
-    let status = git_output(&workspace_root, &["status", "--porcelain"]).unwrap_or_default();
-    let (staged_count, unstaged_count, untracked_count, total_files) =
-        summarize_git_status(status.as_str());
+    let status = compat_run_git(
+        &repo_root,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )
+    .ok()
+    .and_then(|(code, stdout, _)| (code == 0).then_some(stdout))
+    .unwrap_or_default();
+    let files = compat_parse_git_status_files(status.as_str());
+    let (staged_count, unstaged_count, untracked_count, merge_count, total_files) =
+        compat_count_git_status_files(&files);
+
+    let mut scoped = match scope.as_str() {
+        "staged" => files
+            .into_iter()
+            .filter(compat_git_status_is_staged)
+            .collect::<Vec<_>>(),
+        "unstaged" => files
+            .into_iter()
+            .filter(compat_git_status_is_unstaged)
+            .collect::<Vec<_>>(),
+        "merge" => files
+            .into_iter()
+            .filter(compat_git_status_is_merge)
+            .collect::<Vec<_>>(),
+        "untracked" => files
+            .into_iter()
+            .filter(compat_git_status_is_untracked)
+            .collect::<Vec<_>>(),
+        _ => files,
+    };
+
+    let offset = if summary_only {
+        0
+    } else {
+        query.offset.unwrap_or(0)
+    };
+    let limit = if summary_only {
+        0
+    } else {
+        query.limit.unwrap_or(200).min(500)
+    };
+    let scoped_total = scoped.len();
+    let end = offset.saturating_add(limit).min(scoped_total);
+    let has_more = if summary_only {
+        false
+    } else {
+        end < scoped_total
+    };
+    let page_files = if summary_only || limit == 0 || offset >= scoped_total {
+        Vec::new()
+    } else {
+        scoped.drain(offset..end).collect::<Vec<_>>()
+    };
+
+    let mut diff_stats = None;
+    if query.include_diff_stats.unwrap_or(false) && !summary_only && !page_files.is_empty() {
+        let mut map = HashMap::<String, GitStatusCompatDiffStat>::new();
+        let mut paths = page_files
+            .iter()
+            .map(|file| file.path.trim().to_string())
+            .filter(|path| !path.is_empty())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+
+        if !paths.is_empty() {
+            let mut staged_args = vec![
+                "diff".to_string(),
+                "--cached".to_string(),
+                "--numstat".to_string(),
+                "--".to_string(),
+            ];
+            staged_args.extend(paths.iter().cloned());
+            let staged_refs = staged_args.iter().map(String::as_str).collect::<Vec<_>>();
+            if let Ok((code, stdout, _)) = compat_run_git(&repo_root, &staged_refs)
+                && code == 0
+            {
+                compat_parse_git_numstat(&stdout, &mut map);
+            }
+
+            let mut working_args = vec![
+                "diff".to_string(),
+                "--numstat".to_string(),
+                "--".to_string(),
+            ];
+            working_args.extend(paths.iter().cloned());
+            let working_refs = working_args.iter().map(String::as_str).collect::<Vec<_>>();
+            if let Ok((code, stdout, _)) = compat_run_git(&repo_root, &working_refs)
+                && code == 0
+            {
+                compat_parse_git_numstat(&stdout, &mut map);
+            }
+        }
+
+        for file in &page_files {
+            let status_code = if file.working_dir.trim().is_empty() {
+                file.index.trim()
+            } else {
+                file.working_dir.trim()
+            };
+            if status_code != "?" && status_code != "A" {
+                continue;
+            }
+            if map
+                .get(&file.path)
+                .is_some_and(|existing| existing.insertions > 0)
+            {
+                continue;
+            }
+            if let Some(stat) = compat_estimate_new_file_lines(&repo_root, &file.path).await {
+                map.insert(file.path.clone(), stat);
+            }
+        }
+
+        let allowed = page_files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<HashSet<_>>();
+        map.retain(|path, _| allowed.contains(path));
+        diff_stats = Some(map);
+    }
 
     Json(GitStatusCompatResponse {
         current,
         tracking,
         ahead,
         behind,
-        files: Vec::new(),
+        files: page_files,
         total_files,
         staged_count,
         unstaged_count,
         untracked_count,
-        merge_count: 0,
-        offset: 0,
-        limit: 0,
-        has_more: false,
+        merge_count,
+        offset: offset as u64,
+        limit: limit as u64,
+        has_more,
         scope,
+        diff_stats,
     })
 }
 
@@ -2304,7 +3182,10 @@ async fn compat_git_diff(
         }));
     }
 
-    let meta = query.include_meta.unwrap_or(false).then(|| compat_parse_diff_meta(&stdout));
+    let meta = query
+        .include_meta
+        .unwrap_or(false)
+        .then(|| compat_parse_diff_meta(&stdout));
     Ok(Json(GitDiffResponseCompat { diff: stdout, meta }))
 }
 
@@ -2323,10 +3204,134 @@ async fn compat_git_file_diff(
         compat_git_text_from_spec(&repo_root, format!(":{relative}").as_str())
     } else {
         let absolute = repo_root.join(&relative);
-        tokio::fs::read_to_string(&absolute).await.unwrap_or_default()
+        tokio::fs::read_to_string(&absolute)
+            .await
+            .unwrap_or_default()
     };
 
     Ok(Json(GitFileDiffResponseCompat { original, modified }))
+}
+
+async fn compat_git_commit_file_diff(
+    Query(query): Query<GitCommitFileCompatQuery>,
+) -> CompatResult<Json<GitCommitFileDiffResponseCompat>> {
+    let (_dir, repo_root, relative) =
+        compat_git_require_file_path(query.directory.as_deref(), query.path.as_deref()).await?;
+    let commit = query
+        .commit
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("commit parameter is required"))?;
+    let context = query.context_lines.unwrap_or(3).clamp(0, 500);
+    let args = vec![
+        "show".to_string(),
+        "--no-color".to_string(),
+        "--no-ext-diff".to_string(),
+        format!("-U{context}"),
+        "--format=".to_string(),
+        commit.to_string(),
+        "--".to_string(),
+        relative,
+    ];
+    let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
+
+    let (code, stdout, stderr) = compat_run_git(&repo_root, &args_ref).map_err(compat_internal)?;
+    if code != 0 {
+        let message = stderr.trim();
+        return Err(compat_bad_request(if message.is_empty() {
+            "git show failed".to_string()
+        } else {
+            message.to_string()
+        }));
+    }
+
+    Ok(Json(GitCommitFileDiffResponseCompat { diff: stdout }))
+}
+
+async fn compat_git_commit_file_content(
+    Query(query): Query<GitCommitFileContentCompatQuery>,
+) -> CompatResult<Json<GitCommitFileContentResponseCompat>> {
+    let (_dir, repo_root, relative) =
+        compat_git_require_file_path(query.directory.as_deref(), query.path.as_deref()).await?;
+    let commit = query
+        .commit
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("commit parameter is required"))?;
+    let verify_spec = format!("{commit}^{{commit}}");
+    let (code, _stdout, stderr) =
+        compat_run_git(&repo_root, &["rev-parse", "--verify", verify_spec.as_str()])
+            .map_err(compat_internal)?;
+    if code != 0 {
+        let message = stderr.trim();
+        return Err(compat_bad_request(if message.is_empty() {
+            "Invalid commit".to_string()
+        } else {
+            message.to_string()
+        }));
+    }
+
+    let object_spec = format!("{commit}:{relative}");
+    let (code, _stdout, _stderr) =
+        compat_run_git(&repo_root, &["cat-file", "-e", object_spec.as_str()])
+            .map_err(compat_internal)?;
+    if code != 0 {
+        return Ok(Json(GitCommitFileContentResponseCompat {
+            content: String::new(),
+            exists: false,
+            binary: false,
+            truncated: false,
+        }));
+    }
+
+    let (code, stdout, stderr) =
+        compat_run_git(&repo_root, &["cat-file", "-t", object_spec.as_str()])
+            .map_err(compat_internal)?;
+    if code != 0 {
+        let message = stderr.trim();
+        return Err(compat_bad_request(if message.is_empty() {
+            "git cat-file failed".to_string()
+        } else {
+            message.to_string()
+        }));
+    }
+
+    if stdout.trim() != "blob" {
+        return Ok(Json(GitCommitFileContentResponseCompat {
+            content: String::new(),
+            exists: true,
+            binary: true,
+            truncated: false,
+        }));
+    }
+
+    let (code, stdout, stderr) = compat_run_git_bytes(&repo_root, &["show", object_spec.as_str()])
+        .map_err(compat_internal)?;
+    if code != 0 {
+        let message = stderr.trim();
+        return Err(compat_bad_request(if message.is_empty() {
+            "git show failed".to_string()
+        } else {
+            message.to_string()
+        }));
+    }
+
+    let truncated = stdout.len() as u64 > MAX_COMPAT_FILE_BYTES;
+    let limit = MAX_COMPAT_FILE_BYTES as usize;
+    let payload = if truncated {
+        &stdout[..limit]
+    } else {
+        stdout.as_slice()
+    };
+
+    Ok(Json(GitCommitFileContentResponseCompat {
+        content: String::from_utf8_lossy(payload).to_string(),
+        exists: true,
+        binary: std::str::from_utf8(payload).is_err(),
+        truncated,
+    }))
 }
 
 async fn compat_git_patch(
@@ -2378,9 +3383,138 @@ async fn compat_git_patch(
     Ok(Json(FsWriteCompatResponse { success: true }))
 }
 
-async fn compat_git_watch(
-    Query(query): Query<GitWatchCompatQuery>,
-) -> CompatResult<Response> {
+async fn compat_git_conflict_file(
+    Query(query): Query<GitPathCompatQuery>,
+) -> CompatResult<Json<GitConflictFileResponseCompat>> {
+    let (_dir, repo_root, relative) =
+        compat_git_require_file_path(query.directory.as_deref(), query.path.as_deref()).await?;
+    let absolute = repo_root.join(&relative).clean();
+    let metadata = tokio::fs::metadata(&absolute)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => compat_not_found("File not found"),
+            std::io::ErrorKind::PermissionDenied => compat_forbidden("Access to file denied"),
+            _ => compat_internal(error.to_string()),
+        })?;
+    if !metadata.is_file() {
+        return Err(compat_bad_request("Specified path is not a file"));
+    }
+    if metadata.len() > MAX_COMPAT_CONFLICT_FILE_BYTES {
+        return Err(compat_bad_request("File too large"));
+    }
+
+    let text = compat_fs_read_file_text(&absolute).await?;
+    let blocks = compat_parse_conflict_markers(&text);
+    let has_markers = !blocks.is_empty()
+        && text.contains("<<<<<<<")
+        && text.contains("=======")
+        && text.contains(">>>>>>>");
+
+    Ok(Json(GitConflictFileResponseCompat {
+        path: relative.clone(),
+        text,
+        blocks,
+        has_markers,
+        is_unmerged: compat_git_path_is_unmerged(&repo_root, &relative).await,
+    }))
+}
+
+async fn compat_git_conflict_resolve(
+    Query(query): Query<FsWriteCompatQuery>,
+    Json(body): Json<GitConflictResolveCompatBody>,
+) -> CompatResult<Json<FsWriteCompatResponse>> {
+    let path = body
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compat_bad_request("path is required"))?;
+    let (_dir, repo_root, relative) =
+        compat_git_require_file_path(query.directory.as_deref(), Some(path)).await?;
+    let absolute = repo_root.join(&relative).clean();
+    let strategy = body
+        .strategy
+        .as_deref()
+        .unwrap_or("manual")
+        .trim()
+        .to_ascii_lowercase();
+    let stage = body.stage.unwrap_or(true);
+
+    if strategy == "ours" || strategy == "theirs" {
+        let flag = if strategy == "ours" {
+            "--ours"
+        } else {
+            "--theirs"
+        };
+        let (code, _stdout, stderr) =
+            compat_run_git(&repo_root, &["checkout", flag, "--", relative.as_str()])
+                .map_err(compat_internal)?;
+        if code != 0 {
+            let message = stderr.trim();
+            return Err(compat_bad_request(if message.is_empty() {
+                "git checkout failed".to_string()
+            } else {
+                message.to_string()
+            }));
+        }
+    } else {
+        let text = compat_fs_read_file_text(&absolute).await?;
+        if !text.contains("<<<<<<<") {
+            return Err(compat_bad_request("No conflict markers found"));
+        }
+
+        let mut choices = HashMap::<usize, String>::new();
+        if let Some(list) = body.choices {
+            for item in list {
+                let Some(id) = item.id else {
+                    continue;
+                };
+                let Some(choice) = item.choice.as_deref() else {
+                    continue;
+                };
+                let choice = choice.trim().to_ascii_lowercase();
+                if matches!(choice.as_str(), "ours" | "theirs" | "base" | "both") {
+                    choices.insert(id, choice);
+                }
+            }
+        }
+
+        let default_choice = if strategy == "both" {
+            "both"
+        } else if strategy == "base" {
+            "base"
+        } else {
+            "ours"
+        };
+        let resolved = compat_apply_conflict_choices(&text, &choices, default_choice);
+        tokio::fs::write(&absolute, resolved)
+            .await
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::PermissionDenied => compat_forbidden("Access denied"),
+                _ => compat_internal(error.to_string()),
+            })?;
+    }
+
+    if stage {
+        let (code, _stdout, stderr) = compat_run_git(&repo_root, &["add", "--", relative.as_str()])
+            .map_err(compat_internal)?;
+        if code != 0 {
+            let message = stderr.trim();
+            return Err((
+                StatusCode::CONFLICT,
+                if message.is_empty() {
+                    "git add failed".to_string()
+                } else {
+                    message.to_string()
+                },
+            ));
+        }
+    }
+
+    Ok(Json(FsWriteCompatResponse { success: true }))
+}
+
+async fn compat_git_watch(Query(query): Query<GitWatchCompatQuery>) -> CompatResult<Response> {
     let directory = compat_require_directory(query.directory.as_deref()).await?;
     let interval_ms = query.interval_ms.unwrap_or(1500).clamp(500, 10_000);
 
@@ -2436,7 +3570,11 @@ async fn compat_git_watch(
     };
 
     Ok(Sse::new(stream)
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping"))
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("ping"),
+        )
         .into_response())
 }
 
@@ -2590,11 +3728,34 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
     let compat_routes = compat_fs_router::<Arc<AppState>>()
+        .route("/api/session", get(compat_session_list))
+        .route("/api/session/status", get(compat_session_status))
+        .route(
+            "/api/session/{session_id}/message",
+            get(compat_session_message_list),
+        )
+        .route(
+            "/api/session/{session_id}/message/{message_id}/part/{part_id}",
+            get(compat_session_message_part_detail),
+        )
         .route("/api/git/status", get(compat_git_status))
         .route("/api/git/watch", get(compat_git_watch))
         .route("/api/git/blame", get(compat_git_blame))
         .route("/api/git/diff", get(compat_git_diff))
         .route("/api/git/file-diff", get(compat_git_file_diff))
+        .route(
+            "/api/git/commit-file-diff",
+            get(compat_git_commit_file_diff),
+        )
+        .route(
+            "/api/git/commit-file-content",
+            get(compat_git_commit_file_content),
+        )
+        .route("/api/git/conflicts/file", get(compat_git_conflict_file))
+        .route(
+            "/api/git/conflicts/resolve",
+            post(compat_git_conflict_resolve),
+        )
         .route("/api/git/patch", post(compat_git_patch))
         .route(
             "/api/ui/terminal/state",
@@ -2717,6 +3878,177 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
     use tower::ServiceExt;
+
+    fn assert_git_available() {
+        assert!(
+            Command::new("git").arg("--version").output().is_ok(),
+            "git is required for this test"
+        );
+    }
+
+    fn git_ok(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .status()
+            .expect("git command should run");
+        assert!(
+            status.success(),
+            "git -C {} {} should succeed",
+            repo.display(),
+            args.join(" ")
+        );
+    }
+
+    fn init_git_repo(repo: &Path) {
+        assert_git_available();
+        let status = Command::new("git")
+            .arg("init")
+            .arg(repo)
+            .status()
+            .expect("git init should run");
+        assert!(status.success(), "git init should succeed");
+        git_ok(repo, &["config", "user.name", "Agena Test"]);
+        git_ok(repo, &["config", "user.email", "test@example.com"]);
+    }
+
+    async fn compat_test_app_state_with_openai_base_url(
+        openai_base_url: &str,
+    ) -> (
+        Arc<AppState>,
+        Arc<sea_orm::DatabaseConnection>,
+        tempfile::NamedTempFile,
+        tempfile::TempDir,
+    ) {
+        let config = tempfile::NamedTempFile::new().expect("config file should be created");
+        let workspace = tempdir().expect("workspace should be created");
+        std::fs::write(
+            config.path(),
+            format!(
+                r#"
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "{openai_base_url}"
+api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
+
+[plugins.list."agena.memory"]
+kind = "static"
+
+[plugins.list."agena.memory".options.project_instructions]
+enabled = true
+include_global = true
+"#,
+            ),
+        )
+        .expect("config file should be written");
+
+        let db = Arc::new(
+            sea_orm::Database::connect("sqlite::memory:")
+                .await
+                .expect("database should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(agena::config::LoadConfigRequest {
+                config_path: Some(config.path().to_path_buf()),
+                ..agena::config::LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace.path())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        (
+            Arc::new(AppState {
+                ui_auth: crate::ui_auth::init_ui_auth(None),
+                ui_cookie_same_site: SameSite::Lax,
+                cors_allowed_origins: Vec::new(),
+                cors_allow_all: false,
+                runtime,
+            }),
+            db,
+            config,
+            workspace,
+        )
+    }
+
+    async fn compat_test_app_state() -> (
+        Arc<AppState>,
+        Arc<sea_orm::DatabaseConnection>,
+        tempfile::NamedTempFile,
+        tempfile::TempDir,
+    ) {
+        compat_test_app_state_with_openai_base_url("http://127.0.0.1:9/v1").await
+    }
+
+    async fn seed_compat_session_with_user_message(
+        state: &Arc<AppState>,
+        db: &Arc<sea_orm::DatabaseConnection>,
+    ) -> (i64, i64, i64) {
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "compat-session".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_millis()
+            .min(i64::MAX as u128) as i64;
+        let message_id = session.id.saturating_mul(1000).saturating_add(1);
+        let part_id = session.id.saturating_mul(1000).saturating_add(2);
+        let content = agena::message::PartContent::text("hello compat session");
+
+        use sea_orm::{ActiveModelTrait as _, ActiveValue::Set};
+        agena::db::entities::activity_message::ActiveModel {
+            message_id: Set(message_id),
+            session_id: Set(session.id),
+            role: Set(agena::role::Role::User),
+            state: Set(agena::message::ExecutionStatus::Completed),
+            created_at_ms: Set(now_ms),
+            updated_at_ms: Set(now_ms),
+            metadata: Set(agena::message::MessageMetadata::default()),
+            usage: Set(None),
+            finish: Set(None),
+            part_count: Set(1),
+            is_compacted: Set(false),
+        }
+        .insert(db.as_ref())
+        .await
+        .expect("activity message should insert");
+        agena::db::entities::activity_part::ActiveModel {
+            part_id: Set(part_id),
+            message_id: Set(message_id),
+            session_id: Set(session.id),
+            part_index: Set(0),
+            status: Set(agena::message::ExecutionStatus::Completed),
+            kind: Set(agena::message::PartKind::Text),
+            name: Set(None),
+            summary: Set(Some("hello compat session".to_string())),
+            has_detail: Set(true),
+            operation_id: Set(None),
+            created_at_ms: Set(now_ms),
+            content: Set(Some(content)),
+        }
+        .insert(db.as_ref())
+        .await
+        .expect("activity part should insert");
+        (session.id, message_id, part_id)
+    }
 
     #[test]
     fn normalize_origin_str_accepts_http_and_https_origins() {
@@ -3260,10 +4592,612 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compat_git_status_route_returns_paginated_scoped_files() {
+        let temp = tempdir().expect("tempdir should be created");
+        let repo = temp.path();
+        init_git_repo(repo);
+
+        std::fs::write(repo.join("mixed.txt"), "base\n").expect("mixed file should be written");
+        std::fs::write(repo.join("modified.txt"), "base\n")
+            .expect("modified file should be written");
+        git_ok(repo, &["add", "mixed.txt", "modified.txt"]);
+        git_ok(repo, &["commit", "-m", "base"]);
+
+        std::fs::write(repo.join("mixed.txt"), "staged change\n")
+            .expect("mixed file should be updated");
+        git_ok(repo, &["add", "mixed.txt"]);
+        std::fs::write(repo.join("mixed.txt"), "staged change\nunstaged change\n")
+            .expect("mixed file should be updated again");
+
+        std::fs::write(repo.join("modified.txt"), "base\nlocal change\n")
+            .expect("modified file should be updated");
+
+        std::fs::write(repo.join("staged.txt"), "only staged\n")
+            .expect("staged file should be written");
+        git_ok(repo, &["add", "staged.txt"]);
+
+        std::fs::write(repo.join("untracked.txt"), "new file\n")
+            .expect("untracked file should be written");
+
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let router = Router::new()
+            .route("/api/git/status", get(compat_git_status))
+            .with_state(state.clone());
+        let directory_value = repo.display().to_string();
+        let directory = urlencoding::encode(&directory_value);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/git/status?directory={directory}&scope=staged&offset=0&limit=1"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: GitStatusCompatResponse = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload.scope, "staged");
+        assert_eq!(payload.total_files, 4);
+        assert_eq!(payload.staged_count, 2);
+        assert_eq!(payload.unstaged_count, 2);
+        assert_eq!(payload.untracked_count, 1);
+        assert_eq!(payload.merge_count, 0);
+        assert_eq!(payload.offset, 0);
+        assert_eq!(payload.limit, 1);
+        assert!(payload.has_more);
+        assert_eq!(
+            payload.files,
+            vec![GitStatusCompatFile {
+                path: "mixed.txt".to_string(),
+                index: "M".to_string(),
+                working_dir: "M".to_string(),
+            }]
+        );
+        assert!(payload.diff_stats.is_none());
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_list_route_returns_paginated_sessions() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let first = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "first".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("first session should create");
+        let second = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "second".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("second session should create");
+
+        let router = Router::new()
+            .route("/api/session", get(compat_session_list))
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/session?offset=0&limit=1&includeTotal=true")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        let sessions = payload
+            .get("sessions")
+            .and_then(Value::as_array)
+            .expect("sessions should be present");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(payload.get("total").and_then(Value::as_u64), Some(2));
+        assert_eq!(payload.get("offset").and_then(Value::as_u64), Some(0));
+        assert_eq!(payload.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(payload.get("hasMore").and_then(Value::as_bool), Some(true));
+        let returned_id = sessions[0]
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("id should be present");
+        assert!(returned_id == first.id.to_string() || returned_id == second.id.to_string());
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_status_route_returns_idle_status_snapshot() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "idle".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route("/api/session/status", get(compat_session_status))
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/session/status?sessionId={}", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            payload
+                .get(session.id.to_string())
+                .and_then(|entry| entry.get("type"))
+                .and_then(Value::as_str),
+            Some("idle")
+        );
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_message_routes_return_entries_and_part_detail() {
+        let (state, db, _config, _workspace) = compat_test_app_state().await;
+        let (session_id, message_id, part_id) =
+            seed_compat_session_with_user_message(&state, &db).await;
+
+        let router = Router::new()
+            .route(
+                "/api/session/{session_id}/message",
+                get(compat_session_message_list),
+            )
+            .route(
+                "/api/session/{session_id}/message/{message_id}/part/{part_id}",
+                get(compat_session_message_part_detail),
+            )
+            .with_state(state.clone());
+
+        let list_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/session/{session_id}/message?offset=0&limit=10&includeTotal=true"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_payload: Value = serde_json::from_slice(
+            &list_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        let entries = list_payload
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("entries should be present");
+        assert_eq!(entries.len(), 1);
+        let message_id_string = message_id.to_string();
+        let part_id_string = part_id.to_string();
+        assert_eq!(
+            entries[0]
+                .get("info")
+                .and_then(|value| value.get("id"))
+                .and_then(Value::as_str),
+            Some(message_id_string.as_str())
+        );
+        assert_eq!(
+            entries[0]
+                .get("parts")
+                .and_then(Value::as_array)
+                .and_then(|parts| parts.first())
+                .and_then(|part| part.get("id"))
+                .and_then(Value::as_str),
+            Some(part_id_string.as_str())
+        );
+
+        let part_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/session/{session_id}/message/{message_id}/part/{part_id}"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(part_response.status(), StatusCode::OK);
+        let part_payload: Value = serde_json::from_slice(
+            &part_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            part_payload.get("id").and_then(Value::as_str),
+            Some(part_id_string.as_str())
+        );
+        assert_eq!(
+            part_payload.get("text").and_then(Value::as_str),
+            Some("hello compat session")
+        );
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_git_status_route_includes_diff_stats_for_page_files() {
+        let temp = tempdir().expect("tempdir should be created");
+        let repo = temp.path();
+        init_git_repo(repo);
+
+        std::fs::write(repo.join("tracked.txt"), "alpha\n")
+            .expect("tracked file should be written");
+        git_ok(repo, &["add", "tracked.txt"]);
+        git_ok(repo, &["commit", "-m", "base"]);
+
+        std::fs::write(repo.join("tracked.txt"), "alpha\nbeta\n")
+            .expect("tracked file should be updated");
+        std::fs::write(repo.join("untracked.txt"), "one\ntwo\n")
+            .expect("untracked file should be written");
+
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let router = Router::new()
+            .route("/api/git/status", get(compat_git_status))
+            .with_state(state.clone());
+        let directory_value = repo.display().to_string();
+        let directory = urlencoding::encode(&directory_value);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/git/status?directory={directory}&includeDiffStats=true&limit=10"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: GitStatusCompatResponse = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload.scope, "all");
+        assert_eq!(payload.total_files, 2);
+        assert_eq!(payload.staged_count, 0);
+        assert_eq!(payload.unstaged_count, 1);
+        assert_eq!(payload.untracked_count, 1);
+        assert_eq!(payload.merge_count, 0);
+        assert_eq!(payload.files.len(), 2);
+        let files_len = payload.files.len();
+
+        let diff_stats = payload.diff_stats.expect("diff stats should be present");
+        assert_eq!(
+            diff_stats.get("tracked.txt"),
+            Some(&GitStatusCompatDiffStat {
+                insertions: 1,
+                deletions: 0,
+            })
+        );
+        assert_eq!(
+            diff_stats.get("untracked.txt"),
+            Some(&GitStatusCompatDiffStat {
+                insertions: 2,
+                deletions: 0,
+            })
+        );
+        assert_eq!(diff_stats.len(), files_len);
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_git_commit_file_routes_return_history_diff_and_content() {
+        let temp = tempdir().expect("tempdir should be created");
+        let repo = temp.path();
+        init_git_repo(repo);
+
+        let file = repo.join("notes.txt");
+        std::fs::write(&file, "alpha\nbeta\n").expect("file should be written");
+        git_ok(repo, &["add", "notes.txt"]);
+        git_ok(repo, &["commit", "-m", "init"]);
+
+        std::fs::write(&file, "alpha\nbeta changed\ncharlie\n").expect("file should be rewritten");
+        git_ok(repo, &["add", "notes.txt"]);
+        git_ok(repo, &["commit", "-m", "update notes"]);
+
+        let commit = git_output(repo, &["rev-parse", "HEAD"]).expect("commit hash should exist");
+        let directory_value = repo.display().to_string();
+        let directory = urlencoding::encode(&directory_value);
+        let router = Router::new()
+            .route(
+                "/api/git/commit-file-diff",
+                get(compat_git_commit_file_diff),
+            )
+            .route(
+                "/api/git/commit-file-content",
+                get(compat_git_commit_file_content),
+            );
+
+        let diff_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/git/commit-file-diff?directory={directory}&commit={commit}&path=notes.txt&contextLines=1"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(diff_response.status(), StatusCode::OK);
+        let diff_payload: GitCommitFileDiffResponseCompat = serde_json::from_slice(
+            &diff_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert!(diff_payload.diff.contains("beta changed"));
+        assert!(diff_payload.diff.contains("charlie"));
+
+        let content_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/git/commit-file-content?directory={directory}&commit={commit}&path=notes.txt"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(content_response.status(), StatusCode::OK);
+        let content_payload: GitCommitFileContentResponseCompat = serde_json::from_slice(
+            &content_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert!(content_payload.exists);
+        assert!(!content_payload.binary);
+        assert!(!content_payload.truncated);
+        assert_eq!(content_payload.content, "alpha\nbeta changed\ncharlie\n");
+
+        let missing_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/git/commit-file-content?directory={directory}&commit={commit}&path=missing.txt"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(missing_response.status(), StatusCode::OK);
+        let missing_payload: GitCommitFileContentResponseCompat = serde_json::from_slice(
+            &missing_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert!(!missing_payload.exists);
+        assert!(!missing_payload.binary);
+        assert!(!missing_payload.truncated);
+        assert!(missing_payload.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn compat_git_conflict_routes_read_and_resolve_markers() {
+        let temp = tempdir().expect("tempdir should be created");
+        let repo = temp.path();
+        init_git_repo(repo);
+
+        let file = repo.join("conflict.txt");
+        std::fs::write(&file, "shared\nbase line\n").expect("file should be written");
+        git_ok(repo, &["add", "conflict.txt"]);
+        git_ok(repo, &["commit", "-m", "base"]);
+
+        let base_branch =
+            git_output(repo, &["branch", "--show-current"]).expect("branch name should exist");
+        git_ok(repo, &["checkout", "-b", "feature"]);
+        std::fs::write(&file, "shared\nfeature line\n").expect("feature change should be written");
+        git_ok(repo, &["add", "conflict.txt"]);
+        git_ok(repo, &["commit", "-m", "feature change"]);
+
+        git_ok(repo, &["checkout", base_branch.as_str()]);
+        std::fs::write(&file, "shared\nmain line\n").expect("main change should be written");
+        git_ok(repo, &["add", "conflict.txt"]);
+        git_ok(repo, &["commit", "-m", "main change"]);
+
+        let merge_output = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["merge", "feature"])
+            .output()
+            .expect("git merge should run");
+        assert!(
+            !merge_output.status.success(),
+            "merge should create a conflict"
+        );
+
+        let directory_value = repo.display().to_string();
+        let directory = urlencoding::encode(&directory_value);
+        let router = Router::new()
+            .route("/api/git/conflicts/file", get(compat_git_conflict_file))
+            .route(
+                "/api/git/conflicts/resolve",
+                post(compat_git_conflict_resolve),
+            );
+
+        let conflict_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/git/conflicts/file?directory={directory}&path=conflict.txt"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(conflict_response.status(), StatusCode::OK);
+        let conflict_payload: GitConflictFileResponseCompat = serde_json::from_slice(
+            &conflict_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert!(conflict_payload.has_markers);
+        assert!(conflict_payload.is_unmerged);
+        assert_eq!(conflict_payload.blocks.len(), 1);
+        assert_eq!(conflict_payload.blocks[0].ours, "main line");
+        assert_eq!(conflict_payload.blocks[0].theirs, "feature line");
+
+        let resolve_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/git/conflicts/resolve?directory={directory}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "path": "conflict.txt",
+                            "strategy": "manual",
+                            "stage": true,
+                            "choices": [{"id": 0, "choice": "theirs"}]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(resolve_response.status(), StatusCode::OK);
+        let resolve_payload: FsWriteCompatResponse = serde_json::from_slice(
+            &resolve_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert!(resolve_payload.success);
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("resolved file should remain readable"),
+            "shared\nfeature line\n"
+        );
+
+        let after_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/git/conflicts/file?directory={directory}&path=conflict.txt"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(after_response.status(), StatusCode::OK);
+        let after_payload: GitConflictFileResponseCompat = serde_json::from_slice(
+            &after_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert!(!after_payload.has_markers);
+        assert!(!after_payload.is_unmerged);
+        assert!(after_payload.blocks.is_empty());
+    }
+
+    #[tokio::test]
     async fn compat_git_blame_diff_patch_and_watch_routes_work() {
         let temp = tempdir().expect("tempdir should be created");
         let repo = temp.path();
-        assert!(Command::new("git").arg("--version").output().is_ok(), "git is required for this test");
+        assert!(
+            Command::new("git").arg("--version").output().is_ok(),
+            "git is required for this test"
+        );
         Command::new("git")
             .arg("init")
             .arg(repo)
@@ -3301,37 +5235,37 @@ mod tests {
         let directory_value = repo.display().to_string();
         let directory = urlencoding::encode(&directory_value);
 
-        let blame_response = compat_git_blame(
-            Query(GitPathCompatQuery {
-                directory: Some(repo.display().to_string()),
-                path: Some("notes.txt".to_string()),
-            }),
-        )
+        let blame_response = compat_git_blame(Query(GitPathCompatQuery {
+            directory: Some(repo.display().to_string()),
+            path: Some("notes.txt".to_string()),
+        }))
         .await
         .expect("blame should succeed");
         assert_eq!(blame_response.0.lines.len(), 2);
 
-        let diff_response = compat_git_diff(
-            Query(GitDiffCompatQuery {
-                directory: Some(repo.display().to_string()),
-                path: Some("notes.txt".to_string()),
-                staged: Some(false),
-                context_lines: Some(3),
-                include_meta: Some(true),
-            }),
-        )
+        let diff_response = compat_git_diff(Query(GitDiffCompatQuery {
+            directory: Some(repo.display().to_string()),
+            path: Some("notes.txt".to_string()),
+            staged: Some(false),
+            context_lines: Some(3),
+            include_meta: Some(true),
+        }))
         .await
         .expect("diff should succeed");
         assert!(diff_response.0.diff.contains("beta changed"));
-        assert!(diff_response.0.meta.as_ref().is_some_and(|meta| !meta.hunks.is_empty()));
+        assert!(
+            diff_response
+                .0
+                .meta
+                .as_ref()
+                .is_some_and(|meta| !meta.hunks.is_empty())
+        );
 
-        let file_diff_response = compat_git_file_diff(
-            Query(GitFileDiffCompatQuery {
-                directory: Some(repo.display().to_string()),
-                path: Some("notes.txt".to_string()),
-                staged: Some(false),
-            }),
-        )
+        let file_diff_response = compat_git_file_diff(Query(GitFileDiffCompatQuery {
+            directory: Some(repo.display().to_string()),
+            path: Some("notes.txt".to_string()),
+            staged: Some(false),
+        }))
         .await
         .expect("file diff should succeed");
         assert!(file_diff_response.0.original.contains("beta"));
@@ -3373,7 +5307,9 @@ mod tests {
             .route("/api/git/watch", get(compat_git_watch))
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/git/watch?directory={directory}&intervalMs=500"))
+                    .uri(format!(
+                        "/api/git/watch?directory={directory}&intervalMs=500"
+                    ))
                     .body(Body::empty())
                     .expect("request should build"),
             )

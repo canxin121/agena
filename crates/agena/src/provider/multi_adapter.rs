@@ -47,18 +47,18 @@ impl MultiAdapterProvider {
     }
 
     fn adapter(&self, adapter_id: &str) -> Result<Arc<dyn ModelProvider>, AppError> {
-        self.adapters
-            .get(adapter_id)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::Config(format!(
-                    "provider `{}` has no enabled adapter `{adapter_id}`",
-                    self.id
-                ))
-            })
+        self.adapters.get(adapter_id).cloned().ok_or_else(|| {
+            AppError::Config(format!(
+                "provider `{}` has no enabled adapter `{adapter_id}`",
+                self.id
+            ))
+        })
     }
 
-    fn parse_visible_model_id(&self, visible_model_id: &str) -> Result<(String, ModelId), AppError> {
+    fn parse_visible_model_id(
+        &self,
+        visible_model_id: &str,
+    ) -> Result<(String, ModelId), AppError> {
         let Some((adapter_id, model_id)) = visible_model_id.split_once('/') else {
             return Err(AppError::Config(format!(
                 "provider `{}` model `{visible_model_id}` must be in `<adapter>/<model>` format",
@@ -90,15 +90,15 @@ impl MultiAdapterProvider {
                     self.id, model
                 )));
             }
-            return Ok((
-                adapter_id,
-                target_model,
-                route.definition.clone(),
-            ));
+            return Ok((adapter_id, target_model, route.definition.clone()));
         }
 
         self.adapter(adapter_id.as_str())?;
-        Ok((adapter_id, target_model, ConfiguredModelDefinition::default()))
+        Ok((
+            adapter_id,
+            target_model,
+            ConfiguredModelDefinition::default(),
+        ))
     }
 
     fn rewrite_model(

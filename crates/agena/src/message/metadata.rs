@@ -1,4 +1,7 @@
-use sea_orm::{entity::prelude::{DeriveActiveEnum, EnumIter}, FromJsonQueryResult};
+use sea_orm::{
+    FromJsonQueryResult,
+    entity::prelude::{DeriveActiveEnum, EnumIter},
+};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumString};
 

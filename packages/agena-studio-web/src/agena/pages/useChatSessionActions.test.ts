@@ -340,6 +340,41 @@ describe('useChatSessionActions', () => {
     expect(input.inspectedPart.value).toBe(null)
   })
 
+  test('inspectMessage reuses summary-only part data when no full detail exists', async () => {
+    const deps = createDeps()
+    const { input } = createInput()
+    deps.listMessageParts = async (messageId, mode) => {
+      deps.calls.push(`listMessageParts:${messageId}:${mode || 'summary'}`)
+      return [
+        {
+          id: 451,
+          message_id: messageId,
+          part_index: 0,
+          status: 'complete',
+          kind: 'permission_request',
+          summary: 'Permission decision pending',
+          has_detail: false,
+          created_at: '2026-05-10T00:00:00Z',
+        },
+      ]
+    }
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.inspectMessage(21, 451)
+
+    expect(deps.calls).toEqual(['listMessageParts:21:summary'])
+    expect(input.inspectedPart.value).toEqual({
+      id: 451,
+      message_id: 21,
+      part_index: 0,
+      status: 'complete',
+      kind: 'permission_request',
+      summary: 'Permission decision pending',
+      has_detail: false,
+      created_at: '2026-05-10T00:00:00Z',
+    })
+  })
+
   test('createSessionAction uses title, reloads sessions, and selects new session', async () => {
     const deps = createDeps()
     const { input, loadSessionsCalls, selectSessionCalls } = createInput()

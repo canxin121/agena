@@ -746,7 +746,7 @@ impl SessionManager {
         let goal = session.goal.ok_or_else(|| {
             AppError::Internal(format!("session {session_id} has no goal to complete"))
         })?;
-        if goal.status != GoalStatus::Active {
+        if goal.status == GoalStatus::Completed {
             return Err(AppError::Internal(format!(
                 "session {session_id} goal is already completed"
             )));
@@ -8036,6 +8036,15 @@ mod tests {
             1,
             "budget-limited goal should stop additional model turns"
         );
+
+        let completed_goal = service
+            .complete_goal(created.id)
+            .await
+            .expect("budget-limited goal should still be completable");
+        assert_eq!(completed_goal.status, GoalStatus::Completed);
+        assert_eq!(completed_goal.tokens_used, 13);
+        assert_eq!(completed_goal.time_used_seconds, 0);
+        assert!(completed_goal.completed_at.is_some());
     }
 
     /// Cancel a turn while the provider stream is still pending. The

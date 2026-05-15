@@ -30,7 +30,7 @@ use axum::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use axum_extra::extract::cookie::SameSite;
 use ignore::WalkBuilder;
@@ -54,6 +54,7 @@ pub(crate) struct AppState {
     pub(crate) cors_allowed_origins: Vec<String>,
     pub(crate) cors_allow_all: bool,
     pub(crate) runtime: AgenaRuntime,
+    pub(crate) compat_api_service: agena_api_server::local_api::ApiService,
 }
 
 #[derive(Debug, Serialize)]
@@ -137,6 +138,83 @@ struct CompatSessionMessagesQuery {
     include_total: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionDiffQuery {
+    directory: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    #[serde(default, alias = "messageID")]
+    message_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionCreateBody {
+    title: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionPatchBody {
+    title: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompatSessionForkBody {
+    #[serde(rename = "messageID", alias = "messageId")]
+    message_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompatSessionRevertBody {
+    #[serde(rename = "messageID", alias = "messageId")]
+    message_id: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionSummarizeBody {
+    #[serde(default, alias = "providerID")]
+    provider_id: Option<String>,
+    #[serde(default, alias = "modelID")]
+    model_id: Option<String>,
+    #[serde(default)]
+    auto: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionMessageModelBody {
+    #[serde(default, alias = "providerID")]
+    provider_id: Option<String>,
+    #[serde(default, alias = "modelID")]
+    model_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionMessageBody {
+    #[serde(default)]
+    parts: Vec<Value>,
+    #[serde(default)]
+    model: Option<CompatSessionMessageModelBody>,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    agent_profile: Option<String>,
+    #[serde(default)]
+    variant: Option<String>,
+    #[serde(default)]
+    system: Option<String>,
+    #[serde(default)]
+    temperature: Option<f32>,
+    #[serde(default)]
+    max_output_tokens: Option<u32>,
+    #[serde(default)]
+    max_turn_loops: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CompatSessionListResponse {
@@ -158,6 +236,18 @@ struct CompatSessionMessageListResponse {
     offset: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     limit: Option<usize>,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatSessionDiffListResponse {
+    entries: Vec<Value>,
+    total: usize,
+    offset: usize,
+    limit: usize,
     has_more: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_offset: Option<usize>,
@@ -2625,6 +2715,365 @@ fn compat_session_summary_value(summary: &agena::session::SessionSummary) -> Val
     })
 }
 
+fn compat_session_resource_value(resource: &agena_api_server::local_api::SessionResource) -> Value {
+    json!({
+        "id": resource.id.to_string(),
+        "parentID": resource.parent_id.map(|value| value.to_string()),
+        "rootID": resource.root_id.to_string(),
+        "title": resource.title.clone(),
+        "messageCount": resource.message_count,
+        "childSessionCount": resource.child_session_count,
+        "goal": resource.goal.as_ref().map(|goal| json!({
+            "id": goal.id.to_string(),
+            "objective": goal.objective.clone(),
+            "status": goal.status,
+        })),
+        "time": {
+            "created": resource.created_at.timestamp_millis(),
+            "updated": resource.updated_at.timestamp_millis(),
+        }
+    })
+}
+
+async fn compat_require_session(
+    state: &AppState,
+    session_id: i64,
+) -> Result<(), (StatusCode, String)> {
+    state
+        .compat_api_service
+        .get_session(session_id)
+        .await
+        .map_err(|_| compat_internal("Failed to load session"))?
+        .ok_or_else(|| compat_not_found("session not found"))?;
+    Ok(())
+}
+
+async fn compat_require_projected_message(
+    manager: &agena::session::SessionManager,
+    session_id: i64,
+    message_id: i64,
+) -> Result<(), (StatusCode, String)> {
+    manager
+        .find_projected_message(session_id, message_id, false)
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?
+        .ok_or_else(|| compat_not_found("message not found"))?;
+    Ok(())
+}
+
+async fn compat_latest_rewind_target(
+    manager: &agena::session::SessionManager,
+    session_id: i64,
+) -> Result<Option<i64>, (StatusCode, String)> {
+    let checkpoints = manager
+        .list_rewind_checkpoints(session_id)
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+    Ok(checkpoints
+        .last()
+        .map(|checkpoint| checkpoint.target_message_id))
+}
+
+fn compat_session_share_url(session_id: i64) -> String {
+    format!("/chat?session={session_id}")
+}
+
+fn compat_session_diff_kind(kind: agena::message::FileChangeKind) -> &'static str {
+    match kind {
+        agena::message::FileChangeKind::Added => "added",
+        agena::message::FileChangeKind::Updated => "updated",
+        agena::message::FileChangeKind::Deleted => "deleted",
+        agena::message::FileChangeKind::Moved => "moved",
+    }
+}
+
+fn compat_normalize_session_diff_path(path: &str) -> String {
+    path.trim().replace('\\', "/")
+}
+
+fn compat_count_patch_changes(diff: Option<&str>) -> (usize, usize) {
+    let mut additions = 0_usize;
+    let mut deletions = 0_usize;
+    let Some(diff) = diff else {
+        return (0, 0);
+    };
+
+    for line in diff.lines() {
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        if line.starts_with('+') {
+            additions = additions.saturating_add(1);
+        } else if line.starts_with('-') {
+            deletions = deletions.saturating_add(1);
+        }
+    }
+
+    (additions, deletions)
+}
+
+fn compat_push_session_diff_entry(
+    entries: &mut Vec<Value>,
+    session_id: i64,
+    message: &agena::message::Message,
+    part: &agena::message::MessagePart,
+    entry_index: usize,
+    path: String,
+    from_path: Option<String>,
+    kind: &'static str,
+    diff: Option<String>,
+) {
+    let (additions, deletions) = compat_count_patch_changes(diff.as_deref());
+    entries.push(json!({
+        "id": format!("{}:{}:{entry_index}", message.id, part.id),
+        "sessionId": session_id.to_string(),
+        "sessionID": session_id.to_string(),
+        "messageId": message.id.to_string(),
+        "messageID": message.id.to_string(),
+        "partId": part.id.to_string(),
+        "partID": part.id.to_string(),
+        "operationId": part.operation_id.clone(),
+        "file": path.clone(),
+        "path": path,
+        "fromPath": from_path,
+        "kind": kind,
+        "patch": diff.clone(),
+        "diff": diff,
+        "additions": additions,
+        "deletions": deletions,
+        "summary": part.summary.clone(),
+        "time": {
+            "created": message.created_at.timestamp_millis(),
+        }
+    }));
+}
+
+fn compat_collect_session_diff_entries(
+    session_id: i64,
+    messages: &[agena::message::Message],
+) -> Vec<Value> {
+    let mut entries = Vec::new();
+
+    for message in messages {
+        let has_apply_patch_part = message.parts.iter().any(|part| {
+            matches!(
+                part.content.as_ref(),
+                Some(agena::message::PartContent::ToolExecution(
+                    agena::message::ToolExecutionPart::Completed { details, .. }
+                    | agena::message::ToolExecutionPart::Failed { details, .. }
+                )) if matches!(
+                    details.as_first_party(),
+                    Some(agena::message::FirstPartyToolOutput::ApplyPatch { .. })
+                )
+            )
+        });
+
+        for part in &message.parts {
+            match part.content.as_ref() {
+                Some(agena::message::PartContent::ToolExecution(
+                    agena::message::ToolExecutionPart::Completed { details, .. }
+                    | agena::message::ToolExecutionPart::Failed { details, .. },
+                )) => {
+                    if let Some(agena::message::FirstPartyToolOutput::ApplyPatch {
+                        changes,
+                        diff,
+                        ..
+                    }) = details.as_first_party()
+                    {
+                        let diff = compat_trimmed_text(Some(diff.as_str()));
+                        for (entry_index, change) in changes.iter().enumerate() {
+                            let path = compat_normalize_session_diff_path(&change.path);
+                            if path.is_empty() {
+                                continue;
+                            }
+                            compat_push_session_diff_entry(
+                                &mut entries,
+                                session_id,
+                                message,
+                                part,
+                                entry_index,
+                                path,
+                                change
+                                    .from_path
+                                    .as_deref()
+                                    .map(compat_normalize_session_diff_path),
+                                compat_session_diff_kind(change.kind),
+                                diff.clone(),
+                            );
+                        }
+                    }
+                }
+                Some(agena::message::PartContent::FileChange(change_part))
+                    if !has_apply_patch_part =>
+                {
+                    for (entry_index, change) in change_part.changes.iter().enumerate() {
+                        let path = compat_normalize_session_diff_path(&change.path);
+                        if path.is_empty() {
+                            continue;
+                        }
+                        compat_push_session_diff_entry(
+                            &mut entries,
+                            session_id,
+                            message,
+                            part,
+                            entry_index,
+                            path,
+                            change
+                                .from_path
+                                .as_deref()
+                                .map(compat_normalize_session_diff_path),
+                            compat_session_diff_kind(change.kind),
+                            None,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    entries
+}
+
+fn compat_trimmed_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn compat_attachment_source_from_legacy_part(
+    record: &serde_json::Map<String, Value>,
+) -> Option<agena::message::AttachmentSource> {
+    if let Some(path) = compat_trimmed_text(record.get("serverPath").and_then(Value::as_str)) {
+        return Some(agena::message::AttachmentSource::LocalPath { path });
+    }
+
+    let url = compat_trimmed_text(record.get("url").and_then(Value::as_str))?;
+    if url.starts_with("data:") {
+        Some(agena::message::AttachmentSource::DataUrl { url })
+    } else {
+        Some(agena::message::AttachmentSource::Url { url })
+    }
+}
+
+fn compat_attachment_part_from_legacy_value(
+    value: &Value,
+) -> Result<agena::message::PartContent, (StatusCode, String)> {
+    let record = value
+        .as_object()
+        .ok_or_else(|| compat_bad_request("legacy file part must be an object"))?;
+    let mime = record
+        .get("mime")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    let filename = compat_trimmed_text(record.get("filename").and_then(Value::as_str));
+    let title = compat_trimmed_text(record.get("title").and_then(Value::as_str));
+    let source = compat_attachment_source_from_legacy_part(record)
+        .ok_or_else(|| compat_bad_request("legacy file part requires url or serverPath"))?;
+    let hint = filename.as_deref().or_else(|| match &source {
+        agena::message::AttachmentSource::Url { url }
+        | agena::message::AttachmentSource::DataUrl { url } => Some(url.as_str()),
+        agena::message::AttachmentSource::LocalPath { path } => Some(path.as_str()),
+        agena::message::AttachmentSource::FileId { file_id } => Some(file_id.as_str()),
+        agena::message::AttachmentSource::Base64 { .. } => None,
+    });
+
+    Ok(agena::message::PartContent::attachments(vec![
+        agena::message::AttachmentItem {
+            kind: agena::message::AttachmentKind::detect(mime.as_str(), hint),
+            mime,
+            source,
+            filename,
+            title,
+            size_bytes: None,
+            sha256: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
+        },
+    ]))
+}
+
+fn compat_message_parts_from_payload(
+    parts: &[Value],
+) -> Result<Vec<agena::message::PartContent>, (StatusCode, String)> {
+    parts
+        .iter()
+        .map(|part| {
+            if matches!(part.get("type").and_then(Value::as_str), Some("file")) {
+                return compat_attachment_part_from_legacy_value(part);
+            }
+
+            serde_json::from_value::<agena::message::PartContent>(part.clone()).map_err(|error| {
+                compat_bad_request(format!("invalid message part payload: {error}"))
+            })
+        })
+        .collect()
+}
+
+async fn compat_resolve_session_message_options(
+    manager: &agena::session::SessionManager,
+    session_id: i64,
+    body: &CompatSessionMessageBody,
+) -> Result<agena::session::SessionRunOptions, (StatusCode, String)> {
+    let mut options = if let Some(model) = body.model.as_ref() {
+        let provider_id = compat_trimmed_text(model.provider_id.as_deref())
+            .ok_or_else(|| compat_bad_request("model.providerID is required"))?;
+        let model_id = compat_trimmed_text(model.model_id.as_deref())
+            .ok_or_else(|| compat_bad_request("model.modelID is required"))?;
+        let model = agena::model::ModelRef::try_new(provider_id, model_id)
+            .map_err(|error| compat_bad_request(format!("invalid model reference: {error}")))?;
+        agena::session::SessionRunOptions {
+            model,
+            variant: None,
+            thinking: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            agent_profile: None,
+            max_turn_loops: None,
+        }
+    } else {
+        match manager.resolve_scheduled_run_options(session_id).await {
+            Ok(options) => options,
+            Err(agena::AppError::Internal(message))
+                if message.contains("model is required")
+                    || message.contains("no providers configured") =>
+            {
+                return Err(compat_bad_request(message));
+            }
+            Err(error) => return Err(compat_internal(error.to_string())),
+        }
+    };
+
+    if let Some(variant) = compat_trimmed_text(body.variant.as_deref()) {
+        options.variant = Some(variant);
+    }
+    if let Some(agent_profile) = compat_trimmed_text(body.agent.as_deref())
+        .or_else(|| compat_trimmed_text(body.agent_profile.as_deref()))
+    {
+        options.agent_profile = Some(agent_profile);
+    }
+    if let Some(system) = compat_trimmed_text(body.system.as_deref()) {
+        options.system = Some(system);
+    }
+    if let Some(temperature) = body.temperature {
+        options.temperature = Some(temperature);
+    }
+    if let Some(max_output_tokens) = body.max_output_tokens {
+        options.max_output_tokens = Some(max_output_tokens);
+    }
+    if let Some(max_turn_loops) = body.max_turn_loops {
+        options.max_turn_loops = Some(max_turn_loops);
+    }
+
+    Ok(options)
+}
+
 fn compat_message_part_value(session_id: i64, part: &agena::message::MessagePart) -> Value {
     let mut value = json!({
         "id": part.id.to_string(),
@@ -2749,6 +3198,30 @@ async fn compat_session_list(
     .into_response())
 }
 
+async fn compat_session_create(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(body): Json<CompatSessionCreateBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let manager = compat_session_manager(state.as_ref())?;
+    let created = manager
+        .create_session(agena::session::SessionCreateRequest {
+            title: body.title.unwrap_or_default(),
+            parent_session_id: None,
+        })
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+
+    let summary = manager
+        .list_session_summaries(agena::session::SessionListRequest::default())
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?
+        .into_iter()
+        .find(|summary| summary.id == created.id)
+        .ok_or_else(|| compat_internal("Created session summary is unavailable"))?;
+
+    Ok(Json(compat_session_summary_value(&summary)))
+}
+
 async fn compat_session_status(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Query(query): Query<CompatSessionStatusQuery>,
@@ -2790,6 +3263,331 @@ async fn compat_session_status(
     }
 
     Ok(Json(Value::Object(payload)))
+}
+
+async fn compat_session_patch(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+    Json(body): Json<CompatSessionPatchBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    let title = body
+        .title
+        .ok_or_else(|| compat_bad_request("title is required"))?;
+
+    let existing = state
+        .compat_api_service
+        .get_session(session_id)
+        .await
+        .map_err(|_| compat_internal("Failed to load session"))?
+        .ok_or_else(|| compat_not_found("session not found"))?;
+
+    let updated = state
+        .compat_api_service
+        .replace_session(
+            session_id,
+            agena_api_server::local_api::SessionReplaceRequest {
+                title,
+                parent_id: existing.parent_id,
+            },
+        )
+        .await
+        .map_err(|_| compat_internal("Failed to update session"))?;
+
+    Ok(Json(compat_session_resource_value(&updated)))
+}
+
+async fn compat_session_fork(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+    Json(body): Json<CompatSessionForkBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    let message_id = compat_parse_id(&body.message_id, "messageID")?;
+    compat_require_session(state.as_ref(), session_id).await?;
+
+    let manager = compat_session_manager(state.as_ref())?;
+    compat_require_projected_message(manager.as_ref(), session_id, message_id).await?;
+
+    let forked = manager
+        .fork_session(agena::session::SessionForkRequest {
+            session_id,
+            at_message_id: Some(message_id),
+            title: None,
+            expected_version: None,
+        })
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+
+    Ok(Json(json!({ "id": forked.id.to_string() })))
+}
+
+async fn compat_session_delete(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    state
+        .compat_api_service
+        .get_session(session_id)
+        .await
+        .map_err(|_| compat_internal("Failed to load session"))?
+        .ok_or_else(|| compat_not_found("session not found"))?;
+
+    let deleted = state
+        .compat_api_service
+        .delete_session(session_id)
+        .await
+        .map_err(|_| compat_internal("Failed to delete session"))?;
+
+    Ok(Json(compat_session_resource_value(&deleted)))
+}
+
+async fn compat_session_revert(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+    Json(body): Json<CompatSessionRevertBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    let message_id = compat_parse_id(&body.message_id, "messageID")?;
+    compat_require_session(state.as_ref(), session_id).await?;
+
+    let manager = compat_session_manager(state.as_ref())?;
+    compat_require_projected_message(manager.as_ref(), session_id, message_id).await?;
+    manager
+        .rewind_session(agena::session::SessionRewindRequest {
+            session_id,
+            message_id,
+            expected_version: None,
+        })
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+
+    Ok(Json(json!({
+        "id": session_id.to_string(),
+        "revert": {
+            "messageID": message_id.to_string(),
+        }
+    })))
+}
+
+async fn compat_session_unrevert(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    compat_require_session(state.as_ref(), session_id).await?;
+
+    let manager = compat_session_manager(state.as_ref())?;
+    if let Some(message_id) = compat_latest_rewind_target(manager.as_ref(), session_id).await? {
+        manager
+            .unrewind_session(agena::session::SessionUnrewindRequest {
+                session_id,
+                message_id,
+                expected_version: None,
+            })
+            .await
+            .map_err(|error| compat_internal(error.to_string()))?;
+    }
+
+    Ok(Json(json!({
+        "id": session_id.to_string(),
+        "revert": Value::Null,
+    })))
+}
+
+async fn compat_session_message_post(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+    Json(body): Json<CompatSessionMessageBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    if body.parts.is_empty() {
+        return Ok(Json(json!({ "queued": false })));
+    }
+
+    state
+        .compat_api_service
+        .get_session(session_id)
+        .await
+        .map_err(|_| compat_internal("Failed to load session"))?
+        .ok_or_else(|| compat_not_found("session not found"))?;
+
+    let manager = compat_session_manager(state.as_ref())?;
+    let options =
+        compat_resolve_session_message_options(manager.as_ref(), session_id, &body).await?;
+    let parts = compat_message_parts_from_payload(&body.parts)?;
+    let manager = manager.clone();
+    tokio::spawn(async move {
+        if let Err(error) = manager
+            .submit_user_turn(agena::session::SessionUserTurnRequest {
+                session_id,
+                options,
+                parts,
+            })
+            .await
+        {
+            tracing::warn!(
+                session_id,
+                error = %error,
+                "compat session message submission failed"
+            );
+        }
+    });
+
+    Ok(Json(json!({ "queued": true })))
+}
+
+async fn compat_session_abort(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    state
+        .compat_api_service
+        .get_session(session_id)
+        .await
+        .map_err(|_| compat_internal("Failed to load session"))?
+        .ok_or_else(|| compat_not_found("session not found"))?;
+
+    let manager = compat_session_manager(state.as_ref())?;
+    let _ = manager.cancel_active_turn(session_id).await;
+
+    Ok(Json(json!({ "aborted": true })))
+}
+
+async fn compat_session_share(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    compat_require_session(state.as_ref(), session_id).await?;
+
+    Ok(Json(json!({
+        "id": session_id.to_string(),
+        "share": {
+            "url": compat_session_share_url(session_id),
+        }
+    })))
+}
+
+async fn compat_session_unshare(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    compat_require_session(state.as_ref(), session_id).await?;
+
+    Ok(Json(json!({
+        "id": session_id.to_string(),
+        "share": Value::Null,
+    })))
+}
+
+async fn compat_session_summarize(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+    Json(body): Json<CompatSessionSummarizeBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    compat_require_session(state.as_ref(), session_id).await?;
+
+    let provider_id = compat_trimmed_text(body.provider_id.as_deref())
+        .ok_or_else(|| compat_bad_request("providerID is required"))?;
+    let model_id = compat_trimmed_text(body.model_id.as_deref())
+        .ok_or_else(|| compat_bad_request("modelID is required"))?;
+    let model = agena::model::ModelRef::try_new(provider_id.clone(), model_id.clone())
+        .map_err(|error| compat_bad_request(format!("invalid model reference: {error}")))?;
+
+    let manager = compat_session_manager(state.as_ref())?.clone();
+    let options = agena::session::SessionRunOptions {
+        model,
+        variant: None,
+        thinking: None,
+        system: None,
+        temperature: None,
+        max_output_tokens: None,
+        agent_profile: None,
+        max_turn_loops: None,
+    };
+
+    tokio::spawn(async move {
+        if let Err(error) = manager.compact_session(session_id, options).await {
+            tracing::warn!(
+                session_id,
+                provider_id = %provider_id,
+                model_id = %model_id,
+                error = %error,
+                "compat session summarize failed"
+            );
+        }
+    });
+
+    Ok(Json(json!({
+        "ok": true,
+        "queued": true,
+        "auto": body.auto.unwrap_or(false),
+    })))
+}
+
+async fn compat_session_diff(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+    Query(query): Query<CompatSessionDiffQuery>,
+) -> Result<Json<CompatSessionDiffListResponse>, (StatusCode, String)> {
+    let session_id = compat_parse_id(&session_id, "session_id")?;
+    compat_require_session(state.as_ref(), session_id).await?;
+
+    if let Some(directory) = query.directory.as_deref() {
+        let trimmed = directory.trim();
+        if !trimmed.is_empty() {
+            let _ = compat_validate_directory(trimmed).await?;
+        }
+    }
+
+    let limit = query
+        .limit
+        .ok_or_else(|| compat_bad_request("limit parameter is required"))?
+        .min(MAX_COMPAT_LIST_LIMIT);
+    let offset = query.offset.unwrap_or(0);
+    let message_filter = query
+        .message_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| compat_parse_id(value, "messageID"))
+        .transpose()?;
+
+    let manager = compat_session_manager(state.as_ref())?;
+    let messages = manager
+        .list_projected_messages(session_id, true)
+        .await
+        .map_err(|error| compat_internal(error.to_string()))?;
+    let filtered_messages = messages
+        .into_iter()
+        .filter(|message| message_filter.is_none_or(|message_id| message.id == message_id))
+        .collect::<Vec<_>>();
+
+    let all_entries = compat_collect_session_diff_entries(session_id, &filtered_messages);
+    let total = all_entries.len();
+    let mut page_entries = all_entries
+        .into_iter()
+        .rev()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+    page_entries.reverse();
+
+    let has_more = offset.saturating_add(page_entries.len()) < total;
+    let next_offset = has_more.then_some(offset.saturating_add(page_entries.len()));
+    Ok(Json(CompatSessionDiffListResponse {
+        entries: page_entries,
+        total,
+        offset,
+        limit,
+        has_more,
+        next_offset,
+    }))
 }
 
 async fn compat_session_message_list(
@@ -3713,6 +4511,13 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         cors_allowed_origins: normalized_cors_origins.clone(),
         cors_allow_all: args.cors_allow_all,
         runtime: runtime.clone(),
+        compat_api_service: agena_api_server::local_api::ApiService::new(
+            db.clone(),
+            runtime.workspace_root().display().to_string(),
+            runtime
+                .session_manager()
+                .map(|manager| manager.event_publisher()),
+        ),
     });
     let _ = crate::ui_auth::spawn_cleanup_sessions_task_if_enabled(&shared_state.ui_auth);
 
@@ -3728,15 +4533,44 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
     let compat_routes = compat_fs_router::<Arc<AppState>>()
-        .route("/api/session", get(compat_session_list))
+        .route(
+            "/api/session",
+            get(compat_session_list).post(compat_session_create),
+        )
         .route("/api/session/status", get(compat_session_status))
         .route(
+            "/api/session/{session_id}",
+            patch(compat_session_patch).delete(compat_session_delete),
+        )
+        .route("/api/session/{session_id}/fork", post(compat_session_fork))
+        .route(
+            "/api/session/{session_id}/revert",
+            post(compat_session_revert),
+        )
+        .route(
+            "/api/session/{session_id}/unrevert",
+            post(compat_session_unrevert),
+        )
+        .route(
+            "/api/session/{session_id}/share",
+            post(compat_session_share).delete(compat_session_unshare),
+        )
+        .route(
+            "/api/session/{session_id}/summarize",
+            post(compat_session_summarize),
+        )
+        .route("/api/session/{session_id}/diff", get(compat_session_diff))
+        .route(
             "/api/session/{session_id}/message",
-            get(compat_session_message_list),
+            get(compat_session_message_list).post(compat_session_message_post),
         )
         .route(
             "/api/session/{session_id}/message/{message_id}/part/{part_id}",
             get(compat_session_message_part_detail),
+        )
+        .route(
+            "/api/session/{session_id}/abort",
+            post(compat_session_abort),
         )
         .route("/api/git/status", get(compat_git_status))
         .route("/api/git/watch", get(compat_git_watch))
@@ -3971,6 +4805,13 @@ include_global = true
                 ui_cookie_same_site: SameSite::Lax,
                 cors_allowed_origins: Vec::new(),
                 cors_allow_all: false,
+                compat_api_service: agena_api_server::local_api::ApiService::new(
+                    db.clone(),
+                    runtime.workspace_root().display().to_string(),
+                    runtime
+                        .session_manager()
+                        .map(|manager| manager.event_publisher()),
+                ),
                 runtime,
             }),
             db,
@@ -3986,6 +4827,41 @@ include_global = true
         tempfile::TempDir,
     ) {
         compat_test_app_state_with_openai_base_url("http://127.0.0.1:9/v1").await
+    }
+
+    async fn spawn_mock_openai_server() -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "model": "gpt-4.1-mini",
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": "mock assistant response"
+                        }
+                    }],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2
+                    }
+                }))
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("mock openai server should serve");
+        });
+
+        (format!("http://{address}/v1"), handle)
     }
 
     async fn seed_compat_session_with_user_message(
@@ -4048,6 +4924,168 @@ include_global = true
         .await
         .expect("activity part should insert");
         (session.id, message_id, part_id)
+    }
+
+    async fn seed_compat_session_with_runtime_user_message(state: &Arc<AppState>) -> (i64, i64) {
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "compat-runtime-session".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let _ = manager
+            .submit_user_turn(agena::session::SessionUserTurnRequest {
+                session_id: session.id,
+                options: agena::session::SessionRunOptions {
+                    model: agena::model::ModelRef::new("openai", "gpt-4.1-mini"),
+                    variant: None,
+                    thinking: None,
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: Some(32),
+                    agent_profile: None,
+                    max_turn_loops: None,
+                },
+                parts: vec![agena::message::PartContent::text("compat runtime message")],
+            })
+            .await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let message_id = manager
+            .list_projected_messages(session.id, false)
+            .await
+            .expect("messages should load")
+            .into_iter()
+            .find(|message| message.role == agena::role::Role::User)
+            .map(|message| message.id)
+            .expect("user message should persist");
+
+        (session.id, message_id)
+    }
+
+    async fn seed_compat_session_with_apply_patch_messages(
+        state: &Arc<AppState>,
+        db: &Arc<sea_orm::DatabaseConnection>,
+    ) -> (i64, i64, i64) {
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "compat-diff-session".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        async fn insert_apply_patch_message(
+            db: &Arc<sea_orm::DatabaseConnection>,
+            session_id: i64,
+            message_id: i64,
+            part_id: i64,
+            created_at_ms: i64,
+            path: &str,
+            diff: &str,
+        ) {
+            use sea_orm::{ActiveModelTrait as _, ActiveValue::Set};
+
+            let content = agena::message::PartContent::ToolExecution(
+                agena::message::ToolExecutionPart::Completed {
+                    call_id: part_id,
+                    invocation: agena::message::ToolInvocation::new(
+                        "apply_patch",
+                        agena::message::StructuredObject::default(),
+                    ),
+                    output_text: format!("patched {path}"),
+                    blocks: Vec::new(),
+                    attachments: Vec::new(),
+                    details: agena::message::ToolOutput::Custom {
+                        output: agena::message::FirstPartyToolOutput::ApplyPatch {
+                            operation_id: format!("op-{message_id}"),
+                            changes: vec![agena::message::FileChangeEntry {
+                                path: path.to_string(),
+                                kind: agena::message::FileChangeKind::Updated,
+                                from_path: None,
+                            }],
+                            before_hash: None,
+                            after_hash: None,
+                            inverse_patch: String::new(),
+                            diff: diff.to_string(),
+                            progress: Vec::new(),
+                        }
+                        .into_custom_output(),
+                    },
+                    lifecycle: agena::message::TimeRange::default(),
+                },
+            );
+            agena::db::entities::activity_message::ActiveModel {
+                message_id: Set(message_id),
+                session_id: Set(session_id),
+                role: Set(agena::role::Role::Tool),
+                state: Set(agena::message::ExecutionStatus::Completed),
+                created_at_ms: Set(created_at_ms),
+                updated_at_ms: Set(created_at_ms),
+                metadata: Set(agena::message::MessageMetadata::default()),
+                usage: Set(None),
+                finish: Set(None),
+                part_count: Set(1),
+                is_compacted: Set(false),
+            }
+            .insert(db.as_ref())
+            .await
+            .expect("activity message should insert");
+            agena::db::entities::activity_part::ActiveModel {
+                part_id: Set(part_id),
+                message_id: Set(message_id),
+                session_id: Set(session_id),
+                part_index: Set(0),
+                status: Set(agena::message::ExecutionStatus::Completed),
+                kind: Set(content.kind()),
+                name: Set(None),
+                summary: Set(None),
+                has_detail: Set(true),
+                operation_id: Set(None),
+                created_at_ms: Set(created_at_ms),
+                content: Set(Some(content)),
+            }
+            .insert(db.as_ref())
+            .await
+            .expect("activity part should insert");
+        }
+
+        let base = session.id.saturating_mul(1000);
+        let older_message_id = base.saturating_add(11);
+        let newer_message_id = base.saturating_add(21);
+        insert_apply_patch_message(
+            db,
+            session.id,
+            older_message_id,
+            base.saturating_add(12),
+            1_700_000_000_000,
+            "src/older.rs",
+            "diff --git a/src/older.rs b/src/older.rs\n--- a/src/older.rs\n+++ b/src/older.rs\n@@ -1 +1 @@\n-old\n+older\n",
+        )
+        .await;
+        insert_apply_patch_message(
+            db,
+            session.id,
+            newer_message_id,
+            base.saturating_add(22),
+            1_700_000_000_100,
+            "src/newer.rs",
+            "diff --git a/src/newer.rs b/src/newer.rs\n--- a/src/newer.rs\n+++ b/src/newer.rs\n@@ -1 +1 @@\n-old\n+newer\n",
+        )
+        .await;
+
+        (session.id, older_message_id, newer_message_id)
     }
 
     #[test]
@@ -4733,6 +5771,850 @@ include_global = true
     }
 
     #[tokio::test]
+    async fn compat_session_create_route_returns_session_summary_shape() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let router = Router::new()
+            .route("/api/session", post(compat_session_create))
+            .with_state(state.clone());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/session")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "title": "created compat" }).to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+
+        let session_id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("id should be present");
+        assert_eq!(
+            payload.get("title").and_then(Value::as_str),
+            Some("created compat")
+        );
+        assert!(
+            payload
+                .get("time")
+                .and_then(|value| value.get("created"))
+                .and_then(Value::as_i64)
+                .is_some()
+        );
+        assert!(
+            payload
+                .get("time")
+                .and_then(|value| value.get("updated"))
+                .and_then(Value::as_i64)
+                .is_some()
+        );
+
+        let created = state
+            .compat_api_service
+            .get_session(session_id.parse().expect("id should be numeric"))
+            .await
+            .expect("created session should load");
+        assert!(created.is_some(), "created session should persist");
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_patch_route_updates_title() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "before rename".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route("/api/session/{session_id}", patch(compat_session_patch))
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/session/{}", session.id))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "title": "after rename" }).to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            payload.get("id").and_then(Value::as_str),
+            Some(session.id.to_string().as_str())
+        );
+        assert_eq!(
+            payload.get("title").and_then(Value::as_str),
+            Some("after rename")
+        );
+        assert!(
+            payload
+                .get("time")
+                .and_then(|value| value.get("updated"))
+                .and_then(Value::as_i64)
+                .is_some()
+        );
+
+        let updated = state
+            .compat_api_service
+            .get_session(session.id)
+            .await
+            .expect("updated session should load")
+            .expect("updated session should exist");
+        assert_eq!(updated.title, "after rename");
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_delete_route_returns_deleted_session_and_removes_it() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "delete me".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route(
+                "/api/session/{session_id}",
+                patch(compat_session_patch).delete(compat_session_delete),
+            )
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/session/{}", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            payload.get("id").and_then(Value::as_str),
+            Some(session.id.to_string().as_str())
+        );
+        assert_eq!(
+            payload.get("title").and_then(Value::as_str),
+            Some("delete me")
+        );
+
+        let deleted = state
+            .compat_api_service
+            .get_session(session.id)
+            .await
+            .expect("deleted session lookup should succeed");
+        assert!(deleted.is_none(), "deleted session should be removed");
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_share_routes_return_expected_shape() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "share compat".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route(
+                "/api/session/{session_id}/share",
+                post(compat_session_share).delete(compat_session_unshare),
+            )
+            .with_state(state.clone());
+
+        let share_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/session/{}/share", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(share_response.status(), StatusCode::OK);
+        let share_payload: Value = serde_json::from_slice(
+            &share_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            share_payload.get("id").and_then(Value::as_str),
+            Some(session.id.to_string().as_str())
+        );
+        assert_eq!(
+            share_payload
+                .get("share")
+                .and_then(|value| value.get("url"))
+                .and_then(Value::as_str),
+            Some(format!("/chat?session={}", session.id).as_str())
+        );
+
+        let unshare_response = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/session/{}/share", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(unshare_response.status(), StatusCode::OK);
+        let unshare_payload: Value = serde_json::from_slice(
+            &unshare_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            unshare_payload.get("id").and_then(Value::as_str),
+            Some(session.id.to_string().as_str())
+        );
+        assert!(unshare_payload.get("share").is_some_and(Value::is_null));
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_summarize_route_returns_queued_ack_again() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "summarize compat".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route(
+                "/api/session/{session_id}/summarize",
+                post(compat_session_summarize),
+            )
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/session/{}/summarize", session.id))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "providerID": "openai",
+                            "modelID": "gpt-4.1-mini",
+                            "auto": false
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(payload.get("queued").and_then(Value::as_bool), Some(true));
+        assert_eq!(payload.get("auto").and_then(Value::as_bool), Some(false));
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_diff_route_returns_apply_patch_entries() {
+        let (state, db, _config, workspace) = compat_test_app_state().await;
+        let (session_id, older_message_id, newer_message_id) =
+            seed_compat_session_with_apply_patch_messages(&state, &db).await;
+
+        let workspace_path = workspace.path().display().to_string();
+        let directory = urlencoding::encode(&workspace_path);
+        let router = Router::new()
+            .route("/api/session/{session_id}/diff", get(compat_session_diff))
+            .with_state(state.clone());
+
+        let latest_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/session/{session_id}/diff?directory={directory}&offset=0&limit=1"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(latest_response.status(), StatusCode::OK);
+        let latest_payload: Value = serde_json::from_slice(
+            &latest_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        let latest_entries = latest_payload
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("entries should be present");
+        assert_eq!(latest_entries.len(), 1);
+        assert_eq!(latest_payload.get("total").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            latest_entries[0].get("messageID").and_then(Value::as_str),
+            Some(newer_message_id.to_string().as_str())
+        );
+        assert_eq!(
+            latest_entries[0].get("path").and_then(Value::as_str),
+            Some("src/newer.rs")
+        );
+        assert!(
+            latest_entries[0]
+                .get("diff")
+                .and_then(Value::as_str)
+                .is_some_and(|diff| diff.contains("+newer"))
+        );
+
+        let filtered_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/session/{session_id}/diff?limit=10&messageID={older_message_id}"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(filtered_response.status(), StatusCode::OK);
+        let filtered_payload: Value = serde_json::from_slice(
+            &filtered_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        let filtered_entries = filtered_payload
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("entries should be present");
+        assert_eq!(filtered_entries.len(), 1);
+        assert_eq!(
+            filtered_entries[0].get("messageID").and_then(Value::as_str),
+            Some(older_message_id.to_string().as_str())
+        );
+        assert_eq!(
+            filtered_entries[0].get("path").and_then(Value::as_str),
+            Some("src/older.rs")
+        );
+        assert_eq!(
+            filtered_entries[0].get("sessionID").and_then(Value::as_str),
+            Some(session_id.to_string().as_str())
+        );
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_fork_route_returns_forked_session_id() {
+        let (base_url, server_handle) = spawn_mock_openai_server().await;
+        let (state, _db, _config, _workspace) =
+            compat_test_app_state_with_openai_base_url(&base_url).await;
+        let (session_id, message_id) = seed_compat_session_with_runtime_user_message(&state).await;
+
+        let router = Router::new()
+            .route("/api/session/{session_id}/fork", post(compat_session_fork))
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/session/{session_id}/fork"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "messageID": message_id.to_string() }).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        let fork_id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("fork id should be present");
+        assert_ne!(fork_id, session_id.to_string());
+
+        let forked = state
+            .compat_api_service
+            .get_session(fork_id.parse().expect("fork id should be numeric"))
+            .await
+            .expect("forked session should load")
+            .expect("forked session should exist");
+        assert_eq!(forked.parent_id, Some(session_id));
+
+        state.runtime.shutdown();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn compat_session_revert_and_unrevert_routes_toggle_rewind_state() {
+        let (base_url, server_handle) = spawn_mock_openai_server().await;
+        let (state, _db, _config, _workspace) =
+            compat_test_app_state_with_openai_base_url(&base_url).await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let (session_id, message_id) = seed_compat_session_with_runtime_user_message(&state).await;
+
+        let router = Router::new()
+            .route(
+                "/api/session/{session_id}/revert",
+                post(compat_session_revert),
+            )
+            .route(
+                "/api/session/{session_id}/unrevert",
+                post(compat_session_unrevert),
+            )
+            .with_state(state.clone());
+
+        let revert_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/session/{session_id}/revert"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "messageID": message_id.to_string() }).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(revert_response.status(), StatusCode::OK);
+        let revert_payload: Value = serde_json::from_slice(
+            &revert_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            revert_payload.get("id").and_then(Value::as_str),
+            Some(session_id.to_string().as_str())
+        );
+        assert_eq!(
+            revert_payload
+                .get("revert")
+                .and_then(|value| value.get("messageID"))
+                .and_then(Value::as_str),
+            Some(message_id.to_string().as_str())
+        );
+        assert_eq!(
+            manager
+                .list_rewind_checkpoints(session_id)
+                .await
+                .expect("rewind checkpoints should load")
+                .last()
+                .map(|checkpoint| checkpoint.target_message_id),
+            Some(message_id)
+        );
+        let mut rewind_hidden = false;
+        for _ in 0..10 {
+            if manager
+                .list_projected_messages(session_id, false)
+                .await
+                .expect("messages should load")
+                .iter()
+                .all(|message| message.id != message_id)
+            {
+                rewind_hidden = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(rewind_hidden, "rewind should hide the original message");
+
+        let unrevert_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/session/{session_id}/unrevert"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(unrevert_response.status(), StatusCode::OK);
+        let unrevert_payload: Value = serde_json::from_slice(
+            &unrevert_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            unrevert_payload.get("id").and_then(Value::as_str),
+            Some(session_id.to_string().as_str())
+        );
+        assert!(unrevert_payload.get("revert").is_some_and(Value::is_null));
+        let mut unrevert_restored = false;
+        for _ in 0..10 {
+            if manager
+                .list_projected_messages(session_id, false)
+                .await
+                .expect("messages should load")
+                .iter()
+                .any(|message| message.id == message_id)
+            {
+                unrevert_restored = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            unrevert_restored,
+            "unrewind should restore the compacted message"
+        );
+
+        state.runtime.shutdown();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn compat_session_share_and_unshare_routes_return_share_state() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "shared".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route(
+                "/api/session/{session_id}/share",
+                post(compat_session_share).delete(compat_session_unshare),
+            )
+            .with_state(state.clone());
+
+        let share_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/session/{}/share", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(share_response.status(), StatusCode::OK);
+        let share_payload: Value = serde_json::from_slice(
+            &share_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            share_payload.get("id").and_then(Value::as_str),
+            Some(session.id.to_string().as_str())
+        );
+        assert_eq!(
+            share_payload
+                .get("share")
+                .and_then(|value| value.get("url"))
+                .and_then(Value::as_str),
+            Some(format!("/chat?session={}", session.id).as_str())
+        );
+
+        let unshare_response = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/session/{}/share", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(unshare_response.status(), StatusCode::OK);
+        let unshare_payload: Value = serde_json::from_slice(
+            &unshare_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            unshare_payload.get("id").and_then(Value::as_str),
+            Some(session.id.to_string().as_str())
+        );
+        assert!(unshare_payload.get("share").is_some_and(Value::is_null));
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_summarize_route_returns_queued_ack() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "summarize".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route(
+                "/api/session/{session_id}/summarize",
+                post(compat_session_summarize),
+            )
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/session/{}/summarize", session.id))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "providerID": "openai",
+                            "modelID": "gpt-4.1-mini",
+                            "auto": false
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(payload.get("queued").and_then(Value::as_bool), Some(true));
+        assert_eq!(payload.get("auto").and_then(Value::as_bool), Some(false));
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_diff_route_returns_paginated_entries_and_message_filter() {
+        let (state, db, _config, _workspace) = compat_test_app_state().await;
+        let (session_id, older_message_id, newer_message_id) =
+            seed_compat_session_with_apply_patch_messages(&state, &db).await;
+
+        let router = Router::new()
+            .route("/api/session/{session_id}/diff", get(compat_session_diff))
+            .with_state(state.clone());
+
+        let page_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/session/{session_id}/diff?offset=0&limit=1"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(page_response.status(), StatusCode::OK);
+        let page_payload: Value = serde_json::from_slice(
+            &page_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(page_payload.get("total").and_then(Value::as_u64), Some(2));
+        assert_eq!(page_payload.get("offset").and_then(Value::as_u64), Some(0));
+        assert_eq!(page_payload.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            page_payload.get("hasMore").and_then(Value::as_bool),
+            Some(true)
+        );
+        let entries = page_payload
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("entries should be present");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].get("file").and_then(Value::as_str),
+            Some("src/newer.rs")
+        );
+        assert_eq!(entries[0].get("additions").and_then(Value::as_u64), Some(1));
+        assert_eq!(entries[0].get("deletions").and_then(Value::as_u64), Some(1));
+
+        let filtered_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/session/{session_id}/diff?offset=0&limit=10&messageID={older_message_id}"
+                    ))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(filtered_response.status(), StatusCode::OK);
+        let filtered_payload: Value = serde_json::from_slice(
+            &filtered_response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(
+            filtered_payload.get("total").and_then(Value::as_u64),
+            Some(1)
+        );
+        let filtered_entries = filtered_payload
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("entries should be present");
+        assert_eq!(filtered_entries.len(), 1);
+        assert_eq!(
+            filtered_entries[0].get("messageID").and_then(Value::as_str),
+            Some(older_message_id.to_string().as_str())
+        );
+        assert_eq!(
+            filtered_entries[0].get("file").and_then(Value::as_str),
+            Some("src/older.rs")
+        );
+        assert_ne!(older_message_id, newer_message_id);
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
     async fn compat_session_status_route_returns_idle_status_snapshot() {
         let (state, _db, _config, _workspace) = compat_test_app_state().await;
         let manager = state
@@ -4873,6 +6755,161 @@ include_global = true
             part_payload.get("text").and_then(Value::as_str),
             Some("hello compat session")
         );
+
+        state.runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn compat_session_message_post_route_returns_queued_immediately() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "message compat".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route(
+                "/api/session/{session_id}/message",
+                post(compat_session_message_post),
+            )
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/session/{}/message", session.id))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "parts": [
+                                { "type": "text", "text": "hello compat" },
+                                {
+                                    "type": "file",
+                                    "mime": "text/plain",
+                                    "url": "https://example.com/demo.txt",
+                                    "filename": "demo.txt"
+                                }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        let status = response.status();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(body.as_ref())
+        );
+        let payload: Value =
+            serde_json::from_slice(body.as_ref()).expect("response should be valid json");
+        assert_eq!(payload.get("queued").and_then(Value::as_bool), Some(true));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let messages = manager
+            .list_projected_messages(session.id, true)
+            .await
+            .expect("messages should load");
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.role == agena::role::Role::User),
+            "queued compat turn should persist the user message"
+        );
+
+        state.runtime.shutdown();
+    }
+
+    #[test]
+    fn compat_session_message_payload_normalizes_legacy_file_parts() {
+        let parts = compat_message_parts_from_payload(&[
+            json!({ "type": "text", "text": "hello compat" }),
+            json!({
+                "type": "file",
+                "mime": "text/plain",
+                "url": "https://example.com/demo.txt",
+                "filename": "demo.txt"
+            }),
+        ])
+        .expect("payload should normalize");
+
+        assert!(matches!(
+            parts.first(),
+            Some(agena::message::PartContent::Text(text)) if text.text == "hello compat"
+        ));
+        let attachment = match parts.get(1) {
+            Some(agena::message::PartContent::Attachment(part)) => part.attachments.first(),
+            _ => None,
+        }
+        .expect("second part should be an attachment");
+        assert_eq!(attachment.filename.as_deref(), Some("demo.txt"));
+        assert!(matches!(
+            &attachment.source,
+            agena::message::AttachmentSource::Url { url }
+                if url == "https://example.com/demo.txt"
+        ));
+    }
+
+    #[tokio::test]
+    async fn compat_session_abort_route_returns_ack_when_idle() {
+        let (state, _db, _config, _workspace) = compat_test_app_state().await;
+        let manager = state
+            .runtime
+            .session_manager()
+            .expect("session manager should exist");
+        let session = manager
+            .create_session(agena::session::SessionCreateRequest {
+                title: "abort compat".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session should create");
+
+        let router = Router::new()
+            .route(
+                "/api/session/{session_id}/abort",
+                post(compat_session_abort),
+            )
+            .with_state(state.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/session/{}/abort", session.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes(),
+        )
+        .expect("response should be valid json");
+        assert_eq!(payload.get("aborted").and_then(Value::as_bool), Some(true));
 
         state.runtime.shutdown();
     }

@@ -855,8 +855,9 @@ impl SessionStore {
             })
             .collect();
 
+        let now = Utc::now();
+        let mut items = Vec::with_capacity(revisions.len().saturating_add(1));
         if !dropped.is_empty() {
-            let now = Utc::now();
             let checkpoint_id = self.reserve_message_ids(0).await?.message_id;
             let payload = super::history::RewindCheckpoint {
                 schema: 1,
@@ -866,16 +867,21 @@ impl SessionStore {
             };
             let text = serde_json::to_string(&payload)
                 .map_err(|err| AppError::Internal(format!("encode rewind checkpoint: {err}")))?;
-            let notice = EventKind::SystemNoticeAppended(super::history::SystemNoticeAppended {
-                message_id: super::history::MessageId(checkpoint_id),
-                created_at: now,
-                kind: super::history::SystemNoticeKind::RewindCheckpoint,
-                text,
-            });
-            self.publish_event(session_id, notice).await?;
+            items.push(EventKind::SystemNoticeAppended(
+                super::history::SystemNoticeAppended {
+                    message_id: super::history::MessageId(checkpoint_id),
+                    created_at: now,
+                    kind: super::history::SystemNoticeKind::RewindCheckpoint,
+                    text,
+                },
+            ));
         }
-        for kind in revisions {
-            self.publish_event(session_id, kind).await?;
+        items.extend(revisions);
+        if !items.is_empty() {
+            self.history
+                .append_items(session_id, items, now)
+                .await
+                .map_err(|err| AppError::Internal(format!("append rewind events: {err}")))?;
         }
 
         let new_runtime_base = session::get_session_by_id(&self.db, session_id)
@@ -989,8 +995,11 @@ impl SessionStore {
                 })
             })
             .collect();
-        for kind in revisions {
-            self.publish_event(session_id, kind).await?;
+        if !revisions.is_empty() {
+            self.history
+                .append_items(session_id, revisions, Utc::now())
+                .await
+                .map_err(|err| AppError::Internal(format!("append unrewind events: {err}")))?;
         }
 
         let new_runtime_base = session::get_session_by_id(&self.db, session_id)

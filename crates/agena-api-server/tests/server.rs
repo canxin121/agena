@@ -4,7 +4,11 @@
 //! `SessionManager` directly (bypassing `AgenaRuntime`), wire it into
 //! `AppState::with_manager_override`, and exercise the v2 routes.
 
-use std::{process::Command as ProcessCommand, sync::Arc};
+use std::{
+    process::Command as ProcessCommand,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use agena::model::{ModelId, ModelLifecycle, ModelRef, ProviderId};
 use agena::{
@@ -102,9 +106,16 @@ async fn build_state() -> (AppState, Arc<SessionManager>, String) {
 }
 
 async fn build_state_with_config(config_text: &str) -> (AppState, Arc<SessionManager>, String) {
+    let workspace_root = format!("/tmp/api-server-workspace-{}", uuid::Uuid::new_v4());
+    build_state_with_config_and_workspace(config_text, workspace_root).await
+}
+
+async fn build_state_with_config_and_workspace(
+    config_text: &str,
+    workspace_root: String,
+) -> (AppState, Arc<SessionManager>, String) {
     let db = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
     agena::db::init_schema(db.as_ref()).await.unwrap();
-    let workspace_root = format!("/tmp/api-server-workspace-{}", uuid::Uuid::new_v4());
     std::fs::create_dir_all(&workspace_root).expect("test workspace dir should be created");
     agena::db::crud::workspace::ensure_workspace_id(db.as_ref(), workspace_root.as_str())
         .await
@@ -145,6 +156,40 @@ async fn build_state_with_config(config_text: &str) -> (AppState, Arc<SessionMan
 
     let state = AppState::new(runtime, Arc::clone(&db)).with_manager_override(Arc::clone(&manager));
     (state, manager, workspace_root)
+}
+
+fn seed_cached_official_catalog(workspace_root: &str) {
+    let cache_dir = std::path::Path::new(workspace_root)
+        .join(".agena")
+        .join("catalog");
+    std::fs::create_dir_all(&cache_dir).expect("catalog cache dir should be created");
+    let fetched_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_millis() as i64;
+    let payload = serde_json::json!({
+        "remote_url": "https://example.test/catalog.json",
+        "fallback_url": "https://example.test/fallback.json",
+        "fetched_at_unix_ms": fetched_at_unix_ms,
+        "source": "cache",
+        "document": {
+            "providers": {
+                "openai": {
+                    "default_model": "gpt-5",
+                    "models": {
+                        "gpt-5": {
+                            "display_name": "GPT-5 Official"
+                        }
+                    }
+                }
+            }
+        }
+    });
+    std::fs::write(
+        cache_dir.join("model-catalog-cache.json"),
+        serde_json::to_vec_pretty(&payload).expect("cache payload should serialize"),
+    )
+    .expect("catalog cache file should be written");
 }
 
 async fn insert_projected_message(
@@ -218,7 +263,23 @@ async fn health_endpoint_returns_ok() {
 
 #[tokio::test]
 async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
-    let (state, _, _) = build_state().await;
+    let workspace_root = format!("/tmp/api-server-workspace-{}", uuid::Uuid::new_v4());
+    seed_cached_official_catalog(&workspace_root);
+    let (state, _, _) = build_state_with_config_and_workspace("", workspace_root).await;
+    state
+        .runtime()
+        .current_snapshot()
+        .model_catalog()
+        .upsert_custom_entry(
+            "openai",
+            "gpt-5-mini",
+            CatalogModelDefinition {
+                display_name: Some("GPT-5 Mini Workspace".to_owned()),
+                ..CatalogModelDefinition::default()
+            },
+            false,
+        )
+        .expect("custom catalog entry should be written");
     let app = router(state);
 
     let runtime_response = app
@@ -243,6 +304,25 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
         runtime_value.get("model_catalog").is_some(),
         "runtime payload should include model_catalog: {runtime_value:?}"
     );
+    let runtime_entries = runtime_value
+        .pointer("/model_catalog/entries")
+        .and_then(|value| value.as_array())
+        .expect("runtime payload should include model_catalog entries");
+    assert!(runtime_entries.iter().any(|entry| {
+        entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
+            && entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5")
+            && entry.get("kind").and_then(|value| value.as_str()) == Some("official")
+            && entry.get("source").and_then(|value| value.as_str()) == Some("cache")
+            && entry.get("source_label").and_then(|value| value.as_str()) == Some("cached catalog")
+    }));
+    assert!(runtime_entries.iter().any(|entry| {
+        entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
+            && entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
+            && entry.get("kind").and_then(|value| value.as_str()) == Some("custom")
+            && entry.get("source").and_then(|value| value.as_str()) == Some("custom")
+            && entry.get("source_label").and_then(|value| value.as_str())
+                == Some("workspace override")
+    }));
 
     let catalog_response = app
         .oneshot(
@@ -272,6 +352,25 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             .is_some(),
         "catalog payload should include entries array: {catalog_value:?}"
     );
+    let catalog_entries = catalog_value
+        .get("entries")
+        .and_then(|value| value.as_array())
+        .expect("catalog payload should include entries");
+    assert!(catalog_entries.iter().any(|entry| {
+        entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
+            && entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5")
+            && entry.get("kind").and_then(|value| value.as_str()) == Some("official")
+            && entry.get("source").and_then(|value| value.as_str()) == Some("cache")
+            && entry.get("source_label").and_then(|value| value.as_str()) == Some("cached catalog")
+    }));
+    assert!(catalog_entries.iter().any(|entry| {
+        entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
+            && entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
+            && entry.get("kind").and_then(|value| value.as_str()) == Some("custom")
+            && entry.get("source").and_then(|value| value.as_str()) == Some("custom")
+            && entry.get("source_label").and_then(|value| value.as_str())
+                == Some("workspace override")
+    }));
 }
 
 #[tokio::test]

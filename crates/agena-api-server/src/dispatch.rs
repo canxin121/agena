@@ -263,6 +263,29 @@ fn model_catalog_entry_from_http(
     ModelCatalogEntryResource {
         provider_id: value.provider_id,
         model_id: value.model_id,
+        kind: match value.kind {
+            crate::local_api::dto::ModelCatalogEntryKind::Official => {
+                agena_api::resource::ModelCatalogEntryKind::Official
+            }
+            crate::local_api::dto::ModelCatalogEntryKind::Custom => {
+                agena_api::resource::ModelCatalogEntryKind::Custom
+            }
+        },
+        source: match value.source {
+            crate::local_api::dto::ModelCatalogSourceKind::Remote => {
+                agena_api::resource::ModelCatalogSourceKind::Remote
+            }
+            crate::local_api::dto::ModelCatalogSourceKind::Fallback => {
+                agena_api::resource::ModelCatalogSourceKind::Fallback
+            }
+            crate::local_api::dto::ModelCatalogSourceKind::Cache => {
+                agena_api::resource::ModelCatalogSourceKind::Cache
+            }
+            crate::local_api::dto::ModelCatalogSourceKind::Custom => {
+                agena_api::resource::ModelCatalogSourceKind::Custom
+            }
+        },
+        source_label: value.source_label,
         default_model_for_provider: value.default_model_for_provider,
         has_local_override: value.has_local_override,
         display_name: value.display_name,
@@ -378,17 +401,22 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     let resolution = snapshot.config_resolution();
     let mut provider_ids = snapshot.provider_registry().provider_ids();
     provider_ids.sort();
+    let catalog = snapshot.model_catalog_response();
     let model_catalog = model_catalog_from_http(crate::local_api::ModelCatalogResponse {
-        remote_url: snapshot.model_catalog_response().remote_url,
-        fallback_url: snapshot.model_catalog_response().fallback_url,
-        last_refresh_at: snapshot.model_catalog_response().last_refresh_at,
-        last_successful_source: snapshot.model_catalog_response().last_successful_source,
-        last_error: snapshot.model_catalog_response().last_error,
-        entries: snapshot
-            .model_catalog_response()
+        remote_url: catalog.remote_url,
+        fallback_url: catalog.fallback_url,
+        last_refresh_at: catalog.last_refresh_at,
+        last_successful_source: catalog.last_successful_source,
+        last_error: catalog.last_error,
+        entries: catalog
             .entries
             .into_iter()
-            .map(Into::into)
+            .map(|entry| {
+                crate::local_api::ModelCatalogEntryResource::from_record(
+                    entry,
+                    catalog.last_successful_source,
+                )
+            })
             .collect(),
     });
     let session_cache = snapshot.session_manager().map(|manager| {

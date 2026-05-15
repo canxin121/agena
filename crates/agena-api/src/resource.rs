@@ -209,10 +209,30 @@ pub struct ModelCatalogResponse {
     pub entries: Vec<ModelCatalogEntryResource>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCatalogEntryKind {
+    Official,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCatalogSourceKind {
+    Remote,
+    Fallback,
+    Cache,
+    Custom,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogEntryResource {
     pub provider_id: String,
     pub model_id: String,
+    pub kind: ModelCatalogEntryKind,
+    pub source: ModelCatalogSourceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model_for_provider: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

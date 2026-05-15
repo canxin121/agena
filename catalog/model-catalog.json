@@ -1,0 +1,290 @@
+{
+  "providers": {
+    "openai": {
+      "default_model": "openai/gpt-5.4",
+      "models": {
+        "openai/gpt-4.1-mini": {
+          "family": "gpt",
+          "lifecycle": "active",
+          "display_name": "GPT-4.1 Mini",
+          "description": "Fast general-purpose OpenAI model.",
+          "context_window_tokens": 1048576,
+          "max_output_tokens": 32768,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "structured_output",
+              "temperature"
+            ]
+          }
+        },
+        "openai/gpt-5.4": {
+          "family": "gpt",
+          "lifecycle": "active",
+          "display_name": "GPT-5.4",
+          "description": "Frontier OpenAI model for coding and complex reasoning.",
+          "context_window_tokens": 1050000,
+          "max_output_tokens": 128000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning",
+              "structured_output",
+              "temperature"
+            ]
+          }
+        },
+        "openai/gpt-5.4-mini": {
+          "family": "gpt",
+          "lifecycle": "active",
+          "display_name": "GPT-5.4 Mini",
+          "description": "Smaller GPT-5.4 tier for high-volume workloads.",
+          "context_window_tokens": 400000,
+          "max_output_tokens": 128000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning",
+              "structured_output",
+              "temperature"
+            ]
+          }
+        },
+        "openai/gpt-5.3-codex": {
+          "family": "codex",
+          "lifecycle": "active",
+          "display_name": "GPT-5.3 Codex",
+          "description": "Coding-oriented GPT-5 model for agentic tasks.",
+          "context_window_tokens": 400000,
+          "max_output_tokens": 128000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning",
+              "structured_output"
+            ]
+          }
+        }
+      }
+    },
+    "anthropic": {
+      "default_model": "anthropic/claude-sonnet-4-6",
+      "models": {
+        "anthropic/claude-haiku-4-5-20251001": {
+          "family": "claude",
+          "lifecycle": "active",
+          "display_name": "Claude 4.5 Haiku",
+          "context_window_tokens": 200000,
+          "max_output_tokens": 64000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning"
+            ]
+          }
+        },
+        "anthropic/claude-sonnet-4-5-20250929": {
+          "family": "claude",
+          "lifecycle": "active",
+          "display_name": "Claude 4.5 Sonnet",
+          "context_window_tokens": 200000,
+          "max_output_tokens": 64000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning"
+            ]
+          }
+        },
+        "anthropic/claude-sonnet-4-6": {
+          "family": "claude",
+          "lifecycle": "preview",
+          "display_name": "Claude 4.6 Sonnet",
+          "context_window_tokens": 200000,
+          "max_output_tokens": 64000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning"
+            ]
+          }
+        },
+        "anthropic/claude-opus-4-5-20251101": {
+          "family": "claude",
+          "lifecycle": "preview",
+          "display_name": "Claude 4.5 Opus",
+          "context_window_tokens": 200000,
+          "max_output_tokens": 64000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning"
+            ]
+          }
+        }
+      }
+    },
+    "gemini": {
+      "default_model": "gemini/gemini-2.5-pro",
+      "models": {
+        "gemini/gemini-2.5-pro": {
+          "family": "gemini",
+          "lifecycle": "active",
+          "display_name": "Gemini 2.5 Pro",
+          "description": "Stable Gemini 2.5 Pro release.",
+          "context_window_tokens": 1048576,
+          "max_output_tokens": 65536,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning",
+              "structured_output",
+              "temperature"
+            ]
+          }
+        },
+        "gemini/gemini-2.5-flash": {
+          "family": "gemini",
+          "lifecycle": "active",
+          "display_name": "Gemini 2.5 Flash",
+          "description": "Stable Gemini 2.5 Flash release.",
+          "context_window_tokens": 1048576,
+          "max_output_tokens": 65536,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning",
+              "structured_output",
+              "temperature"
+            ]
+          }
+        },
+        "gemini/gemini-2.5-flash-lite": {
+          "family": "gemini",
+          "lifecycle": "active",
+          "display_name": "Gemini 2.5 Flash Lite",
+          "description": "Smallest Gemini 2.5 tier for low-latency workloads.",
+          "context_window_tokens": 1048576,
+          "max_output_tokens": 65536,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning",
+              "structured_output",
+              "temperature"
+            ]
+          }
+        },
+        "gemini/gemini-3.1-pro-preview": {
+          "family": "gemini",
+          "lifecycle": "preview",
+          "display_name": "Gemini 3.1 Pro Preview",
+          "description": "Preview Gemini 3.1 Pro release.",
+          "context_window_tokens": 1048576,
+          "max_output_tokens": 65536,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning",
+              "structured_output",
+              "temperature"
+            ]
+          }
+        }
+      }
+    },
+    "gitlab": {
+      "default_model": "gitlab/claude-sonnet-4-5",
+      "models": {
+        "gitlab/claude-sonnet-4-5": {
+          "family": "claude",
+          "lifecycle": "active",
+          "display_name": "Claude Sonnet 4.5 (GitLab)",
+          "description": "Direct Claude Sonnet route supported by the GitLab adapter mapping.",
+          "context_window_tokens": 200000,
+          "max_output_tokens": 64000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning"
+            ]
+          }
+        },
+        "gitlab/duo-chat-haiku-4-5": {
+          "family": "claude",
+          "lifecycle": "active",
+          "display_name": "GitLab Duo Chat Haiku 4.5",
+          "description": "GitLab Duo chat preset backed by Claude Haiku 4.5.",
+          "context_window_tokens": 200000,
+          "max_output_tokens": 64000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning"
+            ]
+          }
+        },
+        "gitlab/duo-chat-sonnet-4-5": {
+          "family": "claude",
+          "lifecycle": "active",
+          "display_name": "GitLab Duo Chat Sonnet 4.5",
+          "description": "GitLab Duo chat preset backed by Claude Sonnet 4.5.",
+          "context_window_tokens": 200000,
+          "max_output_tokens": 64000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning"
+            ]
+          }
+        },
+        "gitlab/duo-chat-opus-4-5": {
+          "family": "claude",
+          "lifecycle": "active",
+          "display_name": "GitLab Duo Chat Opus 4.5",
+          "description": "GitLab Duo chat preset backed by Claude Opus 4.5.",
+          "context_window_tokens": 200000,
+          "max_output_tokens": 64000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning"
+            ]
+          }
+        },
+        "gitlab/duo-chat-gpt-5-codex": {
+          "family": "codex",
+          "lifecycle": "preview",
+          "display_name": "GitLab Duo Chat GPT-5 Codex",
+          "description": "GitLab Duo coding preset backed by GPT-5 Codex.",
+          "context_window_tokens": 400000,
+          "max_output_tokens": 128000,
+          "features": {
+            "supported": [
+              "tool_calling",
+              "streaming",
+              "reasoning",
+              "structured_output"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

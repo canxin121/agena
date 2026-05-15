@@ -110,10 +110,8 @@ const sharedPanels = {
       {
         provider_id: 'openai',
         model_id: 'gpt-5',
-        kind: 'official',
-        source: 'remote',
-        source_label: 'remote: https://example.test/catalog.json',
         default_model_for_provider: 'gpt-5',
+        has_local_override: false,
         display_name: 'GPT-5',
         description: 'flagship model',
       },

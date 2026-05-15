@@ -15,23 +15,14 @@ use crate::{
     provider::{ConfiguredModelDefinition, ConfiguredModelVariant, ModelCapabilityPatch},
 };
 
-const DEFAULT_REMOTE_URL: &str =
+pub const DEFAULT_REMOTE_URL: &str =
     "https://raw.githubusercontent.com/agena-ai/model-catalog/main/catalog.json";
-const DEFAULT_GITHUB_FALLBACK_URL: &str =
+pub const DEFAULT_GITHUB_FALLBACK_URL: &str =
     "https://raw.githubusercontent.com/agena-ai/agena/main/catalog/model-catalog.json";
 const DEFAULT_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelCatalogEntryKind {
-    Official,
-    Custom,
-}
-
-impl Default for ModelCatalogEntryKind {
-    fn default() -> Self {
-        Self::Official
-    }
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +31,6 @@ pub enum ModelCatalogEntrySourceKind {
     Remote,
     Fallback,
     Cache,
-    Custom,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -105,14 +95,12 @@ pub struct ModelCatalogDocument {
 pub struct ModelCatalogEntryRecord {
     pub provider_id: String,
     pub model_id: String,
-    pub kind: ModelCatalogEntryKind,
-    pub source: ModelCatalogEntrySourceKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_model_for_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_local_override: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<ModelFamily>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -203,52 +191,29 @@ impl ModelCatalogSnapshot {
         provider_ids.extend(self.custom.providers.keys().cloned());
 
         for provider_id in provider_ids {
-            let merged_default = self
-                .merged_provider(provider_id.as_str())
-                .and_then(|provider| provider.default_model);
+            let Some(provider) = self.merged_provider(provider_id.as_str()) else {
+                continue;
+            };
+            let merged_default = provider.default_model.clone();
+            let custom_provider = self.custom.providers.get(provider_id.as_str());
 
-            if let Some(provider) = self.official.providers.get(provider_id.as_str()) {
-                for (model_id, definition) in &provider.models {
-                    entries.push(ModelCatalogEntryRecord {
-                        provider_id: provider_id.clone(),
-                        model_id: model_id.clone(),
-                        kind: ModelCatalogEntryKind::Official,
-                        source: self
-                            .last_successful_source
-                            .unwrap_or(ModelCatalogEntrySourceKind::Fallback),
-                        source_label: Some(self.source_label_for_official()),
-                        default_model_for_provider: merged_default.clone(),
-                        display_name: definition.display_name.clone(),
-                        family: definition.family,
-                        lifecycle: definition.lifecycle,
-                        context_window_tokens: definition.context_window_tokens,
-                        max_output_tokens: definition.max_output_tokens,
-                        description: definition.description.clone(),
-                        variants: definition.variants.clone(),
-                        capabilities: definition.capabilities.clone(),
-                    });
-                }
-            }
-
-            if let Some(provider) = self.custom.providers.get(provider_id.as_str()) {
-                for (model_id, definition) in &provider.models {
-                    entries.push(ModelCatalogEntryRecord {
-                        provider_id: provider_id.clone(),
-                        model_id: model_id.clone(),
-                        kind: ModelCatalogEntryKind::Custom,
-                        source: ModelCatalogEntrySourceKind::Custom,
-                        source_label: Some("local custom entry".to_owned()),
-                        default_model_for_provider: merged_default.clone(),
-                        display_name: definition.display_name.clone(),
-                        family: definition.family,
-                        lifecycle: definition.lifecycle,
-                        context_window_tokens: definition.context_window_tokens,
-                        max_output_tokens: definition.max_output_tokens,
-                        description: definition.description.clone(),
-                        variants: definition.variants.clone(),
-                        capabilities: definition.capabilities.clone(),
-                    });
-                }
+            for (model_id, definition) in provider.models {
+                entries.push(ModelCatalogEntryRecord {
+                    provider_id: provider_id.clone(),
+                    model_id: model_id.clone(),
+                    default_model_for_provider: merged_default.clone(),
+                    display_name: definition.display_name,
+                    has_local_override: custom_provider
+                        .and_then(|provider| provider.models.get(model_id.as_str()))
+                        .is_some(),
+                    family: definition.family,
+                    lifecycle: definition.lifecycle,
+                    context_window_tokens: definition.context_window_tokens,
+                    max_output_tokens: definition.max_output_tokens,
+                    description: definition.description,
+                    variants: definition.variants,
+                    capabilities: definition.capabilities,
+                });
             }
         }
 
@@ -256,7 +221,6 @@ impl ModelCatalogSnapshot {
             left.provider_id
                 .cmp(&right.provider_id)
                 .then(left.model_id.cmp(&right.model_id))
-                .then(left.kind.cmp(&right.kind))
         });
         entries
     }
@@ -276,18 +240,6 @@ impl ModelCatalogSnapshot {
             last_successful_source: self.last_successful_source,
             last_error: self.last_error.clone(),
             entries: self.entries(),
-        }
-    }
-
-    fn source_label_for_official(&self) -> String {
-        match self
-            .last_successful_source
-            .unwrap_or(ModelCatalogEntrySourceKind::Fallback)
-        {
-            ModelCatalogEntrySourceKind::Remote => format!("remote: {}", self.remote_url),
-            ModelCatalogEntrySourceKind::Fallback => format!("fallback: {}", self.fallback_url),
-            ModelCatalogEntrySourceKind::Cache => "local cache".to_owned(),
-            ModelCatalogEntrySourceKind::Custom => "local custom entry".to_owned(),
         }
     }
 }
@@ -463,6 +415,30 @@ impl ModelCatalogService {
                                 return Ok(snapshot);
                             }
                         }
+                        if let Ok(document) = bundled_catalog_document() {
+                            let fetched_at_unix_ms = now_unix_ms();
+                            self.store.write_cached_official(&CachedOfficialCatalog {
+                                remote_url: config.remote_url.clone(),
+                                fallback_url: config.fallback_url.clone(),
+                                fetched_at_unix_ms,
+                                source: ModelCatalogEntrySourceKind::Fallback,
+                                document: document.clone(),
+                            })?;
+
+                            let mut snapshot = self.snapshot();
+                            snapshot.remote_url = config.remote_url;
+                            snapshot.fallback_url = config.fallback_url;
+                            snapshot.official = document;
+                            snapshot.last_successful_source =
+                                Some(ModelCatalogEntrySourceKind::Fallback);
+                            snapshot.last_refresh_at =
+                                DateTime::<Utc>::from_timestamp_millis(fetched_at_unix_ms);
+                            snapshot.last_error = Some(format!(
+                                "remote refresh failed: {remote_error}; fallback failed: {fallback_error}; using bundled catalog"
+                            ));
+                            self.replace_snapshot(snapshot.clone());
+                            return Ok(snapshot);
+                        }
                         return Err(AppError::Config(format!(
                             "model catalog refresh failed: remote: {remote_error}; fallback: {fallback_error}"
                         )));
@@ -586,6 +562,14 @@ pub fn catalog_definition_to_provider_definition(
     definition.clone().into_configured_definition()
 }
 
+pub fn bundled_catalog_document() -> Result<ModelCatalogDocument, AppError> {
+    serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../catalog/model-catalog.json"
+    )))
+    .map_err(|err| AppError::Config(format!("parse bundled model catalog: {err}")))
+}
+
 pub fn catalog_family_for_model(
     provider: &ModelCatalogProviderRecord,
     model: &ModelId,
@@ -646,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn entries_include_custom_and_official_records() {
+    fn entries_merge_overrides_into_single_record() {
         let snapshot = ModelCatalogSnapshot {
             last_successful_source: Some(ModelCatalogEntrySourceKind::Remote),
             official: ModelCatalogDocument {
@@ -674,7 +658,7 @@ mod tests {
                     ModelCatalogProviderRecord {
                         default_model: None,
                         models: BTreeMap::from([(
-                            "claude-sonnet-local".to_owned(),
+                            "claude-sonnet".to_owned(),
                             CatalogModelDefinition {
                                 display_name: Some("Claude Sonnet Local".to_owned()),
                                 variants: BTreeMap::from([(
@@ -696,16 +680,35 @@ mod tests {
         };
 
         let entries = snapshot.entries();
-        assert_eq!(entries.len(), 2);
-        assert!(
-            entries
-                .iter()
-                .any(|entry| entry.kind == ModelCatalogEntryKind::Official)
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].provider_id, "anthropic");
+        assert_eq!(entries[0].model_id, "claude-sonnet");
+        assert_eq!(
+            entries[0].display_name.as_deref(),
+            Some("Claude Sonnet Local")
         );
-        assert!(
-            entries
-                .iter()
-                .any(|entry| entry.kind == ModelCatalogEntryKind::Custom)
+        assert!(entries[0].has_local_override);
+        assert_eq!(
+            entries[0].default_model_for_provider.as_deref(),
+            Some("claude-sonnet")
         );
+        assert!(entries[0].variants.contains_key("deep"));
+    }
+
+    #[test]
+    fn bundled_fallback_catalog_file_parses_and_seeds_known_providers() {
+        let document = bundled_catalog_document().expect("bundled fallback catalog should parse");
+
+        let provider_ids = document.providers.keys().cloned().collect::<Vec<_>>();
+        assert!(provider_ids.iter().any(|id| id == "openai"));
+        assert!(provider_ids.iter().any(|id| id == "anthropic"));
+        assert!(provider_ids.iter().any(|id| id == "gemini"));
+        assert!(provider_ids.iter().any(|id| id == "gitlab"));
+
+        let gitlab = document
+            .providers
+            .get("gitlab")
+            .expect("gitlab provider should exist");
+        assert!(gitlab.models.contains_key("gitlab/duo-chat-sonnet-4-5"));
     }
 }

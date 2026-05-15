@@ -51,7 +51,7 @@ const sortedCatalogEntries = computed(() =>
   [...catalogEntriesState.value].sort((left, right) => {
     if (left.provider_id !== right.provider_id) return left.provider_id.localeCompare(right.provider_id)
     if (left.model_id !== right.model_id) return left.model_id.localeCompare(right.model_id)
-    return left.kind.localeCompare(right.kind)
+    return Number(right.has_local_override || false) - Number(left.has_local_override || false)
   }),
 )
 
@@ -326,7 +326,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         <div class="page-header" style="align-items: flex-start">
           <div>
             <h3>Catalog Entries</h3>
-            <p class="muted">Official entries can be edited into a local override. Delete only removes local custom entries.</p>
+            <p class="muted">Entries are shown as one merged catalog. Saving writes or updates the local override for that provider/model, and delete removes only the local override.</p>
           </div>
           <span class="badge">{{ sortedCatalogEntries.length }}</span>
         </div>
@@ -334,14 +334,15 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         <div v-if="sortedCatalogEntries.length" class="list" style="margin-top: 12px">
           <div
             v-for="entry in sortedCatalogEntries"
-            :key="`${entry.provider_id}/${entry.model_id}/${entry.kind}`"
+            :key="`${entry.provider_id}/${entry.model_id}`"
             class="list-item"
             :style="isEntrySelected(entry) ? 'border-color: var(--accent-color, #444);' : ''"
           >
             <div class="page-header" style="align-items: flex-start">
               <div>
                 <div><strong>{{ entry.provider_id }}/{{ entry.model_id }}</strong></div>
-                <div class="muted">{{ entry.display_name || 'Unnamed model' }} · {{ entry.kind }} · {{ entry.source }}</div>
+                <div class="muted">{{ entry.display_name || 'Unnamed model' }}</div>
+                <div v-if="entry.has_local_override" class="muted">Local override saved for this model.</div>
                 <div v-if="entry.family || entry.lifecycle" class="muted">
                   {{ entry.family || 'family unset' }} · {{ entry.lifecycle || 'lifecycle unset' }}
                 </div>
@@ -351,16 +352,14 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                   ctx={{ entry.context_window_tokens ?? 'n/a' }} · max_out={{ entry.max_output_tokens ?? 'n/a' }}
                 </div>
               </div>
-              <span class="badge">{{ entry.source_label || entry.kind }}</span>
+              <span v-if="entry.has_local_override" class="badge">override</span>
             </div>
 
             <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
-              <button class="button" :disabled="submitting" @click="editEntry(entry)">
-                {{ entry.kind === 'custom' ? 'Edit Override' : 'Create Override' }}
-              </button>
+              <button class="button" :disabled="submitting" @click="editEntry(entry)">Edit Entry</button>
               <button class="button" :disabled="submitting" @click="setDefault(entry)">Set Default</button>
               <button
-                v-if="entry.kind === 'custom'"
+                v-if="entry.has_local_override"
                 class="button danger"
                 :disabled="submitting"
                 @click="deleteEntry(entry)"

@@ -27,14 +27,13 @@ use agena::{
 use agena_api::{
     commands::{
         CancelTurnParams, ClearSessionGoalParams, Command, CommandResult,
-        CompleteSessionGoalParams, ContinueRunParams, CreateSessionGoalParams,
-        CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
-        DeleteSessionParams, DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams,
-        ImportSessionParams, ListRewindCheckpointsParams, ListSessionTreeParams,
-        ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
-        ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams,
-        SubmitTurnParams, UnrewindSessionParams, UpdateSessionParams, UpdateWorkspaceParams,
-        UpsertPermissionRuleParams,
+        CompleteSessionGoalParams, ContinueRunParams, CreateSessionGoalParams, CreateSessionParams,
+        CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
+        DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
+        ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
+        ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
+        RevokePermissionRuleParams, RewindSessionParams, SubmitTurnParams, UnrewindSessionParams,
+        UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
@@ -238,10 +237,8 @@ fn model_catalog_entry_from_http(
     ModelCatalogEntryResource {
         provider_id: value.provider_id,
         model_id: value.model_id,
-        kind: value.kind,
-        source: value.source,
-        source_label: value.source_label,
         default_model_for_provider: value.default_model_for_provider,
+        has_local_override: value.has_local_override,
         display_name: value.display_name,
         family: value.family,
         lifecycle: value.lifecycle,
@@ -1217,15 +1214,13 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
         Query::GetSessionGoal(GetSessionParams { session_id }) => {
             let session = manager.get_session(session_id).await?;
             let goal = match session.goal.as_ref() {
-                Some(goal) => Some(
-                    session_goal_from_http(
-                        state
-                            .service()
-                            .session_goal_resource(manager.as_ref(), &session, goal)
-                            .await
-                            .map_err(server_error_from_http)?,
-                    ),
-                ),
+                Some(goal) => Some(session_goal_from_http(
+                    state
+                        .service()
+                        .session_goal_resource(manager.as_ref(), &session, goal)
+                        .await
+                        .map_err(server_error_from_http)?,
+                )),
                 None => None,
             };
             Ok(QueryResult::SessionGoal(goal))

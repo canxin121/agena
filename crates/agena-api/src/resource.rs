@@ -9,7 +9,7 @@ use agena::{
     agents::AgentScope,
     message::{MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
-    model_catalog::{CatalogModelDefinition, ModelCatalogEntryKind, ModelCatalogEntrySourceKind},
+    model_catalog::{CatalogModelDefinition, ModelCatalogEntrySourceKind},
     session::{GoalStatus, SessionStatus, SessionSummary},
 };
 
@@ -213,12 +213,10 @@ pub struct ModelCatalogResponse {
 pub struct ModelCatalogEntryResource {
     pub provider_id: String,
     pub model_id: String,
-    pub kind: ModelCatalogEntryKind,
-    pub source: ModelCatalogEntrySourceKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model_for_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_local_override: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

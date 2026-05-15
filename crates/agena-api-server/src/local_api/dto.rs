@@ -9,10 +9,7 @@ use agena::{
         UserInputRequest,
     },
     model::ModelRef,
-    model_catalog::{
-        CatalogModelDefinition, ModelCatalogEntryKind, ModelCatalogEntryRecord,
-        ModelCatalogEntrySourceKind,
-    },
+    model_catalog::{CatalogModelDefinition, ModelCatalogEntryRecord, ModelCatalogEntrySourceKind},
     permission::PermissionMode,
     permission::{PermissionReply, PermissionRequest},
     provider::ProviderModel,
@@ -132,12 +129,10 @@ pub struct ModelCatalogResponse {
 pub struct ModelCatalogEntryResource {
     pub provider_id: String,
     pub model_id: String,
-    pub kind: ModelCatalogEntryKind,
-    pub source: ModelCatalogEntrySourceKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model_for_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_local_override: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -161,10 +156,8 @@ impl From<ModelCatalogEntryRecord> for ModelCatalogEntryResource {
         Self {
             provider_id: value.provider_id,
             model_id: value.model_id,
-            kind: value.kind,
-            source: value.source,
-            source_label: value.source_label,
             default_model_for_provider: value.default_model_for_provider,
+            has_local_override: value.has_local_override,
             display_name: value.display_name,
             family: value.family,
             lifecycle: value.lifecycle,

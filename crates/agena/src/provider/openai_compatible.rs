@@ -17,7 +17,9 @@ use crate::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
         },
-        prompt_cache, sse, utils, wire_message,
+        prompt_cache,
+        remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
+        sse, utils, wire_message,
     },
     role::Role,
 };
@@ -686,12 +688,22 @@ impl ModelProvider for OpenAiCompatibleProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            self.apply_auth_headers(self.client.get(self.models_endpoint()), api_key)
-        })
-        .await?;
-        let payload: Value = utils::parse_json_response(self.id.as_str(), response).await?;
-        self.parse_models(payload)
+        let endpoint = self.models_endpoint();
+        let source = RemoteModelCatalogSource::new(
+            self.id.as_str(),
+            endpoint.as_str(),
+            self.api_key.prompt_cache_scope(),
+        );
+        RemoteModelCatalogCache::default()
+            .get_or_fetch(&source, || async {
+                let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+                    self.apply_auth_headers(self.client.get(endpoint.as_str()), api_key)
+                })
+                .await?;
+                let payload: Value = utils::parse_json_response(self.id.as_str(), response).await?;
+                self.parse_models(payload)
+            })
+            .await
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
@@ -1013,7 +1025,7 @@ struct RealtimeEntryDefinition {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     use super::*;
     use crate::message::{
@@ -1024,6 +1036,43 @@ mod tests {
     use crate::provider::{CompletionRequest, CompletionToolCall};
     use crate::tool::{EntryBehavior, EntryDefinition};
     use tokio::net::TcpListener;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: tests serialize env mutation through `env_lock()`.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::set_var(self.key, previous);
+                }
+            } else {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     fn sample_tool_definition() -> EntryDefinition {
         EntryDefinition::plugin(
@@ -1675,6 +1724,63 @@ mod tests {
             .expect_err("invalid model payload should fail");
 
         assert!(matches!(err, AppError::Provider(_)));
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_list_models_uses_disk_cache_after_first_fetch() {
+        let _env_lock = env_lock().lock().expect("env lock should succeed");
+        let dir = tempfile::tempdir().expect("tempdir should create");
+        let _cache_dir =
+            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
+
+        let mut server = mockito::Server::new_async().await;
+        {
+            let _mock = server
+                .mock("GET", "/models")
+                .match_header("authorization", "Bearer sk-test")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "data": [{
+                            "id": "google/gemini-2.5-pro",
+                            "name": "Gemini 2.5 Pro"
+                        }]
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let provider = OpenAiCompatibleProvider::new(
+                "shared-gateway",
+                reqwest::Client::new(),
+                "sk-test",
+                server.url(),
+                "google/gemini-2.5-pro",
+            );
+            let models = provider
+                .list_models()
+                .await
+                .expect("initial list_models should succeed");
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].id.as_str(), "google/gemini-2.5-pro");
+        }
+
+        let provider = OpenAiCompatibleProvider::new(
+            "shared-gateway",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "google/gemini-2.5-pro",
+        );
+        let models = provider
+            .list_models()
+            .await
+            .expect("cached list_models should succeed");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "google/gemini-2.5-pro");
     }
 
     #[tokio::test]

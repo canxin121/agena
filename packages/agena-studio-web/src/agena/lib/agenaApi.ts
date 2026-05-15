@@ -275,12 +275,38 @@ export type ModelCatalogProviderDefaultRequest = {
   model_id: string
 }
 
+export type CapabilitySupportValue = 'supported' | 'unsupported' | 'unknown'
+
+export type ProviderModelCapabilities = {
+  text_input?: CapabilitySupportValue | null
+  image_input?: CapabilitySupportValue | null
+  document_input?: CapabilitySupportValue | null
+  audio_input?: CapabilitySupportValue | null
+  video_input?: CapabilitySupportValue | null
+  file_input?: CapabilitySupportValue | null
+  tool_calling?: CapabilitySupportValue | null
+  streaming?: CapabilitySupportValue | null
+  reasoning?: CapabilitySupportValue | null
+  structured_output?: CapabilitySupportValue | null
+  temperature_supported?: CapabilitySupportValue | null
+}
+
+export type ProviderModelMetadata = {
+  family?: string | null
+  lifecycle?: string | null
+  description?: string | null
+  limits?: {
+    context_window_tokens?: number | null
+    max_output_tokens?: number | null
+  } | null
+}
+
 export type ProviderModel = {
   provider_id: string
   id: string
   display_name?: string | null
-  capabilities?: Record<string, unknown>
-  metadata?: Record<string, unknown>
+  capabilities?: ProviderModelCapabilities | null
+  metadata?: ProviderModelMetadata | null
   variants?: Record<string, ProviderModelVariant>
 }
 
@@ -714,7 +740,9 @@ export async function upsertModelCatalogEntry(input: ModelCatalogEntryWriteReque
   })
 }
 
-export async function setModelCatalogProviderDefault(input: ModelCatalogProviderDefaultRequest): Promise<ModelCatalogResponse> {
+export async function setModelCatalogProviderDefault(
+  input: ModelCatalogProviderDefaultRequest,
+): Promise<ModelCatalogResponse> {
   return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog/default-model', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -880,9 +908,7 @@ export async function listProviders(): Promise<ProviderSummary[]> {
 }
 
 export async function listProviderModels(providerId: string): Promise<ProviderModel[]> {
-  const response = await apiJson<ProviderModelsResponse>(
-    `/api/v1/providers/${encodeURIComponent(providerId)}/models`,
-  )
+  const response = await apiJson<ProviderModelsResponse>(`/api/v1/providers/${encodeURIComponent(providerId)}/models`)
   return response.models ?? []
 }
 

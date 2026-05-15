@@ -1,14 +1,74 @@
 import { describe, expect, test } from 'bun:test'
 import { ref } from 'vue'
 
-import type { ModelCatalogEntry } from '../lib/agenaApi'
-
+import type { ModelCatalogEntry, ModelCatalogEntryWriteRequest, ProviderModel } from '../lib/agenaApi'
 import {
   buildModelCatalogWriteRequest,
   createEmptyModelCatalogDraft,
   createModelCatalogDraftFromEntry,
+  createModelCatalogDraftFromProviderModel,
+  createModelCatalogDraftFromProviderSelection,
   useRuntimeModelCatalogActions,
 } from './useRuntimeModelCatalogActions'
+
+function sampleProviderModel(overrides: Partial<ProviderModel> = {}): ProviderModel {
+  return {
+    provider_id: 'openai',
+    id: 'gpt-5',
+    display_name: 'GPT-5',
+    metadata: {
+      family: 'gpt',
+      lifecycle: 'active',
+      description: 'Latest flagship model',
+      limits: {
+        context_window_tokens: 400000,
+        max_output_tokens: 16384,
+      },
+    },
+    capabilities: {
+      tool_calling: 'supported',
+      streaming: 'supported',
+      reasoning: 'supported',
+      structured_output: 'supported',
+      temperature_supported: 'unsupported',
+    },
+    variants: {
+      high: {
+        display_name: 'High',
+        description: 'More reasoning',
+      },
+    },
+    ...overrides,
+  }
+}
+
+function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  return {
+    provider_id: 'openai',
+    model_id: 'gpt-5',
+    kind: 'official',
+    source: 'remote',
+    source_label: 'remote',
+    display_name: 'GPT-5 Catalog',
+    family: 'gpt',
+    lifecycle: 'preview',
+    context_window_tokens: 256000,
+    max_output_tokens: 8192,
+    description: 'Catalog metadata',
+    capabilities: {
+      features: {
+        supported: ['tool_calling', 'streaming'],
+      },
+    },
+    variants: {
+      balanced: {
+        display_name: 'Balanced',
+        description: 'Default profile',
+      },
+    },
+    ...overrides,
+  }
+}
 
 describe('useRuntimeModelCatalogActions', () => {
   test('createModelCatalogDraftFromEntry hydrates model variants for editing', () => {
@@ -44,6 +104,75 @@ describe('useRuntimeModelCatalogActions', () => {
         name: 'light',
         display_name: 'Light',
         description: 'Faster responses',
+        disabled: false,
+        thinking_json: '',
+      },
+    ])
+  })
+
+  test('createModelCatalogDraftFromProviderModel maps live provider metadata into the editable draft shape', () => {
+    const draft = createModelCatalogDraftFromProviderModel(sampleProviderModel())
+
+    expect(draft).toEqual({
+      provider_id: 'openai',
+      model_id: 'gpt-5',
+      set_default_for_provider: false,
+      family: 'gpt',
+      lifecycle: 'active',
+      context_window_tokens: '400000',
+      max_output_tokens: '16384',
+      display_name: 'GPT-5',
+      description: 'Latest flagship model',
+      tool_calling: true,
+      streaming: true,
+      reasoning: true,
+      structured_output: true,
+      temperature_supported: false,
+      variants: [
+        {
+          name: 'high',
+          display_name: 'High',
+          description: 'More reasoning',
+          disabled: false,
+          thinking_json: '',
+        },
+      ],
+    })
+  })
+
+  test('createModelCatalogDraftFromProviderSelection prefers a local override, then catalog metadata, before raw provider metadata', () => {
+    const fromCustom = createModelCatalogDraftFromProviderSelection(
+      [
+        sampleCatalogEntry(),
+        sampleCatalogEntry({
+          kind: 'custom',
+          source: 'custom',
+          display_name: 'Workspace GPT-5',
+          description: 'Local override',
+          capabilities: {
+            features: {
+              supported: ['tool_calling', 'streaming', 'reasoning'],
+            },
+          },
+        }),
+      ],
+      sampleProviderModel(),
+    )
+
+    expect(fromCustom.display_name).toBe('Workspace GPT-5')
+    expect(fromCustom.description).toBe('Local override')
+    expect(fromCustom.reasoning).toBe(true)
+    expect(fromCustom.context_window_tokens).toBe('256000')
+
+    const fromCatalog = createModelCatalogDraftFromProviderSelection([sampleCatalogEntry()], sampleProviderModel())
+    expect(fromCatalog.display_name).toBe('GPT-5 Catalog')
+    expect(fromCatalog.lifecycle).toBe('preview')
+    expect(fromCatalog.context_window_tokens).toBe('256000')
+    expect(fromCatalog.variants).toEqual([
+      {
+        name: 'balanced',
+        display_name: 'Balanced',
+        description: 'Default profile',
         disabled: false,
         thinking_json: '',
       },
@@ -119,5 +248,67 @@ describe('useRuntimeModelCatalogActions', () => {
     expect(calls).toEqual([])
     expect(state.actionMessage.value).toBe('')
     expect(state.actionError.value).toBe('Variant deep thinking must be valid JSON.')
+  })
+
+  test('saveCatalogEntryAction preserves live-model variants when saving an override', async () => {
+    const calls: string[] = []
+    const actionError = ref('')
+    const actionMessage = ref('')
+    const catalogEntries = ref<ModelCatalogEntry[]>([])
+    let capturedRequest: ModelCatalogEntryWriteRequest | null = null
+
+    const actions = useRuntimeModelCatalogActions(
+      {
+        actionError,
+        actionMessage,
+        catalogEntries,
+        load: async () => {
+          calls.push('load')
+        },
+      },
+      {
+        deleteModelCatalogEntry: async () => ({ remote_url: '', fallback_url: '', entries: [] }),
+        refreshModelCatalog: async () => ({ remote_url: '', fallback_url: '', entries: [] }),
+        setModelCatalogProviderDefault: async () => ({ remote_url: '', fallback_url: '', entries: [] }),
+        upsertModelCatalogEntry: async (request) => {
+          capturedRequest = request
+          calls.push('upsert')
+          return {
+            remote_url: '',
+            fallback_url: '',
+            entries: [sampleCatalogEntry({ kind: 'custom', source: 'custom' })],
+          }
+        },
+      },
+    )
+
+    await actions.saveCatalogEntryAction(createModelCatalogDraftFromProviderModel(sampleProviderModel()))
+
+    expect(calls).toEqual(['upsert', 'load'])
+    expect(capturedRequest).toEqual({
+      provider_id: 'openai',
+      model_id: 'gpt-5',
+      set_default_for_provider: false,
+      family: 'gpt',
+      lifecycle: 'active',
+      context_window_tokens: 400000,
+      max_output_tokens: 16384,
+      display_name: 'GPT-5',
+      description: 'Latest flagship model',
+      capabilities: {
+        tool_calling: 'supported',
+        streaming: 'supported',
+        reasoning: 'supported',
+        structured_output: 'supported',
+      },
+      variants: {
+        high: {
+          display_name: 'High',
+          description: 'More reasoning',
+        },
+      },
+    })
+    expect(actionError.value).toBe('')
+    expect(actionMessage.value).toBe('Saved catalog entry openai/gpt-5.')
   })
 })

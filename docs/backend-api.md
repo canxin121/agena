@@ -312,12 +312,12 @@ If-Match: <session.version>
 
 ### Runtime
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/health` | API server health，返回 status、generation、loaded_at、database_connected |
-| GET | `/api/v1/runtime` | runtime status、config path、providers、plugins、reload/janitor、operator 信息 |
-| POST | `/api/v1/runtime/reload` | 手动 reload runtime config |
-| GET | `/api/v1/git/status` | workspace 的 git/gh 状态 |
+| Method | Path                     | 说明                                                                           |
+| ------ | ------------------------ | ------------------------------------------------------------------------------ |
+| GET    | `/api/v1/health`         | API server health，返回 status、generation、loaded_at、database_connected      |
+| GET    | `/api/v1/runtime`        | runtime status、config path、providers、plugins、reload/janitor、operator 信息 |
+| POST   | `/api/v1/runtime/reload` | 手动 reload runtime config                                                     |
+| GET    | `/api/v1/git/status`     | workspace 的 git/gh 状态                                                       |
 
 `GET /api/v1/runtime` 响应包含：
 
@@ -341,18 +341,18 @@ If-Match: <session.version>
 
 ### Plugins and marketplace
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/plugins` | plugin runtime status list |
-| GET | `/api/v1/plugins/{plugin_id}` | plugin inspect，包含 status、manifest、authority |
-| GET | `/api/v1/plugins/{plugin_id}/logs` | plugin retained logs，query: `after_seq`、`limit` |
-| POST | `/api/v1/plugins/marketplace/search` | 搜索 registry |
-| POST | `/api/v1/plugins/marketplace/sync` | 同步 registry index |
-| GET | `/api/v1/plugins/marketplace/installed` | 已安装 marketplace plugins |
-| GET | `/api/v1/plugins/marketplace/outdated` | 可升级 plugins |
-| POST | `/api/v1/plugins/marketplace/install` | 安装 plugin |
-| POST | `/api/v1/plugins/marketplace/uninstall` | 卸载 plugin |
-| POST | `/api/v1/plugins/marketplace/upgrade` | 升级一个或全部 plugin |
+| Method | Path                                    | 说明                                              |
+| ------ | --------------------------------------- | ------------------------------------------------- |
+| GET    | `/api/v1/plugins`                       | plugin runtime status list                        |
+| GET    | `/api/v1/plugins/{plugin_id}`           | plugin inspect，包含 status、manifest、authority  |
+| GET    | `/api/v1/plugins/{plugin_id}/logs`      | plugin retained logs，query: `after_seq`、`limit` |
+| POST   | `/api/v1/plugins/marketplace/search`    | 搜索 registry                                     |
+| POST   | `/api/v1/plugins/marketplace/sync`      | 同步 registry index                               |
+| GET    | `/api/v1/plugins/marketplace/installed` | 已安装 marketplace plugins                        |
+| GET    | `/api/v1/plugins/marketplace/outdated`  | 可升级 plugins                                    |
+| POST   | `/api/v1/plugins/marketplace/install`   | 安装 plugin                                       |
+| POST   | `/api/v1/plugins/marketplace/uninstall` | 卸载 plugin                                       |
+| POST   | `/api/v1/plugins/marketplace/upgrade`   | 升级一个或全部 plugin                             |
 
 Marketplace search/install 请求示例：
 
@@ -381,21 +381,21 @@ Marketplace search/install 请求示例：
 
 ### Auth providers
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/auth/providers` | 列出公开 auth providers 和 credential 状态 |
-| GET | `/api/v1/auth/providers/{provider_id}` | 获取一个 auth provider |
-| DELETE | `/api/v1/auth/providers/{provider_id}` | 删除 credential |
-| PUT | `/api/v1/auth/providers/{provider_id}/api-key` | 写入 API key |
-| POST | `/api/v1/auth/providers/{provider_id}/refresh` | 刷新支持的 OAuth credential |
-| POST | `/api/v1/auth/providers/openai/browser/start` | OpenAI browser OAuth start |
-| POST | `/api/v1/auth/providers/openai/browser/finish` | OpenAI browser OAuth finish |
-| POST | `/api/v1/auth/providers/openai/device/start` | OpenAI device flow start |
-| POST | `/api/v1/auth/providers/openai/device/poll` | OpenAI device flow poll |
-| POST | `/api/v1/auth/providers/gitlab/browser/start` | GitLab browser OAuth start |
-| POST | `/api/v1/auth/providers/gitlab/browser/finish` | GitLab browser OAuth finish |
-| POST | `/api/v1/auth/providers/github-copilot/device/start` | GitHub Copilot device flow start |
-| POST | `/api/v1/auth/providers/github-copilot/device/poll` | GitHub Copilot device flow poll |
+| Method | Path                                                 | 说明                                       |
+| ------ | ---------------------------------------------------- | ------------------------------------------ |
+| GET    | `/api/v1/auth/providers`                             | 列出公开 auth providers 和 credential 状态 |
+| GET    | `/api/v1/auth/providers/{provider_id}`               | 获取一个 auth provider                     |
+| DELETE | `/api/v1/auth/providers/{provider_id}`               | 删除 credential                            |
+| PUT    | `/api/v1/auth/providers/{provider_id}/api-key`       | 写入 API key                               |
+| POST   | `/api/v1/auth/providers/{provider_id}/refresh`       | 刷新支持的 OAuth credential                |
+| POST   | `/api/v1/auth/providers/openai/browser/start`        | OpenAI browser OAuth start                 |
+| POST   | `/api/v1/auth/providers/openai/browser/finish`       | OpenAI browser OAuth finish                |
+| POST   | `/api/v1/auth/providers/openai/device/start`         | OpenAI device flow start                   |
+| POST   | `/api/v1/auth/providers/openai/device/poll`          | OpenAI device flow poll                    |
+| POST   | `/api/v1/auth/providers/gitlab/browser/start`        | GitLab browser OAuth start                 |
+| POST   | `/api/v1/auth/providers/gitlab/browser/finish`       | GitLab browser OAuth finish                |
+| POST   | `/api/v1/auth/providers/github-copilot/device/start` | GitHub Copilot device flow start           |
+| POST   | `/api/v1/auth/providers/github-copilot/device/poll`  | GitHub Copilot device flow poll            |
 
 `PUT /api/v1/auth/providers/{provider_id}/api-key`:
 
@@ -424,10 +424,10 @@ GitLab browser start additionally requires:
 
 ### Providers
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/providers` | provider summary list |
-| GET | `/api/v1/providers/{provider_id}/models` | provider models |
+| Method | Path                                     | 说明                  |
+| ------ | ---------------------------------------- | --------------------- |
+| GET    | `/api/v1/providers`                      | provider summary list |
+| GET    | `/api/v1/providers/{provider_id}/models` | provider models       |
 
 Provider summary:
 
@@ -435,21 +435,165 @@ Provider summary:
 {
   "provider_id": "anthropic",
   "default_model": "claude-sonnet-4-6",
-  "default_model_ref": "anthropic/claude-sonnet-4-6"
+  "default_model_ref": "anthropic/claude-sonnet-4-6",
+  "catalog_default_model": "claude-sonnet-4-6"
+}
+```
+
+Provider models:
+
+```json
+{
+  "provider_id": "openai",
+  "models": [
+    {
+      "provider_id": "openai",
+      "id": "gpt-5",
+      "display_name": "GPT-5",
+      "capabilities": {
+        "tool_calling": "supported",
+        "streaming": "supported",
+        "reasoning": "supported",
+        "structured_output": "supported",
+        "temperature_supported": "unsupported"
+      },
+      "metadata": {
+        "family": "gpt",
+        "lifecycle": "active",
+        "description": "Latest flagship model",
+        "limits": {
+          "context_window_tokens": 400000,
+          "max_output_tokens": 16384
+        }
+      },
+      "variants": {
+        "high": {
+          "display_name": "High",
+          "description": "Higher reasoning effort"
+        }
+      }
+    }
+  ]
+}
+```
+
+`models` 是 runtime 当前从 provider 解析出来的 live model 列表；Studio Web 用它们作为 model catalog draft 的来源。
+
+### Model Catalog
+
+| Method | Path                                  | 说明                                                         |
+| ------ | ------------------------------------- | ------------------------------------------------------------ |
+| GET    | `/api/v1/model-catalog`               | current merged model catalog snapshot                        |
+| POST   | `/api/v1/model-catalog/refresh`       | refresh remote/fallback catalog and re-merge local overrides |
+| PUT    | `/api/v1/model-catalog/entries`       | create or update a local catalog override                    |
+| DELETE | `/api/v1/model-catalog/entries`       | delete a local catalog override                              |
+| POST   | `/api/v1/model-catalog/default-model` | set provider default model in the local catalog              |
+
+Model catalog response:
+
+```json
+{
+  "remote_url": "https://example.test/catalog.json",
+  "fallback_url": "https://example.test/catalog-fallback.json",
+  "last_refresh_at": "2026-05-15T08:00:00Z",
+  "last_successful_source": "remote",
+  "entries": [
+    {
+      "provider_id": "openai",
+      "model_id": "gpt-5",
+      "kind": "official",
+      "source": "remote",
+      "source_label": "remote: https://example.test/catalog.json",
+      "default_model_for_provider": "gpt-5",
+      "display_name": "GPT-5",
+      "family": "gpt",
+      "lifecycle": "active",
+      "context_window_tokens": 400000,
+      "max_output_tokens": 16384,
+      "description": "Latest flagship model",
+      "features": {
+        "supported": [
+          "tool_calling",
+          "streaming",
+          "reasoning",
+          "structured_output"
+        ],
+        "unsupported": ["temperature"]
+      },
+      "variants": {
+        "high": {
+          "display_name": "High",
+          "description": "Higher reasoning effort"
+        }
+      }
+    },
+    {
+      "provider_id": "openai",
+      "model_id": "gpt-5",
+      "kind": "custom",
+      "source": "custom",
+      "source_label": "local override",
+      "display_name": "Workspace GPT-5"
+    }
+  ]
+}
+```
+
+`entries` 同时包含官方条目和本地 override，按 `provider_id + model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。
+
+Create/update local override:
+
+```json
+{
+  "provider_id": "openai",
+  "model_id": "gpt-5",
+  "set_default_for_provider": true,
+  "family": "gpt",
+  "lifecycle": "active",
+  "context_window_tokens": 400000,
+  "max_output_tokens": 16384,
+  "display_name": "Workspace GPT-5",
+  "description": "Pinned for agent runs",
+  "features": {
+    "supported": ["tool_calling", "streaming", "reasoning"],
+    "unsupported": ["temperature"]
+  },
+  "variants": {
+    "high": {
+      "display_name": "High",
+      "description": "Higher reasoning effort"
+    }
+  }
+}
+```
+
+Delete local override query:
+
+```text
+provider_id=openai
+model_id=gpt-5
+```
+
+Set provider default:
+
+```json
+{
+  "provider_id": "openai",
+  "model_id": "gpt-5"
 }
 ```
 
 ### Workspaces
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/workspaces` | list workspaces |
-| POST | `/api/v1/workspaces` | create workspace |
-| POST | `/api/v1/workspaces/resolve` | resolve path，必要时创建 |
-| GET | `/api/v1/workspaces/{workspace_id}` | get workspace |
-| PUT | `/api/v1/workspaces/{workspace_id}` | replace workspace path |
-| DELETE | `/api/v1/workspaces/{workspace_id}` | delete workspace |
-| GET | `/api/v1/workspaces/{workspace_id}/files` | list workspace file tree |
+| Method | Path                                      | 说明                     |
+| ------ | ----------------------------------------- | ------------------------ |
+| GET    | `/api/v1/workspaces`                      | list workspaces          |
+| POST   | `/api/v1/workspaces`                      | create workspace         |
+| POST   | `/api/v1/workspaces/resolve`              | resolve path，必要时创建 |
+| GET    | `/api/v1/workspaces/{workspace_id}`       | get workspace            |
+| PUT    | `/api/v1/workspaces/{workspace_id}`       | replace workspace path   |
+| DELETE | `/api/v1/workspaces/{workspace_id}`       | delete workspace         |
+| GET    | `/api/v1/workspaces/{workspace_id}/files` | list workspace file tree |
 
 List query：
 
@@ -487,29 +631,29 @@ limit=<1..2000>
 
 ### Sessions
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/sessions` | list sessions |
-| POST | `/api/v1/sessions` | create session |
-| POST | `/api/v1/sessions/import` | import JSONL session |
-| GET | `/api/v1/sessions/tree/{root_id}` | list session tree |
-| GET | `/api/v1/sessions/{session_id}` | get session |
-| PUT | `/api/v1/sessions/{session_id}` | update session title/parent |
-| DELETE | `/api/v1/sessions/{session_id}` | delete session |
-| GET | `/api/v1/sessions/{session_id}/state` | execution state |
-| GET | `/api/v1/sessions/{session_id}/events` | session events |
-| GET | `/api/v1/sessions/{session_id}/events/stream` | session event SSE |
-| GET | `/api/v1/sessions/{session_id}/messages` | session messages |
-| POST | `/api/v1/sessions/{session_id}/turns` | submit user turn |
-| POST | `/api/v1/sessions/{session_id}/continue` | continue blocked/incomplete run |
-| POST | `/api/v1/sessions/{session_id}/fork` | fork session |
-| POST | `/api/v1/sessions/{session_id}/cancel` | cancel active turn |
-| POST | `/api/v1/sessions/{session_id}/permission-replies` | reply to permission request |
-| POST | `/api/v1/sessions/{session_id}/user-input-replies` | reply to host/user input request |
-| POST | `/api/v1/sessions/{session_id}/rewind` | rewind to message |
-| POST | `/api/v1/sessions/{session_id}/unrewind` | undo rewind from message |
-| GET | `/api/v1/sessions/{session_id}/export` | export session JSONL |
-| GET | `/api/v1/sessions/{session_id}/rewind-checkpoints` | list rewind audit checkpoints |
+| Method | Path                                               | 说明                             |
+| ------ | -------------------------------------------------- | -------------------------------- |
+| GET    | `/api/v1/sessions`                                 | list sessions                    |
+| POST   | `/api/v1/sessions`                                 | create session                   |
+| POST   | `/api/v1/sessions/import`                          | import JSONL session             |
+| GET    | `/api/v1/sessions/tree/{root_id}`                  | list session tree                |
+| GET    | `/api/v1/sessions/{session_id}`                    | get session                      |
+| PUT    | `/api/v1/sessions/{session_id}`                    | update session title/parent      |
+| DELETE | `/api/v1/sessions/{session_id}`                    | delete session                   |
+| GET    | `/api/v1/sessions/{session_id}/state`              | execution state                  |
+| GET    | `/api/v1/sessions/{session_id}/events`             | session events                   |
+| GET    | `/api/v1/sessions/{session_id}/events/stream`      | session event SSE                |
+| GET    | `/api/v1/sessions/{session_id}/messages`           | session messages                 |
+| POST   | `/api/v1/sessions/{session_id}/turns`              | submit user turn                 |
+| POST   | `/api/v1/sessions/{session_id}/continue`           | continue blocked/incomplete run  |
+| POST   | `/api/v1/sessions/{session_id}/fork`               | fork session                     |
+| POST   | `/api/v1/sessions/{session_id}/cancel`             | cancel active turn               |
+| POST   | `/api/v1/sessions/{session_id}/permission-replies` | reply to permission request      |
+| POST   | `/api/v1/sessions/{session_id}/user-input-replies` | reply to host/user input request |
+| POST   | `/api/v1/sessions/{session_id}/rewind`             | rewind to message                |
+| POST   | `/api/v1/sessions/{session_id}/unrewind`           | undo rewind from message         |
+| GET    | `/api/v1/sessions/{session_id}/export`             | export session JSONL             |
+| GET    | `/api/v1/sessions/{session_id}/rewind-checkpoints` | list rewind audit checkpoints    |
 
 List sessions query：
 
@@ -676,12 +820,12 @@ Export returns `application/x-ndjson` text.
 
 ### Messages
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/sessions/{session_id}/messages` | list session messages |
-| GET | `/api/v1/messages/{message_id}` | get message |
-| GET | `/api/v1/messages/{message_id}/parts` | list message parts |
-| GET | `/api/v1/message-parts/{part_id}` | get message part |
+| Method | Path                                     | 说明                  |
+| ------ | ---------------------------------------- | --------------------- |
+| GET    | `/api/v1/sessions/{session_id}/messages` | list session messages |
+| GET    | `/api/v1/messages/{message_id}`          | get message           |
+| GET    | `/api/v1/messages/{message_id}/parts`    | list message parts    |
+| GET    | `/api/v1/message-parts/{part_id}`        | get message part      |
 
 Message list query：
 
@@ -705,14 +849,14 @@ mode=none|summary|full
 
 ### Permission rules
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/permission-rules` | list rules |
-| POST | `/api/v1/permission-rules` | create/upsert rule |
-| GET | `/api/v1/permission-rules/{rule_id}` | get rule |
-| PUT | `/api/v1/permission-rules/{rule_id}` | replace rule |
-| DELETE | `/api/v1/permission-rules/{rule_id}` | delete rule |
-| POST | `/api/v1/permission-rules/{rule_id}/revoke` | revoke rule |
+| Method | Path                                        | 说明               |
+| ------ | ------------------------------------------- | ------------------ |
+| GET    | `/api/v1/permission-rules`                  | list rules         |
+| POST   | `/api/v1/permission-rules`                  | create/upsert rule |
+| GET    | `/api/v1/permission-rules/{rule_id}`        | get rule           |
+| PUT    | `/api/v1/permission-rules/{rule_id}`        | replace rule       |
+| DELETE | `/api/v1/permission-rules/{rule_id}`        | delete rule        |
+| POST   | `/api/v1/permission-rules/{rule_id}/revoke` | revoke rule        |
 
 List query：
 
@@ -760,10 +904,10 @@ Revoke:
 
 ### Events
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/events` | persisted event list |
-| GET | `/api/v1/events/stream` | global/workspace/session notification SSE |
+| Method | Path                    | 说明                                      |
+| ------ | ----------------------- | ----------------------------------------- |
+| GET    | `/api/v1/events`        | persisted event list                      |
+| GET    | `/api/v1/events/stream` | global/workspace/session notification SSE |
 
 `GET /api/v1/events` query:
 

@@ -10,8 +10,9 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ManagedCredential, ModelProvider, ProviderModel, ResponseFormat, should_retry_credential,
-        sse, utils, wire_message,
+        ManagedCredential, ModelProvider, ProviderModel, ResponseFormat,
+        remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
+        should_retry_credential, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -287,31 +288,41 @@ impl ModelProvider for GeminiProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let response = self
-            .send_request(|api_key| {
-                let endpoint = self.endpoint_with_auth(self.list_models_endpoint(), api_key);
-                utils::apply_request_headers(
-                    PROVIDER_ID,
-                    self.apply_auth(self.client.get(endpoint), api_key),
-                    &self.extra_headers,
-                )
-            })
-            .await?;
+        let endpoint = self.list_models_endpoint();
+        let source = RemoteModelCatalogSource::new(
+            PROVIDER_ID,
+            endpoint.as_str(),
+            self.api_key.prompt_cache_scope(),
+        );
+        RemoteModelCatalogCache::default()
+            .get_or_fetch(&source, || async {
+                let response = self
+                    .send_request(|api_key| {
+                        let endpoint = self.endpoint_with_auth(endpoint.clone(), api_key);
+                        utils::apply_request_headers(
+                            PROVIDER_ID,
+                            self.apply_auth(self.client.get(endpoint), api_key),
+                            &self.extra_headers,
+                        )
+                    })
+                    .await?;
 
-        let payload: GeminiModelListResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
-        Ok(payload
-            .models
-            .into_iter()
-            .map(|m| {
-                let id = m.name.trim_start_matches("models/").to_owned();
-                let mut model = ProviderModel::new(PROVIDER_ID, id);
-                let capabilities = self.model_capabilities(&model.id);
-                model = model.with_capabilities(capabilities);
-                model.display_name = m.display_name;
-                model
+                let payload: GeminiModelListResponse =
+                    utils::parse_json_response(PROVIDER_ID, response).await?;
+                Ok(payload
+                    .models
+                    .into_iter()
+                    .map(|m| {
+                        let id = m.name.trim_start_matches("models/").to_owned();
+                        let mut model = ProviderModel::new(PROVIDER_ID, id);
+                        let capabilities = self.model_capabilities(&model.id);
+                        model = model.with_capabilities(capabilities);
+                        model.display_name = m.display_name;
+                        model
+                    })
+                    .collect())
             })
-            .collect())
+            .await
     }
 
     #[tracing::instrument(skip_all, fields(provider = "gemini", model = %request.model))]
@@ -1018,11 +1029,49 @@ struct GeminiUsageMetadata {
 #[cfg(test)]
 mod tests {
     use futures_util::StreamExt;
+    use std::sync::{Mutex, OnceLock};
 
     use super::*;
 
     use crate::message::Message;
     use crate::provider::CompletionRequest;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: tests serialize env mutation through `env_lock()`.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::set_var(self.key, previous);
+                }
+            } else {
+                // SAFETY: tests serialize env mutation through `env_lock()`.
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     #[test]
     fn prompt_cache_shape_changes_when_auth_scope_changes() {
@@ -1221,6 +1270,66 @@ mod tests {
             .expect("completion should succeed");
 
         assert_eq!(response.text, "Hello");
+    }
+
+    #[tokio::test]
+    async fn gemini_list_models_uses_disk_cache_after_first_fetch() {
+        let _env_lock = env_lock().lock().expect("env lock should succeed");
+        let dir = tempfile::tempdir().expect("tempdir should create");
+        let _cache_dir =
+            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
+
+        let mut server = mockito::Server::new_async().await;
+        {
+            let _mock = server
+                .mock("GET", "/models")
+                .match_query(mockito::Matcher::UrlEncoded(
+                    "key".to_owned(),
+                    "test-key".to_owned(),
+                ))
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "models": [{
+                            "name": "models/gemini-2.5-flash",
+                            "displayName": "Gemini 2.5 Flash"
+                        }]
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let provider = GeminiProvider::new(
+                reqwest::Client::new(),
+                "test-key",
+                server.url(),
+                "gemini-2.5-flash",
+            );
+            let models = provider
+                .list_models()
+                .await
+                .expect("initial list_models should succeed");
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].id.as_str(), "gemini-2.5-flash");
+            assert_eq!(models[0].display_name.as_deref(), Some("Gemini 2.5 Flash"));
+        }
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        );
+        let models = provider
+            .list_models()
+            .await
+            .expect("cached list_models should succeed");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "gemini-2.5-flash");
+        assert_eq!(models[0].display_name.as_deref(), Some("Gemini 2.5 Flash"));
     }
 
     #[tokio::test]

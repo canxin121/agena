@@ -16,27 +16,29 @@ use crate::message::{
     UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
-    AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentListResponse,
-    HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostCallbackContext,
-    HostClearGoalRequest, HostClearGoalResponse, HostClient, HostCreateGoalRequest,
-    HostCreateGoalResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
-    HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
-    HostGoal, HostGoalStatus, HostLspDiagnostic, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest,
-    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostStorageDeleteRequest,
-    HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest,
-    HostStorageListResponse, HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus,
-    HostTodoWriteRequest, HostUpdateGoalRequest, HostUpdateGoalResponse, HostWorktreeEntry,
-    HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentGetRequest,
+    HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
+    HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
+    HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClearGoalRequest,
+    HostClearGoalResponse, HostClient, HostCreateGoalRequest, HostCreateGoalResponse,
+    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
+    HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse, HostGoal, HostGoalStatus,
+    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
+    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
+    HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
+    HostUpdateGoalResponse, HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent,
+    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -1369,6 +1371,65 @@ impl HostClient for RuntimeHostClient {
             .map(agent_to_descriptor)
             .collect();
         Ok(HostAgentListResponse { agents })
+    }
+
+    async fn agent_get(
+        &self,
+        req: HostAgentGetRequest,
+    ) -> Result<HostAgentGetResponse, PluginError> {
+        if req.name.trim().is_empty() {
+            return Err(PluginError::invalid_params("agent.name must not be empty"));
+        }
+        Ok(HostAgentGetResponse {
+            agent: self.agents().get(req.name.trim()).map(agent_to_descriptor),
+        })
+    }
+
+    async fn agent_switch(
+        &self,
+        req: HostAgentSwitchRequest,
+    ) -> Result<HostAgentSwitchResponse, PluginError> {
+        let session_id = match req.session_id {
+            Some(id) => id,
+            None => self.callback_context()?.session_id.ok_or_else(|| {
+                host_unavailable("host callback context is missing session_id for agent.switch")
+            })?,
+        };
+        let outcome = self
+            .session_manager()?
+            .switch_session_agent(session_id, req.agent, req.push_previous)
+            .await
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(HostAgentSwitchResponse {
+            session_id: outcome.session_id,
+            previous_agent: outcome.previous_agent,
+            current_agent: outcome.current_agent,
+            stack_depth: outcome.stack_depth,
+        })
+    }
+
+    async fn agent_restore(
+        &self,
+        req: HostAgentRestoreRequest,
+    ) -> Result<HostAgentRestoreResponse, PluginError> {
+        let session_id = match req.session_id {
+            Some(id) => id,
+            None => self.callback_context()?.session_id.ok_or_else(|| {
+                host_unavailable("host callback context is missing session_id for agent.restore")
+            })?,
+        };
+        let outcome = self
+            .session_manager()?
+            .restore_session_agent(session_id)
+            .await
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(HostAgentRestoreResponse {
+            session_id: outcome.session_id,
+            restored: outcome.restored,
+            previous_agent: outcome.previous_agent,
+            current_agent: outcome.current_agent,
+            stack_depth: outcome.stack_depth,
+        })
     }
 
     async fn mcp_list_servers(&self) -> Result<HostMcpListServersResponse, PluginError> {

@@ -754,16 +754,28 @@ async fn agent_calls_require_capability() {
         .install_client(Arc::new(FakeHostClient))
         .await;
 
-    let agent_err = host
-        .host_handle()
-        .handle_call_for_plugin(
-            "capability-plugin",
-            agena_plugin_sdk::rpc::method::HOST_AGENT_LIST,
-            json!({}),
-        )
-        .await
-        .expect_err("agent.list should require AgentRegistry");
-    assert!(agent_err.message.contains("AgentRegistry"));
+    for (method, params) in [
+        (agena_plugin_sdk::rpc::method::HOST_AGENT_LIST, json!({})),
+        (
+            agena_plugin_sdk::rpc::method::HOST_AGENT_GET,
+            json!({"request": {"name": "reviewer"}}),
+        ),
+        (
+            agena_plugin_sdk::rpc::method::HOST_AGENT_SWITCH,
+            json!({"request": {"agent": "reviewer", "session_id": 1}}),
+        ),
+        (
+            agena_plugin_sdk::rpc::method::HOST_AGENT_RESTORE,
+            json!({"request": {"session_id": 1}}),
+        ),
+    ] {
+        let agent_err = host
+            .host_handle()
+            .handle_call_for_plugin("capability-plugin", method, params)
+            .await
+            .expect_err("agent host calls should require AgentRegistry");
+        assert!(agent_err.message.contains("AgentRegistry"));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

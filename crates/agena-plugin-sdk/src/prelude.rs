@@ -12,8 +12,10 @@ pub use std::sync::Arc;
 pub use crate::error::{PluginError, PluginErrorCode, Result};
 pub use crate::hooks::*;
 pub use crate::host_api::{
-    EventSubscription, HostAgentDescriptor, HostAgentListResponse, HostAgentRegisterRequest,
-    HostAgentRemoveRequest, HostAgentRemoveResponse, HostClient, HostEntryDescriptor,
+    EventSubscription, HostAgentDescriptor, HostAgentGetRequest, HostAgentGetResponse,
+    HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
+    HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
+    HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostEntryDescriptor,
     HostEntryListResponse, HostEntryMutationResponse, HostEntryRegisterRequest,
     HostEntryRemoveRequest, HostEntryUpdateRequest, HostHookEntry, HostHookListResponse,
     HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,

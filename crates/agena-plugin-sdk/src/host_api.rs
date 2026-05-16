@@ -301,6 +301,25 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Subagent profile registry — read one profile by name or alias.
+    async fn agent_get(&self, _req: HostAgentGetRequest) -> Result<HostAgentGetResponse> {
+        Err(unavailable())
+    }
+
+    /// Switch the active session to another runtime agent profile.
+    async fn agent_switch(&self, _req: HostAgentSwitchRequest) -> Result<HostAgentSwitchResponse> {
+        Err(unavailable())
+    }
+
+    /// Restore the active session to the previous agent pushed by
+    /// [`HostClient::agent_switch`].
+    async fn agent_restore(
+        &self,
+        _req: HostAgentRestoreRequest,
+    ) -> Result<HostAgentRestoreResponse> {
+        Err(unavailable())
+    }
+
     /// Hook registry — list every hook currently subscribed across plugins.
     async fn hook_list(&self) -> Result<HostHookListResponse> {
         Err(unavailable())
@@ -1334,6 +1353,65 @@ pub struct HostAgentRemoveResponse {
 pub struct HostAgentListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<HostAgentDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostAgentGetRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostAgentGetResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<HostAgentDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostAgentSwitchRequest {
+    /// The target agent profile. When omitted or blank, the explicit runtime
+    /// agent selection is cleared and the session falls back to its base
+    /// model/system/tool context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Defaults to the callback session. Plugins may pass a session id for
+    /// session-level orchestration outside a tool invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    /// Push the current agent before switching so a later restore can return
+    /// to it.
+    #[serde(default)]
+    pub push_previous: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostAgentSwitchResponse {
+    pub session_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_agent: Option<String>,
+    #[serde(default)]
+    pub stack_depth: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostAgentRestoreRequest {
+    /// Defaults to the callback session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostAgentRestoreResponse {
+    pub session_id: i64,
+    #[serde(default)]
+    pub restored: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_agent: Option<String>,
+    #[serde(default)]
+    pub stack_depth: usize,
 }
 
 // ---------------- hooks ----------------

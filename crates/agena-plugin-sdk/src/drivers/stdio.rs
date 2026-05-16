@@ -21,11 +21,13 @@ use crate::hooks::{
     ToolInvokeStreamHandle, ToolStreamError,
 };
 use crate::host_api::{
-    AskUserRequest, AskUserResponse, EventSubscription, HostAgentListResponse,
-    HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostClient,
-    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostEntryListResponse,
-    HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
-    HostEntryUpdateRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostHookListResponse,
+    AskUserRequest, AskUserResponse, EventSubscription, HostAgentGetRequest, HostAgentGetResponse,
+    HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
+    HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
+    HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostEnterPlanModeRequest,
+    HostEnterWorktreeRequest, HostEntryListResponse, HostEntryMutationResponse,
+    HostEntryRegisterRequest, HostEntryRemoveRequest, HostEntryUpdateRequest,
+    HostExitPlanModeRequest, HostExitWorktreeRequest, HostHookListResponse,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
     HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
@@ -884,6 +886,48 @@ impl HostClient for StdioHostClient {
         self.call(
             method::HOST_AGENT_LIST,
             serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn agent_get(
+        &self,
+        req: HostAgentGetRequest,
+    ) -> crate::error::Result<HostAgentGetResponse> {
+        self.call(
+            method::HOST_AGENT_GET,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn agent_switch(
+        &self,
+        req: HostAgentSwitchRequest,
+    ) -> crate::error::Result<HostAgentSwitchResponse> {
+        self.call(
+            method::HOST_AGENT_SWITCH,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn agent_restore(
+        &self,
+        req: HostAgentRestoreRequest,
+    ) -> crate::error::Result<HostAgentRestoreResponse> {
+        self.call(
+            method::HOST_AGENT_RESTORE,
+            serde_json::json!({
+                "request": req,
                 "context": crate::host_api::current_host_callback_context(),
             }),
         )

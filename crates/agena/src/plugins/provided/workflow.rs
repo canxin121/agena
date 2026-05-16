@@ -12,18 +12,20 @@ use crate::entry::{
     ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user, tool_search,
 };
 use crate::message::{
-    AskUserToolInput, ClearGoalToolInput, CreateGoalToolInput, EnterPlanModeToolInput,
-    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, GetGoalToolInput,
-    TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput,
-    WorkflowPromptToolInput,
+    AgentRestoreToolInput, AgentSwitchToolInput, AskUserToolInput, ClearGoalToolInput,
+    CreateGoalToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
+    ExitWorktreeToolInput, GetGoalToolInput, TaskToolInput, TodoItem, TodoPriority, TodoStatus,
+    TodoWriteToolInput, ToolSearchToolInput, WorkflowPromptToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
-    HostClearGoalRequest, HostClient, HostCreateGoalRequest, HostEnterPlanModeRequest,
-    HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest,
-    HostGoal, HostGoalStatus, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
-    HostUpdateGoalRequest, SpawnSubtaskRequest, ToolDescriptor,
+    HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
+    HostAgentSwitchResponse, HostClearGoalRequest, HostClient, HostCreateGoalRequest,
+    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
+    HostExitWorktreeRequest, HostGetGoalRequest, HostGoal, HostGoalStatus, HostTodoItem,
+    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
+    SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
     HookSubscription, HostCapability, InitContext, InitOutcome, PathAccessSpec, PathKind,
@@ -143,6 +145,50 @@ impl WorkflowPlugin {
         Ok(ToolInvokeOutput::text(prompt)
             .with_title(format!("{} workflow", workflow.frontmatter.name))
             .with_metadata("workflow", workflow.frontmatter.name))
+    }
+
+    async fn invoke_agent_workflow(
+        &self,
+        workflow_name: &str,
+        agent_name: &str,
+        input: &WorkflowPromptToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let switch = self
+            .host()?
+            .agent_switch(HostAgentSwitchRequest {
+                agent: Some(agent_name.to_string()),
+                session_id: None,
+                push_previous: true,
+            })
+            .await?;
+        let mut output = self.invoke_provided_workflow(workflow_name, input).await?;
+        output = output
+            .with_metadata("workflow_agent", agent_name)
+            .with_metadata("agent_stack_depth", switch.stack_depth.to_string());
+        if let Some(previous) = switch.previous_agent {
+            output = output.with_metadata("previous_agent", previous);
+        }
+        Ok(output)
+    }
+
+    async fn switch_agent_for_tool(
+        &self,
+        agent: Option<String>,
+        push_previous: bool,
+    ) -> SdkResult<HostAgentSwitchResponse> {
+        self.host()?
+            .agent_switch(HostAgentSwitchRequest {
+                agent,
+                session_id: None,
+                push_previous,
+            })
+            .await
+    }
+
+    async fn restore_agent_for_tool(&self) -> SdkResult<HostAgentRestoreResponse> {
+        self.host()?
+            .agent_restore(HostAgentRestoreRequest { session_id: None })
+            .await
     }
 
     fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
@@ -414,6 +460,56 @@ impl WorkflowPlugin {
         )
     }
 
+    async fn invoke_agent_switch(
+        &self,
+        input: &AgentSwitchToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let response = self
+            .switch_agent_for_tool(input.agent.clone(), input.push_previous)
+            .await?;
+        let payload =
+            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
+        let current = response
+            .current_agent
+            .as_deref()
+            .unwrap_or("default runtime context");
+        let previous = response.previous_agent.as_deref().unwrap_or("none");
+        Ok(ToolInvokeOutput::text(format!(
+            "Switched session {} agent to {current}. Previous agent: {previous}.",
+            response.session_id
+        ))
+        .with_title("agent switch")
+        .with_payload(payload))
+    }
+
+    async fn invoke_agent_restore(
+        &self,
+        _input: &AgentRestoreToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let response = self.restore_agent_for_tool().await?;
+        let payload =
+            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
+        let text = if response.restored {
+            let current = response
+                .current_agent
+                .as_deref()
+                .unwrap_or("default runtime context");
+            let previous = response.previous_agent.as_deref().unwrap_or("none");
+            format!(
+                "Restored session {} agent to {current}. Previous agent: {previous}.",
+                response.session_id
+            )
+        } else {
+            format!(
+                "No agent restore point is available for session {}.",
+                response.session_id
+            )
+        };
+        Ok(ToolInvokeOutput::text(text)
+            .with_title("agent restore")
+            .with_payload(payload))
+    }
+
     async fn invoke_tool_search(&self, input: &ToolSearchToolInput) -> SdkResult<ToolInvokeOutput> {
         let host = self.host()?;
         let catalog = host
@@ -437,7 +533,8 @@ impl Plugin for WorkflowPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-workflow", env!("CARGO_PKG_VERSION"))
             .description("Workflow orchestration tools.")
-            .hooks(HookSubscription::TOOL_INVOKE)
+            .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::AGENT_STOP)
+            .plugin_capability(HostCapability::AgentRegistry)
             .tools(entries())
             .build()
     }
@@ -458,6 +555,14 @@ impl Plugin for WorkflowPlugin {
             }
             "tool_search" => {
                 self.invoke_tool_search(&serde_json::from_value(input.input)?)
+                    .await
+            }
+            "agent_switch" => {
+                self.invoke_agent_switch(&serde_json::from_value(input.input)?)
+                    .await
+            }
+            "agent_restore" => {
+                self.invoke_agent_restore(&serde_json::from_value(input.input)?)
                     .await
             }
             "todo_write" => {
@@ -490,15 +595,35 @@ impl Plugin for WorkflowPlugin {
             }
             "enter_plan_mode" => {
                 let _: EnterPlanModeToolInput = serde_json::from_value(input.input)?;
-                self.host()?
+                let switch = self
+                    .switch_agent_for_tool(Some("planner".to_string()), true)
+                    .await?;
+                let mut output = self
+                    .host()?
                     .enter_plan_mode(HostEnterPlanModeRequest::default())
-                    .await
+                    .await?;
+                output = output
+                    .with_metadata("workflow_agent", "planner")
+                    .with_metadata("agent_stack_depth", switch.stack_depth.to_string());
+                if let Some(previous) = switch.previous_agent {
+                    output = output.with_metadata("previous_agent", previous);
+                }
+                Ok(output)
             }
             "exit_plan_mode" => {
                 let _: ExitPlanModeToolInput = serde_json::from_value(input.input)?;
-                self.host()?
+                let mut output = self
+                    .host()?
                     .exit_plan_mode(HostExitPlanModeRequest::default())
-                    .await
+                    .await?;
+                let restore = self.restore_agent_for_tool().await?;
+                output = output
+                    .with_metadata("agent_restored", restore.restored.to_string())
+                    .with_metadata("agent_stack_depth", restore.stack_depth.to_string());
+                if let Some(current) = restore.current_agent {
+                    output = output.with_metadata("current_agent", current);
+                }
+                Ok(output)
             }
             "enter_worktree" => {
                 let input: EnterWorktreeToolInput = serde_json::from_value(input.input)?;
@@ -523,12 +648,17 @@ impl Plugin for WorkflowPlugin {
                     .await
             }
             "workflow_review" => {
-                self.invoke_provided_workflow("review", &serde_json::from_value(input.input)?)
-                    .await
+                self.invoke_agent_workflow(
+                    "review",
+                    "reviewer",
+                    &serde_json::from_value(input.input)?,
+                )
+                .await
             }
             "workflow_security_review" => {
-                self.invoke_provided_workflow(
+                self.invoke_agent_workflow(
                     "security-review",
+                    "reviewer",
                     &serde_json::from_value(input.input)?,
                 )
                 .await
@@ -565,6 +695,31 @@ impl Plugin for WorkflowPlugin {
             _ => Ok(Vec::new()),
         }
     }
+
+    async fn agent_stop(
+        &self,
+        input: crate::plugin::AgentStopInput,
+    ) -> SdkResult<Option<crate::plugin::AgentStopPatch>> {
+        if input.stop_hook_active {
+            return Ok(None);
+        }
+        match self
+            .host()?
+            .agent_restore(HostAgentRestoreRequest {
+                session_id: Some(input.session_id),
+            })
+            .await
+        {
+            Ok(_) => Ok(None),
+            Err(err)
+                if err.code == crate::plugin::sdk::PluginErrorCode::HostUnavailable
+                    || err.message.contains("No agent restore point") =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(err),
+        }
+    }
 }
 
 fn entries() -> Vec<PluginToolDecl> {
@@ -584,7 +739,8 @@ fn entries() -> Vec<PluginToolDecl> {
         .description("Generate the review workflow prompt so it can be submitted as a normal turn.")
         .tag(ToolTag::ReadOnly)
         .always_load()
-        .concurrency_safe(true),
+        .concurrency_safe(true)
+        .host_capability(HostCapability::AgentRegistry),
         PluginToolDecl::new(
             "workflow_security_review",
             crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
@@ -592,7 +748,8 @@ fn entries() -> Vec<PluginToolDecl> {
         .description("Generate the security review workflow prompt so it can be submitted as a normal turn.")
         .tag(ToolTag::ReadOnly)
         .always_load()
-        .concurrency_safe(true),
+        .concurrency_safe(true)
+        .host_capability(HostCapability::AgentRegistry),
         PluginToolDecl::new(
             "task",
             crate::entry::definition::json_schema_for::<TaskToolInput>(),
@@ -613,6 +770,22 @@ fn entries() -> Vec<PluginToolDecl> {
         .always_load()
         .concurrency_safe(true)
         .host_capability(HostCapability::ListTools),
+        PluginToolDecl::new(
+            "agent_switch",
+            crate::entry::definition::json_schema_for::<AgentSwitchToolInput>(),
+        )
+        .description("Switch the current session to a runtime agent profile without changing local agent files.")
+        .always_load()
+        .concurrency_safe(false)
+        .host_capability(HostCapability::AgentRegistry),
+        PluginToolDecl::new(
+            "agent_restore",
+            crate::entry::definition::json_schema_for::<AgentRestoreToolInput>(),
+        )
+        .description("Restore the current session to the previous runtime agent profile pushed by agent_switch.")
+        .always_load()
+        .concurrency_safe(false)
+        .host_capability(HostCapability::AgentRegistry),
         PluginToolDecl::new(
             "todo_write",
             crate::entry::definition::json_schema_for::<TodoWriteToolInput>(),
@@ -684,7 +857,7 @@ fn entries() -> Vec<PluginToolDecl> {
         })
         .always_load()
         .concurrency_safe(true)
-        .host_capability(HostCapability::PlanRegistry),
+        .host_capabilities([HostCapability::PlanRegistry, HostCapability::AgentRegistry]),
         PluginToolDecl::new(
             "exit_plan_mode",
             crate::entry::definition::json_schema_for::<ExitPlanModeToolInput>(),
@@ -695,7 +868,7 @@ fn entries() -> Vec<PluginToolDecl> {
         .tags([ToolTag::ReadOnly, ToolTag::Planning])
         .always_load()
         .concurrency_safe(true)
-        .host_capability(HostCapability::PlanRegistry),
+        .host_capabilities([HostCapability::PlanRegistry, HostCapability::AgentRegistry]),
         PluginToolDecl::new(
             "enter_worktree",
             crate::entry::definition::json_schema_for::<EnterWorktreeToolInput>(),
@@ -728,10 +901,12 @@ mod tests {
 
     use super::*;
     use crate::plugin::sdk::host_api::{
-        EventSubscription, HostClearGoalRequest, HostClearGoalResponse, HostCreateGoalRequest,
-        HostCreateGoalResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
-        HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
-        HostGoal, HostGoalStatus, HostUpdateGoalRequest, HostUpdateGoalResponse, LogLevel,
+        EventSubscription, HostAgentRestoreRequest, HostAgentRestoreResponse,
+        HostAgentSwitchRequest, HostAgentSwitchResponse, HostClearGoalRequest,
+        HostClearGoalResponse, HostCreateGoalRequest, HostCreateGoalResponse,
+        HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
+        HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse, HostGoal, HostGoalStatus,
+        HostUpdateGoalRequest, HostUpdateGoalResponse, LogLevel,
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
 
@@ -745,6 +920,8 @@ mod tests {
     struct TestHost {
         clear_goal_request_count: Mutex<u32>,
         update_goal_request: Mutex<Option<RecordedUpdateGoalRequest>>,
+        agent_switch_requests: Mutex<Vec<HostAgentSwitchRequest>>,
+        agent_restore_requests: Mutex<Vec<HostAgentRestoreRequest>>,
     }
 
     impl TestHost {
@@ -752,6 +929,8 @@ mod tests {
             Self {
                 clear_goal_request_count: Mutex::new(0),
                 update_goal_request: Mutex::new(None),
+                agent_switch_requests: Mutex::new(Vec::new()),
+                agent_restore_requests: Mutex::new(Vec::new()),
             }
         }
 
@@ -766,6 +945,20 @@ mod tests {
             self.update_goal_request
                 .lock()
                 .expect("update goal request lock")
+                .clone()
+        }
+
+        fn recorded_agent_switches(&self) -> Vec<HostAgentSwitchRequest> {
+            self.agent_switch_requests
+                .lock()
+                .expect("agent switch request lock")
+                .clone()
+        }
+
+        fn recorded_agent_restores(&self) -> Vec<HostAgentRestoreRequest> {
+            self.agent_restore_requests
+                .lock()
+                .expect("agent restore request lock")
                 .clone()
         }
     }
@@ -841,6 +1034,39 @@ mod tests {
                 deferred: true,
                 plugin_id: None,
             }])
+        }
+
+        async fn agent_switch(
+            &self,
+            req: HostAgentSwitchRequest,
+        ) -> SdkResult<HostAgentSwitchResponse> {
+            self.agent_switch_requests
+                .lock()
+                .expect("agent switch request lock")
+                .push(req.clone());
+            Ok(HostAgentSwitchResponse {
+                session_id: req.session_id.unwrap_or(1),
+                previous_agent: Some("build".to_string()),
+                current_agent: req.agent.clone().filter(|agent| !agent.trim().is_empty()),
+                stack_depth: usize::from(req.push_previous),
+            })
+        }
+
+        async fn agent_restore(
+            &self,
+            req: HostAgentRestoreRequest,
+        ) -> SdkResult<HostAgentRestoreResponse> {
+            self.agent_restore_requests
+                .lock()
+                .expect("agent restore request lock")
+                .push(req.clone());
+            Ok(HostAgentRestoreResponse {
+                session_id: req.session_id.unwrap_or(1),
+                restored: true,
+                previous_agent: Some("reviewer".to_string()),
+                current_agent: Some("build".to_string()),
+                stack_depth: 0,
+            })
         }
 
         async fn todo_write(&self, req: HostTodoWriteRequest) -> SdkResult<ToolInvokeOutput> {
@@ -1354,7 +1580,7 @@ mod tests {
 
     #[tokio::test]
     async fn plan_and_worktree_entries_invoke_explicit_host_apis() {
-        let (plugin, _) = initialized_plugin().await;
+        let (plugin, host) = initialized_plugin().await;
 
         let enter_plan = plugin
             .tool_invoke(invoke_input(
@@ -1375,6 +1601,10 @@ mod tests {
             }
             other => panic!("unexpected output: {other:?}"),
         }
+        let switches = host.recorded_agent_switches();
+        assert_eq!(switches.len(), 1);
+        assert_eq!(switches[0].agent.as_deref(), Some("planner"));
+        assert!(switches[0].push_previous);
 
         let enter_worktree = plugin
             .tool_invoke(invoke_input(
@@ -1444,6 +1674,8 @@ mod tests {
             }
             other => panic!("unexpected output: {other:?}"),
         }
+        let restores = host.recorded_agent_restores();
+        assert_eq!(restores.len(), 1);
     }
 
     #[tokio::test]
@@ -1475,7 +1707,7 @@ mod tests {
 
     #[tokio::test]
     async fn provided_workflow_entries_render_prompt_text() {
-        let (plugin, _) = initialized_plugin().await;
+        let (plugin, host) = initialized_plugin().await;
 
         let review = plugin
             .tool_invoke(invoke_input(
@@ -1494,6 +1726,10 @@ mod tests {
         );
         assert!(review.output_text.contains("User arguments:\nauth flow"));
         assert_eq!(review.metadata.get("workflow"), Some(&"review".to_string()));
+        assert_eq!(
+            review.metadata.get("workflow_agent"),
+            Some(&"reviewer".to_string())
+        );
 
         let init = plugin
             .tool_invoke(invoke_input(
@@ -1518,5 +1754,32 @@ mod tests {
                 .output_text
                 .contains("Audit the changes on this branch")
         );
+        let switches = host.recorded_agent_switches();
+        assert_eq!(switches.len(), 2);
+        assert!(
+            switches
+                .iter()
+                .all(|req| req.agent.as_deref() == Some("reviewer"))
+        );
+        assert!(switches.iter().all(|req| req.push_previous));
+    }
+
+    #[tokio::test]
+    async fn agent_stop_restores_pushed_workflow_agent() {
+        let (plugin, host) = initialized_plugin().await;
+
+        let patch = plugin
+            .agent_stop(crate::plugin::AgentStopInput {
+                session_id: 42,
+                stop_hook_active: false,
+                last_assistant_message: Some("done".to_string()),
+            })
+            .await
+            .expect("agent_stop restore");
+
+        assert!(patch.is_none());
+        let restores = host.recorded_agent_restores();
+        assert_eq!(restores.len(), 1);
+        assert_eq!(restores[0].session_id, Some(42));
     }
 }

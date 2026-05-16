@@ -11,9 +11,9 @@ use async_trait::async_trait;
 
 use crate::message::{
     AskUserToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
-    ExitWorktreeToolInput, BundledToolInput, MonitorStatus, MonitorStream, StructuredObject,
-    TaskSubagentType, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation,
-    ToolOutput, UserInputOption, UserInputQuestion,
+    ExitWorktreeToolInput, MonitorStatus, MonitorStream, StructuredObject, TaskSubagentType,
+    TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, UserInputOption,
+    UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentListResponse,
@@ -48,7 +48,8 @@ use crate::plugins::storage::{
 use crate::runtime::AgenaRuntime;
 use crate::tool::{MonitorError, MonitorReadParams, MonitorStartParams};
 use crate::{
-    entry::BundledExecutionContext, plugins::bundled::router::bundled_to_invoke_output,
+    entry::{BundledExecutionContext, BundledToolInput},
+    plugins::bundled::router::bundled_to_invoke_output,
 };
 
 /// Build a `HostClient` impl for a runtime; use [`NoopHostClient`] when no
@@ -204,15 +205,10 @@ fn host_unavailable(message: impl Into<String>) -> PluginError {
 fn tool_execution_to_invoke_output(
     execution: crate::tool::ToolInvocationExecution,
 ) -> ToolInvokeOutput {
-    let payload = match execution.output {
-        ToolOutput::Custom { output } => Some(serde_json::Value::from(output.payload)),
-        ToolOutput::Mcp { output } => serde_json::to_value(output).ok(),
-        ToolOutput::None => None,
-    };
     ToolInvokeOutput {
         title: execution.view.title,
         output_text: execution.view.output_text,
-        payload,
+        payload: execution.output.to_json_payload(),
         metadata: execution.view.metadata.into_iter().collect(),
         attachments: execution.view.attachments,
     }

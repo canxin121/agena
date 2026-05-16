@@ -16,11 +16,10 @@ use agena_lsp::lsp_types::{
 };
 
 use crate::message::{
-    BundledToolOutput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
-    LspReferencesToolInput,
+    LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
 };
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{BundledExecution, BundledToolOutput, ToolError, ToolExecutionView, ToolExecutor};
 
 pub(super) fn execute_definition(
     executor: &ToolExecutor,

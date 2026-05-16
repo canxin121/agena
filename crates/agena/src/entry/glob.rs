@@ -1,10 +1,11 @@
 use globset::Glob;
 use walkdir::WalkDir;
 
-use crate::message::{BundledToolOutput, GlobToolInput};
+use crate::message::GlobToolInput;
 
 use super::{
-    BundledExecution, ToolError, ToolExecutionView, ToolExecutor, normalize_path_for_display,
+    BundledExecution, BundledToolOutput, ToolError, ToolExecutionView, ToolExecutor,
+    normalize_path_for_display,
 };
 
 const MAX_MATCHES: usize = 5_000;

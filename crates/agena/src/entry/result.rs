@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::message::{BundledToolOutput, ToolAttachment, ToolOutput};
+use crate::message::{ToolAttachment, ToolOutput};
+
+use super::BundledToolOutput;
 
 use super::ApplyPatchExecution;
 
@@ -75,9 +77,7 @@ impl ToolInvocationExecution {
 impl From<BundledExecution> for ToolInvocationExecution {
     fn from(value: BundledExecution) -> Self {
         Self {
-            output: ToolOutput::Custom {
-                output: value.output.into_custom_output(),
-            },
+            output: value.output.into_tool_output(),
             view: value.view,
             apply_patch: value.apply_patch,
         }

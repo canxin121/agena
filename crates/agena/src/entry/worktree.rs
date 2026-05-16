@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput, BundledToolOutput};
+use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput};
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{BundledExecution, BundledToolOutput, ToolError, ToolExecutionView, ToolExecutor};
 
 #[derive(Debug, Clone)]
 pub struct WorktreeSession {

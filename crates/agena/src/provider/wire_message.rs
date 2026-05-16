@@ -511,7 +511,7 @@ mod tests {
                     ExecutionStatus::Completed,
                     PartContent::ToolExecution(crate::message::ToolExecutionPart::Completed {
                         call_id: 3,
-                        invocation: crate::message::BundledToolInput::ToolSearch(
+                        invocation: crate::tool::BundledToolInput::ToolSearch(
                             crate::message::ToolSearchToolInput {
                                 query: "patch".to_string(),
                                 load: vec!["apply_patch".to_string()],

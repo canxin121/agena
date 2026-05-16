@@ -1,9 +1,9 @@
 use std::cmp::min;
 use std::fs;
 
-use crate::message::{BundledToolOutput, ReadToolInput};
+use crate::message::ReadToolInput;
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{BundledExecution, BundledToolOutput, ToolError, ToolExecutionView, ToolExecutor};
 
 const DEFAULT_OFFSET: usize = 1;
 const DEFAULT_LIMIT: usize = 2000;

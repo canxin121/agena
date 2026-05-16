@@ -1,6 +1,7 @@
 pub(crate) mod apply_patch;
 pub(crate) mod ask_user;
 pub(crate) mod bash;
+pub(crate) mod bundled;
 pub(crate) mod catalog;
 pub(crate) mod cron;
 pub(crate) mod definition;
@@ -35,24 +36,22 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    AskUserToolInput, CustomToolOutput, FilesystemEffect, BundledToolInput,
-    BundledToolOutput, Message, PartContent, PluginInvocation, StructuredObject,
+    AskUserToolInput, FilesystemEffect, Message, PartContent, PluginInvocation, StructuredObject,
     ToolExecutionPart, ToolInvocation, ToolOutput,
 };
 use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
-    registry::PluginEntry as RegistryPluginEntry,
-    ToolDefinitionInput as PluginEntryDefinitionInput, PluginHost, PluginHostBuilder,
-    ToolAfterInput as PluginToolAfterInput,
-    ToolBeforeInput as PluginToolBeforeInput, ToolFailureInput as PluginToolFailureInput,
-    ToolInvokeInput as PluginToolInvokeInput,
+    PluginHost, PluginHostBuilder, ToolAfterInput as PluginToolAfterInput,
+    ToolBeforeInput as PluginToolBeforeInput, ToolDefinitionInput as PluginEntryDefinitionInput,
+    ToolFailureInput as PluginToolFailureInput, ToolInvokeInput as PluginToolInvokeInput,
     ToolPermissionNetworksInput as PluginToolPermissionNetworksInput,
     ToolPermissionPathsInput as PluginToolPermissionPathsInput,
+    registry::PluginEntry as RegistryPluginEntry,
     sdk::{
-        ToolStreamingMode as SdkEntryStreamingMode, InputNetworkSpec as SdkInputNetworkSpec,
-        InputPathSpec as SdkInputPathSpec, PathAccessSpec as SdkPathAccessSpec,
-        NetworkAccessSpec as SdkNetworkAccessSpec, PathKind as SdkPathKind,
-        ShellEnvInput as PluginShellEnvInput,
+        InputNetworkSpec as SdkInputNetworkSpec, InputPathSpec as SdkInputPathSpec,
+        NetworkAccessSpec as SdkNetworkAccessSpec, PathAccessSpec as SdkPathAccessSpec,
+        PathKind as SdkPathKind, ShellEnvInput as PluginShellEnvInput,
+        ToolStreamingMode as SdkEntryStreamingMode,
     },
 };
 use crate::plugins::bundled::{
@@ -60,7 +59,9 @@ use crate::plugins::bundled::{
     shell as bundled_shell, skills_fs, web as bundled_web, workflow as bundled_workflow,
 };
 
+pub use crate::plugin::sdk::ToolLoadPriority;
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
+pub use bundled::{BundledToolInput, BundledToolOutput, CronJobSummary, WebSearchHit};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use monitor::{
     MonitorError, MonitorRead, MonitorRegistry, MonitorService, MonitorStart, MonitorStopOutcome,
@@ -69,7 +70,6 @@ pub use monitor::{
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
 pub use result::{BundledExecution, ToolExecutionView, ToolInvocationExecution};
 pub use shell::{ShellError, ShellOutput, ShellRequest};
-pub use crate::plugin::sdk::ToolLoadPriority;
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 pub use worktree::{
     ActiveWorktree, ManagedWorktree, WorktreeRegistry, list_active as worktree_list_active,
@@ -133,9 +133,7 @@ pub fn new_workflow_plugin() -> impl crate::plugin::sdk::Plugin {
     bundled_workflow::new_plugin()
 }
 
-pub fn default_tool_host(
-    workspace_root: impl Into<PathBuf>,
-) -> Result<Arc<PluginHost>, String> {
+pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
     let workspace_root = workspace_root.into();
     let skills_fs_id = skills_fs_plugin_id().to_string();
     let lsp_id = lsp_plugin_id().to_string();
@@ -563,8 +561,7 @@ impl ToolExecutor {
         self.catalogued_tools()
             .into_iter()
             .filter(|entry| {
-                entry.should_load_by_default()
-                    || loaded_tools.contains(entry.exposed_name.as_str())
+                entry.should_load_by_default() || loaded_tools.contains(entry.exposed_name.as_str())
             })
             .collect()
     }
@@ -603,7 +600,9 @@ impl ToolExecutor {
     ) -> Result<Option<BundledToolInput>, ToolError> {
         BundledToolInput::from_invocation(invocation)
             .map(Some)
-            .ok_or_else(|| ToolError::InvalidInput(format!("decode tool input: {}", invocation.name)))
+            .ok_or_else(|| {
+                ToolError::InvalidInput(format!("decode tool input: {}", invocation.name))
+            })
     }
 
     fn invocation_streaming_mode(
@@ -637,10 +636,7 @@ impl ToolExecutor {
                     "tool '{tool_name}' disabled for current model profile"
                 )));
             }
-            return Ok((
-                tool_name,
-                self.agent.authorize_bundled_tool(bundled),
-            ));
+            return Ok((tool_name, self.agent.authorize_bundled_tool(bundled)));
         }
 
         let tool_name = invocation_name(invocation);
@@ -915,10 +911,9 @@ impl ToolExecutor {
         session_id: Option<i64>,
         call_id: Option<i64>,
     ) -> Result<crate::plugin::ToolInvokeOutput, ToolError> {
-        let bundled =
-            bundled_router::parse_bundled_tool(tool_name, input).map_err(|err| {
-                ToolError::InvalidInput(format!("parse bundled tool {tool_name}: {err}"))
-            })?;
+        let bundled = bundled_router::parse_bundled_tool(tool_name, input).map_err(|err| {
+            ToolError::InvalidInput(format!("parse bundled tool {tool_name}: {err}"))
+        })?;
         let execution = orchestrator::execute_bundled(
             self,
             &bundled,
@@ -949,10 +944,7 @@ impl ToolExecutor {
         let definition = scoped_executor
             .invocation_definition(&invocation)
             .ok_or_else(|| ToolError::UnknownTool(tool_name.to_string()))?;
-        if !scoped_executor
-            .tool_catalog()
-            .is_tool_enabled(&definition)
-        {
+        if !scoped_executor.tool_catalog().is_tool_enabled(&definition) {
             return Err(ToolError::UnsupportedInvocation(tool_name.to_string()));
         }
 
@@ -1030,8 +1022,7 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
-        let Some(crate::message::BundledToolInput::Bash(bash_input)) =
-            self.bundled_from_invocation(invocation)?
+        let Some(BundledToolInput::Bash(bash_input)) = self.bundled_from_invocation(invocation)?
         else {
             return Ok((invocation.clone(), None));
         };
@@ -1045,7 +1036,7 @@ impl ToolExecutor {
         let mut rewritten = bash_input;
         rewritten.command = prepared_shell.command.clone();
         Ok((
-            crate::message::BundledToolInput::Bash(rewritten).into_invocation(),
+            BundledToolInput::Bash(rewritten).into_invocation(),
             Some(prepared_shell),
         ))
     }
@@ -1163,7 +1154,6 @@ impl ToolExecutor {
         let end = stream.end;
         let executor = self.clone();
         let invocation = invocation.clone();
-        let tool_name = plugin_invocation.entry_name.clone();
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let result = match end.await {
@@ -1177,27 +1167,12 @@ impl ToolExecutor {
                     let mut execution = if let Ok(envelope) =
                         bundled_router::payload_to_bundled_envelope(end.payload.as_ref())
                     {
-                        ToolInvocationExecution::new(
-                            ToolOutput::Custom {
-                                output: envelope.output.into_custom_output(),
-                            },
-                            view,
-                        )
-                        .with_apply_patch_option(envelope.apply_patch)
+                        ToolInvocationExecution::new(envelope.output.into_tool_output(), view)
+                            .with_apply_patch_option(envelope.apply_patch)
                     } else {
-                        let payload = end
-                            .payload
-                            .as_ref()
-                            .map(|value| parse_custom_payload(&value.to_string()))
-                            .transpose()?
-                            .unwrap_or_default();
                         ToolInvocationExecution::new(
-                            ToolOutput::Custom {
-                                output: CustomToolOutput {
-                                    name: tool_name,
-                                    payload,
-                                },
-                            },
+                            ToolOutput::from_json_payload(end.payload.as_ref())
+                                .map_err(ToolError::InvalidInput)?,
                             view,
                         )
                     };
@@ -1284,27 +1259,12 @@ impl ToolExecutor {
         let mut execution = if let Ok(envelope) =
             bundled_router::payload_to_bundled_envelope(response.payload.as_ref())
         {
-            ToolInvocationExecution::new(
-                ToolOutput::Custom {
-                    output: envelope.output.into_custom_output(),
-                },
-                view,
-            )
-            .with_apply_patch_option(envelope.apply_patch)
+            ToolInvocationExecution::new(envelope.output.into_tool_output(), view)
+                .with_apply_patch_option(envelope.apply_patch)
         } else {
-            let payload = response
-                .payload
-                .as_ref()
-                .map(|v| parse_custom_payload(&v.to_string()))
-                .transpose()?
-                .unwrap_or_default();
             ToolInvocationExecution::new(
-                ToolOutput::Custom {
-                    output: CustomToolOutput {
-                        name: plugin_invocation.entry_name.clone(),
-                        payload,
-                    },
-                },
+                ToolOutput::from_json_payload(response.payload.as_ref())
+                    .map_err(ToolError::InvalidInput)?,
                 view,
             )
         };
@@ -1374,11 +1334,6 @@ impl ToolExecutor {
     ) -> Result<(), ToolError> {
         let tool_name = invocation_name(invocation).to_owned();
         let plugin_name = self.invocation_plugin_name_for(invocation);
-        let payload_value: Option<serde_json::Value> = match &execution.output {
-            ToolOutput::Custom { output } => Some(serde_json::Value::from(output.payload.clone())),
-            _ => None,
-        };
-
         let after_in = PluginToolAfterInput {
             tool_name,
             plugin_name: plugin_name.clone(),
@@ -1387,7 +1342,7 @@ impl ToolExecutor {
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
             title: execution.view.title.clone(),
             output_text: execution.view.output_text.clone(),
-            payload: payload_value,
+            payload: execution.output.to_json_payload(),
             metadata: execution.view.metadata.clone().into_iter().collect(),
         };
 
@@ -1402,10 +1357,9 @@ impl ToolExecutor {
             execution.view.metadata.insert(k, v);
         }
 
-        if let (Some(payload_value), ToolOutput::Custom { output }) =
-            (hooked.payload, &mut execution.output)
-        {
-            output.payload = parse_custom_payload(&payload_value.to_string()).unwrap_or_default();
+        if let Some(payload_value) = hooked.payload {
+            execution.output =
+                ToolOutput::from_json_payload(Some(&payload_value)).unwrap_or_default();
         }
 
         Ok(())
@@ -1757,14 +1711,14 @@ fn collect_loaded_tool_names(
         .iter()
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.content.as_ref() {
-            Some(PartContent::ToolExecution(ToolExecutionPart::Completed { details, .. })) => {
-                match details.as_bundled() {
-                    Some(BundledToolOutput::ToolSearch { loaded_tools, .. }) => {
-                        Some(loaded_tools)
-                    }
-                    _ => None,
-                }
-            }
+            Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                invocation,
+                details,
+                ..
+            })) => match BundledToolOutput::from_tool_output(invocation.name.as_str(), details) {
+                Some(BundledToolOutput::ToolSearch { loaded_tools, .. }) => Some(loaded_tools),
+                _ => None,
+            },
             _ => None,
         })
         .flatten()
@@ -1780,16 +1734,6 @@ fn collect_loaded_tool_names(
     );
 
     loaded
-}
-
-fn parse_custom_payload(payload_json: &str) -> Result<StructuredObject, ToolError> {
-    let value = if payload_json.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(payload_json)
-            .map_err(|err| ToolError::InvalidInput(err.to_string()))?
-    };
-    StructuredObject::try_from(value).map_err(|err| ToolError::InvalidInput(err.to_string()))
 }
 
 fn sdk_path_kind_to_access_kind(kind: SdkPathKind) -> AccessKind {
@@ -1955,10 +1899,9 @@ mod tests {
 
     use crate::message::{
         ApplyPatchToolInput, BashToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-        FileChangeKind, FilesystemAccess, FilesystemEffect, BundledToolInput,
-        BundledToolOutput, GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput,
-        StructuredObject, TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority,
-        TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput,
+        FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput, Message,
+        PartContent, ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TimeRange,
+        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation,
         ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
@@ -1972,7 +1915,7 @@ mod tests {
     use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
-    use super::{ToolError, ToolExecutor};
+    use super::{BundledToolInput, BundledToolOutput, ToolError, ToolExecutor};
     use crate::plugins::bundled::router as bundled_router;
 
     #[derive(Debug)]
@@ -2392,16 +2335,11 @@ mod tests {
                     output_text: "loaded deferred tools".to_string(),
                     blocks: Vec::new(),
                     attachments: Vec::new(),
-                    details: ToolOutput::Custom {
-                        output: BundledToolOutput::ToolSearch {
-                            results: Vec::new(),
-                            loaded_tools: loaded_tools
-                                .iter()
-                                .map(|name| name.to_string())
-                                .collect(),
-                        }
-                        .into_custom_output(),
-                    },
+                    details: (BundledToolOutput::ToolSearch {
+                        results: Vec::new(),
+                        loaded_tools: loaded_tools.iter().map(|name| name.to_string()).collect(),
+                    })
+                    .into_tool_output(),
                     lifecycle: TimeRange::default(),
                 }),
             )],
@@ -2713,19 +2651,13 @@ mod tests {
             Some(TaskSubagentType::Explore.guidance())
         );
 
-        match result.output {
-            ToolOutput::Custom { output } => {
-                assert_eq!(output.name, "task");
-                let payload = BundledToolOutput::from_custom(&output)
-                    .expect("task output should decode as bundled payload");
-                match payload {
-                    BundledToolOutput::Task { session_id, .. } => {
-                        assert!(session_id.is_some());
-                    }
-                    other => panic!("expected task payload, got {other:?}"),
-                }
+        let payload = BundledToolOutput::from_tool_output("task", &result.output)
+            .expect("task output should decode as bundled payload");
+        match payload {
+            BundledToolOutput::Task { session_id, .. } => {
+                assert!(session_id.is_some());
             }
-            other => panic!("expected custom task output, got {other:?}"),
+            other => panic!("expected task payload, got {other:?}"),
         }
     }
 
@@ -2762,7 +2694,11 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let initial = executor.available_tools();
-        assert!(initial.iter().any(|tool| tool.exposed_name == "tool_search"));
+        assert!(
+            initial
+                .iter()
+                .any(|tool| tool.exposed_name == "tool_search")
+        );
         assert!(initial.iter().any(|tool| tool.exposed_name == "todo_write"));
         assert!(!initial.iter().any(|tool| tool.exposed_name == "bash"));
         assert!(!initial.iter().any(|tool| tool.exposed_name == "task"));
@@ -3077,10 +3013,11 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root));
 
-        assert!(executor.available_tools().iter().any(|tool| {
-            tool.exposed_name == "plugin_echo"
-                && tool.plugin_name == "fixture"
-        }));
+        assert!(
+            executor.available_tools().iter().any(|tool| {
+                tool.exposed_name == "plugin_echo" && tool.plugin_name == "fixture"
+            })
+        );
 
         let invocation = ToolInvocation {
             name: "plugin_echo".to_string(),
@@ -3104,15 +3041,9 @@ mod tests {
             .execute_invocation_detailed(&prepared.invocation, 7, 9)
             .expect("plugin execution should succeed");
 
-        match execution.output {
-            ToolOutput::Custom { output } => {
-                let payload = serde_json::Value::from(output.payload);
-                assert_eq!(output.name, "plugin_echo");
-                assert_eq!(payload["echoed"], "hello prepared");
-                assert_eq!(payload["after"], true);
-            }
-            other => panic!("expected custom output, got {other:?}"),
-        }
+        let payload = serde_json::Value::from(execution.output.payload.clone());
+        assert_eq!(payload["echoed"], "hello prepared");
+        assert_eq!(payload["after"], true);
 
         assert_eq!(execution.view.title, "Plugin echo after");
         assert_eq!(execution.view.output_text, "hello prepared after");
@@ -3644,7 +3575,7 @@ mod tests {
             )
             .expect("bash invocation should succeed");
 
-        match execution.output.as_bundled() {
+        match BundledToolOutput::from_tool_output("bash", &execution.output) {
             Some(BundledToolOutput::Bash {
                 output,
                 description: _,

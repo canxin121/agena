@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
-use crate::message::{BundledToolOutput, PowerShellToolInput};
+use crate::message::PowerShellToolInput;
 
 use super::shell::ShellRequest;
 use super::{
-    BundledExecution, BundledExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
+    BundledExecution, BundledExecutionContext, BundledToolOutput, ToolError, ToolExecutionView,
+    ToolExecutor,
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;

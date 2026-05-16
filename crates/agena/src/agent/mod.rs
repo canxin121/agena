@@ -4,12 +4,12 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::message::BundledToolInput;
 use crate::permission::{
     AccessKind, AccessSelector, NetworkPermissionPolicy, NetworkTarget, PermissionConfigError,
     PermissionDecision, PermissionMode, PermissionPolicy, ToolPermissionPolicy,
 };
 use crate::plugin::sdk::ToolTag;
+use crate::tool::BundledToolInput;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -738,8 +738,9 @@ impl PermissionDecisionExt for PermissionDecision {
 mod tests {
     use std::{collections::BTreeMap, path::Path};
 
-    use crate::message::{BashToolInput, BundledToolInput, ReadToolInput};
+    use crate::message::{BashToolInput, ReadToolInput};
     use crate::permission::{AccessKind, PermissionDecision, PermissionMode, PermissionPolicy};
+    use crate::tool::BundledToolInput;
     use indexmap::IndexMap;
 
     use super::{

@@ -1,7 +1,6 @@
 //! Pending-message queue for the composer.
 //!
-//! Modeled after Claude Code's `messageQueueManager` and Codex's
-//! `queued_user_messages`. Three priority bands:
+//! Pending user input is grouped into three priority bands:
 //!
 //! * `Now`   — pushed to the front (used for cancel/recovery edge cases).
 //! * `Next`  — normal user submissions while the AI is busy. FIFO.

@@ -107,7 +107,7 @@ where
     }
 
     serde_json::to_string(&FsChangedEvent {
-        event_type: "opencode-studio:fs-changed",
+        event_type: "agena-studio:fs-changed",
         properties: FsChangedEventProperties {
             directory: to_api_path(root),
             change_type: change_type.to_string(),
@@ -816,7 +816,7 @@ pub async fn fs_upload(
         .await
     {
         tracing::warn!(
-            target: "opencode_studio.attachment_cache",
+            target: "agena_studio.attachment_cache",
             path = %resolved.display(),
             error = %err,
             "failed to register uploaded file in attachment cache"
@@ -2208,7 +2208,7 @@ mod tests {
         .expect("expected fs event payload");
 
         let value: serde_json::Value = serde_json::from_str(&payload).expect("valid json payload");
-        assert_eq!(value["type"], "opencode-studio:fs-changed");
+        assert_eq!(value["type"], "agena-studio:fs-changed");
         assert_eq!(value["properties"]["directory"], "/tmp/workspace");
         assert_eq!(value["properties"]["changeType"], "rename");
         assert_eq!(value["properties"]["oldPath"], "/tmp/workspace/src/old.ts");

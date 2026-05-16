@@ -6,9 +6,9 @@
 
 参考对象：
 
-- Codex CLI
-- OpenCode
-- Claude Code
+- Agena CLI
+- Zed Agent Panel
+- 现代 agent 工作台
 
 设计原则：
 
@@ -85,7 +85,7 @@
 
 状态：进行中
 
-目标：补齐会话生命周期，接近 Codex/OpenCode/Claude Code 的日常使用体验。
+目标：补齐会话生命周期，接近长期 agent 工作台的日常使用体验。
 
 已实现：
 
@@ -331,7 +331,7 @@
 
 - 会话树现在已经具备 session pane、parent/child 导航、resume picker、lineage picker、timeline、pager、draft persistence，以及 header/status/session pane 级别的 branch affordance。
 - 继续加零散命令的收益会明显下降。
-- branch 与 rewind 做完之后，`agena-tui` 才算真正进入接近 Codex / Claude Code 的“长期工作台”阶段。
+- branch 与 rewind 做完之后，`agena-tui` 才算真正进入“长期工作台”阶段。
 
 ## 验收标准
 

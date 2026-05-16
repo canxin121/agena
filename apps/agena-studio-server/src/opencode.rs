@@ -47,11 +47,7 @@ fn parse_forward_logs_value(raw: Option<&str>) -> bool {
 }
 
 fn forward_logs_enabled() -> bool {
-    parse_forward_logs_value(
-        std::env::var("OPENCODE_STUDIO_OPENCODE_LOGS")
-            .ok()
-            .as_deref(),
-    )
+    parse_forward_logs_value(std::env::var("AGENA_STUDIO_OPENCODE_LOGS").ok().as_deref())
 }
 
 const OPENCODE_STARTUP_STDERR_MAX_LINES: usize = 64;
@@ -436,10 +432,10 @@ impl OpenCodeManager {
             .stdin(Stdio::null());
 
         if let Some(base_url) = self.studio_base_url.as_deref() {
-            cmd.env("OPENCODE_STUDIO_BASE_URL", base_url);
+            cmd.env("AGENA_STUDIO_BASE_URL", base_url);
         }
         if let Some(token) = ui_auth::issue_internal_token(&self.ui_auth) {
-            cmd.env("OPENCODE_STUDIO_UI_AUTH_TOKEN", token);
+            cmd.env("AGENA_STUDIO_UI_AUTH_TOKEN", token);
         }
 
         if cfg!(windows) {
@@ -974,7 +970,7 @@ async fn signal_pid(pid: u32, signal: &str) {
 
 async fn kill_process_on_port(port: u16) {
     // Best-effort port cleanup using listener-only lsof queries on Unix so we
-    // do not kill clients like opencode-studio's own SSE connection.
+    // do not kill clients like Agena Studio's own SSE connection.
     #[cfg(unix)]
     {
         let current_pid = std::process::id();

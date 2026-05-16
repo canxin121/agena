@@ -4241,9 +4241,8 @@ impl SessionManager {
     }
 
     /// Drain every pending steer message (non-blocking) and append each as
-    /// a User message before the next model turn. Mirrors Codex's
-    /// `push_pending_input` semantics: a user steer becomes the next input
-    /// the model sees.
+    /// a User message before the next model turn. A user steer becomes the
+    /// next input the model sees.
     async fn drain_steer_input(
         &self,
         mut session: Session,

@@ -153,7 +153,7 @@ async fn gpg_agent_enable_allow_preset_passphrase() -> Result<bool, String> {
         if !next.ends_with('\n') && !next.is_empty() {
             next.push('\n');
         }
-        next.push_str("# Added by OpenCode Studio to allow UI passphrase presetting\n");
+        next.push_str("# Added by Agena Studio to allow UI passphrase presetting\n");
         next.push_str("allow-preset-passphrase\n");
         tokio::fs::write(&conf, next)
             .await

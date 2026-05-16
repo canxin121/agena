@@ -1,7 +1,7 @@
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, VecDeque},
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -28,11 +28,11 @@ use crate::{ApiResult, AppError};
 use crate::studio_db;
 
 const MAX_TERMINAL_SESSIONS: usize = 20;
-const TERMINAL_IDLE_TIMEOUT_ENV: &str = "OPENCODE_STUDIO_TERMINAL_IDLE_TIMEOUT_SECS";
+const TERMINAL_IDLE_TIMEOUT_ENV: &str = "AGENA_STUDIO_TERMINAL_IDLE_TIMEOUT_SECS";
 const TERMINAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TERMINAL_HEARTBEAT: Duration = Duration::from_secs(15);
 const TERMINAL_SESSION_FILE_VERSION: u64 = 1;
-const TMUX_SESSION_PREFIX: &str = "opencode-studio-";
+const TMUX_SESSION_PREFIX: &str = "agena-studio-";
 
 // Keep a bounded recent scrollback for resumable streams.
 const TERMINAL_HISTORY_MAX_BYTES: usize = 512 * 1024;
@@ -181,17 +181,6 @@ fn tmux_kill_session(session_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn try_load_session_registry(path: &Path) -> Option<PersistedTerminalRegistry> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let parsed = serde_json::from_str::<PersistedTerminalRegistry>(trimmed).ok()?;
-    Some(normalize_persisted_registry(parsed))
-}
-
 fn normalize_persisted_registry(
     mut registry: PersistedTerminalRegistry,
 ) -> PersistedTerminalRegistry {
@@ -209,107 +198,7 @@ async fn load_session_registry_from_store(db: &studio_db::StudioDb) -> Persisted
         return normalize_persisted_registry(registry);
     }
 
-    let migrated = normalize_persisted_registry(load_session_registry_from_disk_legacy().await);
-    let _ = db
-        .set_json(studio_db::KV_KEY_TERMINAL_SESSION_REGISTRY, &migrated)
-        .await;
-    migrated
-}
-
-async fn file_mtime_ms(path: &Path) -> u64 {
-    let meta = match tokio::fs::metadata(path).await {
-        Ok(meta) => meta,
-        Err(_) => return 0,
-    };
-    let modified = match meta.modified() {
-        Ok(m) => m,
-        Err(_) => return 0,
-    };
-    modified
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-async fn discover_tmp_variants_for_file(path: &Path) -> Vec<PathBuf> {
-    let Some(parent) = path.parent() else {
-        return Vec::new();
-    };
-    let Some(base_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return Vec::new();
-    };
-
-    let prefix = format!("{base_name}.tmp");
-    let mut out = vec![path.with_extension("json.tmp")];
-    let mut dir = match tokio::fs::read_dir(parent).await {
-        Ok(dir) => dir,
-        Err(_) => return out,
-    };
-    while let Ok(Some(entry)) = dir.next_entry().await {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if name == prefix || name.starts_with(&format!("{prefix}.")) {
-            out.push(entry.path());
-        }
-    }
-    out
-}
-
-async fn terminal_registry_disk_candidates() -> Vec<PathBuf> {
-    let mut out = Vec::<PathBuf>::new();
-    let mut seen = HashSet::<PathBuf>::new();
-
-    for base in crate::persistence_paths::terminal_session_registry_path_candidates() {
-        let paths = discover_tmp_variants_for_file(base.as_path()).await;
-        for path in std::iter::once(base).chain(paths) {
-            if seen.insert(path.clone()) {
-                out.push(path);
-            }
-        }
-    }
-
-    out
-}
-
-fn registry_score(registry: &PersistedTerminalRegistry) -> (u64, u64, usize) {
-    let max_updated_at = registry
-        .sessions
-        .values()
-        .map(|s| s.updated_at)
-        .max()
-        .unwrap_or(0);
-    (registry.version, max_updated_at, registry.sessions.len())
-}
-
-async fn load_session_registry_from_disk_legacy() -> PersistedTerminalRegistry {
-    let mut best: Option<((u64, u64, usize, u64), PersistedTerminalRegistry)> = None;
-
-    for path in terminal_registry_disk_candidates().await {
-        let Some(registry) = tokio::task::spawn_blocking({
-            let path = path.clone();
-            move || try_load_session_registry(&path)
-        })
-        .await
-        .ok()
-        .flatten() else {
-            continue;
-        };
-
-        let score = registry_score(&registry);
-        let mtime = file_mtime_ms(&path).await;
-        let composite = (score.0, score.1, score.2, mtime);
-        if best
-            .as_ref()
-            .is_none_or(|(best_score, _)| composite > *best_score)
-        {
-            best = Some((composite, registry));
-        }
-    }
-
-    best.map(|(_, registry)| registry).unwrap_or_default()
+    PersistedTerminalRegistry::default()
 }
 
 const TERMINAL_REGISTRY_FLUSH_DEBOUNCE: Duration = Duration::from_millis(180);
@@ -399,7 +288,7 @@ impl TerminalManager {
                     .await
                 {
                     tracing::warn!(
-                        target: "opencode_studio.terminal",
+                        target: "agena_studio.terminal",
                         error = %error,
                         "failed to persist terminal session registry; will retry"
                     );

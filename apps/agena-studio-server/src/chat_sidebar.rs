@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -178,101 +177,6 @@ fn sanitize_sidebar_preferences(input: SessionsSidebarPreferences) -> SessionsSi
     }
 }
 
-async fn file_mtime_ms(path: &Path) -> u64 {
-    let meta = match tokio::fs::metadata(path).await {
-        Ok(meta) => meta,
-        Err(_) => return 0,
-    };
-    let modified = match meta.modified() {
-        Ok(m) => m,
-        Err(_) => return 0,
-    };
-    modified
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-async fn discover_tmp_variants_for_file(path: &Path) -> Vec<PathBuf> {
-    let Some(parent) = path.parent() else {
-        return Vec::new();
-    };
-    let Some(base_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return Vec::new();
-    };
-
-    let prefix = format!("{base_name}.tmp");
-    let mut out = vec![path.with_extension("json.tmp")];
-
-    let mut dir = match tokio::fs::read_dir(parent).await {
-        Ok(dir) => dir,
-        Err(_) => return out,
-    };
-
-    while let Ok(Some(entry)) = dir.next_entry().await {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if name == prefix || name.starts_with(&format!("{prefix}.")) {
-            out.push(entry.path());
-        }
-    }
-
-    out
-}
-
-async fn sidebar_preferences_disk_candidates() -> Vec<PathBuf> {
-    let mut out = Vec::<PathBuf>::new();
-    let mut seen = HashSet::<PathBuf>::new();
-
-    for base in crate::persistence_paths::sidebar_preferences_path_candidates() {
-        let paths = discover_tmp_variants_for_file(base.as_path()).await;
-        for path in std::iter::once(base).chain(paths) {
-            if seen.insert(path.clone()) {
-                out.push(path);
-            }
-        }
-    }
-
-    out
-}
-
-async fn load_sidebar_preferences_from_disk_legacy() -> SessionsSidebarPreferences {
-    let mut best: Option<((u64, u64, u64), SessionsSidebarPreferences)> = None;
-
-    for path in sidebar_preferences_disk_candidates().await {
-        let raw = match tokio::fs::read_to_string(&path).await {
-            Ok(raw) => raw,
-            Err(_) => continue,
-        };
-
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let parsed = match serde_json::from_str::<SessionsSidebarPreferences>(trimmed) {
-            Ok(parsed) => parsed,
-            Err(_) => continue,
-        };
-
-        let parsed = sanitize_sidebar_preferences(parsed);
-        let mtime = file_mtime_ms(&path).await;
-        let score = (parsed.version, parsed.updated_at, mtime);
-
-        if best
-            .as_ref()
-            .is_none_or(|(best_score, _)| score > *best_score)
-        {
-            best = Some((score, parsed));
-        }
-    }
-
-    best.map(|(_, prefs)| prefs).unwrap_or_default()
-}
-
 async fn load_sidebar_preferences_from_store(
     db: &studio_db::StudioDb,
 ) -> SessionsSidebarPreferences {
@@ -283,11 +187,7 @@ async fn load_sidebar_preferences_from_store(
         return sanitize_sidebar_preferences(prefs);
     }
 
-    let migrated = load_sidebar_preferences_from_disk_legacy().await;
-    let _ = db
-        .set_json(studio_db::KV_KEY_CHAT_SIDEBAR_PREFERENCES, &migrated)
-        .await;
-    migrated
+    SessionsSidebarPreferences::default()
 }
 
 async fn persist_sidebar_preferences_to_store(
@@ -366,7 +266,7 @@ fn queue_sidebar_preferences_flush(
             if let Err(error) = persist_sidebar_preferences_to_store(db.as_ref(), &candidate).await
             {
                 tracing::warn!(
-                    target: "opencode_studio.chat_sidebar",
+                    target: "agena_studio.chat_sidebar",
                     error = %error,
                     "failed to persist sidebar preferences; will retry"
                 );

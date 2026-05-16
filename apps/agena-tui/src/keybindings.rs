@@ -1,6 +1,6 @@
 //! Configurable composer key bindings.
 //!
-//! Two distinct submit actions following the Codex / Claude Code hybrid:
+//! Two distinct submit actions:
 //!
 //! * `submit_key`   — fire the message immediately. While the AI is busy
 //!   this routes through `steer_input` (Phase 3); when

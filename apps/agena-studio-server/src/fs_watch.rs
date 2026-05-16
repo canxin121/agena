@@ -399,7 +399,7 @@ fn update_watches(
         retry_by_root.remove(&existing.normalized);
         if let Err(err) = watcher.unwatch(&existing.path) {
             tracing::debug!(
-                target: "opencode_studio.fs_watch",
+                target: "agena_studio.fs_watch",
                 path = %existing.path.display(),
                 error = %err,
                 "failed to unwatch filesystem path"
@@ -445,7 +445,7 @@ fn update_watches(
                     },
                 );
                 tracing::warn!(
-                    target: "opencode_studio.fs_watch",
+                    target: "agena_studio.fs_watch",
                     path = %root.path.display(),
                     error = %err,
                     retry_in_seconds = backoff.as_secs(),
@@ -472,7 +472,7 @@ async fn run_fs_watch_loop(state: Arc<crate::AppState>) {
         Ok(watcher) => watcher,
         Err(err) => {
             tracing::warn!(
-                target: "opencode_studio.fs_watch",
+                target: "agena_studio.fs_watch",
                 error = %err,
                 "failed to initialize filesystem watcher"
             );
@@ -527,7 +527,7 @@ async fn run_fs_watch_loop(state: Arc<crate::AppState>) {
                     }
                     Err(err) => {
                         tracing::debug!(
-                            target: "opencode_studio.fs_watch",
+                            target: "agena_studio.fs_watch",
                             error = %err,
                             "filesystem watcher emitted an error"
                         );
@@ -549,10 +549,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "opencode-studio-{prefix}-{}-{ts}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("agena-studio-{prefix}-{}-{ts}", std::process::id()))
     }
 
     async fn test_state_with_project(project_path: &Path) -> Arc<crate::AppState> {
@@ -803,7 +800,7 @@ mod tests {
             if let Some(matched) = downstream
                 .recv_matching_json(Duration::from_secs(3), |payload| {
                     if payload.get("type").and_then(|v| v.as_str())
-                        != Some("opencode-studio:fs-changed")
+                        != Some("agena-studio:fs-changed")
                     {
                         return false;
                     }
@@ -906,7 +903,7 @@ mod tests {
             if let Some(matched) = downstream
                 .recv_matching_json(Duration::from_secs(3), |payload| {
                     if payload.get("type").and_then(|v| v.as_str())
-                        != Some("opencode-studio:fs-changed")
+                        != Some("agena-studio:fs-changed")
                     {
                         return false;
                     }

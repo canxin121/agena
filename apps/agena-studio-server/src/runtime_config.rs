@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use clap::{CommandFactory, FromArgMatches, parser::ValueSource};
 use serde::Deserialize;
 
-const DEFAULT_RUNTIME_CONFIG_FILE: &str = "opencode-studio.toml";
+const DEFAULT_RUNTIME_CONFIG_FILE: &str = "agena-studio.toml";
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]

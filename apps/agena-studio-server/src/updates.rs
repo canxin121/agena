@@ -4,7 +4,7 @@ use std::time::Duration;
 use axum::{Json, extract::Query};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_RELEASE_REPO: &str = "canxin121/opencode-studio";
+const DEFAULT_RELEASE_REPO: &str = "canxin121/agena";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_WEB_BASE: &str = "https://github.com";
 const SOURCE_KIND: &str = "githubRelease";
@@ -225,16 +225,21 @@ pub async fn update_check(Query(query): Query<UpdateCheckQuery>) -> Json<UpdateC
         .map(|latest| is_newer_version(&service_current_version, latest))
         .unwrap_or(false);
 
+    let release_tag = release.tag_name.trim();
+    let asset_tag = latest_version
+        .as_deref()
+        .map(|version| format!("v{version}"))
+        .unwrap_or_else(|| release_tag.to_string());
+
     if let Some(target) = service_target.as_deref() {
-        let release_tag = release.tag_name.trim();
         let (asset_name, asset_url) = resolve_release_asset_url(
             &release.assets,
             &repo,
             release_tag,
-            service_asset_candidates(target, release_tag).as_slice(),
+            service_asset_candidates(target, &asset_tag).as_slice(),
         );
         if let Some(asset_name) = asset_name.as_deref() {
-            response.service.target = service_asset_target_from_name(asset_name, release_tag)
+            response.service.target = service_asset_target_from_name(asset_name, &asset_tag)
                 .or_else(|| response.service.target.clone());
         }
         response.service.asset_name = asset_name;
@@ -269,9 +274,10 @@ pub async fn update_check(Query(query): Query<UpdateCheckQuery>) -> Json<UpdateC
         let mut assets = installer_assets_for_target(
             &release.assets,
             &repo,
+            release_tag,
             target,
             &runtime.channel,
-            release.tag_name.trim(),
+            &asset_tag,
         );
         assets.sort_by(|a, b| a.name.cmp(&b.name));
         installer.assets = assets;
@@ -343,15 +349,20 @@ fn nonempty(raw: Option<&str>) -> Option<String> {
 }
 
 fn release_repo() -> String {
-    let Some(raw) = nonempty(
-        std::env::var("OPENCODE_STUDIO_RELEASE_REPO")
-            .ok()
-            .as_deref(),
-    ) else {
+    let Some(raw) = env_nonempty(&["AGENA_STUDIO_RELEASE_REPO"]) else {
         return DEFAULT_RELEASE_REPO.to_string();
     };
 
     normalize_repo(&raw).unwrap_or_else(|| DEFAULT_RELEASE_REPO.to_string())
+}
+
+fn env_nonempty(keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = nonempty(std::env::var(key).ok().as_deref()) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn normalize_repo(raw: &str) -> Option<String> {
@@ -376,16 +387,16 @@ fn normalize_repo(raw: &str) -> Option<String> {
 }
 
 fn current_service_version() -> String {
-    nonempty(
-        std::env::var("OPENCODE_STUDIO_UPDATE_SERVICE_VERSION")
-            .ok()
-            .as_deref(),
-    )
-    .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+    env_nonempty(&["AGENA_STUDIO_UPDATE_SERVICE_VERSION"])
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
 fn normalize_release_tag(raw: &str) -> String {
-    raw.trim().trim_start_matches(['v', 'V']).to_string()
+    raw.trim()
+        .strip_prefix("agena-studio-")
+        .unwrap_or(raw.trim())
+        .trim_start_matches(['v', 'V'])
+        .to_string()
 }
 
 fn release_version(tag: &str) -> Option<String> {
@@ -561,11 +572,11 @@ fn service_asset_candidates(target: &str, release_tag: &str) -> Vec<String> {
     for candidate_target in service_target_candidates(target) {
         for ext in [primary_ext, secondary_ext] {
             candidates.push(format!(
-                "opencode-studio-backend-{candidate_target}-{tag}.{ext}"
+                "agena-studio-backend-{candidate_target}-{tag}.{ext}"
             ));
-            candidates.push(format!("opencode-studio-backend-{candidate_target}.{ext}"));
-            candidates.push(format!("opencode-studio-{candidate_target}-{tag}.{ext}"));
-            candidates.push(format!("opencode-studio-{candidate_target}.{ext}"));
+            candidates.push(format!("agena-studio-backend-{candidate_target}.{ext}"));
+            candidates.push(format!("agena-studio-{candidate_target}-{tag}.{ext}"));
+            candidates.push(format!("agena-studio-{candidate_target}.{ext}"));
         }
     }
     candidates
@@ -594,7 +605,7 @@ fn service_target_candidates(target: &str) -> Vec<&str> {
 
 fn service_asset_target_from_name(asset_name: &str, release_tag: &str) -> Option<String> {
     let tag = release_tag.trim();
-    for prefix in ["opencode-studio-backend-", "opencode-studio-"] {
+    for prefix in ["agena-studio-backend-", "agena-studio-"] {
         let Some(rest) = asset_name.strip_prefix(prefix) else {
             continue;
         };
@@ -662,9 +673,9 @@ fn build_service_update_command_for(os: &str, asset_name: Option<&str>, url: &st
     let guessed_name = asset_name.unwrap_or("");
     let lower = guessed_name.to_ascii_lowercase();
     let out = if lower.ends_with(".zip") || os == "windows" {
-        "opencode-studio.zip"
+        "agena-studio.zip"
     } else {
-        "opencode-studio.tar.gz"
+        "agena-studio.tar.gz"
     };
     format!("curl -fL \"{url}\" -o {out}")
 }
@@ -703,11 +714,12 @@ fn normalize_installer_manager(raw: Option<&str>) -> Option<String> {
 fn installer_assets_for_target(
     assets: &[GithubReleaseAsset],
     repo: &str,
+    release_tag: &str,
     target: &str,
     channel: &str,
-    release_tag: &str,
+    asset_tag: &str,
 ) -> Vec<ReleaseAssetLink> {
-    let prefix = installer_asset_prefix(target, channel, release_tag);
+    let prefix = installer_asset_prefix(target, channel, asset_tag);
 
     let mut links = assets
         .iter()
@@ -726,7 +738,7 @@ fn installer_assets_for_target(
 
     // Only guess URLs when we do not have an asset listing (web fallback mode).
     if links.is_empty() && assets.is_empty() {
-        links = installer_expected_asset_names(target, channel, release_tag)
+        links = installer_expected_asset_names(target, channel, asset_tag)
             .into_iter()
             .filter_map(|name| {
                 let identity = classify_asset_identity(&name)?;
@@ -779,12 +791,12 @@ fn unsupported_target_error(raw: &str) -> InstallerSelectionError {
 
 fn installer_asset_prefix(target: &str, channel: &str, release_tag: &str) -> String {
     let suffix = if channel == "cef" { "-cef" } else { "" };
-    format!("opencode-studio-desktop-{target}{suffix}-{release_tag}.")
+    format!("agena-studio-desktop-{target}{suffix}-{release_tag}.")
 }
 
 fn installer_expected_asset_names(target: &str, channel: &str, release_tag: &str) -> Vec<String> {
     let suffix = if channel == "cef" { "-cef" } else { "" };
-    let stem = format!("opencode-studio-desktop-{target}{suffix}-{release_tag}");
+    let stem = format!("agena-studio-desktop-{target}{suffix}-{release_tag}");
 
     if is_windows_target(target) {
         if release_tag.contains('-') {
@@ -977,7 +989,7 @@ async fn fetch_latest_release_via_api(
     let mut request = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header(reqwest::header::USER_AGENT, "opencode-studio-update-check")
+        .header(reqwest::header::USER_AGENT, "agena-studio-update-check")
         .header("X-GitHub-Api-Version", "2022-11-28");
 
     if let Some(token) = github_api_token() {
@@ -1007,7 +1019,7 @@ async fn fetch_latest_release_via_web(repo: &str) -> Result<GithubRelease, Strin
     let latest_url = format!("{GITHUB_WEB_BASE}/{repo}/releases/latest");
     let resp = client
         .get(latest_url)
-        .header(reqwest::header::USER_AGENT, "opencode-studio-update-check")
+        .header(reqwest::header::USER_AGENT, "agena-studio-update-check")
         .send()
         .await
         .map_err(|err| format!("request GitHub release page: {err}"))?;
@@ -1039,12 +1051,7 @@ fn release_tag_from_url(url: &reqwest::Url) -> Option<String> {
 }
 
 fn github_api_token() -> Option<String> {
-    let primary = std::env::var("OPENCODE_STUDIO_GITHUB_TOKEN").ok();
-    if let Some(token) = nonempty(primary.as_deref()) {
-        return Some(token);
-    }
-    let secondary = std::env::var("GITHUB_TOKEN").ok();
-    nonempty(secondary.as_deref())
+    env_nonempty(&["AGENA_STUDIO_GITHUB_TOKEN", "GITHUB_TOKEN"])
 }
 
 #[cfg(test)]
@@ -1075,12 +1082,12 @@ mod tests {
         let runtime = runtime_with("exe", "direct");
         let assets = vec![
             asset(
-                "opencode-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.msi",
+                "agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.msi",
                 "msi",
                 "direct",
             ),
             asset(
-                "opencode-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.exe",
+                "agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.exe",
                 "exe",
                 "direct",
             ),
@@ -1092,7 +1099,7 @@ mod tests {
                 .primary_asset
                 .as_ref()
                 .map(|item| item.name.as_str()),
-            Some("opencode-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.exe")
+            Some("agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.exe")
         );
         assert!(selected.selection_error.is_none());
     }
@@ -1101,7 +1108,7 @@ mod tests {
     fn select_primary_installer_rejects_cross_manager_match() {
         let runtime = runtime_with("exe", "winget");
         let assets = vec![asset(
-            "opencode-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.exe",
+            "agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.exe",
             "exe",
             "direct",
         )];
@@ -1126,7 +1133,7 @@ mod tests {
             installer_manager: Some("direct".to_string()),
         };
         let assets = vec![asset(
-            "opencode-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.exe",
+            "agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.exe",
             "exe",
             "direct",
         )];
@@ -1142,13 +1149,13 @@ mod tests {
     #[test]
     fn classify_asset_identity_infers_extension_defaults() {
         let deb =
-            classify_asset_identity("opencode-studio-desktop-x86_64-unknown-linux-gnu-v1.2.0.deb")
+            classify_asset_identity("agena-studio-desktop-x86_64-unknown-linux-gnu-v1.2.0.deb")
                 .expect("deb identity");
         assert_eq!(deb.installer_type, "deb");
         assert_eq!(deb.manager, "apt");
 
         let rpm =
-            classify_asset_identity("opencode-studio-desktop-x86_64-unknown-linux-gnu-v1.2.0.rpm")
+            classify_asset_identity("agena-studio-desktop-x86_64-unknown-linux-gnu-v1.2.0.rpm")
                 .expect("rpm identity");
         assert_eq!(rpm.installer_type, "rpm");
         assert_eq!(rpm.manager, "dnf");
@@ -1172,6 +1179,15 @@ mod tests {
             runtime_target_triple_for("macos", "aarch64", false),
             Some("aarch64-apple-darwin")
         );
+    }
+
+    #[test]
+    fn release_version_accepts_agena_studio_release_tags() {
+        assert_eq!(
+            release_version("agena-studio-v1.2.0").as_deref(),
+            Some("1.2.0")
+        );
+        assert_eq!(release_version("v1.2.0").as_deref(), Some("1.2.0"));
     }
 
     #[test]
@@ -1219,7 +1235,7 @@ mod tests {
         let mac_assets = installer_expected_asset_names("aarch64-apple-darwin", "main", "v1.2.0");
         assert_eq!(
             mac_assets,
-            vec!["opencode-studio-desktop-aarch64-apple-darwin-v1.2.0.dmg".to_string()]
+            vec!["agena-studio-desktop-aarch64-apple-darwin-v1.2.0.dmg".to_string()]
         );
 
         let linux_assets =
@@ -1227,9 +1243,9 @@ mod tests {
         assert_eq!(
             linux_assets,
             vec![
-                "opencode-studio-desktop-aarch64-unknown-linux-gnu-v1.2.0.AppImage".to_string(),
-                "opencode-studio-desktop-aarch64-unknown-linux-gnu-v1.2.0.deb".to_string(),
-                "opencode-studio-desktop-aarch64-unknown-linux-gnu-v1.2.0.rpm".to_string(),
+                "agena-studio-desktop-aarch64-unknown-linux-gnu-v1.2.0.AppImage".to_string(),
+                "agena-studio-desktop-aarch64-unknown-linux-gnu-v1.2.0.deb".to_string(),
+                "agena-studio-desktop-aarch64-unknown-linux-gnu-v1.2.0.rpm".to_string(),
             ]
         );
     }
@@ -1251,15 +1267,15 @@ mod tests {
     fn service_asset_candidates_prefer_backend_names_and_platform_extensions() {
         assert_eq!(
             service_asset_candidates("x86_64-pc-Windows-msvc", "v1.2.0")[0],
-            "opencode-studio-backend-x86_64-pc-Windows-msvc-v1.2.0.zip"
+            "agena-studio-backend-x86_64-pc-Windows-msvc-v1.2.0.zip"
         );
         assert_eq!(
             service_asset_candidates("x86_64-unknown-linux-gnu", "v1.2.0")[0],
-            "opencode-studio-backend-x86_64-unknown-linux-musl-v1.2.0.tar.gz"
+            "agena-studio-backend-x86_64-unknown-linux-musl-v1.2.0.tar.gz"
         );
         assert_eq!(
             service_asset_candidates("x86_64-unknown-linux-gnu", "v1.2.0")[8],
-            "opencode-studio-backend-x86_64-unknown-linux-gnu-v1.2.0.tar.gz"
+            "agena-studio-backend-x86_64-unknown-linux-gnu-v1.2.0.tar.gz"
         );
     }
 
@@ -1267,16 +1283,13 @@ mod tests {
     fn service_asset_target_from_name_extracts_selected_target() {
         assert_eq!(
             service_asset_target_from_name(
-                "opencode-studio-backend-aarch64-unknown-linux-gnu-v1.2.0.tar.gz",
+                "agena-studio-backend-aarch64-unknown-linux-gnu-v1.2.0.tar.gz",
                 "v1.2.0"
             ),
             Some("aarch64-unknown-linux-gnu".to_string())
         );
         assert_eq!(
-            service_asset_target_from_name(
-                "opencode-studio-x86_64-unknown-linux-musl.zip",
-                "v1.2.0"
-            ),
+            service_asset_target_from_name("agena-studio-x86_64-unknown-linux-musl.zip", "v1.2.0"),
             Some("x86_64-unknown-linux-musl".to_string())
         );
     }
@@ -1320,15 +1333,15 @@ mod tests {
         assert_eq!(
             windows,
             vec![
-                "opencode-studio-desktop-x86_64-pc-Windows-msvc-v1.2.0.msi".to_string(),
-                "opencode-studio-desktop-x86_64-pc-Windows-msvc-v1.2.0.exe".to_string(),
+                "agena-studio-desktop-x86_64-pc-Windows-msvc-v1.2.0.msi".to_string(),
+                "agena-studio-desktop-x86_64-pc-Windows-msvc-v1.2.0.exe".to_string(),
             ]
         );
 
         let mac = installer_expected_asset_names("AARCH64-APPLE-DARWIN", "main", "v1.2.0");
         assert_eq!(
             mac,
-            vec!["opencode-studio-desktop-AARCH64-APPLE-DARWIN-v1.2.0.dmg".to_string()]
+            vec!["agena-studio-desktop-AARCH64-APPLE-DARWIN-v1.2.0.dmg".to_string()]
         );
     }
 
@@ -1338,7 +1351,7 @@ mod tests {
             installer_expected_asset_names("x86_64-pc-windows-msvc", "main", "v1.2.0-rc.1");
         assert_eq!(
             assets,
-            vec!["opencode-studio-desktop-x86_64-pc-windows-msvc-v1.2.0-rc.1.exe".to_string()]
+            vec!["agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0-rc.1.exe".to_string()]
         );
     }
 
@@ -1346,16 +1359,16 @@ mod tests {
     fn parse_manager_from_asset_name_supports_multiple_patterns() {
         assert_eq!(
             parse_manager_from_asset_name(
-                "opencode-studio-desktop-x86_64-pc-windows-msvc-v1.2.0-winget-.exe"
+                "agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0-winget-.exe"
             ),
             Some("winget")
         );
         assert_eq!(
-            parse_manager_from_asset_name("opencode-studio.desktop.scoop.installer.exe"),
+            parse_manager_from_asset_name("agena-studio.desktop.scoop.installer.exe"),
             Some("scoop")
         );
         assert_eq!(
-            parse_manager_from_asset_name("opencode_studio_brew_pkg.dmg"),
+            parse_manager_from_asset_name("agena_studio_brew_pkg.dmg"),
             Some("brew")
         );
     }
@@ -1364,11 +1377,11 @@ mod tests {
     fn build_service_update_command_for_varies_by_os() {
         assert_eq!(
             build_service_update_command_for("windows", None, "https://example.invalid/a.zip"),
-            "curl -fL \"https://example.invalid/a.zip\" -o opencode-studio.zip"
+            "curl -fL \"https://example.invalid/a.zip\" -o agena-studio.zip"
         );
         assert_eq!(
             build_service_update_command_for("linux", None, "https://example.invalid/a.tar.gz"),
-            "curl -fL \"https://example.invalid/a.tar.gz\" -o opencode-studio.tar.gz"
+            "curl -fL \"https://example.invalid/a.tar.gz\" -o agena-studio.tar.gz"
         );
     }
 
@@ -1376,7 +1389,8 @@ mod tests {
     fn installer_assets_for_target_falls_back_to_expected_urls() {
         let assets = installer_assets_for_target(
             &[],
-            "canxin121/opencode-studio",
+            "canxin121/agena",
+            "agena-studio-v1.2.0",
             "x86_64-pc-windows-msvc",
             "main",
             "v1.2.0",
@@ -1387,7 +1401,7 @@ mod tests {
         assert_eq!(assets[0].manager, "direct");
         assert_eq!(
             assets[0].url,
-            "https://github.com/canxin121/opencode-studio/releases/download/v1.2.0/opencode-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.msi"
+            "https://github.com/canxin121/agena/releases/download/agena-studio-v1.2.0/agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.msi"
         );
         assert_eq!(assets[1].installer_type, "exe");
     }

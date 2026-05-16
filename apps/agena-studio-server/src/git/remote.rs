@@ -506,9 +506,9 @@ async fn ssh_signing_probe(
 
     let mut args = vec![
         "-c".to_string(),
-        "user.name=OpenCode Studio SSH Probe".to_string(),
+        "user.name=Agena Studio SSH Probe".to_string(),
         "-c".to_string(),
-        "user.email=opencode-studio-ssh-probe@example.invalid".to_string(),
+        "user.email=agena-studio-ssh-probe@example.invalid".to_string(),
         "-c".to_string(),
         "commit.gpgsign=true".to_string(),
         "-c".to_string(),

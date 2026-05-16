@@ -1036,9 +1036,8 @@ impl App {
             return;
         }
 
-        // ESC while a turn is in flight — global priority. Cancels the
+        // ESC while a turn is in flight has global priority. Cancel the
         // active turn before falling through to focus-specific Esc.
-        // Mirrors Claude Code's `useCancelRequest` priority order.
         if matches!(key.code, KeyCode::Esc)
             && key.modifiers.is_empty()
             && self.transcript.submitting
@@ -2153,9 +2152,8 @@ impl App {
         items
     }
 
-    /// Single-Esc → leave composer focus. Double-Esc within the configured
-    /// window → clear the input. Mirrors Claude Code's "double tap esc to
-    /// clear input" affordance.
+    /// Single-Esc leaves composer focus. Double-Esc within the configured
+    /// window clears the input.
     fn handle_composer_esc(&mut self) {
         let now = Instant::now();
         let double = self
@@ -2487,8 +2485,7 @@ impl App {
                 self.transcript.apply_execution(execution);
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
-                // Pop the next pending message and submit it. Mirrors
-                // Codex's `maybe_send_next_queued_input` post-turn.
+                // Pop the next pending message and submit it after the turn.
                 self.try_drain_queue_one();
             }
             Err(error) => {
@@ -3570,10 +3567,9 @@ impl App {
         self.request_steer_input(session_id, parts, draft);
     }
 
-    /// Secondary submit action (bare Enter by default). When the AI is
-    /// idle, sends immediately. When the AI is mid-turn, the message is
-    /// appended to the local pending queue and drained on turn
-    /// completion. Mirrors Claude Code's default behavior.
+    /// Secondary submit action (bare Enter by default). When the AI is idle,
+    /// sends immediately. When the AI is mid-turn, the message is appended to
+    /// the local pending queue and drained on turn completion.
     fn queue_or_submit(&mut self) {
         // Preserve the legacy paste-burst behavior: if a multi-character
         // paste burst is active, an Enter inside it should be treated as
@@ -4698,11 +4694,10 @@ impl App {
         }
     }
 
-    /// `/btw <question>` — fork a child session and submit the question
-    /// there *without* touching the parent transcript. Mirrors Claude
-    /// Code's "side question" affordance. The parent turn keeps running
-    /// (or stays idle) untouched; the user can switch to the new session
-    /// via the sessions pane to read the answer.
+    /// `/btw <question>` forks a child session and submits the question
+    /// there without touching the parent transcript. The parent turn keeps
+    /// running (or stays idle) untouched; the user can switch to the new
+    /// session via the sessions pane to read the answer.
     fn handle_btw_command(&mut self, args: &str) {
         let question = args.trim();
         if question.is_empty() {

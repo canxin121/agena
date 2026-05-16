@@ -939,7 +939,7 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         let workspace_root = std::env::temp_dir().join(format!(
-            "opencode-studio-workspace-preview-test-{}-{nanos}",
+            "agena-studio-workspace-preview-test-{}-{nanos}",
             std::process::id()
         ));
         crate::test_support::build_test_app_state(
@@ -971,7 +971,7 @@ mod tests {
                 opencode_session_id: None,
                 command: "bun".to_string(),
                 args: vec!["run".to_string(), "dev".to_string()],
-                logs_path: ".opencode/preview/pv_test.log".to_string(),
+                logs_path: ".agena/preview/pv_test.log".to_string(),
                 target_url: "http://example.com:5173".to_string(),
             }),
         )

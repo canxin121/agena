@@ -308,8 +308,8 @@ impl ToolPermissionPolicy {
         Ok(self)
     }
 
-    /// Append an overlay bash command pattern rule using opencode-style
-    /// wildcard semantics. These rules are evaluated after unconditional deny
+    /// Append an overlay bash command pattern rule using shell-style wildcard
+    /// semantics. These rules are evaluated after unconditional deny
     /// patterns but before the base bash pattern rules, and the last matching
     /// overlay rule wins.
     pub fn with_bash_overlay_rule(

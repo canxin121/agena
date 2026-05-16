@@ -8,8 +8,8 @@ use std::{
 const MAX_SANITIZED_LENGTH: usize = 200;
 
 /// Convert an absolute path to a filesystem-safe directory name.
-/// Mirrors Claude Code's `sanitizePath`: replace all non-alphanumeric chars
-/// with `-`, then if the result exceeds 200 chars, truncate and append a hash.
+/// Replace all non-alphanumeric chars with `-`, then if the result exceeds
+/// 200 chars, truncate and append a hash.
 fn sanitize_path(path: &str) -> String {
     let sanitized: String = path
         .chars()
@@ -28,7 +28,6 @@ fn sanitize_path(path: &str) -> String {
 }
 
 /// Returns `~/.agena/projects/<sanitized-workspace-root>/memory/`.
-/// Mirrors Claude Code's `~/.claude/projects/<sanitized-cwd>/memory/`.
 fn memory_base_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -45,8 +44,8 @@ impl MemoryDir {
     /// Path: `~/.agena/projects/<sanitized-workspace-root>/memory/`
     pub fn from_workspace(workspace_root: &Path) -> Self {
         let workspace_str = workspace_root.to_string_lossy();
-        // Normalize separators before sanitizing (mirrors Claude Code behaviour
-        // where the canonical git root is always passed as a forward-slash path).
+        // Normalize separators before sanitizing so the same workspace gets
+        // the same key across platforms.
         let normalized = workspace_str.replace('\\', "/");
         let key = sanitize_path(&normalized);
         Self {

@@ -133,7 +133,7 @@ pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
             // Skip common large folders.
             if matches!(
                 name.as_ref(),
-                "node_modules" | "target" | ".opencode-studio" | "dist" | "build" | ".next"
+                "node_modules" | "target" | ".agena-studio" | "dist" | "build" | ".next"
             ) {
                 it.skip_current_dir();
                 continue;

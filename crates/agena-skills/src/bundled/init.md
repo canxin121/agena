@@ -1,10 +1,10 @@
 ---
 name: init
-description: Initialise an AGENTS.md / CLAUDE.md describing the codebase
+description: Initialise an AGENA.md describing the codebase
 aliases: ["bootstrap"]
 ---
-You are bootstrapping a project memory file (AGENTS.md or CLAUDE.md) for
-this repository.  Walk the top-level layout, read the package manifests
+You are bootstrapping a project memory file (AGENA.md) for this repository.
+Walk the top-level layout, read the package manifests
 (Cargo.toml, package.json, pyproject.toml, etc.), and produce a concise
 markdown document covering:
 
@@ -14,4 +14,4 @@ markdown document covering:
 4. Any conventions (commit style, lint rules, formatting) that future
    contributors should follow.
 
-Save the result to AGENTS.md at the repo root.
+Save the result to AGENA.md at the repo root.

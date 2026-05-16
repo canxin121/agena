@@ -216,7 +216,7 @@ pub async fn config_opencode_put(
         .await
     {
         tracing::warn!(
-            target: "opencode_studio.plugin_runtime",
+            target: "agena_studio.plugin_runtime",
             scope,
             error = %err,
             "failed to refresh plugin runtime after opencode config update"

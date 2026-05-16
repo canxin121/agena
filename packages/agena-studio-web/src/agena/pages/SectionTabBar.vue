@@ -13,12 +13,14 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div v-if="props.tabs.length" class="button-row" style="margin-bottom: 16px; flex-wrap: wrap">
+  <div v-if="props.tabs.length" class="section-tabs" role="tablist" aria-label="Section navigation">
     <button
       v-for="tab in props.tabs"
       :key="tab.id"
-      class="button"
-      :class="{ primary: props.activeTab === tab.id }"
+      class="section-tab"
+      :class="{ active: props.activeTab === tab.id }"
+      role="tab"
+      :aria-selected="props.activeTab === tab.id"
       @click="emit('update:activeTab', tab.id)"
     >
       {{ tab.label }}

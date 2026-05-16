@@ -432,6 +432,8 @@ export type AgentPermissionConfig = PermissionConfig & {
   inherit?: PermissionInheritance
 }
 
+export type PermissionSubjectKind = 'tool' | 'path_access' | 'network_access'
+
 export type PermissionRuleResource = {
   id: number
   action_key: string
@@ -1112,12 +1114,15 @@ export async function listPermissionRules(search = ''): Promise<PermissionRuleRe
 
 export async function createPermissionRule(input: {
   actionKey?: string
-  subjectKind?: 'tool' | 'path_access'
+  subjectKind?: PermissionSubjectKind
   toolName?: string
   qualifier?: string
   pathAccessKind?: string
   workspaceRoot?: string
   targetPath?: string
+  networkTarget?: string
+  networkHost?: string
+  networkPort?: number
   scope?: 'session' | 'workspace' | 'global'
   sessionId?: number
   mode: PermissionMode
@@ -1133,6 +1138,9 @@ export async function createPermissionRule(input: {
       ...(input.pathAccessKind ? { path_access_kind: input.pathAccessKind } : {}),
       ...(input.workspaceRoot ? { workspace_root: input.workspaceRoot } : {}),
       ...(input.targetPath ? { target_path: input.targetPath } : {}),
+      ...(input.networkTarget ? { network_target: input.networkTarget } : {}),
+      ...(input.networkHost ? { network_host: input.networkHost } : {}),
+      ...(input.networkPort !== undefined ? { network_port: input.networkPort } : {}),
       ...(input.scope ? { scope: input.scope } : {}),
       ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
       mode: input.mode,
@@ -1143,12 +1151,15 @@ export async function createPermissionRule(input: {
 export async function updatePermissionRule(input: {
   id: number
   actionKey?: string
-  subjectKind?: 'tool' | 'path_access'
+  subjectKind?: PermissionSubjectKind
   toolName?: string
   qualifier?: string
   pathAccessKind?: string
   workspaceRoot?: string
   targetPath?: string
+  networkTarget?: string
+  networkHost?: string
+  networkPort?: number
   scope?: 'session' | 'workspace' | 'global'
   sessionId?: number
   mode: PermissionMode
@@ -1164,6 +1175,9 @@ export async function updatePermissionRule(input: {
       ...(input.pathAccessKind ? { path_access_kind: input.pathAccessKind } : {}),
       ...(input.workspaceRoot ? { workspace_root: input.workspaceRoot } : {}),
       ...(input.targetPath ? { target_path: input.targetPath } : {}),
+      ...(input.networkTarget ? { network_target: input.networkTarget } : {}),
+      ...(input.networkHost ? { network_host: input.networkHost } : {}),
+      ...(input.networkPort !== undefined ? { network_port: input.networkPort } : {}),
       ...(input.scope ? { scope: input.scope } : {}),
       ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
       mode: input.mode,

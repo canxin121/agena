@@ -1,15 +1,17 @@
 import type { ComputedRef, Ref } from 'vue'
 
-import type { PermissionMode, PermissionRuleResource } from '../lib/agenaApi'
+import type { PermissionMode, PermissionRuleResource, PermissionSubjectKind } from '../lib/agenaApi'
 
 export type SettingsPermissionsStateInput = {
   permissionDraft: {
-    subjectKind: 'tool' | 'path_access'
+    subjectKind: PermissionSubjectKind
     toolName: string
     qualifier: string
     pathAccessKind: string
     workspaceRoot: string
     targetPath: string
+    networkTarget: string
+    networkPort: string
     scope: 'session' | 'workspace' | 'global'
     sessionId: string
     mode: PermissionMode
@@ -24,7 +26,7 @@ export type SettingsPermissionsStateInput = {
   permissionScopeFilter: Ref<'all' | 'session' | 'workspace' | 'global'>
   permissionSearch: Ref<string>
   permissionStatusFilter: Ref<'all' | 'active' | 'revoked'>
-  permissionSubjectFilter: Ref<'all' | 'tool' | 'path_access'>
+  permissionSubjectFilter: Ref<'all' | PermissionSubjectKind>
   savePermissionRule: () => void | Promise<void>
   resetPermissionDraft: () => void
   revokePermissionRuleAction: (rule: PermissionRuleResource) => void | Promise<void>

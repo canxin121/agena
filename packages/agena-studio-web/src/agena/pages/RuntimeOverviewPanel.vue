@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 
 import type {
   ModelCatalogEntry,
+  ModelCatalogEntryKind,
   ProviderModel,
   ProviderModelVariant,
   ProviderSummary,
@@ -36,6 +37,9 @@ const props = defineProps<{
 const actionError = ref('')
 const actionMessage = ref('')
 const catalogEntriesState = ref<ModelCatalogEntry[]>([])
+const catalogKindFilter = ref<'all' | ModelCatalogEntryKind>('all')
+const catalogProviderFilter = ref('')
+const catalogQuery = ref('')
 const draft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft())
 const editingEntryKey = ref('')
 const submitting = ref(false)
@@ -64,6 +68,62 @@ const sortedCatalogEntries = computed(() =>
   }),
 )
 
+const catalogProviderOptions = computed(() => {
+  const providerIds = new Set<string>()
+  for (const entry of catalogEntriesState.value) providerIds.add(entry.provider_id)
+  for (const provider of props.providers) providerIds.add(provider.provider_id)
+  return [...providerIds].sort((left, right) => left.localeCompare(right))
+})
+
+const customCatalogEntriesCount = computed(
+  () => catalogEntriesState.value.filter((entry) => entry.kind === 'custom').length,
+)
+
+const officialCatalogEntriesCount = computed(
+  () => catalogEntriesState.value.filter((entry) => entry.kind === 'official').length,
+)
+
+function catalogEntrySearchText(entry: ModelCatalogEntry) {
+  const variantText = Object.entries(entry.variants || {})
+    .flatMap(([name, variant]) => [
+      name,
+      variant.display_name,
+      variant.description,
+      variant.thinking ? JSON.stringify(variant.thinking) : '',
+    ])
+    .filter(Boolean)
+    .join('\n')
+
+  return [
+    entry.provider_id,
+    entry.model_id,
+    entry.display_name,
+    entry.description,
+    entry.kind,
+    entry.source,
+    entry.source_label,
+    entry.family,
+    entry.lifecycle,
+    entry.default_model_for_provider,
+    variantText,
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase()
+}
+
+const filteredCatalogEntries = computed(() => {
+  const query = catalogQuery.value.trim().toLowerCase()
+  const providerId = catalogProviderFilter.value.trim()
+  const kind = catalogKindFilter.value
+
+  return sortedCatalogEntries.value.filter((entry) => {
+    if (providerId && entry.provider_id !== providerId) return false
+    if (kind !== 'all' && entry.kind !== kind) return false
+    return !query || catalogEntrySearchText(entry).includes(query)
+  })
+})
+
 function makeEntryKey(providerId: string, modelId: string, kind: ModelCatalogEntry['kind']) {
   return `${providerId}/${modelId}/${kind}`
 }
@@ -76,6 +136,14 @@ function resetEditor(providerId = '', modelId = '') {
 function editEntry(entry: ModelCatalogEntry) {
   draft.value = createModelCatalogDraftFromEntry(entry)
   editingEntryKey.value = makeEntryKey(entry.provider_id, entry.model_id, entry.kind)
+  actionError.value = ''
+  actionMessage.value = `Loaded ${entry.provider_id}/${entry.model_id} into the draft editor.`
+}
+
+function clearCatalogFilters() {
+  catalogQuery.value = ''
+  catalogProviderFilter.value = ''
+  catalogKindFilter.value = 'all'
 }
 
 type ProviderModelVariantWithDisabled = ProviderModelVariant & {
@@ -105,7 +173,9 @@ function formatVariantThinking(value: Record<string, unknown> | null | undefined
 function loadProviderModelDraft(model: ProviderModel) {
   const matchingEntry = findCatalogEntryForProviderModel(catalogEntriesState.value, model)
   draft.value = createModelCatalogDraftFromProviderSelection(catalogEntriesState.value, model)
-  editingEntryKey.value = matchingEntry ? makeEntryKey(matchingEntry.provider_id, matchingEntry.model_id, matchingEntry.kind) : ''
+  editingEntryKey.value = matchingEntry
+    ? makeEntryKey(matchingEntry.provider_id, matchingEntry.model_id, matchingEntry.kind)
+    : ''
   actionError.value = ''
   actionMessage.value = `Loaded ${model.provider_id}/${model.id} into the draft editor.`
 }
@@ -430,7 +500,8 @@ function isEntrySelected(entry: ModelCatalogEntry) {
           <div>
             <h4 style="margin: 0">Variants</h4>
             <p class="muted" style="margin: 4px 0 0">
-              Add a few provider/model variants with optional labels, descriptions, disabled state, and raw thinking JSON.
+              Add a few provider/model variants with optional labels, descriptions, disabled state, and raw thinking
+              JSON.
             </p>
           </div>
           <button class="button" :disabled="submitting" @click="addVariantDraft">Add Variant</button>
@@ -497,7 +568,11 @@ function isEntrySelected(entry: ModelCatalogEntry) {
               </div>
             </div>
 
-            <label class="muted" :for="`catalog-variant-disabled-${index}`" style="display: flex; gap: 8px; align-items: center; margin-top: 12px">
+            <label
+              class="muted"
+              :for="`catalog-variant-disabled-${index}`"
+              style="display: flex; gap: 8px; align-items: center; margin-top: 12px"
+            >
               <input :id="`catalog-variant-disabled-${index}`" v-model="variant.disabled" type="checkbox" />
               Disable this variant
             </label>
@@ -522,12 +597,70 @@ function isEntrySelected(entry: ModelCatalogEntry) {
               the only entries you can delete.
             </p>
           </div>
-          <span class="badge">{{ sortedCatalogEntries.length }}</span>
+          <span class="badge">{{ filteredCatalogEntries.length }}/{{ sortedCatalogEntries.length }}</span>
         </div>
 
-        <div v-if="sortedCatalogEntries.length" class="list" style="margin-top: 12px">
+        <div class="settings-summary" style="margin-top: 12px">
+          <div class="summary-item">
+            <div class="summary-label">Official</div>
+            <div class="summary-value">{{ officialCatalogEntriesCount }}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">Custom</div>
+            <div class="summary-value">{{ customCatalogEntriesCount }}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">Providers</div>
+            <div class="summary-value">{{ catalogProviderOptions.length }}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">Showing</div>
+            <div class="summary-value">{{ filteredCatalogEntries.length }}</div>
+          </div>
+        </div>
+
+        <div class="grid three" style="margin-top: 12px">
+          <div class="field">
+            <label class="label" for="catalog-entry-search">Find Entries</label>
+            <input
+              id="catalog-entry-search"
+              v-model="catalogQuery"
+              class="input mono"
+              placeholder="provider, model, variant, description"
+            />
+          </div>
+          <div class="field">
+            <label class="label" for="catalog-entry-provider-filter">Provider</label>
+            <select id="catalog-entry-provider-filter" v-model="catalogProviderFilter" class="select">
+              <option value="">All providers</option>
+              <option v-for="providerId in catalogProviderOptions" :key="providerId" :value="providerId">
+                {{ providerId }}
+              </option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="label" for="catalog-entry-kind-filter">Kind</label>
+            <select id="catalog-entry-kind-filter" v-model="catalogKindFilter" class="select">
+              <option value="all">All entries</option>
+              <option value="official">Official only</option>
+              <option value="custom">Custom only</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
+          <button
+            class="button"
+            :disabled="!catalogQuery && !catalogProviderFilter && catalogKindFilter === 'all'"
+            @click="clearCatalogFilters"
+          >
+            Clear Filters
+          </button>
+        </div>
+
+        <div v-if="filteredCatalogEntries.length" class="list" style="margin-top: 12px">
           <div
-            v-for="entry in sortedCatalogEntries"
+            v-for="entry in filteredCatalogEntries"
             :key="makeEntryKey(entry.provider_id, entry.model_id, entry.kind)"
             class="list-item"
             :style="isEntrySelected(entry) ? 'border-color: var(--accent-color, #444);' : ''"
@@ -538,7 +671,8 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                   <strong>{{ entry.provider_id }}/{{ entry.model_id }}</strong>
                 </div>
                 <div class="muted">
-                  {{ entry.display_name || 'Unnamed model' }} · {{ entry.kind }} · {{ entry.source_label || entry.source }}
+                  {{ entry.display_name || 'Unnamed model' }} · {{ entry.kind }} ·
+                  {{ entry.source_label || entry.source }}
                 </div>
                 <div v-if="entry.kind === 'custom'" class="muted">Custom entry saved for this model.</div>
                 <div v-if="entry.family || entry.lifecycle" class="muted">
@@ -565,7 +699,9 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                       <span v-if="variant.disabled" class="badge" style="margin-left: 8px">disabled</span>
                     </div>
                     <div v-if="variant.description" class="muted">{{ variant.description }}</div>
-                    <div v-if="variant.thinking" class="muted mono">thinking {{ formatVariantThinking(variant.thinking) }}</div>
+                    <div v-if="variant.thinking" class="muted mono">
+                      thinking {{ formatVariantThinking(variant.thinking) }}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -588,6 +724,9 @@ function isEntrySelected(entry: ModelCatalogEntry) {
             </div>
           </div>
         </div>
+        <p v-else-if="sortedCatalogEntries.length" class="muted" style="margin-top: 12px">
+          No catalog entries match the current filters.
+        </p>
         <p v-else class="muted" style="margin-top: 12px">No catalog entries loaded.</p>
       </section>
     </div>

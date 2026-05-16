@@ -44,6 +44,8 @@ describe('useRuntimePageStore', () => {
       pathAccessKind: 'read',
       workspaceRoot: '',
       targetPath: '',
+      networkTarget: '',
+      networkPort: '',
       scope: 'workspace',
       sessionId: '',
       mode: 'ask',

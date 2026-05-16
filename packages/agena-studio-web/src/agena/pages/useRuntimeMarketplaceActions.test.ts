@@ -26,75 +26,94 @@ function createState() {
     marketplaceRequireSignature: ref(false),
   }
   const calls: string[] = []
-  const actions = createRuntimeMarketplaceActions(state, async () => {
-    calls.push('load')
-  }, {
-    listMarketplaceInstalledPlugins: async () => {
-      calls.push('listMarketplaceInstalledPlugins')
-      return [{
-        plugin_id: 'demo/plugin',
-        version: '1.0.0',
-        kind: 'wasm',
-        platform: 'any',
-        binary_path: '/plugins/demo/plugin.wasm',
-        config_path: '/plugins/demo/plugin.json',
-        installed_at: '2026-05-10T00:00:00Z',
-        registry_id: 'custom',
-        registry_url: 'https://registry.example.test',
-        archive_extracted: false,
-      }]
+  const actions = createRuntimeMarketplaceActions(
+    state,
+    async () => {
+      calls.push('load')
     },
-    listMarketplaceOutdatedPlugins: async () => {
-      calls.push('listMarketplaceOutdatedPlugins')
-      return [{ plugin_id: 'demo/plugin', installed_version: '1.0.0', latest_version: '1.1.0' }]
-    },
-    searchMarketplacePlugins: async ({ registryId, registryUrl, query, refresh }) => {
-      calls.push(`searchMarketplacePlugins:${registryId}:${registryUrl}:${query}:${refresh ? 'refresh' : 'cached'}`)
-      return [{
-        plugin_id: 'demo/plugin',
-        name: 'Demo Plugin',
-        latest_version: '1.1.0',
-        description: 'Demo',
-        version_count: 2,
-      }]
-    },
-    syncMarketplaceRegistry: async ({ registryId, registryUrl }) => {
-      calls.push(`syncMarketplaceRegistry:${registryId}:${registryUrl}`)
-      return { registry_id: registryId || 'default', registry_url: registryUrl, plugin_count: 3 }
-    },
-    installMarketplacePlugin: async ({ spec, registryId, registryUrl, allowUnverified, requireSignature, refresh }) => {
-      calls.push(`installMarketplacePlugin:${spec}:${registryId}:${registryUrl}:${allowUnverified}:${requireSignature}:${refresh}`)
-      return {
-        plugin_id: spec,
-        version: '1.1.0',
-        kind: 'wasm',
-        artifact_path: '/downloads/demo-plugin-1.1.0.wasm',
-        config_path: '/plugins/demo/plugin.json',
-        dry_run: false,
-      }
-    },
-    uninstallMarketplacePlugin: async ({ pluginId, cascade }) => {
-      calls.push(`uninstallMarketplacePlugin:${pluginId}:${cascade}`)
-      return [{ plugin_id: pluginId, version: '1.1.0', config_path: '/plugins/demo/plugin.json' }]
-    },
-    upgradeMarketplacePlugins: async (options) => {
-      calls.push(`upgradeMarketplacePlugins:${'pluginId' in options ? options.pluginId : 'all'}`)
-      return [{
-        plugin_id: 'demo/plugin',
-        previous_version: '1.0.0',
-        installed_version: '1.1.0',
-        upgraded: true,
-        outcome: {
-          plugin_id: 'demo/plugin',
+    {
+      listMarketplaceInstalledPlugins: async () => {
+        calls.push('listMarketplaceInstalledPlugins')
+        return [
+          {
+            plugin_id: 'demo/plugin',
+            version: '1.0.0',
+            kind: 'wasm',
+            platform: 'any',
+            binary_path: '/plugins/demo/plugin.wasm',
+            config_path: '/plugins/demo/plugin.json',
+            installed_at: '2026-05-10T00:00:00Z',
+            registry_id: 'custom',
+            registry_url: 'https://registry.example.test',
+            archive_extracted: false,
+          },
+        ]
+      },
+      listMarketplaceOutdatedPlugins: async () => {
+        calls.push('listMarketplaceOutdatedPlugins')
+        return [{ plugin_id: 'demo/plugin', installed_version: '1.0.0', latest_version: '1.1.0' }]
+      },
+      searchMarketplacePlugins: async ({ registryId, registryUrl, query, refresh }) => {
+        calls.push(`searchMarketplacePlugins:${registryId}:${registryUrl}:${query}:${refresh ? 'refresh' : 'cached'}`)
+        return [
+          {
+            plugin_id: 'demo/plugin',
+            name: 'Demo Plugin',
+            latest_version: '1.1.0',
+            description: 'Demo',
+            version_count: 2,
+          },
+        ]
+      },
+      syncMarketplaceRegistry: async ({ registryId, registryUrl }) => {
+        calls.push(`syncMarketplaceRegistry:${registryId}:${registryUrl}`)
+        return { registry_id: registryId || 'default', registry_url: registryUrl, plugin_count: 3 }
+      },
+      installMarketplacePlugin: async ({
+        spec,
+        registryId,
+        registryUrl,
+        allowUnverified,
+        requireSignature,
+        refresh,
+      }) => {
+        calls.push(
+          `installMarketplacePlugin:${spec}:${registryId}:${registryUrl}:${allowUnverified}:${requireSignature}:${refresh}`,
+        )
+        return {
+          plugin_id: spec,
           version: '1.1.0',
           kind: 'wasm',
           artifact_path: '/downloads/demo-plugin-1.1.0.wasm',
           config_path: '/plugins/demo/plugin.json',
           dry_run: false,
-        },
-      }]
+        }
+      },
+      uninstallMarketplacePlugin: async ({ pluginId, cascade }) => {
+        calls.push(`uninstallMarketplacePlugin:${pluginId}:${cascade}`)
+        return [{ plugin_id: pluginId, version: '1.1.0', config_path: '/plugins/demo/plugin.json' }]
+      },
+      upgradeMarketplacePlugins: async (options) => {
+        calls.push(`upgradeMarketplacePlugins:${'pluginId' in options ? options.pluginId : 'all'}`)
+        return [
+          {
+            plugin_id: 'demo/plugin',
+            previous_version: '1.0.0',
+            installed_version: '1.1.0',
+            upgraded: true,
+            outcome: {
+              plugin_id: 'demo/plugin',
+              version: '1.1.0',
+              kind: 'wasm',
+              artifact_path: '/downloads/demo-plugin-1.1.0.wasm',
+              config_path: '/plugins/demo/plugin.json',
+              dry_run: false,
+            },
+          },
+        ]
+      },
     },
-  })
+  )
 
   return { actions, calls, state }
 }
@@ -150,47 +169,63 @@ describe('useRuntimeMarketplaceActions', () => {
     expect(state.marketplaceLoading.value).toBe(false)
   })
 
+  test('one-click install can use a plugin spec without mutating the draft install field', async () => {
+    const { actions, calls, state } = createState()
+
+    await actions.installMarketplacePluginAction('alpha/plugin')
+
+    expect(
+      calls.includes('installMarketplacePlugin:alpha/plugin:custom:https://registry.example.test:true:false:true'),
+    ).toBe(true)
+    expect(state.marketplaceInstallSpec.value).toBe('demo/plugin')
+    expect(state.actionMessage.value).toBe('Installed alpha/plugin v1.1.0.')
+    expect(state.marketplaceLoading.value).toBe(false)
+  })
+
   test('upgrade all reports when everything is already current', async () => {
     const { state } = createState()
     const calls: string[] = []
-    const actions = createRuntimeMarketplaceActions(state, async () => {
-      calls.push('load')
-    }, {
-      listMarketplaceInstalledPlugins: async () => [],
-      listMarketplaceOutdatedPlugins: async () => [],
-      searchMarketplacePlugins: async () => [],
-      syncMarketplaceRegistry: async () => ({
-        registry_id: 'default',
-        registry_url: 'https://registry.example.test',
-        plugin_count: 0,
-      }),
-      installMarketplacePlugin: async () => ({
-        plugin_id: 'demo/plugin',
-        version: '1.0.0',
-        kind: 'wasm',
-        artifact_path: '/downloads/demo-plugin-1.0.0.wasm',
-        config_path: '/plugins/demo/plugin.json',
-        dry_run: true,
-      }),
-      uninstallMarketplacePlugin: async () => [],
-      upgradeMarketplacePlugins: async () => {
-        calls.push('upgradeMarketplacePlugins:all')
-        return [{
-          plugin_id: 'demo/plugin',
-          previous_version: '1.0.0',
-          installed_version: '1.0.0',
-          upgraded: false,
-          outcome: null,
-        }]
+    const actions = createRuntimeMarketplaceActions(
+      state,
+      async () => {
+        calls.push('load')
       },
-    })
+      {
+        listMarketplaceInstalledPlugins: async () => [],
+        listMarketplaceOutdatedPlugins: async () => [],
+        searchMarketplacePlugins: async () => [],
+        syncMarketplaceRegistry: async () => ({
+          registry_id: 'default',
+          registry_url: 'https://registry.example.test',
+          plugin_count: 0,
+        }),
+        installMarketplacePlugin: async () => ({
+          plugin_id: 'demo/plugin',
+          version: '1.0.0',
+          kind: 'wasm',
+          artifact_path: '/downloads/demo-plugin-1.0.0.wasm',
+          config_path: '/plugins/demo/plugin.json',
+          dry_run: true,
+        }),
+        uninstallMarketplacePlugin: async () => [],
+        upgradeMarketplacePlugins: async () => {
+          calls.push('upgradeMarketplacePlugins:all')
+          return [
+            {
+              plugin_id: 'demo/plugin',
+              previous_version: '1.0.0',
+              installed_version: '1.0.0',
+              upgraded: false,
+              outcome: null,
+            },
+          ]
+        },
+      },
+    )
 
     await actions.upgradeMarketplacePluginAction()
 
-    expect(calls).toEqual([
-      'upgradeMarketplacePlugins:all',
-      'load',
-    ])
+    expect(calls).toEqual(['upgradeMarketplacePlugins:all', 'load'])
     expect(state.actionMessage.value).toBe('Marketplace plugins are already up to date.')
   })
 
@@ -203,10 +238,7 @@ describe('useRuntimeMarketplaceActions', () => {
     await actions.installMarketplacePluginAction()
     await actions.syncMarketplaceRegistryAction()
 
-    expect(calls).toEqual([
-      'listMarketplaceInstalledPlugins',
-      'listMarketplaceOutdatedPlugins',
-    ])
+    expect(calls).toEqual(['listMarketplaceInstalledPlugins', 'listMarketplaceOutdatedPlugins'])
     expect(state.marketplacePlugins.value).toEqual([])
   })
 })

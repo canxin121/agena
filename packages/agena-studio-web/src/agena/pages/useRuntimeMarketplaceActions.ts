@@ -116,8 +116,8 @@ export function useRuntimeMarketplaceActions(
     }
   }
 
-  async function installMarketplacePluginAction() {
-    const spec = input.marketplaceInstallSpec.value.trim()
+  async function installMarketplacePluginAction(specOverride?: string) {
+    const spec = String(specOverride || input.marketplaceInstallSpec.value).trim()
     const registryUrl = input.marketplaceRegistryUrl.value.trim()
     if (!spec || !registryUrl) return
     input.marketplaceLoading.value = true
@@ -132,7 +132,7 @@ export function useRuntimeMarketplaceActions(
         requireSignature: input.marketplaceRequireSignature.value,
         refresh: input.marketplaceRefreshIndex.value,
       })
-      input.marketplaceInstallSpec.value = ''
+      if (!specOverride) input.marketplaceInstallSpec.value = ''
       input.actionMessage.value = outcome.dry_run
         ? `Dry-run resolved ${outcome.plugin_id} v${outcome.version}.`
         : `Installed ${outcome.plugin_id} v${outcome.version}.`

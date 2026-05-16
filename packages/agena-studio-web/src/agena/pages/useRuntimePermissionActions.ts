@@ -8,16 +8,19 @@ import {
   updatePermissionRule,
   type PermissionMode,
   type PermissionRuleResource,
+  type PermissionSubjectKind,
   type SessionExecutionResource,
 } from '../lib/agenaApi'
 
 export type RuntimePermissionDraft = {
-  subjectKind: 'tool' | 'path_access'
+  subjectKind: PermissionSubjectKind
   toolName: string
   qualifier: string
   pathAccessKind: string
   workspaceRoot: string
   targetPath: string
+  networkTarget: string
+  networkPort: string
   scope: 'session' | 'workspace' | 'global'
   sessionId: string
   mode: PermissionMode
@@ -51,10 +54,7 @@ const defaultDeps: RuntimePermissionActionsDeps = {
   updatePermissionRule,
 }
 
-function buildPermissionRuleStub(
-  id: number,
-  draft: RuntimePermissionDraft,
-): PermissionRuleResource {
+function buildPermissionRuleStub(id: number, draft: RuntimePermissionDraft): PermissionRuleResource {
   return {
     id,
     action_key: '',
@@ -64,6 +64,10 @@ function buildPermissionRuleStub(
     path_access_kind: draft.subjectKind === 'path_access' ? draft.pathAccessKind || null : null,
     workspace_root: draft.subjectKind === 'path_access' ? draft.workspaceRoot.trim() || null : null,
     target_path: draft.subjectKind === 'path_access' ? draft.targetPath.trim() || null : null,
+    network_target: draft.subjectKind === 'network_access' ? draft.networkTarget.trim() || null : null,
+    network_host: null,
+    network_port:
+      draft.subjectKind === 'network_access' && draft.networkPort.trim() ? Number(draft.networkPort.trim()) : null,
     mode: draft.mode,
     scope: draft.scope,
     source: 'api',
@@ -83,6 +87,8 @@ export function useRuntimePermissionActions(
     input.permissionDraft.pathAccessKind = 'read'
     input.permissionDraft.workspaceRoot = ''
     input.permissionDraft.targetPath = ''
+    input.permissionDraft.networkTarget = ''
+    input.permissionDraft.networkPort = ''
     input.permissionDraft.scope = 'workspace'
     input.permissionDraft.sessionId = ''
     input.permissionDraft.mode = 'ask'
@@ -95,6 +101,10 @@ export function useRuntimePermissionActions(
     }
     if (rule.subject_kind === 'path_access') {
       return `${rule.path_access_kind || 'path'} · ${rule.target_path || rule.action_key}`
+    }
+    if (rule.subject_kind === 'network_access') {
+      const target = rule.network_target || rule.network_host || rule.action_key
+      return rule.network_port == null ? `network · ${target}` : `network · ${target}:${rule.network_port}`
     }
     return rule.action_key
   }
@@ -131,6 +141,14 @@ export function useRuntimePermissionActions(
       const qualifier = rule.qualifier?.trim()
       return qualifier ? `tool=${rule.tool_name} · qualifier=${qualifier}` : `tool=${rule.tool_name}`
     }
+    if (rule.subject_kind === 'network_access') {
+      return [
+        `target=${rule.network_target || rule.network_host || 'network'}`,
+        rule.network_port == null ? null : `port=${rule.network_port}`,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    }
     return [
       `access=${rule.path_access_kind || 'path_access'}`,
       rule.workspace_root ? `workspace=${rule.workspace_root}` : null,
@@ -141,13 +159,21 @@ export function useRuntimePermissionActions(
   }
 
   function editPermissionRule(rule: PermissionRuleResource) {
-    input.permissionDraft.subjectKind = rule.subject_kind === 'path_access' ? 'path_access' : 'tool'
+    input.permissionDraft.subjectKind =
+      rule.subject_kind === 'path_access'
+        ? 'path_access'
+        : rule.subject_kind === 'network_access'
+          ? 'network_access'
+          : 'tool'
     input.permissionDraft.toolName = rule.tool_name || ''
     input.permissionDraft.qualifier = rule.qualifier || ''
     input.permissionDraft.pathAccessKind = rule.path_access_kind || 'read'
     input.permissionDraft.workspaceRoot = rule.workspace_root || ''
     input.permissionDraft.targetPath = rule.target_path || ''
-    input.permissionDraft.scope = rule.scope === 'session' ? 'session' : rule.scope === 'global' ? 'global' : 'workspace'
+    input.permissionDraft.networkTarget = rule.network_target || rule.network_host || ''
+    input.permissionDraft.networkPort = rule.network_port == null ? '' : String(rule.network_port)
+    input.permissionDraft.scope =
+      rule.scope === 'session' ? 'session' : rule.scope === 'global' ? 'global' : 'workspace'
     input.permissionDraft.sessionId = rule.session_id == null ? '' : String(rule.session_id)
     input.permissionDraft.mode = rule.mode
     input.editingPermissionRuleId.value = rule.id
@@ -158,19 +184,29 @@ export function useRuntimePermissionActions(
     const toolName = input.permissionDraft.toolName.trim()
     const qualifier = input.permissionDraft.qualifier.trim()
     const targetPath = input.permissionDraft.targetPath.trim()
+    const networkTarget = input.permissionDraft.networkTarget.trim()
+    const networkPortText = input.permissionDraft.networkPort.trim()
     if (input.permissionDraft.subjectKind === 'tool' && !toolName) return
     if (input.permissionDraft.subjectKind === 'path_access' && !targetPath) return
+    if (input.permissionDraft.subjectKind === 'network_access' && !networkTarget) return
+
+    const networkPort =
+      input.permissionDraft.subjectKind === 'network_access' && networkPortText ? Number(networkPortText) : undefined
+    if (networkPort !== undefined && (!Number.isFinite(networkPort) || networkPort < 0 || networkPort > 65535)) return
 
     const payload = {
       subjectKind: input.permissionDraft.subjectKind,
       toolName: input.permissionDraft.subjectKind === 'tool' ? toolName : undefined,
       qualifier: input.permissionDraft.subjectKind === 'tool' && qualifier ? qualifier : undefined,
-      pathAccessKind: input.permissionDraft.subjectKind === 'path_access' ? input.permissionDraft.pathAccessKind : undefined,
+      pathAccessKind:
+        input.permissionDraft.subjectKind === 'path_access' ? input.permissionDraft.pathAccessKind : undefined,
       workspaceRoot:
         input.permissionDraft.subjectKind === 'path_access' && input.permissionDraft.workspaceRoot.trim()
           ? input.permissionDraft.workspaceRoot.trim()
           : undefined,
       targetPath: input.permissionDraft.subjectKind === 'path_access' ? targetPath : undefined,
+      networkTarget: input.permissionDraft.subjectKind === 'network_access' ? networkTarget : undefined,
+      networkPort,
       scope: input.permissionDraft.scope,
       sessionId:
         input.permissionDraft.scope === 'session' && input.permissionDraft.sessionId.trim()

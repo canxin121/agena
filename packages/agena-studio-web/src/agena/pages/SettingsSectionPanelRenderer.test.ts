@@ -44,6 +44,8 @@ const panels = {
       pathAccessKind: 'read',
       workspaceRoot: '',
       targetPath: '',
+      networkTarget: '',
+      networkPort: '',
       scope: 'workspace',
       sessionId: '',
       mode: 'allow',
@@ -114,9 +116,9 @@ describe('SettingsSectionPanelRenderer', () => {
       panels,
     })
 
-    expect(html.includes('Credentials')).toBe(true)
+    expect(html.includes('Provider Auth')).toBe(true)
     expect(html.includes('openai')).toBe(true)
-    expect(html.includes('Save API Key')).toBe(true)
+    expect(html.includes('Save Key')).toBe(true)
   })
 
   test('renders permission settings content', async () => {
@@ -127,7 +129,7 @@ describe('SettingsSectionPanelRenderer', () => {
       panels,
     })
 
-    expect(html.includes('Permission Rules')).toBe(true)
+    expect(html.includes('Guardrails')).toBe(true)
     expect(html.includes('Create Rule')).toBe(true)
     expect(html.includes('Allow git status in workspace')).toBe(true)
   })
@@ -140,8 +142,8 @@ describe('SettingsSectionPanelRenderer', () => {
       panels,
     })
 
-    expect(html.includes('Desktop Runtime')).toBe(true)
-    expect(html.includes('Desktop Update Actions')).toBe(true)
-    expect(html.includes('Save Desktop Config')).toBe(true)
+    expect(html.includes('Runtime Control')).toBe(true)
+    expect(html.includes('Service and Installer')).toBe(true)
+    expect(html.includes('Save Config')).toBe(true)
   })
 })

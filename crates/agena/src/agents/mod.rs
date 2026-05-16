@@ -425,8 +425,16 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("todo_write", crate::permission::PermissionMode::Allow),
                     ("enter_plan_mode", crate::permission::PermissionMode::Allow),
                     ("exit_plan_mode", crate::permission::PermissionMode::Allow),
+                    ("agent_switch", crate::permission::PermissionMode::Allow),
+                    ("agent_restore", crate::permission::PermissionMode::Allow),
                     ("task", crate::permission::PermissionMode::Allow),
                     ("tool_search", crate::permission::PermissionMode::Allow),
+                    ("workflow_init", crate::permission::PermissionMode::Allow),
+                    ("workflow_review", crate::permission::PermissionMode::Allow),
+                    (
+                        "workflow_security_review",
+                        crate::permission::PermissionMode::Allow,
+                    ),
                 ],
             ),
             Some("openai/openai/gpt-5.3-codex"),
@@ -447,6 +455,8 @@ fn default_profiles() -> Vec<AgentProfile> {
                 "todo_write",
                 "ask_user",
                 "tool_search",
+                "agent_switch",
+                "agent_restore",
             ],
             default_permission(
                 crate::permission::PermissionMode::Deny,
@@ -461,6 +471,8 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("tool_search", crate::permission::PermissionMode::Allow),
                     ("todo_write", crate::permission::PermissionMode::Allow),
                     ("ask_user", crate::permission::PermissionMode::Allow),
+                    ("agent_switch", crate::permission::PermissionMode::Allow),
+                    ("agent_restore", crate::permission::PermissionMode::Allow),
                     ("bash", crate::permission::PermissionMode::Ask),
                 ],
             ),
@@ -538,6 +550,8 @@ fn default_profiles() -> Vec<AgentProfile> {
                 "apply_patch",
                 "notebook_edit",
                 "todo_write",
+                "agent_switch",
+                "agent_restore",
             ],
             default_permission(
                 crate::permission::PermissionMode::Ask,
@@ -551,11 +565,22 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "verify",
             "Validation agent for targeted testing and regression checks.",
-            &["read", "view_file", "glob", "grep", "bash", "todo_write"],
+            &[
+                "read",
+                "view_file",
+                "glob",
+                "grep",
+                "bash",
+                "todo_write",
+                "agent_restore",
+            ],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
-                &[("bash", crate::permission::PermissionMode::Ask)],
+                &[
+                    ("bash", crate::permission::PermissionMode::Ask),
+                    ("agent_restore", crate::permission::PermissionMode::Allow),
+                ],
             ),
             None,
             &["review", "reviewer", "test"],
@@ -573,6 +598,7 @@ fn default_profiles() -> Vec<AgentProfile> {
                 "todo_write",
                 "enter_plan_mode",
                 "exit_plan_mode",
+                "agent_restore",
             ],
             default_permission(
                 crate::permission::PermissionMode::Deny,
@@ -580,6 +606,7 @@ fn default_profiles() -> Vec<AgentProfile> {
                 &[
                     ("enter_plan_mode", crate::permission::PermissionMode::Allow),
                     ("exit_plan_mode", crate::permission::PermissionMode::Allow),
+                    ("agent_restore", crate::permission::PermissionMode::Allow),
                     ("todo_write", crate::permission::PermissionMode::Allow),
                 ],
             ),
@@ -590,11 +617,14 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "reviewer",
             "Code review agent focused on bugs, risks, and missing tests.",
-            &["read", "view_file", "glob", "grep", "bash"],
+            &["read", "view_file", "glob", "grep", "bash", "agent_restore"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
-                &[("bash", crate::permission::PermissionMode::Ask)],
+                &[
+                    ("bash", crate::permission::PermissionMode::Ask),
+                    ("agent_restore", crate::permission::PermissionMode::Allow),
+                ],
             ),
             None,
             &["audit", "critic"],

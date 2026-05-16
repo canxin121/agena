@@ -21,20 +21,22 @@ use crate::registry::{
     effective_host_capabilities_for_manifest,
 };
 use crate::sdk::host_api::{
-    self, AskUserRequest, AskUserResponse, EventSubscription, HostAgentListResponse,
-    HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse, HostCallbackContext,
-    HostClient, HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostEntryDescriptor,
-    HostEntryListResponse, HostEntryMutationResponse, HostEntryRegisterRequest,
-    HostEntryRemoveRequest, HostEntryUpdateRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostHookEntry, HostHookListResponse, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
-    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    self, AskUserRequest, AskUserResponse, EventSubscription, HostAgentGetRequest,
+    HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
+    HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
+    HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClient,
+    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostEntryDescriptor, HostEntryListResponse,
+    HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
+    HostEntryUpdateRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostHookEntry,
+    HostHookListResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
     HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
     HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteRequest,
     HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
@@ -1360,9 +1362,17 @@ impl PluginHost {
             }
             let params = serde_json::to_value(&input)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = call_with_timeout(plugin, method::HOOK_AGENT_STOP, params, timeout)
-                .await
-                .map_err(transport_to_plugin_error)?;
+            let context = HostCallbackContext {
+                plugin_id: Some(plugin.id.clone()),
+                session_id: Some(input.session_id),
+                ..Default::default()
+            };
+            let v = host_api::with_host_callback_context(
+                context,
+                call_with_timeout(plugin, method::HOOK_AGENT_STOP, params, timeout),
+            )
+            .await
+            .map_err(transport_to_plugin_error)?;
             if matches!(&v, serde_json::Value::Null) {
                 continue;
             }
@@ -2946,6 +2956,54 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
+                    method::HOST_AGENT_GET => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::AgentRegistry,
+                        )
+                        .await?;
+                        let p: HostAgentGetParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.agent_get(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_AGENT_SWITCH => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::AgentRegistry,
+                        )
+                        .await?;
+                        let p: HostAgentSwitchParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.agent_switch(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_AGENT_RESTORE => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::AgentRegistry,
+                        )
+                        .await?;
+                        let p: HostAgentRestoreParams = parse(params)?;
+                        let out = host_api::with_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.agent_restore(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
                     method::HOST_HOOK_LIST => {
                         self.require_capability(
                             plugin_id.as_deref(),
@@ -3578,6 +3636,32 @@ struct HostAgentListParams {
     context: Option<HostCallbackContext>,
 }
 
+#[derive(serde::Deserialize)]
+struct HostAgentGetParams {
+    request: HostAgentGetRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostAgentSwitchParams {
+    #[serde(default)]
+    request: HostAgentSwitchRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HostAgentRestoreParams {
+    #[serde(default)]
+    request: HostAgentRestoreRequest,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
 #[derive(serde::Deserialize, Default)]
 struct HostMcpListServersParams {
     #[serde(default)]
@@ -4090,6 +4174,36 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.agent_list()).await
+    }
+
+    async fn agent_get(
+        &self,
+        req: HostAgentGetRequest,
+    ) -> crate::sdk::Result<HostAgentGetResponse> {
+        self.require_capability(method::HOST_AGENT_GET, HostCapability::AgentRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.agent_get(req)).await
+    }
+
+    async fn agent_switch(
+        &self,
+        req: HostAgentSwitchRequest,
+    ) -> crate::sdk::Result<HostAgentSwitchResponse> {
+        self.require_capability(method::HOST_AGENT_SWITCH, HostCapability::AgentRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.agent_switch(req)).await
+    }
+
+    async fn agent_restore(
+        &self,
+        req: HostAgentRestoreRequest,
+    ) -> crate::sdk::Result<HostAgentRestoreResponse> {
+        self.require_capability(method::HOST_AGENT_RESTORE, HostCapability::AgentRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.agent_restore(req)).await
     }
 
     async fn hook_list(&self) -> crate::sdk::Result<HostHookListResponse> {

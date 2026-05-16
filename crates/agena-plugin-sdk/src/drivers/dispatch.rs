@@ -253,7 +253,13 @@ impl<P: Plugin> PluginDispatcher<P> {
             }
             method::HOOK_AGENT_STOP => {
                 let i: AgentStopInput = serde_json::from_value(params)?;
-                ok_json(&plugin.agent_stop(i).await?)
+                let ctx = crate::host_api::HostCallbackContext {
+                    session_id: Some(i.session_id),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                ok_json(
+                    &crate::host_api::with_host_callback_context(ctx, plugin.agent_stop(i)).await?,
+                )
             }
             method::HOOK_COMMAND_AFTER => {
                 let i: CommandAfterInput = serde_json::from_value(params)?;

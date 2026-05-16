@@ -15,7 +15,7 @@ use super::{
     ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
     ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderGoogleAdcAuthConfig,
     ProviderSapAiCoreAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, ResolvedProviderModelConfig, RuntimeConfig,
+    ResolvedProviderConfig, ResolvedProviderModelConfig, RuntimeConfig, RuntimeModelCatalogConfig,
     SharedGatewayEndpointLayout, StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig,
     WebToolsConfig,
 };
@@ -272,6 +272,30 @@ impl RawConfig {
                 .stream_replay
                 .get_or_insert_with(RawStreamReplayConfig::default)
                 .max_tracked_events = Some(value);
+        })?;
+        if let Some(remote_url) = env.var("AGENA_MODEL_CATALOG_URL") {
+            config
+                .runtime
+                .get_or_insert_with(RawRuntimeConfig::default)
+                .model_catalog
+                .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
+                .remote_url = Some(remote_url);
+        }
+        if let Some(fallback_url) = env.var("AGENA_MODEL_CATALOG_FALLBACK_URL") {
+            config
+                .runtime
+                .get_or_insert_with(RawRuntimeConfig::default)
+                .model_catalog
+                .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
+                .fallback_url = Some(fallback_url);
+        }
+        apply_env_number(env, "AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS", |value| {
+            config
+                .runtime
+                .get_or_insert_with(RawRuntimeConfig::default)
+                .model_catalog
+                .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
+                .cache_max_age_secs = Some(value);
         })?;
 
         Ok(config)
@@ -601,6 +625,7 @@ pub(crate) struct RawRuntimeConfig {
     pub(crate) provider_http: Option<RawProviderHttpConfig>,
     pub(crate) request_retry: Option<RawRequestRetryConfig>,
     pub(crate) stream_replay: Option<RawStreamReplayConfig>,
+    pub(crate) model_catalog: Option<RawRuntimeModelCatalogConfig>,
     pub(crate) reload: Option<RawRuntimeReloadConfig>,
     pub(crate) janitor: Option<RawRuntimeJanitorConfig>,
     pub(crate) session_cache: Option<RawSessionCacheConfig>,
@@ -612,6 +637,7 @@ impl Merge for RawRuntimeConfig {
         merge_option_struct(&mut self.provider_http, overlay.provider_http);
         merge_option_struct(&mut self.request_retry, overlay.request_retry);
         merge_option_struct(&mut self.stream_replay, overlay.stream_replay);
+        merge_option_struct(&mut self.model_catalog, overlay.model_catalog);
         merge_option_struct(&mut self.reload, overlay.reload);
         merge_option_struct(&mut self.janitor, overlay.janitor);
         merge_option_struct(&mut self.session_cache, overlay.session_cache);
@@ -624,6 +650,7 @@ impl RuntimeConfig {
         let provider_http = raw.provider_http.unwrap_or_default();
         let request_retry = raw.request_retry.unwrap_or_default();
         let stream_replay = raw.stream_replay.unwrap_or_default();
+        let model_catalog = raw.model_catalog.unwrap_or_default();
         let reload = raw.reload.unwrap_or_default();
         let janitor = raw.janitor.unwrap_or_default();
         let session_cache = raw.session_cache.unwrap_or_default();
@@ -646,6 +673,9 @@ impl RuntimeConfig {
         let session_cache_ttl_secs = session_cache.ttl_secs.unwrap_or(15 * 60);
         let session_cache_max_sessions = session_cache.max_sessions.unwrap_or(128);
         let session_cache_max_bytes = session_cache.max_bytes.unwrap_or(64 * 1024 * 1024);
+        let model_catalog_cache_max_age_secs = model_catalog
+            .cache_max_age_secs
+            .unwrap_or(crate::model_catalog::DEFAULT_CACHE_MAX_AGE_SECS);
 
         if reload_poll_interval_secs == 0 {
             return Err(ConfigError::Validation(
@@ -672,6 +702,11 @@ impl RuntimeConfig {
                 "runtime.session_cache.max_bytes must be greater than 0".to_owned(),
             ));
         }
+        if model_catalog_cache_max_age_secs == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.model_catalog.cache_max_age_secs must be greater than 0".to_owned(),
+            ));
+        }
 
         Ok(Self {
             provider_http: super::ProviderHttpConfig {
@@ -690,6 +725,17 @@ impl RuntimeConfig {
                     .max_retries_after_output
                     .unwrap_or(ProviderStreamReplayConfig::default().max_retries_after_output),
                 max_tracked_events: stream_replay.max_tracked_events.unwrap_or(2_048),
+            },
+            model_catalog: RuntimeModelCatalogConfig {
+                remote_url: normalize_url_or_default(
+                    model_catalog.remote_url,
+                    crate::model_catalog::DEFAULT_REMOTE_URL,
+                ),
+                fallback_url: normalize_url_or_default(
+                    model_catalog.fallback_url,
+                    crate::model_catalog::DEFAULT_GITHUB_FALLBACK_URL,
+                ),
+                cache_max_age_secs: model_catalog_cache_max_age_secs,
             },
             reload: super::RuntimeReloadConfig {
                 enabled: reload.enabled.unwrap_or(true),
@@ -711,6 +757,13 @@ impl RuntimeConfig {
                 .or_else(|| Some("build".to_string())),
         })
     }
+}
+
+fn normalize_url_or_default(value: Option<String>, default: &str) -> String {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default.to_owned())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -757,6 +810,22 @@ impl Merge for RawStreamReplayConfig {
             overlay.max_retries_after_output,
         );
         merge_option(&mut self.max_tracked_events, overlay.max_tracked_events);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct RawRuntimeModelCatalogConfig {
+    pub(crate) remote_url: Option<String>,
+    pub(crate) fallback_url: Option<String>,
+    pub(crate) cache_max_age_secs: Option<u64>,
+}
+
+impl Merge for RawRuntimeModelCatalogConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.remote_url, overlay.remote_url);
+        merge_option(&mut self.fallback_url, overlay.fallback_url);
+        merge_option(&mut self.cache_max_age_secs, overlay.cache_max_age_secs);
     }
 }
 

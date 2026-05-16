@@ -27,9 +27,15 @@ use crate::local_api::{
     WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::config::{
-    ProviderAuthConfig, ProviderConfigCredentialStore, ResolvedProviderConfig, provider_auth_data,
+    ConfigError, ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
+    ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
+    ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
+    ConfigSettingsSource, ConfigSettingsValidateInput, ProviderAuthConfig,
+    ProviderConfigCredentialStore, ResolvedProviderConfig, delete_file_setting, get_json_path,
+    list_file_settings, list_json_path, patch_file_settings, provider_auth_data,
     provider_gitlab_instance_url, provider_has_gitlab_adapter, provider_supports_api_key_write,
-    provider_supports_copilot_device, provider_supports_openai_oauth,
+    provider_supports_copilot_device, provider_supports_openai_oauth, read_file_setting,
+    set_file_setting, validate_file_settings,
 };
 use agena::event::{EventStore, StoreRange};
 use agena::provider::auth::{AuthManager, CopilotDeployment};
@@ -45,6 +51,7 @@ use axum::{
     },
 };
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
 use crate::{dispatch, error::ServerError, state::AppState};
 
@@ -287,6 +294,95 @@ pub async fn reload_runtime(
         generation: report.generation,
         loaded_at: report.loaded_at,
     }))
+}
+
+pub async fn get_settings(
+    State(state): State<AppState>,
+    AxumQuery(input): AxumQuery<ConfigSettingsGetInput>,
+) -> Result<impl IntoResponse, ServerError> {
+    let resolution = state.runtime().config_resolution();
+    let response = match input.source {
+        ConfigSettingsSource::File => {
+            read_file_setting(resolution.meta.config_path.clone(), input).map_err(settings_error)?
+        }
+        ConfigSettingsSource::Effective => {
+            let value = resolved_config_json(&resolution.config)?;
+            let value = get_json_path(&value, input.path.as_deref()).map_err(settings_error)?;
+            ConfigSettingsReadResponse {
+                config_path: resolution.meta.config_path.clone(),
+                config_found: resolution.meta.config_found,
+                source: ConfigSettingsSource::Effective,
+                path: input.path,
+                value,
+            }
+        }
+    };
+    Ok(Json(response))
+}
+
+pub async fn list_settings(
+    State(state): State<AppState>,
+    AxumQuery(input): AxumQuery<ConfigSettingsListInput>,
+) -> Result<impl IntoResponse, ServerError> {
+    let resolution = state.runtime().config_resolution();
+    let response = match input.source {
+        ConfigSettingsSource::File => {
+            list_file_settings(resolution.meta.config_path.clone(), input)
+                .map_err(settings_error)?
+        }
+        ConfigSettingsSource::Effective => {
+            let value = resolved_config_json(&resolution.config)?;
+            let entries = list_json_path(&value, input.path.as_deref(), input.recursive)
+                .map_err(settings_error)?;
+            ConfigSettingsListResponse {
+                config_path: resolution.meta.config_path.clone(),
+                config_found: resolution.meta.config_found,
+                source: ConfigSettingsSource::Effective,
+                path: input.path,
+                entries,
+            }
+        }
+    };
+    Ok(Json(response))
+}
+
+pub async fn set_settings(
+    State(state): State<AppState>,
+    Json(input): Json<ConfigSettingsSetInput>,
+) -> Result<impl IntoResponse, ServerError> {
+    let config_path = state.runtime().config_resolution().meta.config_path.clone();
+    let mut response = set_file_setting(config_path, input).map_err(settings_error)?;
+    reload_settings_if_needed(&state, &mut response).await?;
+    Ok(Json(response))
+}
+
+pub async fn patch_settings(
+    State(state): State<AppState>,
+    Json(input): Json<ConfigSettingsPatchInput>,
+) -> Result<impl IntoResponse, ServerError> {
+    let config_path = state.runtime().config_resolution().meta.config_path.clone();
+    let mut response = patch_file_settings(config_path, input).map_err(settings_error)?;
+    reload_settings_if_needed(&state, &mut response).await?;
+    Ok(Json(response))
+}
+
+pub async fn delete_settings(
+    State(state): State<AppState>,
+    AxumQuery(input): AxumQuery<ConfigSettingsDeleteInput>,
+) -> Result<impl IntoResponse, ServerError> {
+    let config_path = state.runtime().config_resolution().meta.config_path.clone();
+    let mut response = delete_file_setting(config_path, input).map_err(settings_error)?;
+    reload_settings_if_needed(&state, &mut response).await?;
+    Ok(Json(response))
+}
+
+pub async fn validate_settings(
+    State(state): State<AppState>,
+    _input: Option<Json<ConfigSettingsValidateInput>>,
+) -> Result<impl IntoResponse, ServerError> {
+    let config_path = state.runtime().config_resolution().meta.config_path.clone();
+    let response = validate_file_settings(config_path).map_err(settings_error)?;
+    Ok(Json(response))
 }
 
 pub async fn get_model_catalog(
@@ -2310,6 +2406,41 @@ fn auth_manager(state: &AppState) -> AuthManager<ProviderConfigCredentialStore> 
 async fn reload_runtime_from_config(state: &AppState) -> Result<(), ServerError> {
     state.runtime().reload().await.map_err(ServerError::Core)?;
     Ok(())
+}
+
+fn resolved_config_json(config: &impl serde::Serialize) -> Result<JsonValue, ServerError> {
+    serde_json::to_value(config)
+        .map_err(|error| ServerError::Internal(format!("failed to encode settings: {error}")))
+}
+
+async fn reload_settings_if_needed(
+    state: &AppState,
+    response: &mut ConfigSettingsEditResponse,
+) -> Result<(), ServerError> {
+    if !response.reload_required {
+        return Ok(());
+    }
+
+    let report = state.runtime().reload().await.map_err(ServerError::Core)?;
+    METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    response.reload = Some(ConfigSettingsReloadResponse {
+        previous_generation: report.previous_generation,
+        generation: report.generation,
+        loaded_at: report.loaded_at.to_rfc3339(),
+    });
+    Ok(())
+}
+
+fn settings_error(error: ConfigError) -> ServerError {
+    let message = error.to_string();
+    match error {
+        ConfigError::ReadFile { .. }
+        | ConfigError::WriteFile { .. }
+        | ConfigError::SerializeJson(_)
+        | ConfigError::SerializeToml(_) => ServerError::Internal(message),
+        ConfigError::App(error) => ServerError::Core(error),
+        _ => ServerError::BadRequest(message),
+    }
 }
 
 fn current_auth_provider_data(

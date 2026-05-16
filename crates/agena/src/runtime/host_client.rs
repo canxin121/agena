@@ -20,25 +20,25 @@ use crate::plugin::sdk::host_api::{
     HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClearGoalRequest,
-    HostClearGoalResponse, HostClient, HostCreateGoalRequest, HostCreateGoalResponse,
-    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse, HostGoal, HostGoalStatus,
-    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
-    HostUpdateGoalResponse, HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
-    current_host_callback_context,
+    HostClearGoalResponse, HostClient, HostConfigReloadResponse, HostCreateGoalRequest,
+    HostCreateGoalResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
+    HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
+    HostGoal, HostGoalStatus, HostLspDiagnostic, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostStorageDeleteRequest,
+    HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest,
+    HostStorageListResponse, HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus,
+    HostTodoWriteRequest, HostUpdateGoalRequest, HostUpdateGoalResponse, HostWorktreeEntry,
+    HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -621,22 +621,21 @@ impl HostClient for RuntimeHostClient {
         let snapshot = self.runtime.current_snapshot();
         let value = serde_json::to_value(snapshot.config_resolution())
             .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        if let Some(path) = path {
-            // Dot-notation path: `runtime.session_cache.max_sessions`
-            let mut cursor = &value;
-            for segment in path.split('.') {
-                if segment.is_empty() {
-                    continue;
-                }
-                cursor = match cursor.get(segment) {
-                    Some(v) => v,
-                    None => return Ok(serde_json::Value::Null),
-                };
-            }
-            Ok(cursor.clone())
-        } else {
-            Ok(value)
-        }
+        crate::config::get_json_path(&value, path.as_deref())
+            .map_err(|e| PluginError::invalid_params(e.to_string()))
+    }
+
+    async fn reload_config(&self) -> Result<HostConfigReloadResponse, PluginError> {
+        let report = self
+            .runtime
+            .reload()
+            .await
+            .map_err(|e| PluginError::new(e.to_string()))?;
+        Ok(HostConfigReloadResponse {
+            previous_generation: report.previous_generation,
+            generation: report.generation,
+            loaded_at: report.loaded_at.to_rfc3339(),
+        })
     }
 
     async fn invoke_tool(

@@ -78,6 +78,15 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/health", get(rest::health))
             .route("/api/v1/runtime", get(rest::get_runtime_status))
             .route("/api/v1/runtime/reload", post(rest::reload_runtime))
+            .route(
+                "/api/v1/settings",
+                get(rest::get_settings)
+                    .put(rest::set_settings)
+                    .patch(rest::patch_settings)
+                    .delete(rest::delete_settings),
+            )
+            .route("/api/v1/settings/entries", get(rest::list_settings))
+            .route("/api/v1/settings/validate", post(rest::validate_settings))
             .route("/api/v1/model-catalog", get(rest::get_model_catalog))
             .route(
                 "/api/v1/model-catalog/refresh",

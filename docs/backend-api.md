@@ -341,6 +341,76 @@ If-Match: <session.version>
 - `operator.agents`
 - `operator.skills`
 
+### Settings
+
+Settings API 操作当前 runtime 使用的 `config.toml`。读接口可以读 resolved effective config，也可以直接读文件；写接口只编辑文件，并在实际变更且请求 reload 时自动触发 runtime reload。
+
+| Method | Path                         | 说明                                                                      |
+| ------ | ---------------------------- | ------------------------------------------------------------------------- |
+| GET    | `/api/v1/settings`           | 读取一个 setting。query: `path`、`source=effective|file`                   |
+| GET    | `/api/v1/settings/entries`   | 列出 setting entries。query: `path`、`source=effective|file`、`recursive` |
+| PUT    | `/api/v1/settings`           | 设置一个 TOML path 的值                                                   |
+| PATCH  | `/api/v1/settings`           | 深度合并一个 JSON object 到目标 TOML table；`null` 表示删除 key           |
+| DELETE | `/api/v1/settings`           | 删除一个 TOML path。query: `path`、`dry_run`、`validate`、`reload`         |
+| POST   | `/api/v1/settings/validate`  | 校验当前 `config.toml` 能否被 runtime 加载；body 可为空                     |
+
+Path 使用点分语法。带点的 table key 用引号包起来，例如 `plugins.list."agena.mcp".options.servers.filesystem`。
+
+`source=effective` 读取已经应用默认值、文件、环境变量和 CLI override 后的 resolved config，path 根节点是 resolved config 本身，例如 `runtime.reload.enabled`。`source=file` 读取原始 `config.toml`，不会补默认值。
+
+`PUT /api/v1/settings` 请求：
+
+```json
+{
+  "path": "runtime.reload.poll_interval_secs",
+  "value": 2,
+  "dry_run": false,
+  "validate": true,
+  "reload": true
+}
+```
+
+`PATCH /api/v1/settings` 请求：
+
+```json
+{
+  "path": "plugins.list.\"agena.web\".options.search",
+  "changes": {
+    "backend": "brave",
+    "api_key_env": "BRAVE_SEARCH_API_KEY",
+    "old_key": null
+  },
+  "validate": true,
+  "reload": true
+}
+```
+
+写入响应包含：
+
+- `config_path`、`config_found`
+- `operation`
+- `path`
+- `dry_run`
+- `changed`
+- `created`
+- `deleted`
+- `validated`
+- `reload_requested`
+- `reload_required`
+- `reload`
+- `previous`
+- `current`
+
+`reload` 只在实际写入且 reload 成功时出现：
+
+```json
+{
+  "previous_generation": 1,
+  "generation": 2,
+  "loaded_at": "2026-05-13T00:00:00Z"
+}
+```
+
 ### Plugins and marketplace
 
 | Method | Path                                    | 说明                                              |

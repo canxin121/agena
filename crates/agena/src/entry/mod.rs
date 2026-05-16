@@ -56,8 +56,8 @@ use crate::plugin::{
 };
 use crate::plugins::provided::{
     cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp,
-    router as in_process_router, shell as provided_shell, skills, web as provided_web,
-    workflow as provided_workflow,
+    router as in_process_router, settings as provided_settings, shell as provided_shell, skills,
+    web as provided_web, workflow as provided_workflow,
 };
 
 pub use crate::plugin::sdk::ToolLoadPriority;
@@ -110,6 +110,14 @@ pub fn new_fs_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_fs::new_plugin()
 }
 
+pub fn settings_plugin_id() -> &'static str {
+    provided_settings::SETTINGS_PLUGIN_ID
+}
+
+pub fn new_settings_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_settings::SettingsPlugin::new()
+}
+
 pub fn shell_plugin_id() -> &'static str {
     provided_shell::SHELL_PLUGIN_ID
 }
@@ -140,6 +148,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
     let lsp_id = lsp_plugin_id().to_string();
     let cron_id = cron_plugin_id().to_string();
     let fs_id = fs_plugin_id().to_string();
+    let settings_id = settings_plugin_id().to_string();
     let shell_id = shell_plugin_id().to_string();
     let web_id = web_plugin_id().to_string();
     let workflow_id = workflow_plugin_id().to_string();
@@ -149,6 +158,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
         &lsp_id,
         &cron_id,
         &fs_id,
+        &settings_id,
         &shell_id,
         &web_id,
         &workflow_id,
@@ -176,6 +186,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
             .register_static(lsp_id, new_lsp_plugin())
             .register_static(cron_id, new_cron_plugin())
             .register_static(fs_id, new_fs_plugin())
+            .register_static(settings_id, new_settings_plugin())
             .register_static(shell_id, new_shell_plugin())
             .register_static(web_id, new_web_plugin())
             .register_static(workflow_id, new_workflow_plugin())

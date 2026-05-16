@@ -165,6 +165,7 @@ pub mod method {
     pub const HOST_PERMISSION_CHECK_PATH: &str = "host/permission.check_path";
     pub const HOST_PERMISSION_CHECK_NETWORK: &str = "host/permission.check_network";
     pub const HOST_CONFIG_READ: &str = "host/config.read";
+    pub const HOST_CONFIG_RELOAD: &str = "host/config.reload";
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";
     pub const HOST_ASK_USER: &str = "host/ask_user";
     pub const HOST_SUBTASK_SPAWN: &str = "host/subtask.spawn";

@@ -848,8 +848,39 @@ pub struct HostEntryListResponse {
 
 // ---------------- plugin storage ----------------
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostStorageScope {
+    Session,
+    Workspace,
+    Global,
+}
+
+impl Default for HostStorageScope {
+    fn default() -> Self {
+        Self::Global
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostStorageVisibility {
+    Private,
+    Shared,
+}
+
+impl Default for HostStorageVisibility {
+    fn default() -> Self {
+        Self::Private
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostStorageGetRequest {
+    #[serde(default)]
+    pub scope: HostStorageScope,
+    #[serde(default)]
+    pub visibility: HostStorageVisibility,
     pub namespace: String,
     pub key: String,
 }
@@ -862,6 +893,10 @@ pub struct HostStorageGetResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostStorageSetRequest {
+    #[serde(default)]
+    pub scope: HostStorageScope,
+    #[serde(default)]
+    pub visibility: HostStorageVisibility,
     pub namespace: String,
     pub key: String,
     pub value: String,
@@ -869,12 +904,20 @@ pub struct HostStorageSetRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostStorageDeleteRequest {
+    #[serde(default)]
+    pub scope: HostStorageScope,
+    #[serde(default)]
+    pub visibility: HostStorageVisibility,
     pub namespace: String,
     pub key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostStorageListRequest {
+    #[serde(default)]
+    pub scope: HostStorageScope,
+    #[serde(default)]
+    pub visibility: HostStorageVisibility,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1480,5 +1523,34 @@ fn unavailable() -> PluginError {
         hook: None,
         plugin: None,
         data: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_requests_default_to_global_private() {
+        let get: HostStorageGetRequest =
+            serde_json::from_value(serde_json::json!({ "namespace": "ns", "key": "k" }))
+                .expect("storage get request should deserialize");
+        assert_eq!(get.scope, HostStorageScope::Global);
+        assert_eq!(get.visibility, HostStorageVisibility::Private);
+
+        let set: HostStorageSetRequest = serde_json::from_value(serde_json::json!({
+            "namespace": "ns",
+            "key": "k",
+            "value": "v"
+        }))
+        .expect("storage set request should deserialize");
+        assert_eq!(set.scope, HostStorageScope::Global);
+        assert_eq!(set.visibility, HostStorageVisibility::Private);
+
+        let list: HostStorageListRequest =
+            serde_json::from_value(serde_json::json!({ "namespace": "ns" }))
+                .expect("storage list request should deserialize");
+        assert_eq!(list.scope, HostStorageScope::Global);
+        assert_eq!(list.visibility, HostStorageVisibility::Private);
     }
 }

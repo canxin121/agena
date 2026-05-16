@@ -28,9 +28,10 @@ pub use crate::host_api::{
     HostSecretSetRequest, HostStatuslineContributeRequest, HostStatuslineListResponse,
     HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStatuslineSegment,
     HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostWorktreeEntry, HostWorktreeListResponse, LogLevel, NoopHostClient,
+    HostStorageListRequest, HostStorageListResponse, HostStorageScope, HostStorageSetRequest,
+    HostStorageVisibility, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
+    HostThemeRemoveRequest, HostThemeRemoveResponse, HostWorktreeEntry,
+    HostWorktreeListResponse, LogLevel, NoopHostClient,
 };
 pub use crate::manifest::{
     EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,

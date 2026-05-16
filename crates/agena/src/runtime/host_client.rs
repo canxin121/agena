@@ -42,7 +42,7 @@ use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
     PermissionDecision as PluginPermissionDecision, PluginError, ToolInvokeOutput,
 };
-use crate::plugins::storage::{PluginSecretStore, PluginStorage, PluginStorageError};
+use crate::plugins::storage::{PluginSecretStore, PluginStorage, PluginStorageError, StorageLocator};
 use crate::runtime::AgenaRuntime;
 use crate::tool::{EntrySource, MonitorError, MonitorReadParams, MonitorStartParams};
 use crate::{
@@ -134,6 +134,23 @@ impl RuntimeHostClient {
             .ok_or_else(|| host_unavailable("host callback context is missing plugin_id"))
     }
 
+    fn storage_locator(
+        &self,
+        scope: crate::plugin::sdk::host_api::HostStorageScope,
+        visibility: crate::plugin::sdk::host_api::HostStorageVisibility,
+    ) -> Result<StorageLocator, PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let context = self.callback_context()?;
+        StorageLocator::new(
+            scope,
+            visibility,
+            plugin_id,
+            context.session_id,
+            context.workspace_root,
+        )
+        .map_err(map_storage_error)
+    }
+
     fn plugin_storage(&self) -> Arc<dyn PluginStorage> {
         self.runtime
             .current_snapshot()
@@ -203,6 +220,8 @@ fn map_storage_error(err: PluginStorageError) -> PluginError {
     use crate::plugin::sdk::PluginErrorCode;
     match err {
         PluginStorageError::MissingPluginId
+        | PluginStorageError::MissingSessionId
+        | PluginStorageError::MissingWorkspaceRoot
         | PluginStorageError::EmptyNamespace
         | PluginStorageError::EmptyKey
         | PluginStorageError::Data(_) => PluginError::invalid_params(err.to_string()),
@@ -1020,20 +1039,20 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostStorageGetRequest,
     ) -> Result<HostStorageGetResponse, PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
+        let locator = self.storage_locator(req.scope, req.visibility)?;
         let store = self.plugin_storage();
         let value = store
-            .get(&plugin_id, req.namespace.as_str(), req.key.as_str())
+            .get(&locator, req.namespace.as_str(), req.key.as_str())
             .map_err(map_storage_error)?;
         Ok(HostStorageGetResponse { value })
     }
 
     async fn storage_set(&self, req: HostStorageSetRequest) -> Result<(), PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
+        let locator = self.storage_locator(req.scope, req.visibility)?;
         let store = self.plugin_storage();
         store
             .set(
-                &plugin_id,
+                &locator,
                 req.namespace.as_str(),
                 req.key.as_str(),
                 req.value.as_str(),
@@ -1042,10 +1061,10 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn storage_delete(&self, req: HostStorageDeleteRequest) -> Result<(), PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
+        let locator = self.storage_locator(req.scope, req.visibility)?;
         let store = self.plugin_storage();
         store
-            .delete(&plugin_id, req.namespace.as_str(), req.key.as_str())
+            .delete(&locator, req.namespace.as_str(), req.key.as_str())
             .map_err(map_storage_error)
     }
 
@@ -1053,10 +1072,10 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostStorageListRequest,
     ) -> Result<HostStorageListResponse, PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
+        let locator = self.storage_locator(req.scope, req.visibility)?;
         let store = self.plugin_storage();
         let entries = store
-            .list(&plugin_id, req.namespace.as_deref(), req.prefix.as_deref())
+            .list(&locator, req.namespace.as_deref(), req.prefix.as_deref())
             .map_err(map_storage_error)?
             .into_iter()
             .map(|entry| HostStorageEntry {

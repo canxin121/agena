@@ -75,9 +75,9 @@ Tool 的模型可见名称由 tool registry 决定：
 
 这个规则让 plugin 可以安全地提供通用名称，同时避免覆盖其他 plugin 的能力。
 
-## Bundled Static Plugins
+## Provided Static Plugins
 
-Runtime 会注册一组 bundled static plugins。这些 plugin 和外部 plugin 使用同一个 host、manifest、tool registry、hook dispatch 和 permission 路径。
+Runtime 会注册一组 runtime-provided static plugins。这些 plugin 和用户配置 plugin 使用同一个 host、manifest、tool registry、hook dispatch 和 permission 路径。
 
 Runtime build 注册：
 
@@ -526,7 +526,7 @@ apply_patch = "ask"
 "my-plugin.echo" = "allow"
 ```
 
-`names` 覆盖 bundled static plugin tools 和外部 plugin tools。
+`names` 覆盖 runtime-provided 和 user-configured plugin tools。
 
 ## MCP
 
@@ -686,7 +686,7 @@ Studio/backend API：
 | `POST` | `/api/v1/plugins/marketplace/install` | 安装 plugin |
 | `POST` | `/api/v1/plugins/marketplace/uninstall` | 卸载 plugin |
 | `POST` | `/api/v1/plugins/marketplace/upgrade` | 升级 plugin |
-| `POST` | `/plugin-rpc/{plugin_id}` | plugin UI/assets 或外部 plugin 管理面调用 plugin JSON-RPC |
+| `POST` | `/plugin-rpc/{plugin_id}` | plugin UI/assets 或 user-configured plugin 管理面调用 plugin JSON-RPC |
 
 `plugin inspect` 会包含：
 
@@ -753,9 +753,9 @@ Runtime reload 会重建 runtime snapshot 和 plugin host。对配置完全一�
 - Plugin trait and SDK runtime surface: `crates/agena-plugin-sdk/src/plugin.rs`
 - Host callbacks: `crates/agena-plugin-sdk/src/host_api.rs`
 - Static plugin registration: `crates/agena/src/config/registry.rs`
-- First-party tool ids and bridge: `crates/agena/src/entry/mod.rs`
-- Bundled plugins: `crates/agena/src/plugins/bundled/`
-- MCP plugin bridge: `crates/agena/src/plugins/bundled/mcp.rs`
+- Provided tool ids and bridge: `crates/agena/src/entry/mod.rs`
+- Provided plugins: `crates/agena/src/plugins/provided/`
+- MCP plugin bridge: `crates/agena/src/plugins/provided/mcp.rs`
 - Plugin storage/secrets: `crates/agena/src/plugins/storage.rs`
 - Marketplace manifest/install/cache: `crates/agena-plugin-marketplace/`
 - CLI plugin commands: `crates/agena/src/cli.rs`

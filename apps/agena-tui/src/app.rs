@@ -11,9 +11,8 @@ use std::{
 use agena::{
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
-        AttachmentKind, FileChangeKind, BundledToolInput, BundledToolOutput, MessagePart,
-        PartContent, ToolExecutionPart, ToolInvocation, UserInputReply, UserInputReplyKind,
-        UserInputRequest,
+        AttachmentKind, FileChangeKind, MessagePart, PartContent, ToolExecutionPart,
+        ToolInvocation, UserInputReply, UserInputReplyKind, UserInputRequest,
     },
     model::ModelRef,
     permission::{
@@ -4554,10 +4553,11 @@ impl App {
                 .backend
                 .exit_worktree(session_id, "remove".to_string(), discard_changes)
             {
-                Ok(agena::message::BundledToolOutput::ExitWorktree { action, path }) => {
-                    self.flash_success(format!("worktree {action}: {path}"));
-                }
-                Ok(_) => self.flash_success("worktree exited".to_string()),
+                Ok(output) => self.flash_success(format!(
+                    "worktree {}: {}",
+                    output.action.as_deref().unwrap_or("exited"),
+                    output.path
+                )),
                 Err(error) => self.flash_error(error.to_string()),
             },
         }
@@ -4940,10 +4940,11 @@ impl App {
                         .enter_worktree(session_id, Some(argument.to_string()), None)
                 };
                 match result {
-                    Ok(agena::message::BundledToolOutput::EnterWorktree { path, branch }) => {
-                        self.flash_success(format!("worktree ready: {path} ({branch})"));
-                    }
-                    Ok(_) => self.flash_success("worktree entered".to_string()),
+                    Ok(output) => self.flash_success(format!(
+                        "worktree ready: {} ({})",
+                        output.path,
+                        output.branch.as_deref().unwrap_or("unknown")
+                    )),
                     Err(error) => self.flash_error(error.to_string()),
                 }
             }
@@ -4960,10 +4961,11 @@ impl App {
                     .backend
                     .enter_worktree(session_id, None, Some(path.to_string()))
                 {
-                    Ok(agena::message::BundledToolOutput::EnterWorktree { path, branch }) => {
-                        self.flash_success(format!("worktree attached: {path} ({branch})"));
-                    }
-                    Ok(_) => self.flash_success("worktree attached".to_string()),
+                    Ok(output) => self.flash_success(format!(
+                        "worktree attached: {} ({})",
+                        output.path,
+                        output.branch.as_deref().unwrap_or("unknown")
+                    )),
                     Err(error) => self.flash_error(error.to_string()),
                 }
             }
@@ -4972,10 +4974,11 @@ impl App {
                 let (mode, extra) = split_command_args_once(exit_args).unwrap_or((exit_args, ""));
                 match mode.to_ascii_lowercase().as_str() {
                     "" | "keep" => match self.backend.exit_worktree(session_id, "keep".to_string(), false) {
-                        Ok(agena::message::BundledToolOutput::ExitWorktree { action, path }) => {
-                            self.flash_success(format!("worktree {action}: {path}"));
-                        }
-                        Ok(_) => self.flash_success("worktree exited".to_string()),
+                        Ok(output) => self.flash_success(format!(
+                            "worktree {}: {}",
+                            output.action.as_deref().unwrap_or("exited"),
+                            output.path
+                        )),
                         Err(error) => self.flash_error(error.to_string()),
                     },
                     "remove" => {
@@ -9671,10 +9674,7 @@ fn render_permission_rule_preview(input: &str) -> String {
             lines.push(format!("scope: {}", draft.scope));
             match draft.subject_kind {
                 PermissionRuleSubjectKind::Tool => {
-                    lines.push(format!(
-                        "subject: tool ({})",
-                        draft.tool_name.trim()
-                    ));
+                    lines.push(format!("subject: tool ({})", draft.tool_name.trim()));
                     if !draft.qualifier.trim().is_empty() {
                         lines.push(format!("qualifier: {}", draft.qualifier.trim()));
                     }

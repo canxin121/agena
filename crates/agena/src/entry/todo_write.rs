@@ -1,9 +1,9 @@
-use crate::message::{BundledToolOutput, TodoWriteToolInput};
+use crate::message::{TodoWriteToolInput, ToolPayloadOutput};
 
-use super::{BundledExecution, ToolExecutionView};
+use super::{ToolExecutionView, ToolPayloadExecution};
 
-pub(super) fn execute(input: &TodoWriteToolInput) -> BundledExecution {
-    let output = BundledToolOutput::TodoWrite {
+pub(super) fn execute(input: &TodoWriteToolInput) -> ToolPayloadExecution {
+    let output = ToolPayloadOutput::TodoWrite {
         items: input.items.clone(),
     };
 
@@ -13,7 +13,7 @@ pub(super) fn execute(input: &TodoWriteToolInput) -> BundledExecution {
     view.metadata
         .insert("todo_count".to_string(), input.items.len().to_string());
 
-    BundledExecution::new(output, view)
+    ToolPayloadExecution::new(output, view)
 }
 
 fn render_todo_list(input: &TodoWriteToolInput) -> String {

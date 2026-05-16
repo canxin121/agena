@@ -345,13 +345,11 @@ api_key = "test"
 enabled = true
 "#,
     );
-    let plugins = agena::tool::default_tool_host(workspace_root.clone())
-        .expect("bundled plugin host");
+    let plugins = agena::tool::default_tool_host(workspace_root.clone()).expect("plugin host");
     let executor = ToolExecutor::new(
         workspace_root.clone(),
         Agent::new("client-e2e-permission", PermissionPolicy::allow_all()).with_tool_policy(
-            ToolPermissionPolicy::allow_all()
-                .with_tool_mode("todo_write", PermissionMode::Ask),
+            ToolPermissionPolicy::allow_all().with_tool_mode("todo_write", PermissionMode::Ask),
         ),
     )
     .with_plugin_manager(Arc::clone(&plugins));

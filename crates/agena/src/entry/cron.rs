@@ -1,4 +1,4 @@
-//! cron_create / cron_list / cron_delete / schedule_wakeup bundled tools.
+//! cron_create / cron_list / cron_delete / schedule_wakeup plugin tools.
 
 use std::sync::Arc;
 
@@ -6,16 +6,16 @@ use agena_scheduler::{JobKind, ScheduledJob, Scheduler};
 
 use crate::message::{
     CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput,
-    BundledToolOutput, ScheduleWakeupToolInput,
+    ScheduleWakeupToolInput, ToolPayloadOutput,
 };
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
 
 pub(super) fn execute_create(
     executor: &ToolExecutor,
     input: &CronCreateToolInput,
     session_id: Option<i64>,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
     let mut job = ScheduledJob::new_cron(
         input.expression.trim(),
@@ -38,8 +38,8 @@ pub(super) fn execute_create(
             next.as_deref()
         ),
     );
-    Ok(BundledExecution::new(
-        BundledToolOutput::CronCreate {
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::CronCreate {
             id: id.to_string(),
             next_fire_at: next,
         },
@@ -50,7 +50,7 @@ pub(super) fn execute_create(
 pub(super) fn execute_list(
     executor: &ToolExecutor,
     _input: &CronListToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
     let scheduler_for_list = scheduler.clone();
     let jobs = super::mcp::block_on(async move { scheduler_for_list.list().await });
@@ -70,8 +70,8 @@ pub(super) fn execute_list(
         s
     };
     let view = ToolExecutionView::simple("cron_list", summary_text);
-    Ok(BundledExecution::new(
-        BundledToolOutput::CronList { jobs: summaries },
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::CronList { jobs: summaries },
         view,
     ))
 }
@@ -79,7 +79,7 @@ pub(super) fn execute_list(
 pub(super) fn execute_delete(
     executor: &ToolExecutor,
     input: &CronDeleteToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
     let id = uuid::Uuid::parse_str(input.id.trim())
         .map_err(|e| ToolError::Plugin(format!("cron_delete: invalid id: {e}")))?;
@@ -87,8 +87,8 @@ pub(super) fn execute_delete(
     let removed = super::mcp::block_on(async move { scheduler_for_remove.remove(id).await });
     let view =
         ToolExecutionView::simple(format!("cron_delete {id}"), format!("removed: {removed}"));
-    Ok(BundledExecution::new(
-        BundledToolOutput::CronDelete {
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::CronDelete {
             id: id.to_string(),
             removed,
         },
@@ -100,7 +100,7 @@ pub(super) fn execute_wakeup(
     executor: &ToolExecutor,
     input: &ScheduleWakeupToolInput,
     session_id: Option<i64>,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
     let when = chrono::Utc::now() + chrono::Duration::seconds(input.delay_seconds as i64);
     let mut job = ScheduledJob::new_once(when, input.prompt.trim());
@@ -122,8 +122,8 @@ pub(super) fn execute_wakeup(
                 .unwrap_or_default()
         ),
     );
-    Ok(BundledExecution::new(
-        BundledToolOutput::ScheduleWakeup {
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::ScheduleWakeup {
             id: id.to_string(),
             next_fire_at: next,
         },

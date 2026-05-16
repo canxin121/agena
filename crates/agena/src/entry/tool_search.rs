@@ -1,8 +1,8 @@
-use crate::message::{BundledToolOutput, ToolSearchToolInput};
+use crate::message::{ToolPayloadOutput, ToolSearchToolInput};
 use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
 use crate::plugin::sdk::ToolTag;
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
 
 const DEFAULT_LIMIT: usize = 8;
 const MAX_LIMIT: usize = 25;
@@ -32,7 +32,7 @@ impl SearchableTool {
 pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &ToolSearchToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let catalog = executor
         .searchable_tools()
         .into_iter()
@@ -44,7 +44,7 @@ pub(crate) fn execute(
 pub(crate) fn execute_with_tools(
     catalog: &[SearchableTool],
     input: &ToolSearchToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     if input.query.trim().is_empty() && input.load.is_empty() {
         return Err(ToolError::InvalidInput(
             "tool_search requires a non-empty query or at least one tool to load".to_string(),
@@ -88,7 +88,7 @@ pub(crate) fn execute_with_tools(
         );
     }
 
-    let output = BundledToolOutput::ToolSearch {
+    let output = ToolPayloadOutput::ToolSearch {
         results: results.iter().map(|tool| tool.name.clone()).collect(),
         loaded_tools,
     };
@@ -102,7 +102,7 @@ pub(crate) fn execute_with_tools(
             .insert("query".to_string(), input.query.trim().to_string());
     }
 
-    Ok(BundledExecution::new(output, view))
+    Ok(ToolPayloadExecution::new(output, view))
 }
 
 fn search_catalog(

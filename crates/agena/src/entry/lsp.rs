@@ -1,5 +1,5 @@
 //! `lsp_definition` / `lsp_references` / `lsp_hover` / `lsp_diagnostics`
-//! bundled tools.
+//! plugin tools.
 //!
 //! Each tool resolves the right server via the [`agena_lsp::LspRegistry`]
 //! threaded through `ToolExecutor::with_lsp_registry`, runs the LSP
@@ -16,16 +16,16 @@ use agena_lsp::lsp_types::{
 };
 
 use crate::message::{
-    BundledToolOutput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
-    LspReferencesToolInput,
+    LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
+    ToolPayloadOutput,
 };
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
 
 pub(super) fn execute_definition(
     executor: &ToolExecutor,
     input: &LspDefinitionToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
     let path = executor.resolve_target_path(&input.file_path);
     executor.ensure_read_permission(&path)?;
@@ -54,8 +54,8 @@ pub(super) fn execute_definition(
             locations.join("\n")
         },
     );
-    Ok(BundledExecution::new(
-        BundledToolOutput::LspDefinition { locations },
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::LspDefinition { locations },
         view,
     ))
 }
@@ -63,7 +63,7 @@ pub(super) fn execute_definition(
 pub(super) fn execute_references(
     executor: &ToolExecutor,
     input: &LspReferencesToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
     let path = executor.resolve_target_path(&input.file_path);
     executor.ensure_read_permission(&path)?;
@@ -95,8 +95,8 @@ pub(super) fn execute_references(
             locations.join("\n")
         },
     );
-    Ok(BundledExecution::new(
-        BundledToolOutput::LspReferences { locations },
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::LspReferences { locations },
         view,
     ))
 }
@@ -104,7 +104,7 @@ pub(super) fn execute_references(
 pub(super) fn execute_hover(
     executor: &ToolExecutor,
     input: &LspHoverToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
     let path = executor.resolve_target_path(&input.file_path);
     executor.ensure_read_permission(&path)?;
@@ -131,8 +131,8 @@ pub(super) fn execute_hover(
             .clone()
             .unwrap_or_else(|| "no hover info".to_string()),
     );
-    Ok(BundledExecution::new(
-        BundledToolOutput::LspHover { contents },
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::LspHover { contents },
         view,
     ))
 }
@@ -140,7 +140,7 @@ pub(super) fn execute_hover(
 pub(super) fn execute_diagnostics(
     executor: &ToolExecutor,
     input: &LspDiagnosticsToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
     let path = executor.resolve_target_path(&input.file_path);
     executor.ensure_read_permission(&path)?;
@@ -171,8 +171,8 @@ pub(super) fn execute_diagnostics(
             formatted.join("\n")
         },
     );
-    Ok(BundledExecution::new(
-        BundledToolOutput::LspDiagnostics { entries: formatted },
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::LspDiagnostics { entries: formatted },
         view,
     ))
 }

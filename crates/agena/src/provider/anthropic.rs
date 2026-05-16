@@ -353,7 +353,10 @@ impl AnthropicProvider {
         }
     }
 
-    fn tools(&self, tools: &[crate::plugin::registry::PluginEntry]) -> Vec<AnthropicEntryDefinition> {
+    fn tools(
+        &self,
+        tools: &[crate::plugin::registry::PluginEntry],
+    ) -> Vec<AnthropicEntryDefinition> {
         tools
             .iter()
             .map(|tool| AnthropicEntryDefinition {

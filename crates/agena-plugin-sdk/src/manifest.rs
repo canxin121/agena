@@ -248,7 +248,9 @@ impl PluginToolDecl {
     }
 
     pub fn has_tag(&self, tag: ToolTag) -> bool {
-        self.effective_tags().iter().any(|existing| existing == &tag)
+        self.effective_tags()
+            .iter()
+            .any(|existing| existing == &tag)
     }
 
     pub fn should_load_by_default(&self) -> bool {

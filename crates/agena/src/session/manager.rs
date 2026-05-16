@@ -16,8 +16,8 @@ use crate::event::{
     RunStartedEvent, SessionGoalEvent,
 };
 use crate::message::{
-    AttachmentItem, ExecutionStatus, FileChangePart, BundledToolOutput, Message,
-    MessageMetadata, MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart,
+    AttachmentItem, ExecutionStatus, FileChangeEntry, FileChangePart, Message, MessageMetadata,
+    MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart,
     TaskSubagentType, TimeRange, TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation,
     ToolOutput, ToolResultBlock, UserInputReply, UserInputReplyKind, UserInputRequest,
     UserInputRequestPart,
@@ -3385,9 +3385,7 @@ impl SessionManager {
             execution.view.attachments.as_slice(),
             blocks.as_slice(),
         );
-        if let Some(BundledToolOutput::ToolSearch { loaded_tools, .. }) =
-            tool_output.as_bundled()
-        {
+        if let Some(loaded_tools) = loaded_tools_from_tool_output(&tool_output) {
             session.runtime.record_loaded_deferred_tools(&loaded_tools);
         }
         self.apply_tool_success_execution_context(&mut session, &execution);
@@ -4024,16 +4022,23 @@ impl SessionManager {
         session: &mut Session,
         execution: &ToolInvocationExecution,
     ) {
-        let Some(output) = execution.output.as_bundled() else {
-            return;
-        };
-        match output {
-            BundledToolOutput::EnterWorktree { path, .. } => {
-                session
-                    .runtime
-                    .set_effective_workspace_root(Some(PathBuf::from(path)));
+        match execution
+            .view
+            .metadata
+            .get("agena.effect")
+            .map(String::as_str)
+        {
+            Some("enter_worktree") => {
+                if let Some(path) = custom_payload_value(&execution.output)
+                    .and_then(|value| value.get("path").cloned())
+                    .and_then(|value| value.as_str().map(str::to_string))
+                {
+                    session
+                        .runtime
+                        .set_effective_workspace_root(Some(PathBuf::from(path)));
+                }
             }
-            BundledToolOutput::ExitWorktree { .. } => {
+            Some("exit_worktree") => {
                 session.runtime.set_effective_workspace_root(None);
             }
             _ => {}
@@ -4573,17 +4578,33 @@ fn tool_message_extra_part_contents(
 }
 
 fn file_change_part_from_tool_output(details: &ToolOutput) -> Option<FileChangePart> {
-    match details.as_bundled() {
-        Some(BundledToolOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
-            Some(FileChangePart { changes })
-        }
-        _ => None,
-    }
+    let changes: Vec<FileChangeEntry> =
+        serde_json::from_value(custom_payload_value(details)?.get("changes")?.clone()).ok()?;
+    (!changes.is_empty()).then_some(FileChangePart { changes })
 }
 
 fn todo_part_from_tool_output(details: &ToolOutput) -> Option<TodoListPart> {
-    match details.as_bundled() {
-        Some(BundledToolOutput::TodoWrite { items }) => Some(TodoListPart { items }),
+    let items =
+        serde_json::from_value(custom_payload_value(details)?.get("items")?.clone()).ok()?;
+    Some(TodoListPart { items })
+}
+
+fn loaded_tools_from_tool_output(details: &ToolOutput) -> Option<Vec<String>> {
+    let loaded_tools =
+        serde_json::from_value(custom_payload_value(details)?.get("loaded_tools")?.clone()).ok()?;
+    Some(loaded_tools)
+}
+
+#[cfg(test)]
+fn answers_from_tool_output(
+    details: &ToolOutput,
+) -> Option<std::collections::BTreeMap<String, Vec<String>>> {
+    serde_json::from_value(custom_payload_value(details)?.get("answers")?.clone()).ok()
+}
+
+fn custom_payload_value(details: &ToolOutput) -> Option<serde_json::Value> {
+    match details {
+        ToolOutput::Custom { output } => Some(serde_json::Value::from(output.payload.clone())),
         _ => None,
     }
 }
@@ -4856,7 +4877,13 @@ fn user_input_execution(
 
     Ok(ToolInvocationExecution::new(
         ToolOutput::Custom {
-            output: BundledToolOutput::AskUser { answers }.into_custom_output(),
+            output: crate::message::CustomToolOutput {
+                name: "ask_user".to_string(),
+                payload: crate::message::StructuredObject::try_from(serde_json::json!({
+                    "answers": answers,
+                }))
+                .map_err(AppError::Internal)?,
+            },
         },
         view,
     ))
@@ -4989,12 +5016,12 @@ mod tests {
 
     use crate::agent::Agent;
     use crate::db::init_schema;
-    use crate::entry::BundledExecution;
+    use crate::entry::ToolPayloadExecution;
     use crate::event::EventKind;
     use crate::message::{
-        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, BundledToolOutput,
-        McpToolOutput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment,
-        ToolExecutionPart, ToolOutput, ToolResultBlock, ToolSearchToolInput, UserInputOption,
+        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, McpToolOutput, TodoItem,
+        TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart,
+        ToolOutput, ToolPayloadOutput, ToolResultBlock, ToolSearchToolInput, UserInputOption,
         UserInputQuestion, UserInputReply, UserInputReplyKind,
     };
     use crate::model::{ModelId, ModelRef, ProviderId};
@@ -5383,10 +5410,7 @@ mod tests {
                             details,
                             ..
                         })) => {
-                            let answers = match details.as_bundled() {
-                                Some(BundledToolOutput::AskUser { answers }) => answers,
-                                _ => return None,
-                            };
+                            let answers = answers_from_tool_output(details)?;
                             answers
                                 .get("model_choice")
                                 .and_then(|values| values.first().cloned())
@@ -5450,11 +5474,9 @@ mod tests {
                         })) => details,
                         _ => return false,
                     };
-                    matches!(
-                        details.as_bundled(),
-                        Some(BundledToolOutput::ToolSearch { ref loaded_tools, .. })
-                            if loaded_tools.iter().any(|name| name == "apply_patch")
-                    )
+                    loaded_tools_from_tool_output(details).is_some_and(|loaded_tools| {
+                        loaded_tools.iter().any(|name| name == "apply_patch")
+                    })
                 })
             });
 
@@ -6051,12 +6073,13 @@ mod tests {
             let context =
                 crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
             self.executor
-                .execute_bundled_payload_for_host(
+                .execute_tool_payload_for_host(
                     "todo_write",
                     serde_json::to_value(req)
                         .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?,
                     context.session_id.filter(|id| *id >= 0),
                     context.call_id.filter(|id| *id >= 0),
+                    None,
                 )
                 .map_err(|err| crate::plugin::PluginError::new(err.to_string()))
         }
@@ -6080,7 +6103,7 @@ mod tests {
             Agent::new("build", permission_policy.clone()).with_tool_policy(tool_policy.clone()),
         )
         .with_subagent_registry(agents.clone());
-        let plugins = crate::tool::default_tool_host(root).expect("bundled plugin host");
+        let plugins = crate::tool::default_tool_host(root).expect("default plugin host");
         plugins
             .host_handle()
             .install_client(Arc::new(SessionTestHostClient {
@@ -7629,8 +7652,8 @@ mod tests {
             .await
             .expect("create session");
 
-        let entered: ToolInvocationExecution = BundledExecution::new(
-            BundledToolOutput::EnterWorktree {
+        let entered: ToolInvocationExecution = ToolPayloadExecution::new(
+            ToolPayloadOutput::EnterWorktree {
                 path: "/tmp/worktree".to_string(),
                 branch: "agena/demo".to_string(),
             },
@@ -7646,8 +7669,8 @@ mod tests {
             Some("/tmp/worktree".to_string())
         );
 
-        let exited: ToolInvocationExecution = BundledExecution::new(
-            BundledToolOutput::ExitWorktree {
+        let exited: ToolInvocationExecution = ToolPayloadExecution::new(
+            ToolPayloadOutput::ExitWorktree {
                 action: "keep".to_string(),
                 path: "/tmp/worktree".to_string(),
             },
@@ -8487,8 +8510,8 @@ mod tests {
     async fn blocked_permission_survives_restart_and_reply_continues() {
         let workspace = TempWorkspace::new();
         let db = open_temp_database(&workspace.root, "permission-resume.db").await;
-        let tool_policy = ToolPermissionPolicy::allow_all()
-            .with_tool_mode("todo_write", PermissionMode::Ask);
+        let tool_policy =
+            ToolPermissionPolicy::allow_all().with_tool_mode("todo_write", PermissionMode::Ask);
         let first = build_manager_with_provider_on_db(
             &workspace.root,
             db.clone(),

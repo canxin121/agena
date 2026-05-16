@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 
-use crate::message::{BundledToolOutput, PowerShellToolInput};
+use crate::message::{PowerShellToolInput, ToolPayloadOutput};
 
 use super::shell::ShellRequest;
-use super::{
-    BundledExecution, BundledExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
-};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolRuntimeContext};
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -14,8 +12,8 @@ const MAX_OUTPUT_LINES: usize = 2_000;
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &PowerShellToolInput,
-    context: BundledExecutionContext,
-) -> Result<BundledExecution, ToolError> {
+    context: ToolRuntimeContext,
+) -> Result<ToolPayloadExecution, ToolError> {
     if !cfg!(windows) {
         return Err(ToolError::InvalidInput(
             "powershell tool is only available on Windows".to_string(),
@@ -65,7 +63,7 @@ pub(super) fn execute(
         trimmed_output.clone()
     };
 
-    let output = BundledToolOutput::PowerShell {
+    let output = ToolPayloadOutput::PowerShell {
         output: Some(display_output.clone()),
         description: if input.description.trim().is_empty() {
             None
@@ -86,7 +84,7 @@ pub(super) fn execute(
         .insert("truncated".to_string(), truncated.to_string());
     view.metadata.insert("status".to_string(), status_text);
 
-    Ok(BundledExecution::new(output, view))
+    Ok(ToolPayloadExecution::new(output, view))
 }
 
 fn inherited_environment() -> HashMap<String, String> {
@@ -169,7 +167,7 @@ mod tests {
                 workdir: None,
                 filesystem_effects: Vec::new(),
             },
-            BundledExecutionContext::default(),
+            ToolRuntimeContext::default(),
         )
         .expect_err("non-windows should reject powershell");
         assert!(err.to_string().contains("only available on Windows"));

@@ -1,4 +1,4 @@
-//! `enter_worktree` / `exit_worktree` bundled tools.
+//! `enter_worktree` / `exit_worktree` plugin tools.
 //!
 //! Thin wrappers around the `git` CLI; we don't pull in libgit2 for the
 //! sake of keeping the dependency surface tight.  Worktrees are created
@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput, BundledToolOutput};
+use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput, ToolPayloadOutput};
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
 
 #[derive(Debug, Clone)]
 pub struct WorktreeSession {
@@ -39,7 +39,7 @@ pub(super) fn execute_enter(
     executor: &ToolExecutor,
     input: &EnterWorktreeToolInput,
     session_id: Option<i64>,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("enter_worktree: no session in execution context".to_string())
     })?;
@@ -75,20 +75,20 @@ pub(super) fn execute_enter(
             session.branch
         ),
     );
-    let output = BundledToolOutput::EnterWorktree {
+    let output = ToolPayloadOutput::EnterWorktree {
         path: session.path.to_string_lossy().to_string(),
         branch: session.branch.clone(),
     };
 
     registry.write().insert(session_id, session);
-    Ok(BundledExecution::new(output, view))
+    Ok(ToolPayloadExecution::new(output, view))
 }
 
 pub(super) fn execute_exit(
     executor: &ToolExecutor,
     input: &ExitWorktreeToolInput,
     session_id: Option<i64>,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("exit_worktree: no session in execution context".to_string())
     })?;
@@ -141,8 +141,8 @@ pub(super) fn execute_exit(
             session.branch
         ),
     );
-    Ok(BundledExecution::new(
-        BundledToolOutput::ExitWorktree {
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::ExitWorktree {
             action: action.to_string(),
             path: session.path.to_string_lossy().to_string(),
         },

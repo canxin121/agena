@@ -1,17 +1,15 @@
-//! First-party `agena.web` plugin: web_fetch / web_search.
+//! `agena.web` plugin: web_fetch / web_search.
 
 use crate::message::{WebFetchToolInput, WebSearchToolInput};
-use crate::plugin::sdk::{
-    InputNetworkSpec, NetworkAccessSpec, PluginToolDecl, ToolTag,
-};
-use crate::plugins::bundled::router::BundledRouterPlugin;
+use crate::plugin::sdk::{InputNetworkSpec, NetworkAccessSpec, PluginToolDecl, ToolTag};
+use crate::plugins::provided::router::InProcessToolPlugin;
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
 
-pub(crate) fn new_plugin() -> BundledRouterPlugin {
-    BundledRouterPlugin::new(
+pub(crate) fn new_plugin() -> InProcessToolPlugin {
+    InProcessToolPlugin::new(
         "agena-web",
-        "Web tools (web_fetch, web_search) routed through the shared bundled executor bridge.",
+        "Web tools (web_fetch, web_search) backed by the in-process executor bridge.",
         entries(),
     )
 }

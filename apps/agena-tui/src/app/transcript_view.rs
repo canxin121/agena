@@ -826,82 +826,44 @@ fn strip_terminal_ansi_sequences(text: &str) -> String {
 }
 
 fn apply_patch_diff(details: &agena::message::ToolOutput) -> Option<String> {
-    match details.as_bundled()? {
-        BundledToolOutput::ApplyPatch { diff, .. } if !diff.trim().is_empty() => Some(diff),
-        _ => None,
-    }
+    let payload = custom_tool_payload(details)?;
+    payload
+        .get("diff")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|diff| !diff.is_empty())
+        .map(str::to_string)
 }
 
 fn tool_invocation_label(invocation: &ToolInvocation) -> String {
-    if let Some(input) = invocation.as_bundled() {
-        return match input {
-            BundledToolInput::Bash(input) => format!("bash {}", input.command),
-            BundledToolInput::Read(input) => format!("read {}", input.file_path),
-            BundledToolInput::ViewFile(input) => format!("view_file {}", input.path),
-            BundledToolInput::ApplyPatch(_) => "apply_patch".to_string(),
-            BundledToolInput::Glob(input) => format!("glob {}", input.pattern),
-            BundledToolInput::Grep(input) => format!("grep {}", input.pattern),
-            BundledToolInput::Task(input) => format!("task {}", input.description),
-            BundledToolInput::ToolSearch(input) => format!("tool_search {}", input.query),
-            BundledToolInput::TodoWrite(_) => "todo_write".to_string(),
-            BundledToolInput::AskUser(_) => "ask_user".to_string(),
-            BundledToolInput::Monitor(input) => match input {
-                agena::message::MonitorToolInput::Start { command, .. } => {
-                    format!("monitor start {command}")
-                }
-                agena::message::MonitorToolInput::List {} => "monitor list".to_string(),
-                agena::message::MonitorToolInput::Read { monitor_id, .. } => {
-                    format!("monitor read {monitor_id}")
-                }
-                agena::message::MonitorToolInput::Stop { monitor_id } => {
-                    format!("monitor stop {monitor_id}")
-                }
-            },
-            BundledToolInput::WebFetch(input) => format!("web_fetch {}", input.url),
-            BundledToolInput::WebSearch(input) => format!("web_search {}", input.query),
-            BundledToolInput::EnterPlanMode(_) => "enter_plan_mode".to_string(),
-            BundledToolInput::ExitPlanMode(_) => "exit_plan_mode".to_string(),
-            BundledToolInput::EnterWorktree(input) => match (&input.name, &input.path) {
-                (Some(n), _) => format!("enter_worktree name={n}"),
-                (_, Some(p)) => format!("enter_worktree path={p}"),
-                _ => "enter_worktree".to_string(),
-            },
-            BundledToolInput::ExitWorktree(input) => format!("exit_worktree {}", input.action),
-            BundledToolInput::CronCreate(input) => {
-                format!("cron_create {}", input.expression)
-            }
-            BundledToolInput::CronList(_) => "cron_list".to_string(),
-            BundledToolInput::CronDelete(input) => format!("cron_delete {}", input.id),
-            BundledToolInput::ScheduleWakeup(input) => {
-                format!("schedule_wakeup +{}s", input.delay_seconds)
-            }
-            BundledToolInput::LspDefinition(input) => {
-                format!(
-                    "lsp_definition {}:{}:{}",
-                    input.file_path, input.line, input.character
-                )
-            }
-            BundledToolInput::LspReferences(input) => {
-                format!(
-                    "lsp_references {}:{}:{}",
-                    input.file_path, input.line, input.character
-                )
-            }
-            BundledToolInput::LspHover(input) => {
-                format!(
-                    "lsp_hover {}:{}:{}",
-                    input.file_path, input.line, input.character
-                )
-            }
-            BundledToolInput::LspDiagnostics(input) => {
-                format!("lsp_diagnostics {}", input.file_path)
-            }
-            BundledToolInput::NotebookEdit(input) => {
-                format!("notebook_edit {}", input.notebook_path)
-            }
-            BundledToolInput::PowerShell(input) => format!("powershell {}", input.command),
-        };
+    let input = serde_json::Value::from(invocation.input.clone());
+    for key in [
+        "command",
+        "file_path",
+        "path",
+        "pattern",
+        "query",
+        "url",
+        "description",
+        "action",
+        "id",
+        "expression",
+        "notebook_path",
+    ] {
+        if let Some(value) = input.get(key).and_then(serde_json::Value::as_str)
+            && !value.trim().is_empty()
+        {
+            return format!("{} {}", invocation.name, value.trim());
+        }
     }
-    let ToolInvocation { name, .. } = invocation;
-    name.clone()
+    invocation.name.clone()
+}
+
+fn custom_tool_payload(details: &agena::message::ToolOutput) -> Option<serde_json::Value> {
+    match details {
+        agena::message::ToolOutput::Custom { output } => {
+            Some(serde_json::Value::from(output.payload.clone()))
+        }
+        _ => None,
+    }
 }

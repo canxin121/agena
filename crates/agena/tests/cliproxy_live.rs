@@ -327,26 +327,24 @@ fn tool_request() -> CompletionRequest {
             Role::User,
             "Use the provided tool exactly once and do not answer directly.",
         )],
-        tools: vec![
-            RegistryPluginEntry::new(
-                "live-test",
-                PluginToolDecl::new(
-                    "echo",
-                    serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "value": { "type": "string" }
-                        },
-                        "required": ["value"],
-                        "additionalProperties": false
-                    }),
-                )
-                .description("Echo input")
-                .tag(agena::plugin::sdk::ToolTag::ReadOnly)
-                .concurrency_safe(true)
-                .strict(true),
-            ),
-        ],
+        tools: vec![RegistryPluginEntry::new(
+            "live-test",
+            PluginToolDecl::new(
+                "echo",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "value": { "type": "string" }
+                    },
+                    "required": ["value"],
+                    "additionalProperties": false
+                }),
+            )
+            .description("Echo input")
+            .tag(agena::plugin::sdk::ToolTag::ReadOnly)
+            .concurrency_safe(true)
+            .strict(true),
+        )],
         temperature: None,
         max_output_tokens: Some(128),
         prompt_cache_key: None,
@@ -412,26 +410,24 @@ fn anthropic_cache_probe_request(nonce: &str) -> CompletionRequest {
             format!("ANTHROPIC-SYSTEM-{nonce}").as_str(),
         )),
         messages: vec![Message::prompt_text(Role::User, "Reply with exactly OK.")],
-        tools: vec![
-            RegistryPluginEntry::new(
-                "live-cache-test",
-                PluginToolDecl::new(
-                    "project_search",
-                    serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "query": { "type": "string" }
-                        },
-                        "required": ["query"],
-                        "additionalProperties": false
-                    }),
-                )
-                .description("Search project files for matches.")
-                .tag(agena::plugin::sdk::ToolTag::ReadOnly)
-                .concurrency_safe(true)
-                .strict(true),
-            ),
-        ],
+        tools: vec![RegistryPluginEntry::new(
+            "live-cache-test",
+            PluginToolDecl::new(
+                "project_search",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }),
+            )
+            .description("Search project files for matches.")
+            .tag(agena::plugin::sdk::ToolTag::ReadOnly)
+            .concurrency_safe(true)
+            .strict(true),
+        )],
         temperature: None,
         max_output_tokens: Some(64),
         prompt_cache_key: None,

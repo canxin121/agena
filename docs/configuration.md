@@ -124,7 +124,7 @@ agena \
 - map 通常按 key 合并。
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
 - `plugins` 的 `enabled` 和 `timeouts` 会被 overlay 替换；非空 plugin list 会替换嵌套 plugin tools。
-- MCP、LSP、web、memory 和 hooks 都作为 bundled static plugin 的 `options` 解析。
+- MCP、LSP、web、memory 和 hooks 都作为 runtime-provided static plugin 的 `options` 解析。
 - static plugin options 的合并语义跟随对应 plugin 的配置结构，例如 server map 按名称合并，web options 整体替换。
 
 这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
@@ -807,7 +807,7 @@ apply_patch = "ask"
 "*" = "ask"
 ```
 
-`tags` 用于 tool 没有精确规则时的默认策略。Tool 由 plugin manifest 声明自己的 tags，常见 tags 如 `filesystem_read`、`filesystem_write`、`network`、`internet`、`task`、`shell`。`names` 按 tool 名匹配；bundled static plugin tools 和外部 plugin tools 使用同一个名字表。
+`tags` 用于 tool 没有精确规则时的默认策略。Tool 由 plugin manifest 声明自己的 tags，常见 tags 如 `filesystem_read`、`filesystem_write`、`network`、`internet`、`task`、`shell`。`names` 按 tool 名匹配；runtime-provided and user-configured plugin tools 使用同一个名字表。
 
 `rules.<tool>` 可以直接写 mode，也可以写 pattern table。`bash` 的 pattern table 按命令 pattern 覆盖，`"*"` 是 fallback。其他 tool 使用直接 mode；需要 fallback 时也可以写 `rules.<tool>."*" = "ask"`。
 
@@ -942,7 +942,7 @@ timeouts = { tool_invoke = "30s" }
 
 Plugin transport kind：
 
-- `static`: 编译期注册的 bundled/static 插件。
+- `static`: 编译期注册的 runtime-provided static 插件。
 - `cdylib`: 本地动态库。
 - `stdio`: 子进程 JSON-RPC over stdin/stdout。
 - `http`: 远端 JSON-RPC over POST。
@@ -993,7 +993,7 @@ options = { }
 timeouts = { init = "20s" }
 ```
 
-`options` 是传给 plugin 的自由 JSON/TOML 配置；bundled static plugin 也通过 `options` 接收自己的配置。
+`options` 是传给 plugin 的自由 JSON/TOML 配置；runtime-provided static plugin 也通过 `options` 接收自己的配置。
 
 Timeout 字段：
 
@@ -1051,7 +1051,7 @@ auth = { kind = "basic", username = "user", password = "..." }
 auth = { kind = "basic", username = "user", password_env = "PLUGIN_PASSWORD" }
 ```
 
-First-party static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、hooks、MCP 等。它们和外部 plugin 一样进入 plugin host 与 tool registry。
+Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、hooks、MCP 等。它们和用户配置的 plugin 一样进入 plugin host 与 tool registry。
 
 插件存储默认目录是 `~/.agena/plugin-storage`，可通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
 

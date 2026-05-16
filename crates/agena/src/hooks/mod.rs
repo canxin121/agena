@@ -197,7 +197,7 @@ impl ShellHookPlugin {
 impl Plugin for ShellHookPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(SHELL_HOOK_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Agena built-in shell hook bridge")
+            .description("Agena shell hook bridge")
             .hooks(self.subscriptions())
             .build()
     }

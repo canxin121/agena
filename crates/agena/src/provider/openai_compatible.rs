@@ -306,7 +306,9 @@ impl OpenAiCompatibleProvider {
             .collect())
     }
 
-    fn realtime_tools(tools: &[crate::plugin::registry::PluginEntry]) -> Vec<RealtimeEntryDefinition> {
+    fn realtime_tools(
+        tools: &[crate::plugin::registry::PluginEntry],
+    ) -> Vec<RealtimeEntryDefinition> {
         tools
             .iter()
             .map(|tool| RealtimeEntryDefinition {

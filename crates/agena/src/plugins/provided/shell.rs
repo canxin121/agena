@@ -1,16 +1,16 @@
-//! First-party `agena.shell` plugin: bash, powershell, monitor.
+//! `agena.shell` plugin: bash, powershell, monitor.
 
 use crate::message::{BashToolInput, MonitorToolInput, PowerShellToolInput};
 use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
-use crate::plugin::sdk::{ToolStreamingMode, HostCapability, PluginToolDecl, ToolTag};
-use crate::plugins::bundled::router::BundledRouterPlugin;
+use crate::plugin::sdk::{HostCapability, PluginToolDecl, ToolStreamingMode, ToolTag};
+use crate::plugins::provided::router::InProcessToolPlugin;
 
 pub(crate) const SHELL_PLUGIN_ID: &str = "agena.shell";
 
-pub(crate) fn new_plugin() -> BundledRouterPlugin {
-    BundledRouterPlugin::new(
+pub(crate) fn new_plugin() -> InProcessToolPlugin {
+    InProcessToolPlugin::new(
         "agena-shell",
-        "Shell tools (bash, powershell, monitor) routed through the shared bundled executor bridge.",
+        "Shell tools (bash, powershell, monitor) backed by the in-process executor bridge.",
         entries(),
     )
 }

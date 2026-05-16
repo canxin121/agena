@@ -1,5 +1,7 @@
-//! Shared scaffolding for bundled plugins backed by agena's in-process
-//! executor implementations.
+//! Shared scaffolding for static plugins backed by agena's in-process
+//! executor implementations. These tools use the same plugin registry and
+//! permission path as any other plugin tool; this module only supplies the
+//! executor context needed by their Rust implementations.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -8,57 +10,64 @@ use std::sync::{LazyLock, Mutex};
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
-use crate::entry::result::BundledExecution;
-use crate::entry::{BundledExecutionContext, ToolExecutor, orchestrator};
+use crate::entry::result::ToolPayloadExecution;
+use crate::entry::{ToolExecutor, ToolRuntimeContext, orchestrator};
 use crate::message::{
-    ApplyPatchToolInput, BashToolInput, BundledToolInput, BundledToolOutput, GlobToolInput,
-    GrepToolInput, MonitorToolInput, PowerShellToolInput,
+    ApplyPatchToolInput, BashToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
+    PowerShellToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, Plugin, PluginToolDecl, PluginManifest,
+    HookSubscription, InitContext, InitOutcome, Plugin, PluginManifest, PluginToolDecl,
     Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
 };
 
 thread_local! {
-    static BUILTIN_CTX: RefCell<Option<ToolExecutor>> = const { RefCell::new(None) };
+    static IN_PROCESS_TOOL_CTX: RefCell<Option<ToolExecutor>> = const { RefCell::new(None) };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct BuiltinContextKey {
+struct InProcessContextKey {
     session_id: i64,
     call_id: i64,
     tool_name: String,
 }
 
-static BUILTIN_CTX_BY_CALL: LazyLock<Mutex<HashMap<BuiltinContextKey, ToolExecutor>>> =
+static IN_PROCESS_TOOL_CTX_BY_CALL: LazyLock<Mutex<HashMap<InProcessContextKey, ToolExecutor>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub(crate) fn with_executor<R>(
+pub(crate) struct ExecutorContextGuard {
+    key: InProcessContextKey,
+    previous: Option<ToolExecutor>,
+}
+
+impl Drop for ExecutorContextGuard {
+    fn drop(&mut self) {
+        IN_PROCESS_TOOL_CTX.with(|cell| {
+            *cell.borrow_mut() = self.previous.take();
+        });
+        if let Ok(mut contexts) = IN_PROCESS_TOOL_CTX_BY_CALL.lock() {
+            contexts.remove(&self.key);
+        }
+    }
+}
+
+pub(crate) fn install_executor_context(
     executor: &ToolExecutor,
     session_id: i64,
     call_id: i64,
     tool_name: String,
-    f: impl FnOnce() -> R,
-) -> R {
-    let key = BuiltinContextKey {
+) -> ExecutorContextGuard {
+    let key = InProcessContextKey {
         session_id,
         call_id,
         tool_name,
     };
-    if let Ok(mut contexts) = BUILTIN_CTX_BY_CALL.lock() {
+    if let Ok(mut contexts) = IN_PROCESS_TOOL_CTX_BY_CALL.lock() {
         contexts.insert(key.clone(), executor.clone());
     }
-    let out = BUILTIN_CTX.with(|cell| {
-        let prev = cell.replace(Some(executor.clone()));
-        let out = f();
-        *cell.borrow_mut() = prev;
-        out
-    });
-    if let Ok(mut contexts) = BUILTIN_CTX_BY_CALL.lock() {
-        contexts.remove(&key);
-    }
-    out
+    let previous = IN_PROCESS_TOOL_CTX.with(|cell| cell.replace(Some(executor.clone())));
+    ExecutorContextGuard { key, previous }
 }
 
 fn current_executor(
@@ -66,19 +75,19 @@ fn current_executor(
     call_id: i64,
     tool_name: &str,
 ) -> Result<ToolExecutor, PluginError> {
-    if let Some(executor) = BUILTIN_CTX.with(|cell| cell.borrow().clone()) {
+    if let Some(executor) = IN_PROCESS_TOOL_CTX.with(|cell| cell.borrow().clone()) {
         return Ok(executor);
     }
-    let key = BuiltinContextKey {
+    let key = InProcessContextKey {
         session_id,
         call_id,
         tool_name: tool_name.to_string(),
     };
-    BUILTIN_CTX_BY_CALL
+    IN_PROCESS_TOOL_CTX_BY_CALL
         .lock()
         .ok()
         .and_then(|contexts| contexts.get(&key).cloned())
-        .ok_or_else(|| PluginError::new("bundled plugin invoked without executor context"))
+        .ok_or_else(|| PluginError::new("static plugin invoked without executor context"))
 }
 
 #[cfg(test)]
@@ -96,27 +105,27 @@ pub(crate) fn current_executor_lookup(
     call_id: i64,
     tool_name: &str,
 ) -> Option<ToolExecutor> {
-    if let Some(executor) = BUILTIN_CTX.with(|cell| cell.borrow().clone()) {
+    if let Some(executor) = IN_PROCESS_TOOL_CTX.with(|cell| cell.borrow().clone()) {
         return Some(executor);
     }
-    let key = BuiltinContextKey {
+    let key = InProcessContextKey {
         session_id,
         call_id,
         tool_name: tool_name.to_string(),
     };
-    BUILTIN_CTX_BY_CALL
+    IN_PROCESS_TOOL_CTX_BY_CALL
         .lock()
         .ok()
         .and_then(|contexts| contexts.get(&key).cloned())
 }
 
-pub(crate) struct BundledRouterPlugin {
+pub(crate) struct InProcessToolPlugin {
     plugin_name: &'static str,
     description: &'static str,
     entries: Vec<PluginToolDecl>,
 }
 
-impl BundledRouterPlugin {
+impl InProcessToolPlugin {
     pub fn new(
         plugin_name: &'static str,
         description: &'static str,
@@ -131,7 +140,7 @@ impl BundledRouterPlugin {
 }
 
 #[async_trait]
-impl Plugin for BundledRouterPlugin {
+impl Plugin for InProcessToolPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut builder = PluginManifest::builder(self.plugin_name, env!("CARGO_PKG_VERSION"))
             .description(self.description)
@@ -151,7 +160,7 @@ impl Plugin for BundledRouterPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        invoke_bundled_tool(
+        invoke_tool(
             &input.tool_name,
             input.input,
             input.session_id,
@@ -168,24 +177,22 @@ impl Plugin for BundledRouterPlugin {
     }
 }
 
-pub(crate) fn invoke_bundled_tool(
+pub(crate) fn invoke_tool(
     tool_name: &str,
     input: JsonValue,
     session_id: i64,
     call_id: i64,
 ) -> SdkResult<ToolInvokeOutput> {
-    let bundled = parse_bundled_tool(tool_name, input)
-        .map_err(|err| PluginError::new(format!("parse {tool_name}: {err}")))?;
     let executor = current_executor(session_id, call_id, tool_name)?;
-    let context = BundledExecutionContext {
+    let context = ToolRuntimeContext {
         session_id: (session_id >= 0).then_some(session_id),
         call_id: (call_id >= 0).then_some(call_id),
         session_context: None,
         prepared_shell_command: None,
     };
-    let execution = orchestrator::execute_bundled(&executor, &bundled, context)
+    let execution = orchestrator::execute_tool(&executor, tool_name, input, context)
         .map_err(|err| PluginError::new(format!("{tool_name}: {err}")))?;
-    Ok(bundled_to_invoke_output(execution))
+    Ok(tool_execution_to_invoke_output(execution))
 }
 
 pub(crate) fn permission_paths_for(
@@ -234,75 +241,53 @@ fn default_workspace_read(needs_workspace: bool) -> Vec<crate::plugin::sdk::Path
         .collect()
 }
 
-pub(crate) fn parse_bundled_tool(
-    tool: &str,
-    input: JsonValue,
-) -> Result<BundledToolInput, serde_json::Error> {
-    Ok(match tool {
-        "bash" => BundledToolInput::Bash(serde_json::from_value(input)?),
-        "read" => BundledToolInput::Read(serde_json::from_value(input)?),
-        "view_file" => BundledToolInput::ViewFile(serde_json::from_value(input)?),
-        "apply_patch" => BundledToolInput::ApplyPatch(serde_json::from_value(input)?),
-        "glob" => BundledToolInput::Glob(serde_json::from_value(input)?),
-        "grep" => BundledToolInput::Grep(serde_json::from_value(input)?),
-        "task" => BundledToolInput::Task(serde_json::from_value(input)?),
-        "tool_search" => BundledToolInput::ToolSearch(serde_json::from_value(input)?),
-        "todo_write" => BundledToolInput::TodoWrite(serde_json::from_value(input)?),
-        "ask_user" => BundledToolInput::AskUser(serde_json::from_value(input)?),
-        "monitor" => BundledToolInput::Monitor(serde_json::from_value(input)?),
-        "web_fetch" => BundledToolInput::WebFetch(serde_json::from_value(input)?),
-        "web_search" => BundledToolInput::WebSearch(serde_json::from_value(input)?),
-        "enter_plan_mode" => BundledToolInput::EnterPlanMode(serde_json::from_value(input)?),
-        "exit_plan_mode" => BundledToolInput::ExitPlanMode(serde_json::from_value(input)?),
-        "enter_worktree" => BundledToolInput::EnterWorktree(serde_json::from_value(input)?),
-        "exit_worktree" => BundledToolInput::ExitWorktree(serde_json::from_value(input)?),
-        "cron_create" => BundledToolInput::CronCreate(serde_json::from_value(input)?),
-        "cron_list" => BundledToolInput::CronList(serde_json::from_value(input)?),
-        "cron_delete" => BundledToolInput::CronDelete(serde_json::from_value(input)?),
-        "schedule_wakeup" => BundledToolInput::ScheduleWakeup(serde_json::from_value(input)?),
-        "lsp_definition" => BundledToolInput::LspDefinition(serde_json::from_value(input)?),
-        "lsp_references" => BundledToolInput::LspReferences(serde_json::from_value(input)?),
-        "lsp_hover" => BundledToolInput::LspHover(serde_json::from_value(input)?),
-        "lsp_diagnostics" => BundledToolInput::LspDiagnostics(serde_json::from_value(input)?),
-        "notebook_edit" => BundledToolInput::NotebookEdit(serde_json::from_value(input)?),
-        "powershell" => BundledToolInput::PowerShell(serde_json::from_value(input)?),
-        other => {
-            return Err(serde::de::Error::custom(format!(
-                "unknown bundled tool `{other}`"
-            )));
+pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolInvokeOutput {
+    let mut metadata = execution.view.metadata;
+    match &execution.output {
+        crate::message::ToolPayloadOutput::ApplyPatch { .. } => {
+            metadata.insert("agena.effect".to_string(), "file_changes".to_string());
         }
-    })
-}
-
-pub(crate) fn bundled_to_invoke_output(execution: BundledExecution) -> ToolInvokeOutput {
-    let envelope = BundledResponseEnvelope {
-        output: execution.output,
-        apply_patch: execution.apply_patch,
-    };
-    let payload = serde_json::to_value(&envelope).ok();
+        crate::message::ToolPayloadOutput::ToolSearch { .. } => {
+            metadata.insert("agena.effect".to_string(), "load_tools".to_string());
+        }
+        crate::message::ToolPayloadOutput::TodoWrite { .. } => {
+            metadata.insert("agena.effect".to_string(), "todo_list".to_string());
+        }
+        crate::message::ToolPayloadOutput::EnterWorktree { .. } => {
+            metadata.insert("agena.effect".to_string(), "enter_worktree".to_string());
+        }
+        crate::message::ToolPayloadOutput::ExitWorktree { .. } => {
+            metadata.insert("agena.effect".to_string(), "exit_worktree".to_string());
+        }
+        _ => {}
+    }
+    let payload = Some(serde_json::Value::from(
+        execution.output.into_custom_output().payload,
+    ));
     ToolInvokeOutput {
         title: execution.view.title,
         output_text: execution.view.output_text,
         payload,
-        metadata: execution.view.metadata.into_iter().collect(),
+        metadata: metadata.into_iter().collect(),
         attachments: execution.view.attachments,
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct BundledResponseEnvelope {
-    pub output: BundledToolOutput,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub apply_patch: Option<crate::entry::apply_patch::ApplyPatchExecution>,
-}
-
-pub(crate) fn payload_to_bundled_envelope(
+#[cfg(test)]
+pub(crate) fn payload_to_tool_output(
+    tool_name: &str,
     payload: Option<&JsonValue>,
-) -> Result<BundledResponseEnvelope, serde_json::Error> {
-    match payload {
-        Some(value) => serde_json::from_value(value.clone()),
-        None => Err(serde::de::Error::custom(
-            "bundled plugin response missing payload",
-        )),
-    }
+) -> Result<crate::message::ToolPayloadOutput, serde_json::Error> {
+    let value = payload.cloned().unwrap_or(serde_json::json!({}));
+    let payload = crate::message::StructuredObject::try_from(value)
+        .map_err(|err| serde::de::Error::custom(err.to_string()))?;
+    let output = crate::message::CustomToolOutput {
+        name: tool_name.to_string(),
+        payload,
+    };
+    crate::message::ToolPayloadOutput::from_custom(&output).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "payload for tool `{tool_name}` did not match tool payload schema"
+        ))
+    })
 }

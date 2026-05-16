@@ -1665,9 +1665,7 @@ fn permission_action_from_write_request(
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    ApiError::bad_request("tool_name is required for tool rule")
-                })?
+                .ok_or_else(|| ApiError::bad_request("tool_name is required for tool rule"))?
                 .to_string();
             Ok(PermissionAction::Tool {
                 tool_name,

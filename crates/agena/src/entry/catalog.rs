@@ -3,9 +3,9 @@ use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
 use crate::plugin::sdk::ToolTag;
 
 use crate::plugin::sdk::Plugin;
-use crate::plugins::bundled::{
-    cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, shell as bundled_shell,
-    web as bundled_web, workflow as bundled_workflow,
+use crate::plugins::provided::{
+    cron as provided_cron, fs as provided_fs, lsp as provided_lsp, shell as provided_shell,
+    web as provided_web, workflow as provided_workflow,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,12 +95,12 @@ impl ToolCatalog {
 
 fn tool_decls() -> Vec<crate::plugin::sdk::PluginToolDecl> {
     let mut decls = Vec::new();
-    decls.extend(bundled_lsp::LspPlugin::new().manifest().entries);
-    decls.extend(bundled_cron::CronPlugin::new().manifest().entries);
-    decls.extend(bundled_fs::new_plugin().manifest().entries);
-    decls.extend(bundled_shell::new_plugin().manifest().entries);
-    decls.extend(bundled_web::new_plugin().manifest().entries);
-    decls.extend(bundled_workflow::new_plugin().manifest().entries);
+    decls.extend(provided_lsp::LspPlugin::new().manifest().entries);
+    decls.extend(provided_cron::CronPlugin::new().manifest().entries);
+    decls.extend(provided_fs::new_plugin().manifest().entries);
+    decls.extend(provided_shell::new_plugin().manifest().entries);
+    decls.extend(provided_web::new_plugin().manifest().entries);
+    decls.extend(provided_workflow::new_plugin().manifest().entries);
     decls
 }
 
@@ -147,12 +147,12 @@ mod tests {
         let catalog = ToolCatalog::for_model(Some("readonly-model"));
         let agent = Agent::new("test", crate::permission::PermissionPolicy::allow_all());
         let readonly_plugin = RegistryPluginEntry::new(
-            "third_party",
+            "fixture_read",
             crate::plugin::sdk::PluginToolDecl::new(
-                "third_party_read",
+                "fixture_read",
                 serde_json::json!({"type": "object"}),
             )
-            .description("read from a third-party plugin")
+            .description("read from a fixture plugin")
             .tags([ToolTag::ReadOnly, ToolTag::Network])
             .concurrency_safe(true),
         );
@@ -167,9 +167,9 @@ mod tests {
             .concurrency_safe(false),
         );
         let task_plugin = RegistryPluginEntry::new(
-            "third_party",
+            "fixture_task",
             crate::plugin::sdk::PluginToolDecl::new(
-                "third_party_task",
+                "fixture_task",
                 serde_json::json!({"type": "object"}),
             )
             .description("delegate work")

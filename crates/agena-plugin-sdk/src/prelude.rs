@@ -34,10 +34,9 @@ pub use crate::host_api::{
     LogLevel, NoopHostClient,
 };
 pub use crate::manifest::{
-    ToolLoadPriority, ToolStreamingMode, ToolTag, HookSubscription, HostCapability,
-    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
-    PluginToolDecl, PluginManifest, PluginManifestBuilder, TransportKind,
-    normalize_tool_tag_name,
+    HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
+    PathAccessSpec, PathKind, PluginManifest, PluginManifestBuilder, PluginToolDecl,
+    ToolLoadPriority, ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
 

@@ -1,4 +1,4 @@
-//! `web_fetch` bundled tool — GET an absolute URL, convert HTML→Markdown,
+//! `web_fetch` plugin tool — GET an absolute URL, convert HTML→Markdown,
 //! optionally summarize via the session's default LLM provider.
 //!
 //! Cache: 15-minute TTL keyed by canonicalized URL (LRU, capped at 64).
@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use lru::LruCache;
 
-use crate::message::{BundledToolOutput, ToolAttachment, WebFetchToolInput};
+use crate::message::{ToolAttachment, ToolPayloadOutput, WebFetchToolInput};
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
 
 const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,7 +37,7 @@ static CACHE: LazyLock<Mutex<LruCache<String, CachedFetch>>> = LazyLock::new(|| 
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &WebFetchToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let raw_url = input.url.trim();
     if raw_url.is_empty() {
         return Err(ToolError::Plugin(
@@ -178,7 +178,7 @@ fn make_execution(
     truncated: bool,
     cached: bool,
     _prompt: Option<&str>,
-) -> BundledExecution {
+) -> ToolPayloadExecution {
     // NOTE: prompt-based summarization is left as a follow-up — it
     // requires re-entering the LLM provider from inside a tool dispatch,
     // which the executor doesn't currently expose synchronously.  The
@@ -188,7 +188,7 @@ fn make_execution(
     let preview = preview_text(&markdown, 4000);
     let view =
         ToolExecutionView::simple(format!("WebFetch {url}"), format!("[{status}] {preview}"));
-    let output = BundledToolOutput::WebFetch {
+    let output = ToolPayloadOutput::WebFetch {
         url,
         markdown: Some(markdown),
         summary,
@@ -196,7 +196,7 @@ fn make_execution(
         cached,
         status,
     };
-    BundledExecution::new(output, view)
+    ToolPayloadExecution::new(output, view)
 }
 
 fn preview_text(s: &str, max: usize) -> String {

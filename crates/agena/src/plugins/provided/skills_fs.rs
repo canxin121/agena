@@ -3,15 +3,14 @@
 //! `~/.claude/skills/`) plus user slash-command markdown, and registers
 //! everything it finds as dynamic plugin tools.
 //!
-//! Bundled skills shipped with `agena-skills` are also projected here so a
-//! fresh install has workflow-like entries even before any user-defined
-//! content exists.
+//! Packaged skills from `agena-skills` are also projected here so a fresh
+//! install has workflow-like entries before any user-defined content exists.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use agena_skills::bundled as bundled_skills;
+use agena_skills::bundled as packaged_skills;
 use agena_skills::discovery::{default_command_roots, default_roots, scan, scan_commands};
 use agena_skills::skill::Skill;
 use async_trait::async_trait;
@@ -20,8 +19,8 @@ use crate::message::WorkflowPromptToolInput;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostEntryRegisterRequest, HostEntryRemoveRequest};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginToolDecl,
-    PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginManifest,
+    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const SKILLS_FS_PLUGIN_ID: &str = "agena.skills_fs";
@@ -116,8 +115,8 @@ impl SkillsFsPlugin {
             .into_iter()
             .map(|skill| (skill.frontmatter.name.clone(), skill))
             .collect();
-        if let Ok(builtins) = bundled_skills::all() {
-            for skill in builtins {
+        if let Ok(packaged) = packaged_skills::all() {
+            for skill in packaged {
                 skills_by_name
                     .entry(skill.frontmatter.name.clone())
                     .or_insert(skill);

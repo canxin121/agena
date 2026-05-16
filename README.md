@@ -21,7 +21,7 @@ apps/
   agena-studio-desktop/      # Tauri 桌面封装，启动内置 Studio sidecar
 
 crates/
-  agena/                     # 核心 runtime、配置、会话、权限、provider、事件、数据库、bundled plugin tools
+  agena/                     # 核心 runtime、配置、会话、权限、provider、事件、数据库、provided plugin tools
   agena-api/                 # API wire type，不绑定具体传输
   agena-api-server/          # HTTP/REST、SSE、WebSocket、IPC、JSON-RPC transport
   agena-client/              # Rust client SDK

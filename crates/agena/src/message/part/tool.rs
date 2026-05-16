@@ -187,7 +187,7 @@ pub struct MonitorEvent {
     pub line: String,
 }
 
-/// Action discriminator for the `monitor` bundled tool.
+/// Action discriminator for the `monitor` tool payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MonitorToolInput {
@@ -487,7 +487,7 @@ pub struct PowerShellToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum BundledToolInput {
+pub enum ToolPayloadInput {
     Bash(BashToolInput),
     Read(ReadToolInput),
     ViewFile(ViewFileToolInput),
@@ -518,7 +518,7 @@ pub enum BundledToolInput {
     PowerShell(PowerShellToolInput),
 }
 
-impl BundledToolInput {
+impl ToolPayloadInput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
@@ -567,10 +567,10 @@ impl BundledToolInput {
         ToolInvocation::new(name, payload)
     }
 
-    /// Reconstruct a `BundledToolInput` from a [`ToolInvocation`], or `None`
-    /// if the invocation does not name a bundled tool. The look-up is
-    /// authoritative: any name that round-trips through [`tool_name`] is
-    /// accepted; anything else returns `None`.
+    /// Reconstruct a `ToolPayloadInput` from a [`ToolInvocation`], or `None`
+    /// if the invocation does not use one of the typed payload tool names.
+    /// Namespaced forms like `plugin/tool` are matched by their terminal
+    /// segment so user-installed replacements inherit the same semantics.
     pub fn from_invocation(invocation: &ToolInvocation) -> Option<Self> {
         let value: serde_json::Value = invocation.input.clone().into();
         let mut object = match value {
@@ -580,7 +580,7 @@ impl BundledToolInput {
         };
         object.insert(
             "tool".to_string(),
-            serde_json::Value::String(invocation.name.clone()),
+            serde_json::Value::String(canonical_tool_payload_name(invocation.name.as_str()).into()),
         );
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
@@ -601,9 +601,9 @@ impl PluginInvocation {
     }
 }
 
-/// A dynamic tool invocation: stable name + structured payload. First-party
-/// tools and plugin-supplied tools share this shape; the typed
-/// [`BundledToolInput`] is recovered on demand via [`Self::as_bundled`].
+/// A dynamic tool invocation: stable name + structured payload. Shipped tools
+/// and user/plugin-supplied tools share this shape; tool-payload payload helpers
+/// can be recovered on demand via [`Self::as_tool_payload`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolInvocation {
     pub name: String,
@@ -619,16 +619,16 @@ impl ToolInvocation {
         }
     }
 
-    /// If this invocation names a bundled tool, decode its input into a
-    /// strongly-typed [`BundledToolInput`].
-    pub fn as_bundled(&self) -> Option<BundledToolInput> {
-        BundledToolInput::from_invocation(self)
+    /// If this invocation uses one of the typed payload tool names, decode its
+    /// input into a strongly-typed [`ToolPayloadInput`].
+    pub fn as_tool_payload(&self) -> Option<ToolPayloadInput> {
+        ToolPayloadInput::from_invocation(self)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
-pub enum BundledToolOutput {
+pub enum ToolPayloadOutput {
     Bash {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
@@ -829,7 +829,7 @@ pub struct WebSearchHit {
     pub snippet: Option<String>,
 }
 
-impl BundledToolOutput {
+impl ToolPayloadOutput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
@@ -879,9 +879,9 @@ impl BundledToolOutput {
     }
 
     /// Reverse of [`into_custom_output`]: try to decode a `CustomToolOutput`
-    /// emitted by a bundled tool back into the strongly-typed enum. Returns
-    /// `None` for any name that does not correspond to one of the bundled
-    /// variants (serde rejects the unknown tag).
+    /// emitted by a tool-payload tool back into the strongly-typed enum.
+    /// Namespaced forms like `plugin/tool` are matched by their terminal
+    /// segment so user-installed replacements inherit the same semantics.
     pub fn from_custom(output: &CustomToolOutput) -> Option<Self> {
         let value: serde_json::Value = output.payload.clone().into();
         let mut object = match value {
@@ -891,7 +891,7 @@ impl BundledToolOutput {
         };
         object.insert(
             "tool".to_string(),
-            serde_json::Value::String(output.name.clone()),
+            serde_json::Value::String(canonical_tool_payload_name(output.name.as_str()).into()),
         );
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
@@ -1039,14 +1039,18 @@ pub enum ToolOutput {
 }
 
 impl ToolOutput {
-    /// If this output is a `Custom` carrying a bundled tool's payload,
-    /// decode it into a strongly-typed [`BundledToolOutput`].
-    pub fn as_bundled(&self) -> Option<BundledToolOutput> {
+    /// If this output is a `Custom` carrying a tool-payload tool payload,
+    /// decode it into a strongly-typed [`ToolPayloadOutput`].
+    pub fn as_tool_payload(&self) -> Option<ToolPayloadOutput> {
         match self {
-            Self::Custom { output } => BundledToolOutput::from_custom(output),
+            Self::Custom { output } => ToolPayloadOutput::from_custom(output),
             _ => None,
         }
     }
+}
+
+fn canonical_tool_payload_name(name: &str) -> &str {
+    name.rsplit('/').next().unwrap_or(name)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

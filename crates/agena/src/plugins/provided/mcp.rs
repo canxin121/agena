@@ -1,5 +1,5 @@
-//! First-party in-process plugin that exposes configured MCP server capabilities
-//! as plugin tools.
+//! In-process plugin that exposes configured MCP server capabilities as plugin
+//! tools.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -16,8 +16,8 @@ use serde_json::Value;
 use crate::message::{AttachmentItem, ToolResultBlock};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, NetworkAccessSpec, Plugin, PluginToolDecl,
-    PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    HookSubscription, InitContext, InitOutcome, NetworkAccessSpec, Plugin, PluginManifest,
+    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
@@ -179,7 +179,7 @@ fn manifest_from_snapshot(
         entries.extend(resource_and_prompt_entry_decls(server, network_access));
     }
     PluginManifest::builder("agena-mcp", env!("CARGO_PKG_VERSION"))
-        .description("Agena MCP bridge exposed as bundled plugin tools.")
+        .description("Agena MCP bridge exposed as plugin tools.")
         .hooks(HookSubscription::TOOL_INVOKE)
         .tools(entries)
         .build()

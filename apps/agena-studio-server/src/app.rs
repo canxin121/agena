@@ -153,7 +153,7 @@ async fn detect_opencode_cli_version() -> Option<String> {
         .or_else(|| (!stdout.is_empty()).then_some(stdout))
 }
 
-async fn opencode_studio_diagnostics(
+async fn agena_studio_diagnostics(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Query(query): Query<DiagnosticsQuery>,
 ) -> Json<DiagnosticsResponse> {
@@ -234,7 +234,7 @@ async fn opencode_studio_diagnostics(
             "USERPROFILE": std::env::var("USERPROFILE").ok(),
             "APPDATA": std::env::var("APPDATA").ok(),
             "LOCALAPPDATA": std::env::var("LOCALAPPDATA").ok(),
-            "OPENCODE_STUDIO_DATA_DIR": std::env::var("OPENCODE_STUDIO_DATA_DIR").ok(),
+            "AGENA_STUDIO_DATA_DIR": std::env::var("AGENA_STUDIO_DATA_DIR").ok(),
             "OPENCODE_CONFIG": std::env::var("OPENCODE_CONFIG").ok(),
         }),
     })
@@ -694,7 +694,7 @@ async fn reconcile_runtime_status_from_opencode(state: &Arc<AppState>) {
 
     if !status_reconciled {
         tracing::debug!(
-            target: "opencode_studio.runtime.reconcile",
+            target: "agena_studio.runtime.reconcile",
             "skipped runtime status reconciliation (no usable status payload)"
         );
     }
@@ -705,7 +705,7 @@ fn spawn_opencode_bootstrap_task(state: Arc<AppState>) {
         loop {
             if let Err(err) = state.opencode.start_if_needed().await {
                 tracing::warn!(
-                    target: "opencode_studio.opencode",
+                    target: "agena_studio.opencode",
                     error = %err,
                     "failed to start OpenCode during startup bootstrap"
                 );
@@ -723,7 +723,7 @@ fn spawn_opencode_bootstrap_task(state: Arc<AppState>) {
                         .await
                     {
                         tracing::warn!(
-                            target: "opencode_studio.plugin_runtime",
+                            target: "agena_studio.plugin_runtime",
                             error = %err,
                             "failed to refresh plugin runtime after OpenCode became ready"
                         );
@@ -732,7 +732,7 @@ fn spawn_opencode_bootstrap_task(state: Arc<AppState>) {
                 }
                 Err(err) => {
                     tracing::warn!(
-                        target: "opencode_studio.opencode",
+                        target: "agena_studio.opencode",
                         error = %err,
                         retry_after_secs = OPENCODE_BOOTSTRAP_RETRY_DELAY.as_secs(),
                         "OpenCode not ready yet; will retry"
@@ -970,7 +970,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         spawn_opencode_bootstrap_task(shared_state.clone());
     } else {
         tracing::info!(
-            target: "opencode_studio.opencode",
+            target: "agena_studio.opencode",
             "OpenCode bootstrap disabled (--skip-opencode-start without --opencode-port)"
         );
     }
@@ -1091,8 +1091,8 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         )
         .route("/api/session-activity", get(session_activity_get))
         .route(
-            "/api/opencode-studio/session-locate",
-            get(crate::opencode_proxy::opencode_studio_session_locate),
+            "/api/agena-studio/session-locate",
+            get(crate::opencode_proxy::agena_studio_session_locate),
         )
         .route(
             "/api/session/status",
@@ -1166,12 +1166,12 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             axum::routing::any(crate::workspace_preview::workspace_preview_session_proxy_path),
         )
         .route(
-            "/api/opencode-studio/update-check",
+            "/api/agena-studio/update-check",
             get(crate::updates::update_check),
         )
         .route(
-            "/api/opencode-studio/diagnostics",
-            get(opencode_studio_diagnostics),
+            "/api/agena-studio/diagnostics",
+            get(agena_studio_diagnostics),
         )
         .route("/api/git/status", get(crate::git::git_status))
         .route("/api/git/watch", get(crate::git::git_watch))
@@ -1501,17 +1501,19 @@ mod tests {
     }
 
     fn git_ok(repo: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let output = Command::new("git")
             .arg("-C")
             .arg(repo)
             .args(args)
-            .status()
+            .output()
             .expect("git command should run");
         assert!(
-            status.success(),
-            "git -C {} {} should succeed",
+            output.status.success(),
+            "git -C {} {} should succeed\nstdout:\n{}\nstderr:\n{}",
             repo.display(),
-            args.join(" ")
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 
@@ -1536,6 +1538,7 @@ mod tests {
         assert_git_available();
         let status = Command::new("git")
             .arg("init")
+            .arg("-q")
             .arg(repo)
             .status()
             .expect("git init should run");
@@ -3161,7 +3164,7 @@ enabled = true
     }
 
     #[tokio::test]
-    async fn opencode_studio_session_locate_route_uses_direct_handler() {
+    async fn agena_studio_session_locate_route_uses_direct_handler() {
         let extra = Router::new().route(
             "/session/{session_id}",
             get(
@@ -3215,14 +3218,14 @@ enabled = true
 
         let router = Router::new()
             .route(
-                "/api/opencode-studio/session-locate",
-                get(crate::opencode_proxy::opencode_studio_session_locate),
+                "/api/agena-studio/session-locate",
+                get(crate::opencode_proxy::agena_studio_session_locate),
             )
             .with_state(state.clone());
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri("/api/opencode-studio/session-locate?sessionId=ses_locate_1")
+                    .uri("/api/agena-studio/session-locate?sessionId=ses_locate_1")
                     .body(Body::empty())
                     .expect("request should build"),
             )

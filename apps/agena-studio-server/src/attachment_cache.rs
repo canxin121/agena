@@ -276,7 +276,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!("opencode-studio-{label}-{nanos}"))
+        std::env::temp_dir().join(format!("agena-studio-{label}-{nanos}"))
     }
 
     #[tokio::test]

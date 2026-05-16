@@ -65,11 +65,8 @@ fn init_repo(dir: &Path) {
     fs::create_dir_all(dir).unwrap_or_else(|err| panic!("mkdir {} failed: {err}", dir.display()));
     run_git_ok(dir, &["init", "-q"]);
     run_git_ok(dir, &["branch", "-M", "main"]);
-    run_git_ok(dir, &["config", "user.name", "OpenCode Studio Fixture"]);
-    run_git_ok(
-        dir,
-        &["config", "user.email", "fixture@opencode-studio.local"],
-    );
+    run_git_ok(dir, &["config", "user.name", "Agena Studio Fixture"]);
+    run_git_ok(dir, &["config", "user.email", "fixture@agena-studio.local"]);
     run_git_ok(dir, &["config", "commit.gpgsign", "false"]);
 }
 
@@ -172,7 +169,7 @@ fn mk_remote_suite(root: &Path) -> PathBuf {
     run_git_ok(&repo_a, &["config", "user.name", "OC2 Fixture"]);
     run_git_ok(
         &repo_a,
-        &["config", "user.email", "fixture@opencode-studio.local"],
+        &["config", "user.email", "fixture@agena-studio.local"],
     );
     run_git_ok(&repo_a, &["config", "commit.gpgsign", "false"]);
 
@@ -190,7 +187,7 @@ fn mk_remote_suite(root: &Path) -> PathBuf {
     run_git_ok(&repo_b, &["config", "user.name", "OC2 Fixture"]);
     run_git_ok(
         &repo_b,
-        &["config", "user.email", "fixture@opencode-studio.local"],
+        &["config", "user.email", "fixture@agena-studio.local"],
     );
     run_git_ok(&repo_b, &["config", "commit.gpgsign", "false"]);
 

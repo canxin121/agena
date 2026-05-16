@@ -1,6 +1,6 @@
 //! `enter_plan_mode` / `exit_plan_mode` plugin tools.
 //!
-//! Plan mode pattern (mirrors claude-code's EnterPlanMode/ExitPlanMode):
+//! Agena plan mode pattern:
 //!
 //! 1. The model invokes `enter_plan_mode` to declare it's about to draft a
 //!    plan.  The executor allocates a fresh markdown file at

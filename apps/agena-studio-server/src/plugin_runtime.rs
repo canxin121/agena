@@ -1374,12 +1374,10 @@ fn augment_macos_path(base: &str) -> String {
 
 fn resolve_bridge_program_override(program: &str) -> String {
     if program == "bun" {
-        for key in ["OPENCODE_STUDIO_BUN_PATH", "OPENCODE_BUN_PATH"] {
-            if let Some(value) = std::env::var_os(key) {
-                let value = value.to_string_lossy().trim().to_string();
-                if !value.is_empty() {
-                    return value;
-                }
+        if let Some(value) = std::env::var_os("AGENA_STUDIO_BUN_PATH") {
+            let value = value.to_string_lossy().trim().to_string();
+            if !value.is_empty() {
+                return value;
             }
         }
     }
@@ -1390,7 +1388,7 @@ fn resolve_bridge_program_override(program: &str) -> String {
 fn bridge_program_not_found_hint(program: &str) -> Option<String> {
     if program == "bun" {
         return Some(
-            "Hint: 'bun' was not found. For systemd installs, ensure the service PATH includes ~/.bun/bin (the installer now writes that by default), or set OPENCODE_STUDIO_BUN_PATH=/absolute/path/to/bun in the service unit. Plugins can also set bridge.env.PATH explicitly."
+            "Hint: 'bun' was not found. For systemd installs, ensure the service PATH includes ~/.bun/bin (the installer now writes that by default), or set AGENA_STUDIO_BUN_PATH=/absolute/path/to/bun in the service unit. Plugins can also set bridge.env.PATH explicitly."
                 .to_string(),
         );
     }
@@ -1861,18 +1859,20 @@ fn read_package_json(root: &Path) -> Option<Value> {
 }
 
 fn resolve_manifest_path(root: &Path, package_json: Option<&Value>) -> Option<PathBuf> {
-    if let Some(path) = package_json
-        .and_then(|pkg| pkg.get("opencodeStudio"))
-        .and_then(|meta| meta.get("manifest"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-    {
-        if path.is_absolute() {
-            return Some(path);
+    if let Some(pkg) = package_json {
+        if let Some(path) = pkg
+            .get("agenaStudio")
+            .and_then(|meta| meta.get("manifest"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+        {
+            if path.is_absolute() {
+                return Some(path);
+            }
+            return Some(root.join(path));
         }
-        return Some(root.join(path));
     }
 
     let dist = root.join("dist").join("studio.manifest.json");
@@ -1969,7 +1969,7 @@ mod tests {
 
     fn plugin_with_manifest(root: PathBuf, manifest: Value) -> RegisteredPlugin {
         RegisteredPlugin {
-            id: "opencode-planpilot".to_string(),
+            id: "agena-planpilot".to_string(),
             spec: "file:./src/index.ts".to_string(),
             status: PluginStatus::Ready,
             root_path: Some(root.clone()),
@@ -2016,17 +2016,14 @@ mod tests {
     #[test]
     fn sanitize_plugin_id_replaces_route_unsafe_chars() {
         assert_eq!(sanitize_plugin_id("@scope/pkg"), "scope-pkg");
-        assert_eq!(
-            sanitize_plugin_id(" opencode planpilot "),
-            "opencode-planpilot"
-        );
+        assert_eq!(sanitize_plugin_id(" agena planpilot "), "agena-planpilot");
     }
 
     #[test]
     fn resolve_manifest_path_prefers_package_metadata() {
         let root = PathBuf::from("/tmp/plugin");
         let package_json = json!({
-            "opencodeStudio": {
+            "agenaStudio": {
                 "manifest": "custom/studio.manifest.json"
             }
         });
@@ -2048,8 +2045,8 @@ mod tests {
         std::fs::write(
             root.join("package.json"),
             r#"{
-  "name": "opencode-planpilot",
-  "opencodeStudio": { "manifest": "studio.manifest.json" }
+  "name": "agena-planpilot",
+  "agenaStudio": { "manifest": "studio.manifest.json" }
 }"#,
         )
         .expect("write package");
@@ -2057,7 +2054,7 @@ mod tests {
         std::fs::write(
             root.join("studio.manifest.json"),
             r#"{
-  "id": "opencode-planpilot",
+  "id": "agena-planpilot",
   "version": "1.0.0",
   "displayName": "Planpilot",
   "capabilities": ["settings.panel", "chat.sidebar"]
@@ -2071,7 +2068,7 @@ mod tests {
 
         let plugins = discover_plugins(&[spec]);
         assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].id, "opencode-planpilot");
+        assert_eq!(plugins[0].id, "agena-planpilot");
         assert!(plugins[0].manifest.is_some());
         assert_eq!(plugins[0].capabilities.len(), 2);
     }
@@ -2086,8 +2083,8 @@ mod tests {
         std::fs::write(
             root.join("package.json"),
             r#"{
-  "name": "opencode-planpilot",
-  "opencodeStudio": { "manifest": "studio.manifest.json" }
+  "name": "agena-planpilot",
+  "agenaStudio": { "manifest": "studio.manifest.json" }
 }"#,
         )
         .expect("write package");
@@ -2095,7 +2092,7 @@ mod tests {
         std::fs::write(
             root.join("studio.manifest.json"),
             r#"{
-  "id": "opencode-planpilot",
+  "id": "agena-planpilot",
   "version": "1.0.0",
   "displayName": "Planpilot",
   "capabilities": ["settings.panel"]
@@ -2109,7 +2106,7 @@ mod tests {
 
         let plugins = discover_plugins(&[spec]);
         assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].id, "opencode-planpilot");
+        assert_eq!(plugins[0].id, "agena-planpilot");
         assert!(plugins[0].manifest.is_some());
         assert_eq!(plugins[0].capabilities, vec!["settings.panel".to_string()]);
     }
@@ -2121,8 +2118,8 @@ mod tests {
         std::fs::write(
             root.join("package.json"),
             r#"{
-  "name": "opencode-planpilot",
-  "opencodeStudio": { "manifest": "studio.manifest.json" }
+  "name": "agena-planpilot",
+  "agenaStudio": { "manifest": "studio.manifest.json" }
 }"#,
         )
         .expect("write package");
@@ -2130,7 +2127,7 @@ mod tests {
         std::fs::write(
             root.join("studio.manifest.json"),
             r#"{
-  "id": "opencode-planpilot",
+  "id": "agena-planpilot",
   "version": "1.0.0",
   "displayName": "Planpilot",
   "capabilities": []
@@ -2138,10 +2135,10 @@ mod tests {
         )
         .expect("write manifest");
 
-        let spec = format!("opencode-planpilot@file:{}", root.to_string_lossy());
+        let spec = format!("agena-planpilot@file:{}", root.to_string_lossy());
         let plugins = discover_plugins(&[spec]);
         assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].id, "opencode-planpilot");
+        assert_eq!(plugins[0].id, "agena-planpilot");
         assert!(matches!(plugins[0].status, PluginStatus::Ready));
         assert!(plugins[0].root_path.is_some());
         assert!(plugins[0].manifest.is_some());
@@ -2155,7 +2152,7 @@ mod tests {
             root.join("package.json"),
             r#"{
   "name": "@scope/planpilot",
-  "opencodeStudio": { "manifest": "studio.manifest.json" }
+  "agenaStudio": { "manifest": "studio.manifest.json" }
 }"#,
         )
         .expect("write package");
@@ -2185,13 +2182,13 @@ mod tests {
         let cwd = temp.path().to_path_buf();
 
         let plugin = RegisteredPlugin {
-            id: "opencode-planpilot".to_string(),
+            id: "agena-planpilot".to_string(),
             spec: "file:///tmp/planpilot/src/index.ts".to_string(),
             status: PluginStatus::Ready,
             root_path: Some(cwd.clone()),
             manifest_path: Some(cwd.join("studio.manifest.json")),
             manifest: Some(json!({
-                "id": "opencode-planpilot",
+                "id": "agena-planpilot",
                 "bridge": {
                     "command": "node",
                     "args": ["dist/studio-bridge.js", "--stdio"],
@@ -2225,7 +2222,7 @@ mod tests {
         let plugin = ready_plugin_with_manifest(
             cwd,
             json!({
-                "id": "opencode-planpilot",
+                "id": "agena-planpilot",
                 "bridge": "node dist/studio-bridge.js --stdio"
             }),
         );
@@ -2243,7 +2240,7 @@ mod tests {
         let plugin = ready_plugin_with_manifest(
             cwd,
             json!({
-                "id": "opencode-planpilot",
+                "id": "agena-planpilot",
                 "bridge": {
                     "command": "node \"dist/my bridge.js\" --stdio"
                 }
@@ -2265,7 +2262,7 @@ mod tests {
         let plugin = ready_plugin_with_manifest(
             cwd,
             json!({
-                "id": "opencode-planpilot",
+                "id": "agena-planpilot",
                 "bridge": bridge_file.to_string_lossy().to_string()
             }),
         );
@@ -2278,13 +2275,13 @@ mod tests {
     #[test]
     fn resolve_bridge_invocation_errors_when_bridge_missing() {
         let plugin = RegisteredPlugin {
-            id: "opencode-planpilot".to_string(),
+            id: "agena-planpilot".to_string(),
             spec: "file:///tmp/planpilot/src/index.ts".to_string(),
             status: PluginStatus::Ready,
             root_path: Some(PathBuf::from("/tmp")),
             manifest_path: Some(PathBuf::from("/tmp/studio.manifest.json")),
             manifest: Some(json!({
-                "id": "opencode-planpilot"
+                "id": "agena-planpilot"
             })),
             display_name: Some("Planpilot".to_string()),
             version: Some("1.0.0".to_string()),
@@ -2304,7 +2301,7 @@ mod tests {
         let missing_command = plugin_with_manifest(
             root.clone(),
             json!({
-                "id": "opencode-planpilot",
+                "id": "agena-planpilot",
                 "bridge": {
                     "args": ["--stdio"]
                 }
@@ -2321,7 +2318,7 @@ mod tests {
         let empty_command = plugin_with_manifest(
             root.clone(),
             json!({
-                "id": "opencode-planpilot",
+                "id": "agena-planpilot",
                 "bridge": {
                     "command": "   "
                 }
@@ -2333,7 +2330,7 @@ mod tests {
         let bad_args_type = plugin_with_manifest(
             root.clone(),
             json!({
-                "id": "opencode-planpilot",
+                "id": "agena-planpilot",
                 "bridge": {
                     "command": "node",
                     "args": "--stdio"
@@ -2346,7 +2343,7 @@ mod tests {
         let bad_args_token = plugin_with_manifest(
             root,
             json!({
-                "id": "opencode-planpilot",
+                "id": "agena-planpilot",
                 "bridge": {
                     "command": ["node"],
                     "args": ["--stdio", 7]
@@ -2389,13 +2386,13 @@ mod tests {
         let plugin = plugin_with_manifest(
             root.clone(),
             json!({
-                "id": "opencode-planpilot",
+                "id": "agena-planpilot",
                 "bridge": {
                     "command": "node",
                     "args": ["./dist/studio-bridge.js"],
                     "env": {
                         "PATH": custom_bin,
-                        "OPENCODE_PLUGIN_MODE": "bridge",
+                        "AGENA_PLUGIN_MODE": "bridge",
                         "": "ignored"
                     }
                 }
@@ -2407,7 +2404,7 @@ mod tests {
         assert_eq!(bridge.args, vec!["./dist/studio-bridge.js"]);
         assert_eq!(bridge.env.get("PATH"), Some(&custom_bin));
         assert_eq!(
-            bridge.env.get("OPENCODE_PLUGIN_MODE"),
+            bridge.env.get("AGENA_PLUGIN_MODE"),
             Some(&"bridge".to_string())
         );
         assert!(!bridge.env.contains_key(""));
@@ -2417,13 +2414,13 @@ mod tests {
     fn resolve_bridge_program_override_prefers_explicit_bun_path() {
         let bun = tempfile::NamedTempFile::new().expect("temp bun");
         unsafe {
-            std::env::set_var("OPENCODE_STUDIO_BUN_PATH", bun.path());
+            std::env::set_var("AGENA_STUDIO_BUN_PATH", bun.path());
         }
 
         let resolved = resolve_bridge_program_override("bun");
 
         unsafe {
-            std::env::remove_var("OPENCODE_STUDIO_BUN_PATH");
+            std::env::remove_var("AGENA_STUDIO_BUN_PATH");
         }
         assert_eq!(resolved, bun.path().to_string_lossy());
         assert_eq!(resolve_bridge_program_override("node"), "node");
@@ -2433,7 +2430,7 @@ mod tests {
     fn bridge_program_not_found_hint_mentions_systemd_override_for_bun() {
         let hint = bridge_program_not_found_hint("bun").expect("bun hint");
         assert!(hint.contains("~/.bun/bin"));
-        assert!(hint.contains("OPENCODE_STUDIO_BUN_PATH"));
+        assert!(hint.contains("AGENA_STUDIO_BUN_PATH"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::error::{SkillError, SkillResult};
 use crate::skill::Skill;
 
 /// Default discovery roots in priority order.  Workspace skills win over
-/// user skills win over claude-code skills win over bundled ones.
+/// user skills and bundled skills.
 pub fn default_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(ws) = workspace {
@@ -14,7 +14,6 @@ pub fn default_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
     }
     if let Some(home) = dirs::home_dir() {
         roots.push(home.join(".agena").join("skills"));
-        roots.push(home.join(".claude").join("skills"));
     }
     roots
 }

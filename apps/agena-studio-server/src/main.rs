@@ -84,7 +84,7 @@ pub(crate) struct Args {
     /// Do not start OpenCode automatically.
     #[arg(
         long,
-        env = "OPENCODE_STUDIO_SKIP_OPENCODE_START",
+        env = "AGENA_STUDIO_SKIP_OPENCODE_START",
         default_value_t = false
     )]
     pub(crate) skip_opencode_start: bool,
@@ -94,7 +94,7 @@ pub(crate) struct Args {
     /// Only used when Agena Studio starts OpenCode itself (i.e. when --opencode-port is unset).
     #[arg(
         long,
-        env = "OPENCODE_STUDIO_OPENCODE_LOG_LEVEL",
+        env = "AGENA_STUDIO_OPENCODE_LOG_LEVEL",
         value_enum,
         value_name = "LEVEL"
     )]

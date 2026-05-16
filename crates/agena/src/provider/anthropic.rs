@@ -376,8 +376,8 @@ impl AnthropicProvider {
     ) {
         // Keep Anthropic cache markers within the documented four-breakpoint
         // envelope: up to two system blocks, the final tool schema, and the
-        // last message block. Claude Code also deliberately uses a single
-        // message-level marker to avoid unstable intermediate breakpoints.
+        // last message block. A single message-level marker avoids unstable
+        // intermediate breakpoints.
         for block in system.iter_mut().take(2) {
             block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
         }

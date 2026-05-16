@@ -1466,7 +1466,7 @@ pub async fn session_message_get(
     };
 
     // Ensure each part carries stable IDs so the web UI can lazy-load details by
-    // (sessionId, messageId, partId). Keep legacy aliases for compatibility.
+    // (sessionId, messageId, partId), while preserving upstream casing variants.
     for entry in entries.iter_mut() {
         let Some(obj) = entry.as_object_mut() else {
             continue;
@@ -1726,7 +1726,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!("opencode-studio-{label}-{nanos}"))
+        std::env::temp_dir().join(format!("agena-studio-{label}-{nanos}"))
     }
 
     #[test]
@@ -1858,7 +1858,7 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         let workspace_root = std::env::temp_dir().join(format!(
-            "opencode-studio-opencode-session-test-db-{}-{nanos}",
+            "agena-studio-opencode-session-test-db-{}-{nanos}",
             std::process::id()
         ));
         crate::test_support::build_test_app_state(
@@ -2095,7 +2095,7 @@ mod tests {
 
         // Ensure we use the default HOME-based data dir.
 
-        let sid = std::env::var("OPENCODE_STUDIO_TEST_SESSION_ID")
+        let sid = std::env::var("AGENA_STUDIO_TEST_SESSION_ID")
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| "ses_374a79ca0ffecNaySDDSnJwFVq".to_string());
@@ -2613,7 +2613,7 @@ mod tests {
                 .join("share")
                 .join("opencode")
                 .join("storage")
-                .join("session")
+                .join("sessions")
                 .join("global")
                 .join("dgit.json"),
             &serde_json::json!({

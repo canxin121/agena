@@ -49,7 +49,7 @@ async fn git_flag_bool(
 pub(crate) async fn git_allow_force_push(state: &Arc<crate::AppState>) -> bool {
     git_flag_bool(
         state,
-        "OPENCODE_STUDIO_GIT_ALLOW_FORCE_PUSH",
+        "AGENA_STUDIO_GIT_ALLOW_FORCE_PUSH",
         "gitAllowForcePush",
         false,
     )
@@ -59,7 +59,7 @@ pub(crate) async fn git_allow_force_push(state: &Arc<crate::AppState>) -> bool {
 pub(crate) async fn git_allow_no_verify_commit(state: &Arc<crate::AppState>) -> bool {
     git_flag_bool(
         state,
-        "OPENCODE_STUDIO_GIT_ALLOW_NO_VERIFY_COMMIT",
+        "AGENA_STUDIO_GIT_ALLOW_NO_VERIFY_COMMIT",
         "gitAllowNoVerifyCommit",
         false,
     )
@@ -69,7 +69,7 @@ pub(crate) async fn git_allow_no_verify_commit(state: &Arc<crate::AppState>) -> 
 pub(crate) async fn git_enforce_branch_protection(state: &Arc<crate::AppState>) -> bool {
     git_flag_bool(
         state,
-        "OPENCODE_STUDIO_GIT_ENFORCE_BRANCH_PROTECTION",
+        "AGENA_STUDIO_GIT_ENFORCE_BRANCH_PROTECTION",
         "gitEnforceBranchProtection",
         false,
     )
@@ -79,7 +79,7 @@ pub(crate) async fn git_enforce_branch_protection(state: &Arc<crate::AppState>) 
 pub(crate) async fn git_strict_patch_validation(state: &Arc<crate::AppState>) -> bool {
     git_flag_bool(
         state,
-        "OPENCODE_STUDIO_GIT_STRICT_PATCH_VALIDATION",
+        "AGENA_STUDIO_GIT_STRICT_PATCH_VALIDATION",
         "gitStrictPatchValidation",
         false,
     )

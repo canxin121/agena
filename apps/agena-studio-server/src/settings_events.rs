@@ -230,7 +230,7 @@ pub(crate) async fn config_settings_events(
     };
 
     tracing::debug!(
-        target: "opencode_studio.settings.sse",
+        target: "agena_studio.settings.sse",
         client_id,
         last_event_id,
         seq_at_subscribe,
@@ -286,7 +286,7 @@ pub(crate) async fn config_settings_events(
                 }
                 Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
                     tracing::warn!(
-                        target: "opencode_studio.settings.sse",
+                        target: "agena_studio.settings.sse",
                         client_id,
                         downstream_clients = SETTINGS_EVENT_HUB.tx.receiver_count(),
                         "settings SSE client lagged; closing stream"
@@ -295,7 +295,7 @@ pub(crate) async fn config_settings_events(
                 }
                 Ok(Err(broadcast::error::RecvError::Closed)) => {
                     tracing::debug!(
-                        target: "opencode_studio.settings.sse",
+                        target: "agena_studio.settings.sse",
                         client_id,
                         last_emitted_seq,
                         disconnect_reason = "closed",

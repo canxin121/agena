@@ -40,7 +40,7 @@ async fn create_git_askpass_script() -> Result<TempGitAskpass, String> {
     // Using a temp file is not ideal, but keeps credentials out of argv.
     let mut path = std::env::temp_dir();
     path.push(format!(
-        "opencode-studio-git-askpass-{}.sh",
+        "agena-studio-git-askpass-{}.sh",
         crate::issue_token()
     ));
 

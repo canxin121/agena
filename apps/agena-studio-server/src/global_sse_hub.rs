@@ -120,7 +120,7 @@ impl GlobalSseHub {
 
     fn publish_disconnect_and_close(&self, reason: &str) {
         let payload = serde_json::json!({
-            "type": "opencode-studio:upstream-disconnected",
+            "type": "agena-studio:upstream-disconnected",
             "timestamp": time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
             "properties": {
                 "reason": reason,
@@ -162,7 +162,7 @@ impl GlobalSseHub {
             } else {
                 self.mark_unbuffered_seq(seq);
                 tracing::warn!(
-                    target: "opencode_studio.global_sse_hub.downstream",
+                    target: "agena_studio.global_sse_hub.downstream",
                     seq,
                     frame_bytes = frame_len,
                     replay_max_bytes = HUB_REPLAY_MAX_BYTES,
@@ -287,7 +287,7 @@ fn replay_gap_payload(
     seq_at_subscribe: u64,
 ) -> serde_json::Value {
     serde_json::json!({
-        "type": "opencode-studio:replay-gap",
+        "type": "agena-studio:replay-gap",
         "timestamp": time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
         "properties": {
             "scope": "global",
@@ -584,7 +584,7 @@ pub(crate) fn start_global_sse_hub_if_needed(state: Arc<crate::AppState>) {
             last_disconnect_reason = None;
 
             tracing::info!(
-                target: "opencode_studio.global_sse_hub.upstream",
+                target: "agena_studio.global_sse_hub.upstream",
                 last_event_id = last_upstream_event_id.as_deref().unwrap_or(""),
                 downstream_clients = GLOBAL_HUB.downstream_client_count(),
                 "Connected to OpenCode global SSE"
@@ -760,7 +760,7 @@ pub(crate) fn start_global_sse_hub_if_needed(state: Arc<crate::AppState>) {
                                 sidebar_needs_state_invalidate = true;
 
                                 let injected = serde_json::json!({
-                                    "type": "opencode-studio:session-activity",
+                                    "type": "agena-studio:session-activity",
                                     "properties": {
                                         "sessionID": session_id,
                                         "phase": phase.as_str(),
@@ -809,7 +809,7 @@ fn publish_disconnect_once(reason: &str, last_reason: &mut Option<String>) {
     }
     *last_reason = Some(reason.to_string());
     tracing::warn!(
-        target: "opencode_studio.global_sse_hub.upstream",
+        target: "agena_studio.global_sse_hub.upstream",
         reason,
         "OpenCode upstream SSE disconnected"
     );
@@ -877,7 +877,7 @@ pub(crate) async fn global_event_sse(
     let directory_filter = normalize_directory_filter(query.directory.as_deref());
 
     tracing::debug!(
-        target: "opencode_studio.global_sse_hub.downstream",
+        target: "agena_studio.global_sse_hub.downstream",
         client_id,
         requested_last_event_id,
         last_event_id,
@@ -895,7 +895,7 @@ pub(crate) async fn global_event_sse(
 
     if let Some(gap_seq) = replay_gap_seq {
         tracing::warn!(
-            target: "opencode_studio.global_sse_hub.downstream",
+            target: "agena_studio.global_sse_hub.downstream",
             client_id,
             requested_last_event_id,
             seq_at_subscribe,
@@ -939,7 +939,7 @@ pub(crate) async fn global_event_sse(
                     yield Ok::<Bytes, Infallible>(evt.bytes);
                     if close_after {
                         tracing::debug!(
-                            target: "opencode_studio.global_sse_hub.downstream",
+                            target: "agena_studio.global_sse_hub.downstream",
                             client_id,
                             disconnect_reason = "close_after",
                             last_emitted_seq,
@@ -952,7 +952,7 @@ pub(crate) async fn global_event_sse(
                     // If this client can't keep up, close the stream so the browser reconnects
                     // and performs a best-effort REST reconciliation.
                     tracing::warn!(
-                        target: "opencode_studio.global_sse_hub.downstream",
+                        target: "agena_studio.global_sse_hub.downstream",
                         client_id,
                         last_emitted_seq,
                         "Global SSE client lagged; closing stream"
@@ -961,7 +961,7 @@ pub(crate) async fn global_event_sse(
                 }
                 Ok(Err(broadcast::error::RecvError::Closed)) => {
                     tracing::debug!(
-                        target: "opencode_studio.global_sse_hub.downstream",
+                        target: "agena_studio.global_sse_hub.downstream",
                         client_id,
                         last_emitted_seq,
                         disconnect_reason = "closed",
@@ -1042,7 +1042,7 @@ async fn run_global_event_ws_client(
                 match incoming {
                     Some(Ok(Message::Close(_))) | None => {
                         tracing::debug!(
-                            target: "opencode_studio.global_sse_hub.downstream",
+                            target: "agena_studio.global_sse_hub.downstream",
                             client_id,
                             last_emitted_seq,
                             disconnect_reason = "ws_client_closed",
@@ -1059,7 +1059,7 @@ async fn run_global_event_ws_client(
                     Some(Ok(Message::Text(_))) | Some(Ok(Message::Binary(_))) => {}
                     Some(Err(_)) => {
                         tracing::debug!(
-                            target: "opencode_studio.global_sse_hub.downstream",
+                            target: "agena_studio.global_sse_hub.downstream",
                             client_id,
                             last_emitted_seq,
                             disconnect_reason = "ws_receive_error",
@@ -1085,7 +1085,7 @@ async fn run_global_event_ws_client(
                         }
                         if evt.close_after {
                             tracing::debug!(
-                                target: "opencode_studio.global_sse_hub.downstream",
+                                target: "agena_studio.global_sse_hub.downstream",
                                 client_id,
                                 disconnect_reason = "close_after",
                                 last_emitted_seq,
@@ -1101,7 +1101,7 @@ async fn run_global_event_ws_client(
                         let envelope = ws_envelope_text(gap_seq, &gap_json);
                         let _ = socket.send(Message::Text(envelope.into())).await;
                         tracing::warn!(
-                            target: "opencode_studio.global_sse_hub.downstream",
+                            target: "agena_studio.global_sse_hub.downstream",
                             client_id,
                             last_emitted_seq,
                             gap_seq,
@@ -1111,7 +1111,7 @@ async fn run_global_event_ws_client(
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         tracing::debug!(
-                            target: "opencode_studio.global_sse_hub.downstream",
+                            target: "agena_studio.global_sse_hub.downstream",
                             client_id,
                             last_emitted_seq,
                             disconnect_reason = "closed",
@@ -1161,7 +1161,7 @@ pub(crate) async fn global_event_ws(
     };
 
     tracing::debug!(
-        target: "opencode_studio.global_sse_hub.downstream",
+        target: "agena_studio.global_sse_hub.downstream",
         client_id,
         requested_last_event_id,
         last_event_id,
@@ -1263,7 +1263,7 @@ mod tests {
 
         assert!(!encoded.contains("id: 7"));
         assert!(encoded.contains("event: replay-gap"));
-        assert!(encoded.contains("\"type\":\"opencode-studio:replay-gap\""));
+        assert!(encoded.contains("\"type\":\"agena-studio:replay-gap\""));
         assert!(encoded.contains("\"requestedLastEventId\":3"));
         assert!(encoded.contains("\"seqAtSubscribe\":9"));
         assert!(encoded.contains("\"gapSeq\":7"));

@@ -177,7 +177,7 @@ impl OpenCodeConfigStore {
 
         Ok(serde_json::json!({
             "sources": {
-                // Auth is stored separately by opencode; OpenCode Studio augments this in providers.rs
+                // Auth is stored separately by opencode; Agena Studio augments this in providers.rs
                 "auth": {"exists": false},
                 "user": {
                     "exists": has_provider(&user),

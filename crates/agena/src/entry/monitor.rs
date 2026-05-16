@@ -1,4 +1,4 @@
-//! Background process monitor — analogue of Claude Code's `Monitor` tool.
+//! Background process monitor.
 //!
 //! A monitor runs a long-lived shell command in the background and captures
 //! every stdout/stderr line as a numbered event. The model interacts with it

@@ -1503,7 +1503,7 @@ mod tests {
             .await
             .expect("workflow_init invoke");
         assert_eq!(init.title, "init workflow");
-        assert!(init.output_text.contains("Save the result to AGENTS.md"));
+        assert!(init.output_text.contains("Save the result to AGENA.md"));
 
         let security = plugin
             .tool_invoke(invoke_input(

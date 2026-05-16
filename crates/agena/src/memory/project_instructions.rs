@@ -1,16 +1,15 @@
 //! Project instruction file discovery.
 //!
-//! Mirrors Claude Code's CLAUDE.md hierarchy: walk up from the workspace
-//! root collecting any `AGENA.md` / `AGENTS.md` / `CLAUDE.md` files along
-//! the way (project closest to the leaf wins on conflict). Each layer is
-//! returned with the path it came from so the prompt section can show
-//! provenance, and stale entries can be dropped without trawling them all.
+//! Walk up from the workspace root collecting any `AGENA.md`
+//! files along the way (project closest to the leaf wins on conflict). Each
+//! layer is returned with the path it came from so the prompt section can
+//! show provenance, and stale entries can be dropped without trawling them all.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const INSTRUCTION_FILES: &[&str] = &["AGENA.md", "AGENTS.md", "CLAUDE.md"];
+const INSTRUCTION_FILES: &[&str] = &["AGENA.md"];
 const MAX_FILE_BYTES: usize = 50_000;
 
 #[derive(Debug, Clone)]
@@ -137,10 +136,8 @@ mod tests {
     }
 
     #[test]
-    fn picks_first_listed_name_when_multiple_exist_in_one_dir() {
-        let dir = tmp_dir("first-wins");
-        fs::write(dir.join("AGENTS.md"), "agents content").unwrap();
-        fs::write(dir.join("CLAUDE.md"), "claude content").unwrap();
+    fn reads_agena_instruction_file() {
+        let dir = tmp_dir("agena-file");
         fs::write(dir.join("AGENA.md"), "agena content").unwrap();
         let layers = discover(&dir);
         let chosen = layers
@@ -156,7 +153,7 @@ mod tests {
         let outer = tmp_dir("walk-up");
         let inner = outer.join("nested").join("deep");
         fs::create_dir_all(&inner).unwrap();
-        fs::write(outer.join("CLAUDE.md"), "outer").unwrap();
+        fs::write(outer.join("AGENA.md"), "outer").unwrap();
         fs::write(inner.join("AGENA.md"), "inner").unwrap();
         let layers = discover(&inner);
         assert!(layers.len() >= 2);
@@ -188,10 +185,10 @@ mod tests {
     fn discovers_global_instruction_file_from_agena_dir() {
         let dir = tmp_dir("global").join(".agena");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("AGENTS.md"), "global instructions").unwrap();
+        fs::write(dir.join("AGENA.md"), "global instructions").unwrap();
 
         let layer = discover_global_in(&dir).expect("global layer should load");
-        assert!(layer.path.ends_with("AGENTS.md"));
+        assert!(layer.path.ends_with("AGENA.md"));
         assert_eq!(layer.content, "global instructions");
     }
 

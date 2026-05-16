@@ -80,7 +80,7 @@ fn emit_git_telemetry(args: &[&str], code: i32, stdout: &str, stderr: &str, elap
     let latency_ms = elapsed.as_secs_f64() * 1000.0;
     if code == 0 {
         tracing::info!(
-            target: "opencode_studio.git.metrics",
+            target: "agena_studio.git.metrics",
             git_operation = operation,
             git_success = true,
             git_exit_code = code,
@@ -96,7 +96,7 @@ fn emit_git_telemetry(args: &[&str], code: i32, stdout: &str, stderr: &str, elap
     let retryable = classification.map(|it| it.retryable).unwrap_or(false);
 
     tracing::warn!(
-        target: "opencode_studio.git.metrics",
+        target: "agena_studio.git.metrics",
         git_operation = operation,
         git_success = false,
         git_exit_code = code,
@@ -109,7 +109,7 @@ fn emit_git_telemetry(args: &[&str], code: i32, stdout: &str, stderr: &str, elap
 }
 
 fn git_timeout() -> Duration {
-    if let Ok(v) = std::env::var("OPENCODE_STUDIO_GIT_TIMEOUT_MS")
+    if let Ok(v) = std::env::var("AGENA_STUDIO_GIT_TIMEOUT_MS")
         && let Ok(ms) = v.trim().parse::<u64>()
         && ms > 0
     {

@@ -117,7 +117,7 @@ pub async fn git_worktrees(Query(q): Query<DirectoryQuery>) -> Response {
         // Return [] for non-worktree repos.
         let mut resp = Json(Vec::<GitWorktreeInfo>::new()).into_response();
         resp.headers_mut().insert(
-            "X-OpenCode-Studio-Warning",
+            "X-Agena-Studio-Warning",
             "git worktrees unavailable".parse().unwrap(),
         );
         tracing::warn!("git worktree list failed: {}", err.trim());

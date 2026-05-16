@@ -19,24 +19,24 @@ use crate::config::{
 };
 use crate::{ApiResult, AppError};
 
-const OPENCODE_STUDIO_SSE_HEARTBEAT: Duration = Duration::from_secs(15);
+const AGENA_STUDIO_SSE_HEARTBEAT: Duration = Duration::from_secs(15);
 
 static KNOWN_TOOL_ACTIVITY_FILTER_IDS: LazyLock<HashSet<String>> =
     LazyLock::new(|| default_chat_activity_tool_filters().into_iter().collect());
 
-fn opencode_studio_sse_heartbeat_bytes() -> Bytes {
+fn agena_studio_sse_heartbeat_bytes() -> Bytes {
     // Emit a plain "data: <json>\n\n" event.
     let payload = serde_json::json!({
-        "type": "opencode-studio:heartbeat",
+        "type": "agena-studio:heartbeat",
         "timestamp": time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
     });
     Bytes::from(format!("data: {}\n\n", payload))
 }
 
-fn opencode_studio_session_activity_bytes(session_id: &str, phase: &str) -> Bytes {
+fn agena_studio_session_activity_bytes(session_id: &str, phase: &str) -> Bytes {
     // Inject this event alongside upstream OpenCode events.
     let payload = serde_json::json!({
-        "type": "opencode-studio:session-activity",
+        "type": "agena-studio:session-activity",
         "properties": {
             // Match OpenCode's ID casing (sessionID/messageID/etc).
             "sessionID": session_id,
@@ -46,7 +46,7 @@ fn opencode_studio_session_activity_bytes(session_id: &str, phase: &str) -> Byte
     Bytes::from(format!("data: {}\n\n", payload))
 }
 
-fn opencode_studio_sse_data_bytes(payload: &serde_json::Value) -> Option<Bytes> {
+fn agena_studio_sse_data_bytes(payload: &serde_json::Value) -> Option<Bytes> {
     let encoded = serde_json::to_string(payload).ok()?;
     Some(Bytes::from(format!("data: {}\n\n", encoded)))
 }
@@ -1002,8 +1002,8 @@ fn sse_passthrough_with_heartbeat_and_activity(
     detail: ActivityDetailPolicy,
 ) -> impl futures_util::Stream<Item = Result<Bytes, std::convert::Infallible>> {
     let mut upstream = resp.bytes_stream();
-    let start = tokio::time::Instant::now() + OPENCODE_STUDIO_SSE_HEARTBEAT;
-    let mut ticker = tokio::time::interval_at(start, OPENCODE_STUDIO_SSE_HEARTBEAT);
+    let start = tokio::time::Instant::now() + AGENA_STUDIO_SSE_HEARTBEAT;
+    let mut ticker = tokio::time::interval_at(start, AGENA_STUDIO_SSE_HEARTBEAT);
 
     async_stream::stream! {
         let activity = state.session_activity.clone();
@@ -1015,7 +1015,7 @@ fn sse_passthrough_with_heartbeat_and_activity(
             tokio::select! {
                 _ = ticker.tick() => {
                     if buffer.is_empty() {
-                        yield Ok(opencode_studio_sse_heartbeat_bytes());
+                        yield Ok(agena_studio_sse_heartbeat_bytes());
                     } else {
                         heartbeat_deferred = true;
                     }
@@ -1063,7 +1063,7 @@ fn sse_passthrough_with_heartbeat_and_activity(
                             }
 
                             if let Some(diff_event) = injected_diff_event
-                                && let Some(bytes) = opencode_studio_sse_data_bytes(&diff_event)
+                                && let Some(bytes) = agena_studio_sse_data_bytes(&diff_event)
                             {
                                 yield Ok(bytes);
                             }
@@ -1075,7 +1075,7 @@ fn sse_passthrough_with_heartbeat_and_activity(
                             {
                                 activity.set_phase(&session_id, phase);
                                 runtime_index.upsert_runtime_phase(&session_id, phase.as_str());
-                                yield Ok(opencode_studio_session_activity_bytes(
+                                yield Ok(agena_studio_session_activity_bytes(
                                     &session_id,
                                     phase.as_str(),
                                 ));
@@ -1084,7 +1084,7 @@ fn sse_passthrough_with_heartbeat_and_activity(
 
                         if heartbeat_deferred && buffer.is_empty() {
                             heartbeat_deferred = false;
-                            yield Ok(opencode_studio_sse_heartbeat_bytes());
+                            yield Ok(agena_studio_sse_heartbeat_bytes());
                         }
                     }
                 }
@@ -1116,7 +1116,7 @@ fn sse_passthrough_with_heartbeat_and_activity(
             }
 
             if let Some(diff_event) = injected_diff_event
-                && let Some(bytes) = opencode_studio_sse_data_bytes(&diff_event)
+                && let Some(bytes) = agena_studio_sse_data_bytes(&diff_event)
             {
                 yield Ok(bytes);
             }
@@ -1130,7 +1130,7 @@ fn sse_passthrough_with_heartbeat_and_activity(
             {
                 activity.set_phase(&session_id, phase);
                 runtime_index.upsert_runtime_phase(&session_id, phase.as_str());
-                yield Ok(opencode_studio_session_activity_bytes(
+                yield Ok(agena_studio_session_activity_bytes(
                     &session_id,
                     phase.as_str(),
                 ));
@@ -1283,7 +1283,7 @@ pub(crate) async fn proxy_opencode_rest_inner(
                         Ok(url) => url,
                         Err(err) => {
                             tracing::warn!(
-                                target: "opencode_studio.attachment_cache",
+                                target: "agena_studio.attachment_cache",
                                 path = %abs.display(),
                                 error = %err,
                                 "attachment cache miss/failure; using direct base64 path"
@@ -3594,7 +3594,7 @@ pub(crate) fn sanitize_sse_event_data(
         return true;
     }
 
-    if event_type == "opencode-studio:heartbeat" {
+    if event_type == "agena-studio:heartbeat" {
         retain_only_keys(event_obj, &["type", "timestamp"]);
         return true;
     }
@@ -3624,9 +3624,7 @@ pub(crate) fn sanitize_sse_event_data(
         }
         "session.deleted" => sanitize_session_deleted_event_properties(&mut props),
         "session.diff" => false,
-        "opencode-studio:session-activity" => {
-            sanitize_session_activity_event_properties(&mut props)
-        }
+        "agena-studio:session-activity" => sanitize_session_activity_event_properties(&mut props),
         _ => true,
     };
 
@@ -4156,7 +4154,7 @@ pub(crate) async fn session_status_get(
             "application/json".parse().unwrap(),
         );
         out.headers_mut().insert(
-            axum::http::HeaderName::from_static("x-opencode-studio-source"),
+            axum::http::HeaderName::from_static("x-agena-studio-source"),
             "local-cache".parse().unwrap(),
         );
         return Ok(out);
@@ -4189,7 +4187,7 @@ pub(crate) async fn session_status_get(
                 "application/json".parse().unwrap(),
             );
             out.headers_mut().insert(
-                axum::http::HeaderName::from_static("x-opencode-studio-source"),
+                axum::http::HeaderName::from_static("x-agena-studio-source"),
                 "local-cache".parse().unwrap(),
             );
             return Ok(out);
@@ -4652,7 +4650,7 @@ async fn list_git_worktrees_best_effort(root: &str) -> Vec<String> {
     out
 }
 
-pub(crate) async fn opencode_studio_session_locate(
+pub(crate) async fn agena_studio_session_locate(
     State(state): State<Arc<crate::AppState>>,
     Query(q): Query<SessionLocateQuery>,
 ) -> ApiResult<Response> {

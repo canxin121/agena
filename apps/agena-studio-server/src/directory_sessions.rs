@@ -443,7 +443,7 @@ async fn build_snapshot_bundle_from_entries(
     let snapshot = snapshot_from_parts(&entries, &pages_by_directory_id, &runtime_by_session_id);
 
     tracing::debug!(
-        target: "opencode_studio.directory_sessions.metrics",
+        target: "agena_studio.directory_sessions.metrics",
         snapshot_build_ms = snapshot_started.elapsed().as_secs_f64() * 1000.0,
         index_update_ms = index_update_elapsed.as_secs_f64() * 1000.0,
         indexed_session_count,
@@ -809,7 +809,7 @@ fn start_directory_sessions_poller_if_needed(state: Arc<crate::AppState>) {
             }
 
             tracing::debug!(
-                target: "opencode_studio.directory_sessions.metrics",
+                target: "agena_studio.directory_sessions.metrics",
                 publish_latency_ms = patch_started.elapsed().as_secs_f64() * 1000.0,
                 changed_count,
                 latest_seq = EVENT_HUB.latest_seq(),

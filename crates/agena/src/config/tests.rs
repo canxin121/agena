@@ -1697,7 +1697,7 @@ enabled = true
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&crate::memory::memory_plugin_id()));
     assert!(ids.contains(&crate::hooks::ShellHookPlugin::id()));
-    assert!(ids.contains(&crate::tool::skills_fs_plugin_id()));
+    assert!(ids.contains(&crate::tool::skills_plugin_id()));
     assert!(ids.contains(&crate::tool::lsp_plugin_id()));
     assert!(ids.contains(&crate::tool::cron_plugin_id()));
     assert!(ids.contains(&crate::tool::fs_plugin_id()));
@@ -1749,7 +1749,7 @@ enabled = true
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&crate::memory::memory_plugin_id()));
     assert!(ids.contains(&crate::hooks::ShellHookPlugin::id()));
-    assert!(ids.contains(&crate::tool::skills_fs_plugin_id()));
+    assert!(ids.contains(&crate::tool::skills_plugin_id()));
     assert!(ids.contains(&crate::tool::lsp_plugin_id()));
     assert!(ids.contains(&crate::tool::cron_plugin_id()));
     assert!(ids.contains(&crate::tool::fs_plugin_id()));

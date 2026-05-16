@@ -230,7 +230,7 @@ api_key_env = "OPENAI_API_KEY"
 
 - `direct`：`base_url` 已经是当前 provider 直接要使用的最终协议 base
 - `protocol_root`：把 `base_url` 当成共享网关入口，为不同 adapter 自动派生 `/v1` 或 `/v1beta`
-- `provider_routed`：把 `base_url` 当成 CLIProxyAPI / Amp 风格共享入口，为不同 adapter 自动派生 `/api/provider/<provider>/...`
+- `provider_routed`：把 `base_url` 当成 provider-routed 共享网关入口，为不同 adapter 自动派生 `/api/provider/<provider>/...`
 - `auto`：运行时根据填写的 URL 形状自动推断，默认值就是它
 
 `auto` 的判断大致是：
@@ -420,34 +420,34 @@ enabled = true
 - `anthropic` 会自动派生到 `https://gateway.example.com/v1`
 - `gemini` 如果启用，会自动派生到 `https://gateway.example.com/v1beta`
 
-### CLIProxyAPI Shared Gateway
+### Provider-Routed Shared Gateway
 
 ```toml
-[providers.cliproxy]
+[providers.provider_gateway]
 default_model = "openai/gpt-4.1-mini"
 
-[providers.cliproxy.auth]
+[providers.provider_gateway.auth]
 mode = "api"
 base_url = "https://api.cxits.cn/api/provider/openai/v1"
 endpoint_layout = "provider_routed"
-api_key_env = "CLIPROXY_API_KEY"
+api_key_env = "AGENA_PROVIDER_GATEWAY_API_KEY"
 
-[providers.cliproxy.adapters.openai]
+[providers.provider_gateway.adapters.openai]
 enabled = true
 
-[providers.cliproxy.adapters.openai.models."gpt-4.1-mini"]
+[providers.provider_gateway.adapters.openai.models."gpt-4.1-mini"]
 enabled = true
 
-[providers.cliproxy.adapters.anthropic]
+[providers.provider_gateway.adapters.anthropic]
 enabled = true
 
-[providers.cliproxy.adapters.anthropic.models."claude-sonnet-4"]
+[providers.provider_gateway.adapters.anthropic.models."claude-sonnet-4"]
 enabled = true
 
-[providers.cliproxy.adapters.gemini]
+[providers.provider_gateway.adapters.gemini]
 enabled = true
 
-[providers.cliproxy.adapters.gemini.models."gemini-2.5-pro"]
+[providers.provider_gateway.adapters.gemini.models."gemini-2.5-pro"]
 enabled = true
 ```
 

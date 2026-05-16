@@ -29,7 +29,7 @@ crates/
   agena-plugin-sdk/          # 插件侧 SDK 和 hook/host API 类型
   agena-mcp-client/          # MCP client manager，供 agena.mcp plugin bridge 使用
   agena-lsp/                 # LSP registry/client，供 agena.lsp plugin 使用
-  agena-skills/              # skill 发现，供 agena.skills_fs plugin 使用
+  agena-skills/              # skill 发现，供 agena.skills plugin 使用
 
 packages/
   agena-studio-web/          # Vue Studio 前端

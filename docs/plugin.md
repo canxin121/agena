@@ -87,7 +87,7 @@ Runtime build 注册：
 | `agena.shell` | shell / powershell / monitor 相关 tools |
 | `agena.web` | web search / web fetch tools |
 | `agena.workflow` | plan mode、todo、worktree 等 workflow tools |
-| `agena.skills_fs` | 扫描 `SKILL.md` 和 slash command，并动态注册 tools |
+| `agena.skills` | 扫描 `SKILL.md` 和 slash command，并动态注册 tools |
 | `agena.lsp` | LSP server 观测和 LSP 查询 tools |
 | `agena.cron` | cron 和 one-shot wakeup 调度 tools |
 | `agena.memory` | memory 配置和项目记忆相关能力 |

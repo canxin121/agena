@@ -31,7 +31,7 @@ use sea_orm::{Database, DatabaseConnection};
 
 const LIVE_BASE_URL: &str = "https://api.cxits.cn";
 const LIVE_MODEL: &str = "gpt-5.4";
-const LIVE_KEY_ENV: &str = "CX_API_KEY";
+const LIVE_KEY_ENV: &str = "AGENA_PROVIDER_GATEWAY_API_KEY";
 const CACHE_PROBE_ATTEMPTS: usize = 8;
 const CACHE_PROBE_PREFIX_REPETITIONS: usize = 4000;
 const CACHE_PROBE_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -87,7 +87,7 @@ fn live_key() -> String {
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .expect("CX_API_KEY must be set for cliproxy live tests")
+        .expect("AGENA_PROVIDER_GATEWAY_API_KEY must be set for provider gateway live tests")
 }
 
 fn env_usize_or(key: &str, default: usize) -> usize {
@@ -113,49 +113,49 @@ fn env_u64_or(key: &str, default: u64) -> u64 {
 
 fn live_cache_probe_attempts() -> usize {
     env_usize_or(
-        "AGENA_CLIPROXY_LIVE_CACHE_PROBE_ATTEMPTS",
+        "AGENA_PROVIDER_GATEWAY_LIVE_CACHE_PROBE_ATTEMPTS",
         CACHE_PROBE_ATTEMPTS,
     )
 }
 
 fn live_cache_probe_retry_delay() -> Duration {
     Duration::from_millis(env_u64_or(
-        "AGENA_CLIPROXY_LIVE_CACHE_PROBE_RETRY_DELAY_MS",
+        "AGENA_PROVIDER_GATEWAY_LIVE_CACHE_PROBE_RETRY_DELAY_MS",
         CACHE_PROBE_RETRY_DELAY.as_millis() as u64,
     ))
 }
 
 fn live_request_retry_max_retries() -> u32 {
     env_u32_or(
-        "AGENA_CLIPROXY_LIVE_REQUEST_MAX_RETRIES",
+        "AGENA_PROVIDER_GATEWAY_LIVE_REQUEST_MAX_RETRIES",
         LIVE_REQUEST_RETRY_MAX_RETRIES,
     )
 }
 
 fn live_request_retry_base_delay_ms() -> u64 {
     env_u64_or(
-        "AGENA_CLIPROXY_LIVE_REQUEST_BASE_DELAY_MS",
+        "AGENA_PROVIDER_GATEWAY_LIVE_REQUEST_BASE_DELAY_MS",
         LIVE_REQUEST_RETRY_BASE_DELAY_MS,
     )
 }
 
 fn live_request_retry_max_delay_ms() -> u64 {
     env_u64_or(
-        "AGENA_CLIPROXY_LIVE_REQUEST_MAX_DELAY_MS",
+        "AGENA_PROVIDER_GATEWAY_LIVE_REQUEST_MAX_DELAY_MS",
         LIVE_REQUEST_RETRY_MAX_DELAY_MS,
     )
 }
 
 fn live_stream_replay_max_retries_after_output() -> u32 {
     env_u32_or(
-        "AGENA_CLIPROXY_LIVE_STREAM_REPLAY_MAX_RETRIES_AFTER_OUTPUT",
+        "AGENA_PROVIDER_GATEWAY_LIVE_STREAM_REPLAY_MAX_RETRIES_AFTER_OUTPUT",
         LIVE_STREAM_REPLAY_MAX_RETRIES_AFTER_OUTPUT,
     )
 }
 
 fn live_stream_replay_max_tracked_events() -> usize {
     env_usize_or(
-        "AGENA_CLIPROXY_LIVE_STREAM_REPLAY_MAX_TRACKED_EVENTS",
+        "AGENA_PROVIDER_GATEWAY_LIVE_STREAM_REPLAY_MAX_TRACKED_EVENTS",
         LIVE_STREAM_REPLAY_MAX_TRACKED_EVENTS,
     )
 }
@@ -294,7 +294,7 @@ async fn build_live_session_manager(
     );
     let executor = ToolExecutor::new(
         workspace_root.to_path_buf(),
-        Agent::new("cliproxy-live-test", PermissionPolicy::allow_all()),
+        Agent::new("provider-gateway-live-test", PermissionPolicy::allow_all()),
     );
     Arc::new(SessionManager::new(db, processor, executor))
 }
@@ -592,7 +592,7 @@ async fn session_cache_probe_with_retries(
         let session = manager
             .create_session(SessionCreateRequest {
                 title: format!(
-                    "cliproxy cache probe {} attempt {}",
+                    "provider gateway cache probe {} attempt {}",
                     case.provider_id, attempt
                 ),
                 parent_session_id: None,
@@ -746,7 +746,7 @@ async fn assert_session_single_hi(case: LiveProviderCase) {
 
     let session = manager
         .create_session(SessionCreateRequest {
-            title: format!("cliproxy live {} single hi", case.provider_id),
+            title: format!("provider gateway live {} single hi", case.provider_id),
             parent_session_id: None,
         })
         .await
@@ -781,7 +781,7 @@ async fn assert_session_multi_turn(case: LiveProviderCase) {
 
     let session = manager
         .create_session(SessionCreateRequest {
-            title: format!("cliproxy live {} multi turn", case.provider_id),
+            title: format!("provider gateway live {} multi turn", case.provider_id),
             parent_session_id: None,
         })
         .await
@@ -909,7 +909,7 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
 
     let source = first
         .create_session(SessionCreateRequest {
-            title: format!("cliproxy live {} lifecycle", case.provider_id),
+            title: format!("provider gateway live {} lifecycle", case.provider_id),
             parent_session_id: None,
         })
         .await
@@ -1150,49 +1150,49 @@ macro_rules! live_provider_tests {
             const CASE: LiveProviderCase = LiveProviderCase::new(stringify!($provider_id), $slug);
 
             #[tokio::test]
-            #[ignore = "real integration test against deployed CLIProxyAPI"]
+            #[ignore = "real integration test against deployed provider-routed gateway"]
             async fn single_hi_completion() {
                 assert_registry_single_hi(CASE).await;
             }
 
             #[tokio::test]
-            #[ignore = "real integration test against deployed CLIProxyAPI"]
+            #[ignore = "real integration test against deployed provider-routed gateway"]
             async fn single_hi_stream() {
                 assert_registry_stream_hi(CASE).await;
             }
 
             #[tokio::test]
-            #[ignore = "real integration test against deployed CLIProxyAPI"]
+            #[ignore = "real integration test against deployed provider-routed gateway"]
             async fn tool_call_roundtrip() {
                 assert_registry_tool_call(CASE).await;
             }
 
             #[tokio::test]
-            #[ignore = "real integration test against deployed CLIProxyAPI"]
+            #[ignore = "real integration test against deployed provider-routed gateway"]
             async fn session_single_hi() {
                 assert_session_single_hi(CASE).await;
             }
 
             #[tokio::test]
-            #[ignore = "real integration test against deployed CLIProxyAPI"]
+            #[ignore = "real integration test against deployed provider-routed gateway"]
             async fn session_multi_turn() {
                 assert_session_multi_turn(CASE).await;
             }
 
             #[tokio::test]
-            #[ignore = "real integration test against deployed CLIProxyAPI"]
+            #[ignore = "real integration test against deployed provider-routed gateway"]
             async fn registry_cache_hit() {
                 assert_registry_cache_hit(CASE).await;
             }
 
             #[tokio::test]
-            #[ignore = "real integration test against deployed CLIProxyAPI"]
+            #[ignore = "real integration test against deployed provider-routed gateway"]
             async fn session_cache_hit() {
                 assert_session_cache_hit(CASE).await;
             }
 
             #[tokio::test]
-            #[ignore = "real integration test against deployed CLIProxyAPI"]
+            #[ignore = "real integration test against deployed provider-routed gateway"]
             async fn session_lifecycle_fork_rewind_resume() {
                 assert_session_lifecycle(CASE).await;
             }
@@ -1206,8 +1206,8 @@ live_provider_tests!(anthropic_live, "anthropic");
 live_provider_tests!(gemini_live, "gemini");
 
 #[tokio::test]
-#[ignore = "real integration test against deployed CLIProxyAPI"]
-async fn cliproxy_live_registry_lists_models_for_all_protocols() {
+#[ignore = "real integration test against deployed provider-routed gateway"]
+async fn provider_gateway_live_registry_lists_models_for_all_protocols() {
     let registry = load_live_registry();
 
     for case in PROVIDERS {
@@ -1229,7 +1229,7 @@ async fn cliproxy_live_registry_lists_models_for_all_protocols() {
 }
 
 #[test]
-fn cliproxy_live_test_config_uses_real_proxy_endpoint() {
+fn provider_gateway_live_test_config_uses_live_gateway_endpoint() {
     let config = live_config_text();
     let file = write_temp_config(config.as_str());
     let loader = ConfigLoader::new(placeholder_test_env());
@@ -1248,6 +1248,6 @@ fn cliproxy_live_test_config_uses_real_proxy_endpoint() {
     let serialized = serde_json::to_string(provider).expect("serialize provider config");
     assert!(
         serialized.contains("/api/provider/openai/v1"),
-        "config should point to live proxy endpoint: {serialized}"
+        "config should point to live provider gateway endpoint: {serialized}"
     );
 }

@@ -6,10 +6,43 @@ use clap::{Parser, ValueEnum};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod app;
-mod terminal_sessions;
+mod attachment_cache;
+mod chat_sidebar;
+mod config;
+mod directory_session_index;
+mod directory_sessions;
+mod error;
+mod fs;
+mod fs_watch;
+mod git;
+mod git2_utils;
+mod global_sse_hub;
+mod opencode;
+mod opencode_auth;
+mod opencode_config;
+mod opencode_config_model;
+mod opencode_proxy;
+mod opencode_session;
+mod path_utils;
+mod persistence_paths;
+mod plugin_runtime;
+mod providers;
+mod runtime_config;
+mod session_activity;
+mod settings;
+mod settings_events;
+mod studio_db;
+mod terminal;
 mod terminal_ui_state;
+#[cfg(test)]
+mod test_support;
 mod ui_auth;
+mod updates;
+mod workspace_preview;
+mod workspace_preview_registry;
+mod workspace_preview_runtime;
 pub(crate) use app::AppState;
+pub(crate) use error::{ApiResult, AppError};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -37,6 +70,35 @@ pub(crate) struct Args {
     /// Enable UI session password
     #[arg(long, env = "AGENA_STUDIO_UI_PASSWORD")]
     pub(crate) ui_password: Option<String>,
+
+    /// Connect to an existing OpenCode server on this port.
+    ///
+    /// When unset, Agena Studio will try to start `opencode serve`.
+    #[arg(long, env = "OPENCODE_PORT")]
+    pub(crate) opencode_port: Option<u16>,
+
+    /// Hostname for the OpenCode server (used with --opencode-port)
+    #[arg(long, env = "OPENCODE_HOST", default_value = "127.0.0.1")]
+    pub(crate) opencode_host: String,
+
+    /// Do not start OpenCode automatically.
+    #[arg(
+        long,
+        env = "OPENCODE_STUDIO_SKIP_OPENCODE_START",
+        default_value_t = false
+    )]
+    pub(crate) skip_opencode_start: bool,
+
+    /// Log level for the managed `opencode serve` process.
+    ///
+    /// Only used when Agena Studio starts OpenCode itself (i.e. when --opencode-port is unset).
+    #[arg(
+        long,
+        env = "OPENCODE_STUDIO_OPENCODE_LOG_LEVEL",
+        value_enum,
+        value_name = "LEVEL"
+    )]
+    pub(crate) opencode_log_level: Option<crate::opencode::OpenCodeLogLevel>,
 
     /// Agena workspace root for session/runtime features.
     #[arg(long, env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]
@@ -120,7 +182,13 @@ pub(crate) fn issue_token() -> String {
 
 #[tokio::main]
 async fn main() {
-    let args = Args::parse();
+    let args = match runtime_config::parse_args_with_runtime_config() {
+        Ok(args) => args,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(2);
+        }
+    };
     let resolution = ConfigLoader::default().load(&args.load_request()).ok();
     let tracing = resolution
         .as_ref()

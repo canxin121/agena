@@ -1100,51 +1100,22 @@ pub(crate) async fn terminal_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena::config::LoadConfigRequest;
-    use agena::runtime::AgenaRuntime;
     use axum::{
         Router,
         body::Body,
         http::{Request, header},
         routing::{get, post},
     };
-    use axum_extra::extract::cookie::SameSite;
     use http_body_util::BodyExt;
-    use sea_orm::Database;
     use tempfile::tempdir;
     use tower::ServiceExt;
 
     async fn test_state(workspace_root: &Path) -> Arc<crate::AppState> {
-        let config_path = workspace_root.join("empty-agena.toml");
-        std::fs::write(&config_path, "").expect("empty config should be written");
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(config_path),
-                overrides: Vec::new(),
-            })
-            .with_workspace_root(workspace_root)
-            .build()
-            .await
-            .expect("runtime should build");
-        let compat_db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("compat db should open"),
-        );
-        Arc::new(crate::AppState {
-            ui_auth: crate::ui_auth::init_ui_auth(None),
-            ui_cookie_same_site: SameSite::Strict,
-            cors_allowed_origins: Vec::new(),
-            cors_allow_all: false,
-            compat_api_service: agena_api_server::local_api::ApiService::new(
-                compat_db,
-                runtime.workspace_root().display().to_string(),
-                runtime
-                    .session_manager()
-                    .map(|manager| manager.event_publisher()),
-            ),
-            runtime,
-        })
+        crate::test_support::build_test_app_state(
+            workspace_root,
+            crate::settings::Settings::default(),
+        )
+        .await
     }
 
     fn test_router(state: Arc<crate::AppState>) -> Router {

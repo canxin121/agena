@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
@@ -303,6 +305,20 @@ pub struct EnterPlanModeToolInput {}
 pub struct ExitPlanModeToolInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct AgentSwitchToolInput {
+    /// Target agent profile. Omit or pass an empty string to clear the
+    /// explicit runtime agent selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Push the current agent so `agent_restore` can return to it later.
+    #[serde(default)]
+    pub push_previous: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct AgentRestoreToolInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 pub struct WorkflowPromptToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
@@ -485,6 +501,7 @@ pub struct PowerShellToolInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInvocation {
     pub entry_name: String,
+    pub plugin_name: Option<String>,
     pub input: StructuredObject,
 }
 
@@ -492,6 +509,7 @@ impl PluginInvocation {
     pub fn from_tool_invocation(invocation: &ToolInvocation) -> Self {
         Self {
             entry_name: invocation.name.clone(),
+            plugin_name: invocation.plugin_name.clone(),
             input: invocation.input.clone(),
         }
     }
@@ -502,6 +520,8 @@ impl PluginInvocation {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolInvocation {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_name: Option<String>,
     #[serde(default)]
     pub input: StructuredObject,
 }
@@ -510,16 +530,79 @@ impl ToolInvocation {
     pub fn new(name: impl Into<String>, input: StructuredObject) -> Self {
         Self {
             name: name.into(),
+            plugin_name: None,
+            input,
+        }
+    }
+
+    pub fn with_plugin_name(
+        name: impl Into<String>,
+        plugin_name: impl Into<String>,
+        input: StructuredObject,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            plugin_name: Some(plugin_name.into()),
             input,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum ToolResultBlock {
+pub enum OperationBlock {
     Text {
         text: String,
+    },
+    Markdown {
+        text: String,
+    },
+    Json {
+        value: serde_json::Value,
+    },
+    Table {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        columns: Vec<TableColumn>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rows: Vec<Vec<serde_json::Value>>,
+    },
+    Log {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stream: Option<String>,
+        text: String,
+    },
+    Command {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stdout: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stderr: Option<String>,
+    },
+    Diff {
+        diff: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
+    },
+    FileChanges {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        changes: Vec<super::FileChangeEntry>,
+    },
+    SearchResults {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        results: Vec<SearchResultItem>,
+    },
+    Citation {
+        uri: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        snippet: Option<String>,
     },
     Image {
         mime: String,
@@ -533,6 +616,8 @@ pub enum ToolResultBlock {
         uri: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mime_type: Option<String>,
     },
     EmbeddedResource {
         uri: String,
@@ -547,12 +632,78 @@ pub enum ToolResultBlock {
         filename: String,
         mime: String,
     },
+    Media {
+        mime_type: String,
+        artifact: ArtifactRef,
+    },
+    Checklist {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        items: Vec<TodoItem>,
+    },
+    NestedTask {
+        task_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        status: ExecutionStatus,
+    },
+    Progress {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        percent: Option<f32>,
+    },
+    Custom {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema: Option<String>,
+        value: serde_json::Value,
+    },
 }
 
-impl ToolResultBlock {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TableColumn {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SearchResultItem {
+    pub title: String,
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactRef {
+    pub uri: String,
+    pub mime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
+impl OperationBlock {
     pub fn to_attachment_item(&self) -> Option<AttachmentItem> {
         match self {
-            Self::Text { .. } => None,
+            Self::Text { .. }
+            | Self::Markdown { .. }
+            | Self::Json { .. }
+            | Self::Table { .. }
+            | Self::Log { .. }
+            | Self::Command { .. }
+            | Self::Diff { .. }
+            | Self::FileChanges { .. }
+            | Self::SearchResults { .. }
+            | Self::Citation { .. }
+            | Self::Checklist { .. }
+            | Self::NestedTask { .. }
+            | Self::Progress { .. }
+            | Self::Custom { .. } => None,
             Self::Image { mime, url } | Self::Audio { mime, url } => Some(AttachmentItem {
                 kind: AttachmentKind::detect(mime.as_str(), Some(url.as_str())),
                 mime: mime.clone(),
@@ -566,9 +717,16 @@ impl ToolResultBlock {
                 duration_ms: None,
                 page_count: None,
             }),
-            Self::ResourceLink { uri, title } => Some(AttachmentItem {
-                kind: AttachmentKind::detect("", Some(uri.as_str())),
-                mime: String::new(),
+            Self::ResourceLink {
+                uri,
+                title,
+                mime_type,
+            } => Some(AttachmentItem {
+                kind: AttachmentKind::detect(
+                    mime_type.as_deref().unwrap_or(""),
+                    Some(uri.as_str()),
+                ),
+                mime: mime_type.clone().unwrap_or_default(),
                 source: attachment_source_from_location(uri.as_str())?,
                 filename: filename_hint(uri.as_str()),
                 title: title.clone(),
@@ -621,6 +779,35 @@ impl ToolResultBlock {
                 duration_ms: None,
                 page_count: None,
             }),
+            Self::Media {
+                mime_type,
+                artifact,
+            } => Some(AttachmentItem {
+                kind: AttachmentKind::detect(mime_type.as_str(), artifact.name.as_deref()),
+                mime: mime_type.clone(),
+                source: attachment_source_from_location(artifact.uri.as_str())?,
+                filename: artifact
+                    .name
+                    .clone()
+                    .or_else(|| filename_hint(artifact.uri.as_str())),
+                title: artifact.name.clone(),
+                size_bytes: artifact.size_bytes,
+                sha256: artifact.sha256.clone(),
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            }),
+        }
+    }
+
+    pub fn text_value(&self) -> Option<&str> {
+        match self {
+            Self::Text { text }
+            | Self::Markdown { text }
+            | Self::Log { text, .. }
+            | Self::Diff { diff: text, .. } => Some(text.as_str()),
+            _ => None,
         }
     }
 }
@@ -650,7 +837,7 @@ impl ToolOutput {
         (!self.payload.is_empty()).then(|| serde_json::Value::from(self.payload.clone()))
     }
 
-    pub fn content_blocks(&self) -> Vec<ToolResultBlock> {
+    pub fn content_blocks(&self) -> Vec<OperationBlock> {
         let Some(blocks) = self
             .payload
             .get("content_blocks")
@@ -669,156 +856,216 @@ impl ToolOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum ToolExecutionPart {
-    Pending {
-        call_id: i64,
-        invocation: ToolInvocation,
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        title: String,
-        #[serde(default)]
-        lifecycle: TimeRange,
-    },
-    InProgress {
-        call_id: i64,
-        invocation: ToolInvocation,
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        title: String,
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        output_text: String,
-        #[serde(default)]
-        lifecycle: TimeRange,
-    },
-    Completed {
-        call_id: i64,
-        invocation: ToolInvocation,
-        #[serde(default)]
-        output_text: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        blocks: Vec<ToolResultBlock>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        attachments: Vec<ToolAttachment>,
-        #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
-        details: ToolOutput,
-        #[serde(default)]
-        lifecycle: TimeRange,
-    },
-    Failed {
-        call_id: i64,
-        invocation: ToolInvocation,
-        error_message: String,
-        #[serde(default)]
-        output_text: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        blocks: Vec<ToolResultBlock>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        attachments: Vec<ToolAttachment>,
-        #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
-        details: ToolOutput,
-        #[serde(default)]
-        lifecycle: TimeRange,
-    },
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperationError {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
-impl ToolExecutionPart {
-    pub const fn status(&self) -> ExecutionStatus {
-        match self {
-            Self::Pending { .. } => ExecutionStatus::Pending,
-            Self::InProgress { .. } => ExecutionStatus::InProgress,
-            Self::Completed { .. } => ExecutionStatus::Completed,
-            Self::Failed { .. } => ExecutionStatus::Failed,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ModelVisibleOutput {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ToolAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
+}
+
+impl ModelVisibleOutput {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            attachments: Vec::new(),
+            truncated: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OperationPart {
+    pub call_id: i64,
+    pub invocation: ToolInvocation,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    #[serde(default)]
+    pub model_output: ModelVisibleOutput,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<OperationBlock>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ToolAttachment>,
+    #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
+    pub details: ToolOutput,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<OperationError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw: Option<serde_json::Value>,
+    #[serde(default)]
+    pub lifecycle: TimeRange,
+}
+
+impl OperationPart {
+    pub fn pending(
+        call_id: i64,
+        invocation: ToolInvocation,
+        title: impl Into<String>,
+        lifecycle: TimeRange,
+    ) -> Self {
+        Self {
+            call_id,
+            invocation,
+            title: title.into(),
+            summary: String::new(),
+            model_output: ModelVisibleOutput::default(),
+            blocks: Vec::new(),
+            artifacts: Vec::new(),
+            attachments: Vec::new(),
+            details: ToolOutput::default(),
+            structured: None,
+            metadata: BTreeMap::new(),
+            error: None,
+            raw: None,
+            lifecycle,
+        }
+    }
+
+    pub fn completed(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        attachments: Vec<ToolAttachment>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self {
+        let output_text = output_text.into();
+        let structured = details.to_json_payload();
+        Self {
+            call_id,
+            invocation,
+            title: String::new(),
+            summary: output_text.clone(),
+            model_output: ModelVisibleOutput {
+                text: output_text,
+                attachments: attachments.clone(),
+                truncated: None,
+            },
+            blocks,
+            artifacts: Vec::new(),
+            attachments,
+            details,
+            structured,
+            metadata: BTreeMap::new(),
+            error: None,
+            raw: None,
+            lifecycle,
+        }
+    }
+
+    pub fn failed(
+        call_id: i64,
+        invocation: ToolInvocation,
+        error_message: impl Into<String>,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        attachments: Vec<ToolAttachment>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self {
+        let error_message = error_message.into();
+        let output_text = output_text.into();
+        let structured = details.to_json_payload();
+        Self {
+            call_id,
+            invocation,
+            title: String::new(),
+            summary: if error_message.trim().is_empty() {
+                output_text.clone()
+            } else {
+                error_message.clone()
+            },
+            model_output: ModelVisibleOutput {
+                text: output_text,
+                attachments: attachments.clone(),
+                truncated: None,
+            },
+            blocks,
+            artifacts: Vec::new(),
+            attachments,
+            details,
+            structured,
+            metadata: BTreeMap::new(),
+            error: Some(OperationError {
+                message: error_message,
+                code: None,
+            }),
+            raw: None,
+            lifecycle,
         }
     }
 
     pub fn call_id(&self) -> i64 {
-        match self {
-            Self::Pending { call_id, .. }
-            | Self::InProgress { call_id, .. }
-            | Self::Completed { call_id, .. }
-            | Self::Failed { call_id, .. } => *call_id,
-        }
+        self.call_id
     }
 
     pub fn invocation(&self) -> &ToolInvocation {
-        match self {
-            Self::Pending { invocation, .. }
-            | Self::InProgress { invocation, .. }
-            | Self::Completed { invocation, .. }
-            | Self::Failed { invocation, .. } => invocation,
-        }
+        &self.invocation
     }
 
     pub fn lifecycle(&self) -> &TimeRange {
-        match self {
-            Self::Pending { lifecycle, .. }
-            | Self::InProgress { lifecycle, .. }
-            | Self::Completed { lifecycle, .. }
-            | Self::Failed { lifecycle, .. } => lifecycle,
-        }
+        &self.lifecycle
     }
 
     pub fn lifecycle_mut(&mut self) -> &mut TimeRange {
-        match self {
-            Self::Pending { lifecycle, .. }
-            | Self::InProgress { lifecycle, .. }
-            | Self::Completed { lifecycle, .. }
-            | Self::Failed { lifecycle, .. } => lifecycle,
-        }
+        &mut self.lifecycle
     }
 
-    /// `Pending` carries no output yet; the other states all expose an
-    /// `output_text` accumulator.
     pub fn output_text(&self) -> Option<&str> {
-        match self {
-            Self::Pending { .. } => None,
-            Self::InProgress { output_text, .. }
-            | Self::Completed { output_text, .. }
-            | Self::Failed { output_text, .. } => Some(output_text.as_str()),
-        }
+        (!self.model_output.text.is_empty()).then_some(self.model_output.text.as_str())
     }
 
-    /// `Pending` and `InProgress` have no `title` of their own — they share
-    /// the title field; `Completed` / `Failed` drop it.
     pub fn title(&self) -> Option<&str> {
-        match self {
-            Self::Pending { title, .. } | Self::InProgress { title, .. } => Some(title.as_str()),
-            Self::Completed { .. } | Self::Failed { .. } => None,
-        }
+        (!self.title.is_empty()).then_some(self.title.as_str())
     }
 
-    /// Only `Failed` carries an error message.
     pub fn error_message(&self) -> Option<&str> {
-        match self {
-            Self::Failed { error_message, .. } => Some(error_message.as_str()),
-            _ => None,
+        self.error.as_ref().map(|error| error.message.as_str())
+    }
+
+    pub fn status(&self) -> ExecutionStatus {
+        if self.error.is_some() {
+            ExecutionStatus::Failed
+        } else if self.lifecycle.end_ms.is_some() {
+            ExecutionStatus::Completed
+        } else if self.model_output.text.trim().is_empty() {
+            ExecutionStatus::Pending
+        } else {
+            ExecutionStatus::InProgress
         }
     }
 
     pub fn append_output_delta(&mut self, delta: &str) -> bool {
-        match self {
-            Self::Pending {
-                call_id,
-                invocation,
-                title,
-                lifecycle,
-            } => {
-                *self = Self::InProgress {
-                    call_id: *call_id,
-                    invocation: invocation.clone(),
-                    title: title.clone(),
-                    output_text: delta.to_string(),
-                    lifecycle: lifecycle.clone(),
-                };
-                true
-            }
-            Self::InProgress { output_text, .. }
-            | Self::Completed { output_text, .. }
-            | Self::Failed { output_text, .. } => {
-                output_text.push_str(delta);
-                true
-            }
+        self.model_output.text.push_str(delta);
+        if self.summary.is_empty() {
+            self.summary.push_str(delta);
         }
+        if let Some(OperationBlock::Text { text }) = self.blocks.last_mut() {
+            text.push_str(delta);
+        } else {
+            self.blocks.push(OperationBlock::Text {
+                text: delta.to_string(),
+            });
+        }
+        true
     }
 }
 
@@ -896,9 +1143,10 @@ mod tests {
 
     #[test]
     fn tool_result_block_converts_resource_links_into_attachments() {
-        let block = ToolResultBlock::ResourceLink {
+        let block = OperationBlock::ResourceLink {
             uri: "https://example.com/report.pdf".to_string(),
             title: Some("report".to_string()),
+            mime_type: None,
         };
 
         let attachment = block
@@ -945,18 +1193,21 @@ mod tests {
             json!({})
         );
 
-        let part = ToolExecutionPart::Completed {
-            call_id: 7,
-            invocation: ToolInvocation::new("plugin.example", StructuredObject::default()),
-            output_text: String::new(),
-            blocks: Vec::new(),
-            attachments: Vec::new(),
-            details: ToolOutput::default(),
-            lifecycle: TimeRange::default(),
-        };
+        let part = OperationPart::completed(
+            7,
+            ToolInvocation::new("plugin.example", StructuredObject::default()),
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            ToolOutput::default(),
+            TimeRange {
+                start_ms: 0,
+                end_ms: Some(1),
+            },
+        );
         let serialized = serde_json::to_value(part).expect("tool execution part should serialize");
 
-        assert_eq!(serialized["state"], "completed");
+        assert_eq!(serialized["call_id"], 7);
         assert!(serialized.get("details").is_none());
     }
 
@@ -987,12 +1238,13 @@ mod tests {
         assert_eq!(
             output.content_blocks(),
             vec![
-                ToolResultBlock::Text {
+                OperationBlock::Text {
                     text: "done".to_string()
                 },
-                ToolResultBlock::ResourceLink {
+                OperationBlock::ResourceLink {
                     uri: "https://example.com/report.pdf".to_string(),
-                    title: Some("report".to_string())
+                    title: Some("report".to_string()),
+                    mime_type: None
                 }
             ]
         );

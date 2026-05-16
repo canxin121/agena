@@ -1,5 +1,5 @@
 use super::*;
-use agena::message::{ExecutionStatus, MessageStatus};
+use agena::message::{ExecutionStatus, FileChangeKind, MessageStatus, OperationBlock, RequestPart};
 use textwrap::{Options as WrapOptions, WordSplitter, wrap};
 use unicode_width::UnicodeWidthStr;
 
@@ -245,124 +245,7 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
                 width,
             );
         }
-        Some(PartContent::ToolExecution(tool)) => render_tool_execution(tool, out, width, i18n),
-        Some(PartContent::CommandExecution(command)) => {
-            push_label_value(
-                out,
-                "  ",
-                &format!("$ {}", command.command),
-                Style::default().fg(Color::Magenta),
-                width,
-            );
-            if let Some(output) = &command.output
-                && !output.trim().is_empty()
-            {
-                push_multiline(out, "    ", output, Style::default().fg(Color::Gray), width);
-            }
-            if command.status != ExecutionStatus::Completed || command.exit_code.unwrap_or(0) != 0 {
-                push_label_value(
-                    out,
-                    "  ",
-                    &i18n.text_args(
-                        "message-command-status",
-                        &crate::fl_args!(
-                            "status" => ui_text::execution_status_label(i18n, command.status),
-                            "exit" => command.exit_code.unwrap_or(-1),
-                        ),
-                    ),
-                    Style::default().fg(Color::DarkGray),
-                    width,
-                );
-            }
-        }
-        Some(PartContent::FileChange(change)) => {
-            push_section_heading(
-                out,
-                &format!("  {}", ui_text::t(i18n, "message-file-changes")),
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-                width,
-            );
-            for entry in &change.changes {
-                let path = if entry.kind == FileChangeKind::Moved {
-                    entry
-                        .from_path
-                        .as_ref()
-                        .map(|from_path| format!("{from_path} -> {}", entry.path))
-                        .unwrap_or_else(|| entry.path.clone())
-                } else {
-                    entry.path.clone()
-                };
-                push_label_value(
-                    out,
-                    "    - ",
-                    &format!(
-                        "{} ({})",
-                        path,
-                        ui_text::file_change_kind_label(i18n, entry.kind)
-                    ),
-                    Style::default(),
-                    width,
-                );
-            }
-        }
-        Some(PartContent::WebSearch(search)) => {
-            push_label_value(
-                out,
-                "  search: ",
-                search.query.as_str(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                width,
-            );
-            for result in &search.results {
-                push_label_value(
-                    out,
-                    "    - ",
-                    result.title.as_str(),
-                    Style::default(),
-                    width,
-                );
-                push_multiline(
-                    out,
-                    "      ",
-                    result.url.as_str(),
-                    Style::default().fg(Color::DarkGray),
-                    width,
-                );
-                if let Some(snippet) = &result.snippet
-                    && !snippet.trim().is_empty()
-                {
-                    push_multiline(out, "      ", snippet, Style::default(), width);
-                }
-            }
-        }
-        Some(PartContent::TodoList(todo)) => {
-            push_section_heading(
-                out,
-                &format!("  {}", ui_text::t(i18n, "message-todo-list")),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                width,
-            );
-            for item in &todo.items {
-                push_label_value(
-                    out,
-                    "    - ",
-                    &format!(
-                        "[{}|{}] {}",
-                        ui_text::todo_status_label(i18n, item.status),
-                        ui_text::todo_priority_label(i18n, item.priority),
-                        item.content
-                    ),
-                    Style::default(),
-                    width,
-                );
-            }
-        }
+        Some(PartContent::Operation(tool)) => render_tool_execution(part, tool, out, width, i18n),
         Some(PartContent::Error(error)) => {
             push_multiline(
                 out,
@@ -397,47 +280,11 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
                 push_label_value(out, "    - ", label.as_str(), Style::default(), width);
             }
         }
-        Some(PartContent::PermissionRequest(permission)) => {
-            push_section_heading(
-                out,
-                "  permission",
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-                width,
-            );
-            push_multiline(
-                out,
-                "    ",
-                ui_text::permission_summary(i18n, permission).as_str(),
-                Style::default().fg(Color::Magenta),
-                width,
-            );
+        Some(PartContent::Request(RequestPart::Permission(permission))) => {
+            render_permission_request(permission, out, width, i18n)
         }
-        Some(PartContent::UserInputRequest(request)) => {
-            push_multiline(
-                out,
-                "  ",
-                &i18n.text_args(
-                    "message-awaiting-user-input",
-                    &crate::fl_args!("request_id" => request.request.request_id.as_str()),
-                ),
-                Style::default().fg(Color::Magenta),
-                width,
-            );
-            for question in &request.request.questions {
-                push_multiline(
-                    out,
-                    "    ",
-                    &ui_text::message_question_line(
-                        i18n,
-                        question.question.as_str(),
-                        question.id.as_str(),
-                    ),
-                    Style::default(),
-                    width,
-                );
-            }
+        Some(PartContent::Request(RequestPart::UserInput(request))) => {
+            render_user_input_request(request, out, width, i18n)
         }
         None => {
             let fallback = part
@@ -456,126 +303,378 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
 }
 
 fn render_tool_execution(
-    tool: &ToolExecutionPart,
+    part: &MessagePart,
+    tool: &OperationPart,
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
 ) {
-    match tool {
-        ToolExecutionPart::Pending {
-            invocation, title, ..
-        } => {
-            let label = if title.trim().is_empty() {
-                tool_invocation_label(invocation)
-            } else {
-                title.clone()
-            };
-            push_multiline(
-                out,
-                "  ",
-                &i18n.text_args("message-tool-pending", &crate::fl_args!("label" => label)),
-                Style::default().fg(Color::Magenta),
-                width,
-            );
-        }
-        ToolExecutionPart::InProgress {
-            invocation,
-            title,
-            output_text,
-            ..
-        } => {
-            let label = if title.trim().is_empty() {
-                tool_invocation_label(invocation)
-            } else {
-                title.clone()
-            };
-            push_multiline(
-                out,
-                "  ",
-                &i18n.text_args("message-tool-running", &crate::fl_args!("label" => label)),
-                Style::default().fg(Color::Magenta),
-                width,
-            );
-            if !output_text.trim().is_empty() {
-                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
-            }
-        }
-        ToolExecutionPart::Completed {
-            invocation,
-            output_text,
-            blocks,
-            details,
-            ..
-        } => {
-            push_multiline(
-                out,
-                "  ",
-                &i18n.text_args(
-                    "message-tool-done",
-                    &crate::fl_args!("label" => tool_invocation_label(invocation)),
-                ),
-                Style::default().fg(Color::Green),
-                width,
-            );
-            if !output_text.trim().is_empty() {
-                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
-            }
-            if let Some(diff) = apply_patch_diff(details) {
+    let label = if tool.title.trim().is_empty() {
+        tool_invocation_label(&tool.invocation)
+    } else {
+        tool.title.clone()
+    };
+    let (message_key, color) = match part.status {
+        ExecutionStatus::Pending => ("message-tool-pending", Color::Magenta),
+        ExecutionStatus::InProgress => ("message-tool-running", Color::Magenta),
+        ExecutionStatus::Completed => ("message-tool-done", Color::Green),
+        ExecutionStatus::Failed => ("message-tool-failed", Color::Red),
+        ExecutionStatus::Cancelled => ("message-tool-failed", Color::DarkGray),
+    };
+    push_multiline(
+        out,
+        "  ",
+        &i18n.text_args(message_key, &crate::fl_args!("label" => label)),
+        Style::default().fg(color),
+        width,
+    );
+
+    if part.status == ExecutionStatus::Failed
+        && let Some(error_message) = tool.error_message()
+        && !error_message.trim().is_empty()
+    {
+        push_multiline(
+            out,
+            "    ",
+            error_message,
+            Style::default().fg(Color::Red),
+            width,
+        );
+    }
+
+    if !tool.model_output.text.trim().is_empty() {
+        push_tool_output_preview(
+            out,
+            "    ",
+            tool.model_output.text.as_str(),
+            Style::default(),
+            width,
+            i18n,
+        );
+    }
+
+    if let Some(diff) = apply_patch_diff(&tool.details) {
+        push_label_value(
+            out,
+            "    diff: ",
+            &format!("{} lines", diff.lines().count()),
+            Style::default().fg(Color::DarkGray),
+            width,
+        );
+        push_tool_output_preview(
+            out,
+            "    ",
+            diff.as_str(),
+            Style::default().fg(Color::DarkGray),
+            width,
+            i18n,
+        );
+    }
+
+    render_operation_blocks(tool.blocks.as_slice(), out, width, i18n);
+}
+
+fn render_operation_blocks(
+    blocks: &[OperationBlock],
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+) {
+    for block in blocks {
+        match block {
+            OperationBlock::Text { .. } | OperationBlock::Markdown { .. } => {}
+            OperationBlock::Command {
+                command,
+                exit_code,
+                stdout,
+                stderr,
+                ..
+            } => {
                 push_label_value(
                     out,
-                    "    diff: ",
-                    &format!("{} lines", diff.lines().count()),
-                    Style::default().fg(Color::DarkGray),
+                    "    $ ",
+                    command.as_str(),
+                    Style::default().fg(Color::Magenta),
                     width,
                 );
+                if let Some(stdout) = stdout
+                    && !stdout.trim().is_empty()
+                {
+                    push_tool_output_preview(out, "      ", stdout, Style::default(), width, i18n);
+                }
+                if let Some(stderr) = stderr
+                    && !stderr.trim().is_empty()
+                {
+                    push_tool_output_preview(
+                        out,
+                        "      ",
+                        stderr,
+                        Style::default().fg(Color::Red),
+                        width,
+                        i18n,
+                    );
+                }
+                if let Some(exit_code) = exit_code
+                    && *exit_code != 0
+                {
+                    push_label_value(
+                        out,
+                        "      ",
+                        &format!("exit {exit_code}"),
+                        Style::default().fg(Color::DarkGray),
+                        width,
+                    );
+                }
+            }
+            OperationBlock::Diff { diff, .. } => {
                 push_tool_output_preview(
                     out,
                     "    ",
-                    diff.as_str(),
+                    diff,
                     Style::default().fg(Color::DarkGray),
                     width,
                     i18n,
                 );
             }
-            if !blocks.is_empty() {
-                push_multiline(
+            OperationBlock::FileChanges { changes } => {
+                render_file_changes(changes, out, width, i18n)
+            }
+            OperationBlock::Checklist { items } => render_checklist(items, out, width, i18n),
+            OperationBlock::SearchResults { query, results } => {
+                let heading = query
+                    .as_deref()
+                    .map(|query| format!("search: {query}"))
+                    .unwrap_or_else(|| "search results".to_string());
+                push_section_heading(
                     out,
-                    "    ",
-                    &ui_text::message_tool_result_blocks(i18n, blocks.len()),
+                    &format!("    {heading}"),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                    width,
+                );
+                for result in results {
+                    push_label_value(
+                        out,
+                        "      - ",
+                        result.title.as_str(),
+                        Style::default(),
+                        width,
+                    );
+                    push_multiline(
+                        out,
+                        "        ",
+                        result.uri.as_str(),
+                        Style::default().fg(Color::DarkGray),
+                        width,
+                    );
+                    if let Some(snippet) = &result.snippet
+                        && !snippet.trim().is_empty()
+                    {
+                        push_multiline(out, "        ", snippet, Style::default(), width);
+                    }
+                }
+            }
+            OperationBlock::ResourceLink { uri, title, .. }
+            | OperationBlock::Citation { uri, title, .. } => {
+                push_label_value(
+                    out,
+                    "    - ",
+                    title.as_deref().unwrap_or(uri.as_str()),
                     Style::default().fg(Color::DarkGray),
                     width,
                 );
             }
-        }
-        ToolExecutionPart::Failed {
-            invocation,
-            error_message,
-            output_text,
-            ..
-        } => {
-            push_multiline(
-                out,
-                "  ",
-                &i18n.text_args(
-                    "message-tool-failed",
-                    &crate::fl_args!("label" => tool_invocation_label(invocation)),
-                ),
-                Style::default().fg(Color::Red),
-                width,
-            );
-            if !error_message.trim().is_empty() {
-                push_multiline(
+            OperationBlock::Image { url, .. }
+            | OperationBlock::Audio { url, .. }
+            | OperationBlock::File { url, .. } => {
+                push_label_value(
                     out,
-                    "    ",
-                    error_message,
-                    Style::default().fg(Color::Red),
+                    "    - ",
+                    url.as_str(),
+                    Style::default().fg(Color::DarkGray),
                     width,
                 );
             }
-            if !output_text.trim().is_empty() {
-                push_tool_output_preview(out, "    ", output_text, Style::default(), width, i18n);
+            OperationBlock::EmbeddedResource { uri, text, .. } => {
+                push_label_value(
+                    out,
+                    "    - ",
+                    uri.as_str(),
+                    Style::default().fg(Color::DarkGray),
+                    width,
+                );
+                if let Some(text) = text
+                    && !text.trim().is_empty()
+                {
+                    push_tool_output_preview(out, "      ", text, Style::default(), width, i18n);
+                }
             }
+            OperationBlock::Media { artifact, .. } => {
+                push_label_value(
+                    out,
+                    "    - ",
+                    artifact.name.as_deref().unwrap_or(artifact.uri.as_str()),
+                    Style::default().fg(Color::DarkGray),
+                    width,
+                );
+            }
+            OperationBlock::Progress { message, .. } => {
+                push_multiline(
+                    out,
+                    "    ",
+                    message,
+                    Style::default().fg(Color::DarkGray),
+                    width,
+                );
+            }
+            OperationBlock::NestedTask {
+                task_id,
+                title,
+                status,
+            } => {
+                let title = title.as_deref().unwrap_or(task_id.as_str());
+                push_label_value(
+                    out,
+                    "    - ",
+                    &format!(
+                        "{} ({})",
+                        title,
+                        ui_text::execution_status_label(i18n, *status)
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                    width,
+                );
+            }
+            OperationBlock::Json { .. }
+            | OperationBlock::Table { .. }
+            | OperationBlock::Log { .. }
+            | OperationBlock::Custom { .. } => {}
         }
+    }
+}
+
+fn render_file_changes(
+    changes: &[agena::message::FileChangeEntry],
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+) {
+    if changes.is_empty() {
+        return;
+    }
+    push_section_heading(
+        out,
+        &format!("    {}", ui_text::t(i18n, "message-file-changes")),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+        width,
+    );
+    for entry in changes {
+        let path = if entry.kind == FileChangeKind::Moved {
+            entry
+                .from_path
+                .as_ref()
+                .map(|from_path| format!("{from_path} -> {}", entry.path))
+                .unwrap_or_else(|| entry.path.clone())
+        } else {
+            entry.path.clone()
+        };
+        push_label_value(
+            out,
+            "      - ",
+            &format!(
+                "{} ({})",
+                path,
+                ui_text::file_change_kind_label(i18n, entry.kind)
+            ),
+            Style::default(),
+            width,
+        );
+    }
+}
+
+fn render_checklist(
+    items: &[agena::message::TodoItem],
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+) {
+    if items.is_empty() {
+        return;
+    }
+    push_section_heading(
+        out,
+        &format!("    {}", ui_text::t(i18n, "message-todo-list")),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        width,
+    );
+    for item in items {
+        push_label_value(
+            out,
+            "      - ",
+            &format!(
+                "[{}|{}] {}",
+                ui_text::todo_status_label(i18n, item.status),
+                ui_text::todo_priority_label(i18n, item.priority),
+                item.content
+            ),
+            Style::default(),
+            width,
+        );
+    }
+}
+
+fn render_permission_request(
+    permission: &agena::message::PermissionRequestPart,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+) {
+    push_section_heading(
+        out,
+        "  permission",
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+        width,
+    );
+    push_multiline(
+        out,
+        "    ",
+        ui_text::permission_summary(i18n, permission).as_str(),
+        Style::default().fg(Color::Magenta),
+        width,
+    );
+}
+
+fn render_user_input_request(
+    request: &agena::message::UserInputRequestPart,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+) {
+    push_multiline(
+        out,
+        "  ",
+        &i18n.text_args(
+            "message-awaiting-user-input",
+            &crate::fl_args!("request_id" => request.request.request_id.as_str()),
+        ),
+        Style::default().fg(Color::Magenta),
+        width,
+    );
+    for question in &request.request.questions {
+        push_multiline(
+            out,
+            "    ",
+            &ui_text::message_question_line(i18n, question.question.as_str(), question.id.as_str()),
+            Style::default(),
+            width,
+        );
     }
 }
 
@@ -590,26 +689,7 @@ fn preview_for_part(part: &MessagePart, i18n: &I18n) -> Option<String> {
             };
             first_non_empty_preview_line(summary.as_str())
         }
-        Some(PartContent::ToolExecution(tool)) => Some(tool_execution_preview(tool)),
-        Some(PartContent::CommandExecution(command)) => Some(format!("$ {}", command.command)),
-        Some(PartContent::FileChange(change)) => change.changes.first().map(|entry| {
-            let path = if entry.kind == FileChangeKind::Moved {
-                entry
-                    .from_path
-                    .as_ref()
-                    .map(|from_path| format!("{from_path} -> {}", entry.path))
-                    .unwrap_or_else(|| entry.path.clone())
-            } else {
-                entry.path.clone()
-            };
-            format!(
-                "{} {}",
-                ui_text::file_change_kind_label(i18n, entry.kind),
-                path
-            )
-        }),
-        Some(PartContent::WebSearch(search)) => Some(format!("search: {}", search.query)),
-        Some(PartContent::TodoList(todo)) => todo.items.first().map(|item| item.content.clone()),
+        Some(PartContent::Operation(tool)) => Some(tool_execution_preview(part, tool)),
         Some(PartContent::Error(error)) => Some(format!("{}: {}", error.code, error.message)),
         Some(PartContent::Attachment(attachment)) => attachment.attachments.first().map(|item| {
             item.title
@@ -618,10 +698,10 @@ fn preview_for_part(part: &MessagePart, i18n: &I18n) -> Option<String> {
                 .cloned()
                 .unwrap_or_else(|| item.mime.clone())
         }),
-        Some(PartContent::PermissionRequest(permission)) => {
+        Some(PartContent::Request(RequestPart::Permission(permission))) => {
             Some(ui_text::permission_summary(i18n, permission))
         }
-        Some(PartContent::UserInputRequest(request)) => request
+        Some(PartContent::Request(RequestPart::UserInput(request))) => request
             .request
             .questions
             .first()
@@ -630,34 +710,18 @@ fn preview_for_part(part: &MessagePart, i18n: &I18n) -> Option<String> {
     }
 }
 
-fn tool_execution_preview(tool: &ToolExecutionPart) -> String {
-    match tool {
-        ToolExecutionPart::Pending {
-            invocation, title, ..
-        } => {
-            let label = if title.trim().is_empty() {
-                tool_invocation_label(invocation)
-            } else {
-                title.clone()
-            };
-            format!("tool pending {label}")
-        }
-        ToolExecutionPart::InProgress {
-            invocation, title, ..
-        } => {
-            let label = if title.trim().is_empty() {
-                tool_invocation_label(invocation)
-            } else {
-                title.clone()
-            };
-            format!("tool running {label}")
-        }
-        ToolExecutionPart::Completed { invocation, .. } => {
-            format!("tool done {}", tool_invocation_label(invocation))
-        }
-        ToolExecutionPart::Failed { invocation, .. } => {
-            format!("tool failed {}", tool_invocation_label(invocation))
-        }
+fn tool_execution_preview(part: &MessagePart, tool: &OperationPart) -> String {
+    let label = if tool.title.trim().is_empty() {
+        tool_invocation_label(&tool.invocation)
+    } else {
+        tool.title.clone()
+    };
+    match part.status {
+        ExecutionStatus::Pending => format!("tool pending {label}"),
+        ExecutionStatus::InProgress => format!("tool running {label}"),
+        ExecutionStatus::Completed => format!("tool done {label}"),
+        ExecutionStatus::Failed => format!("tool failed {label}"),
+        ExecutionStatus::Cancelled => format!("tool cancelled {label}"),
     }
 }
 

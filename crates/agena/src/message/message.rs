@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::message::metadata::MessageMetadata;
 use crate::message::part::{
-    ExecutionStatus, ExecutionStatusTransitionError, MessagePart, PartContent, ToolExecutionPart,
+    ExecutionStatus, ExecutionStatusTransitionError, MessagePart, OperationPart, PartContent,
 };
 use crate::message::usage::MessageUsage;
 use crate::role::Role;
@@ -67,19 +67,20 @@ impl Message {
 
     pub fn prompt_tool_result(tool_call_id: impl Into<String>, output: impl Into<String>) -> Self {
         let mut message = Self::prompt_parts(
-            Role::Tool,
-            vec![PartContent::ToolExecution(ToolExecutionPart::Completed {
-                call_id: 0,
-                invocation: crate::message::ToolInvocation {
+            Role::Assistant,
+            vec![PartContent::Operation(OperationPart::completed(
+                0,
+                crate::message::ToolInvocation {
                     name: "tool".to_owned(),
+                    plugin_name: None,
                     input: crate::message::StructuredObject::default(),
                 },
-                output_text: output.into(),
-                blocks: Vec::new(),
-                attachments: Vec::new(),
-                details: crate::message::ToolOutput::default(),
-                lifecycle: crate::message::TimeRange::default(),
-            })],
+                output.into(),
+                Vec::new(),
+                Vec::new(),
+                crate::message::ToolOutput::default(),
+                crate::message::TimeRange::default(),
+            ))],
         );
         if let Some(part) = message.parts.first_mut() {
             part.operation_id = Some(tool_call_id.into());
@@ -103,7 +104,7 @@ impl Message {
                                 None
                             }
                         }
-                        PartContent::ToolExecution(tool) => tool_text_lossy(tool),
+                        PartContent::Operation(tool) => tool_text_lossy(tool),
                         _ => part.summary.clone(),
                     }
                 } else {
@@ -134,28 +135,14 @@ impl Message {
     }
 }
 
-/// Best-effort textual rendering of a tool-execution part for `as_text_lossy`.
-/// Picks the most informative non-empty surface (output → title → error
-/// message) and falls back to `None` when nothing is populated.
-fn tool_text_lossy(tool: &ToolExecutionPart) -> Option<String> {
-    let candidates: [Option<&str>; 3] = match tool {
-        ToolExecutionPart::Pending { title, .. } => [Some(title.as_str()), None, None],
-        ToolExecutionPart::InProgress {
-            title, output_text, ..
-        } => [Some(output_text.as_str()), Some(title.as_str()), None],
-        ToolExecutionPart::Completed { output_text, .. } => {
-            [Some(output_text.as_str()), None, None]
-        }
-        ToolExecutionPart::Failed {
-            output_text,
-            error_message,
-            ..
-        } => [
-            Some(output_text.as_str()),
-            Some(error_message.as_str()),
-            None,
-        ],
-    };
+/// Best-effort textual rendering of an operation part for `as_text_lossy`.
+fn tool_text_lossy(tool: &OperationPart) -> Option<String> {
+    let candidates = [
+        tool.output_text(),
+        tool.error_message(),
+        tool.title(),
+        (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()),
+    ];
     candidates
         .into_iter()
         .flatten()

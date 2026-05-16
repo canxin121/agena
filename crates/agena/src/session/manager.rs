@@ -16,10 +16,10 @@ use crate::event::{
     RunStartedEvent, SessionGoalEvent,
 };
 use crate::message::{
-    AttachmentItem, ExecutionStatus, FileChangePart, Message, MessageMetadata, MessagePart,
-    MessageSource, MessageStatus, PartContent, PermissionRequestPart, TaskSubagentType, TimeRange,
-    TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock,
-    UserInputReply, UserInputReplyKind, UserInputRequest, UserInputRequestPart,
+    ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus,
+    OperationBlock, OperationPart, PartContent, PermissionRequestPart, TaskSubagentType, TimeRange,
+    ToolAttachment, ToolInvocation, ToolOutput, UserInputReply, UserInputReplyKind,
+    UserInputRequest, UserInputRequestPart,
 };
 use crate::model::ModelRef;
 use crate::permission::{
@@ -106,6 +106,23 @@ pub struct SessionRunOptions {
     pub max_output_tokens: Option<u32>,
     pub agent_profile: Option<String>,
     pub max_turn_loops: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionAgentSwitchOutcome {
+    pub session_id: i64,
+    pub previous_agent: Option<String>,
+    pub current_agent: Option<String>,
+    pub stack_depth: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionAgentRestoreOutcome {
+    pub session_id: i64,
+    pub restored: bool,
+    pub previous_agent: Option<String>,
+    pub current_agent: Option<String>,
+    pub stack_depth: usize,
 }
 
 impl SessionRunOptions {
@@ -583,6 +600,102 @@ impl SessionManager {
         self.store
             .load_session(session_id, state.cache_policy())
             .await
+    }
+
+    pub async fn switch_session_agent(
+        &self,
+        session_id: i64,
+        agent: Option<String>,
+        push_previous: bool,
+    ) -> Result<SessionAgentSwitchOutcome, AppError> {
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let previous_agent = session.runtime.execution.agent_profile.clone();
+        if push_previous {
+            session
+                .runtime
+                .execution
+                .agent_stack
+                .push(previous_agent.clone());
+        }
+
+        let target_agent = agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let mut session = match target_agent {
+            Some(agent_name) => {
+                let mut options = self.run_options_from_session(&session, state.clone())?;
+                options.agent_profile = Some(agent_name);
+                self.apply_requested_agent_profile(session, &mut options, state.clone())
+                    .await?
+            }
+            None => {
+                self.clear_session_agent_profile(session, state.clone())
+                    .await?
+            }
+        };
+        let current_agent = session.runtime.execution.agent_profile.clone();
+        let stack_depth = session.runtime.execution.agent_stack.len();
+        session = self
+            .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+            .await?;
+        Ok(SessionAgentSwitchOutcome {
+            session_id: session.id,
+            previous_agent,
+            current_agent,
+            stack_depth,
+        })
+    }
+
+    pub async fn restore_session_agent(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionAgentRestoreOutcome, AppError> {
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let previous_agent = session.runtime.execution.agent_profile.clone();
+        let Some(target_agent) = session.runtime.execution.agent_stack.pop() else {
+            return Ok(SessionAgentRestoreOutcome {
+                session_id,
+                restored: false,
+                previous_agent,
+                current_agent: session.runtime.execution.agent_profile,
+                stack_depth: 0,
+            });
+        };
+
+        let mut session = match target_agent {
+            Some(agent_name) => {
+                let mut options = self.run_options_from_session(&session, state.clone())?;
+                options.agent_profile = Some(agent_name);
+                self.apply_requested_agent_profile(session, &mut options, state.clone())
+                    .await?
+            }
+            None => {
+                self.clear_session_agent_profile(session, state.clone())
+                    .await?
+            }
+        };
+        let current_agent = session.runtime.execution.agent_profile.clone();
+        let stack_depth = session.runtime.execution.agent_stack.len();
+        session = self
+            .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+            .await?;
+        Ok(SessionAgentRestoreOutcome {
+            session_id: session.id,
+            restored: true,
+            previous_agent,
+            current_agent,
+            stack_depth,
+        })
     }
 
     pub async fn is_turn_active(&self, session_id: i64) -> bool {
@@ -1499,7 +1612,7 @@ impl SessionManager {
                     request.reply.request_id
                 ))
             })?;
-            permission_part.set_content(PartContent::PermissionRequest(
+            permission_part.set_content(PartContent::permission_request(
                 PermissionRequestPart::pending(permission_request.clone())
                     .with_reply(request.reply.clone()),
             ));
@@ -1599,7 +1712,7 @@ impl SessionManager {
                     request.reply.request_id
                 ))
             })?;
-            input_part.set_content(PartContent::UserInputRequest(
+            input_part.set_content(PartContent::user_input_request(
                 UserInputRequestPart::pending(user_input_request.clone())
                     .with_reply(request.reply.clone()),
             ));
@@ -1782,11 +1895,15 @@ impl SessionManager {
         control: Arc<TurnControl>,
         mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
-        let max_turn_loops = options
+        let initial_options =
+            self.apply_execution_context_to_run_options(&session, options.clone())?;
+        let max_turn_loops = initial_options
             .max_turn_loops
             .unwrap_or(state.config.max_turn_loops);
         let mut continuation_available = allow_goal_continuation;
         for _ in 0..max_turn_loops {
+            let current_options =
+                self.apply_execution_context_to_run_options(&session, options.clone())?;
             if control.cancel.is_cancelled() {
                 if control.is_superseded() {
                     return Ok(session);
@@ -1807,9 +1924,11 @@ impl SessionManager {
             }
 
             session = self
-                .drain_steer_input(session, &mut steer_rx, options, state.clone())
+                .drain_steer_input(session, &mut steer_rx, &current_options, state.clone())
                 .await?;
 
+            let current_options =
+                self.apply_execution_context_to_run_options(&session, options.clone())?;
             session.refresh_derived();
             if session.blocked() {
                 return Ok(session);
@@ -1879,9 +1998,12 @@ impl SessionManager {
                                             .last_conversation_message()
                                             .map(|m| m.id),
                                         generated_by_call_id: None,
-                                        model_provider_id: options.model.provider_id.to_string(),
-                                        model_id: options.model.model_id.to_string(),
-                                        model_variant: options.variant.clone(),
+                                        model_provider_id: current_options
+                                            .model
+                                            .provider_id
+                                            .to_string(),
+                                        model_id: current_options.model.model_id.to_string(),
+                                        model_variant: current_options.variant.clone(),
                                         provider_metadata: None,
                                         tags: Vec::new(),
                                     },
@@ -1922,7 +2044,10 @@ impl SessionManager {
             }
 
             let session_id = session.id;
-            let model = format!("{}/{}", options.model.provider_id, options.model.model_id);
+            let model = format!(
+                "{}/{}",
+                current_options.model.provider_id, current_options.model.model_id
+            );
             let message_count = session.messages.len();
             let pre_turn_input = crate::plugin::PreTurnInput {
                 session_id,
@@ -1938,7 +2063,7 @@ impl SessionManager {
             match self
                 .run_model_turn(
                     session,
-                    options,
+                    &current_options,
                     goal_turn_directive
                         .as_ref()
                         .map(|directive| directive.prompt.as_str()),
@@ -2413,7 +2538,7 @@ impl SessionManager {
                 continue;
             }
             for part in &message.parts {
-                if matches!(part.content, Some(PartContent::ToolExecution(_))) {
+                if matches!(part.content, Some(PartContent::Operation(_))) {
                     let Some(op_id) = part.operation_id.as_deref() else {
                         continue;
                     };
@@ -2516,7 +2641,6 @@ impl SessionManager {
                     let role = match msg.role {
                         Role::User => "user",
                         Role::Assistant => "assistant",
-                        Role::Tool => "tool",
                         Role::System => "system",
                     };
                     Some(crate::plugin::ChatMessage {
@@ -2706,9 +2830,7 @@ impl SessionManager {
                 .part(&resolved.pending.part)
                 .and_then(|part| part.content.as_ref())
             {
-                Some(PartContent::ToolExecution(ToolExecutionPart::Pending { title, .. })) => {
-                    title.clone()
-                }
+                Some(PartContent::Operation(operation)) => operation.title.clone(),
                 _ => format!("Tool {}", tool_name(&resolved.invocation)),
             };
 
@@ -2719,12 +2841,12 @@ impl SessionManager {
                     resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: resolved.call_id,
-                invocation: prepared.invocation,
-                title: prepared.title_override.unwrap_or(current_title),
-                lifecycle: resolved.lifecycle.clone(),
-            }));
+            tool_part.set_content(PartContent::Operation(OperationPart::pending(
+                resolved.call_id,
+                prepared.invocation,
+                prepared.title_override.unwrap_or(current_title),
+                resolved.lifecycle.clone(),
+            )));
         }
 
         scoped_executor
@@ -2822,9 +2944,7 @@ impl SessionManager {
                 .part(&resolved.pending.part)
                 .and_then(|part| part.content.as_ref())
             {
-                Some(PartContent::ToolExecution(ToolExecutionPart::Pending { title, .. })) => {
-                    title.clone()
-                }
+                Some(PartContent::Operation(operation)) => operation.title.clone(),
                 _ => format!("Tool {}", tool_name(&resolved.invocation)),
             };
 
@@ -2835,12 +2955,12 @@ impl SessionManager {
                     resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: resolved.call_id,
-                invocation: prepared.invocation,
-                title: prepared.title_override.unwrap_or(current_title),
-                lifecycle: resolved.lifecycle.clone(),
-            }));
+            tool_part.set_content(PartContent::Operation(OperationPart::pending(
+                resolved.call_id,
+                prepared.invocation,
+                prepared.title_override.unwrap_or(current_title),
+                resolved.lifecycle.clone(),
+            )));
             session_changed = true;
         }
 
@@ -3162,12 +3282,12 @@ impl SessionManager {
                     pending_tool.part.message_id, pending_tool.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: resolved.call_id,
-                invocation: resolved.invocation.clone(),
-                title: format!("Awaiting permission: {reason}"),
-                lifecycle: resolved.lifecycle.clone(),
-            }));
+            tool_part.set_content(PartContent::Operation(OperationPart::pending(
+                resolved.call_id,
+                resolved.invocation.clone(),
+                format!("Awaiting permission: {reason}"),
+                resolved.lifecycle.clone(),
+            )));
             tool_part.status = ExecutionStatus::Pending;
             tool_part.summary = Some(reason.clone());
         }
@@ -3249,12 +3369,12 @@ impl SessionManager {
                     pending_tool.part.message_id, pending_tool.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: resolved.call_id,
-                invocation: resolved.invocation.clone(),
-                title: ask_user_title(&request),
-                lifecycle: resolved.lifecycle.clone(),
-            }));
+            tool_part.set_content(PartContent::Operation(OperationPart::pending(
+                resolved.call_id,
+                resolved.invocation.clone(),
+                ask_user_title(&request),
+                resolved.lifecycle.clone(),
+            )));
             tool_part.status = ExecutionStatus::Pending;
             tool_part.summary = Some(match request.questions.len() {
                 0 => "Ask user".to_string(),
@@ -3378,12 +3498,11 @@ impl SessionManager {
         let tool_output = execution.output.clone();
         let output_text = execution.view.output_text.clone();
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
-        let blocks = text_result_blocks(output_text.as_str());
-        let extra_part_contents = tool_message_extra_part_contents(
+        let blocks = operation_blocks_from_tool_output(
             &resolved.invocation,
             &tool_output,
             execution.view.attachments.as_slice(),
-            blocks.as_slice(),
+            output_text.as_str(),
         );
         if let Some(loaded_tools) = loaded_tools_from_tool_output(&tool_output) {
             session.runtime.record_loaded_deferred_tools(&loaded_tools);
@@ -3397,43 +3516,27 @@ impl SessionManager {
                     pending_tool.part.message_id, pending_tool.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                call_id: resolved.call_id,
-                invocation: resolved.invocation.clone(),
-                output_text: output_text.clone(),
-                blocks: blocks.clone(),
-                attachments: execution.view.attachments.clone(),
-                details: tool_output.clone(),
-                lifecycle: lifecycle.clone(),
-            }));
+            tool_part.set_content(PartContent::Operation(OperationPart::completed(
+                resolved.call_id,
+                resolved.invocation.clone(),
+                output_text.clone(),
+                blocks.clone(),
+                execution.view.attachments.clone(),
+                tool_output.clone(),
+                lifecycle.clone(),
+            )));
             tool_part.status = ExecutionStatus::Completed;
         }
-
-        let tool_message = build_tool_message(
-            self.store
-                .reserve_message_ids(1 + extra_part_contents.len())
-                .await?,
-            &resolved,
-            execution.view.attachments,
-            output_text,
-            blocks,
-            tool_output,
-            lifecycle,
-            None,
-            extra_part_contents,
-        );
-        session.messages.push(tool_message.clone());
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
         let tool_call_id = tool_call_id_for(&resolved);
         let tool_output_event = TranscriptToolOutput::Text {
             text: execution.view.output_text.clone(),
         };
-        let tool_message_id = tool_message.id;
         let session = self
             .persist_session_changes(
                 session,
-                vec![assistant_message, tool_message],
+                vec![assistant_message.clone()],
                 Vec::new(),
                 persisted_rule.clone(),
                 state.clone(),
@@ -3442,7 +3545,7 @@ impl SessionManager {
         let now = Utc::now();
         let turn_id = HistoryTurnId::new();
         let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
-            message_id: HistoryMessageId(tool_message_id),
+            message_id: HistoryMessageId(assistant_message.id),
             call_id: tool_call_id,
             turn_id,
             tool_name: resolved.invocation.name.clone().into(),
@@ -3481,39 +3584,25 @@ impl SessionManager {
                     pending_tool.part.message_id, pending_tool.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::ToolExecution(ToolExecutionPart::Failed {
-                call_id: resolved.call_id,
-                invocation: resolved.invocation.clone(),
-                error_message: reason.clone(),
-                output_text: reason.clone(),
-                blocks: blocks.clone(),
-                attachments: Vec::new(),
-                details: ToolOutput::default(),
-                lifecycle: lifecycle.clone(),
-            }));
+            tool_part.set_content(PartContent::Operation(OperationPart::failed(
+                resolved.call_id,
+                resolved.invocation.clone(),
+                reason.clone(),
+                reason.clone(),
+                blocks.clone(),
+                Vec::new(),
+                ToolOutput::default(),
+                lifecycle.clone(),
+            )));
             tool_part.status = ExecutionStatus::Failed;
         }
 
-        let tool_message = build_tool_message(
-            self.store.reserve_message_ids(1).await?,
-            &resolved,
-            Vec::new(),
-            reason.clone(),
-            blocks,
-            ToolOutput::default(),
-            lifecycle,
-            Some(reason.clone()),
-            Vec::new(),
-        );
-        session.messages.push(tool_message.clone());
-
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
         let tool_call_id = tool_call_id_for(&resolved);
-        let tool_message_id = tool_message.id;
         let session = self
             .persist_session_changes(
                 session,
-                vec![assistant_message, tool_message],
+                vec![assistant_message.clone()],
                 Vec::new(),
                 persisted_rule.clone(),
                 state.clone(),
@@ -3522,7 +3611,7 @@ impl SessionManager {
         let now = Utc::now();
         let turn_id = HistoryTurnId::new();
         let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
-            message_id: HistoryMessageId(tool_message_id),
+            message_id: HistoryMessageId(assistant_message.id),
             call_id: tool_call_id,
             turn_id,
             tool_name: resolved.invocation.name.clone().into(),
@@ -3843,6 +3932,77 @@ impl SessionManager {
             options.agent_profile = session.runtime.execution.agent_profile.clone();
         }
         Ok(options)
+    }
+
+    fn run_options_from_session(
+        &self,
+        session: &Session,
+        state: Arc<SessionManagerState>,
+    ) -> Result<SessionRunOptions, AppError> {
+        let model = session
+            .runtime
+            .model_override()
+            .map(|(provider_id, model_id)| {
+                ModelRef::try_new(provider_id, model_id).map_err(|error| {
+                    AppError::Internal(format!(
+                        "session {} contains invalid execution model override: {error}",
+                        session.id
+                    ))
+                })
+            })
+            .transpose()?
+            .or_else(|| infer_session_model(session).ok().flatten())
+            .or_else(|| {
+                let provider_registry = state.processor.provider_registry();
+                let provider_ids = provider_registry.provider_ids();
+                if provider_ids.len() != 1 {
+                    return None;
+                }
+                let provider_id = provider_ids.into_iter().next()?;
+                let provider = provider_registry.get(provider_id.as_str())?;
+                Some(ModelRef::new(
+                    provider_id,
+                    provider.default_model().to_string(),
+                ))
+            })
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "model is required before switching agent for session {}",
+                    session.id
+                ))
+            })?;
+
+        self.apply_execution_context_to_run_options(
+            session,
+            SessionRunOptions {
+                model,
+                variant: None,
+                thinking: None,
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+                agent_profile: None,
+                max_turn_loops: None,
+            },
+        )
+    }
+
+    async fn clear_session_agent_profile(
+        &self,
+        mut session: Session,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        session.runtime.execution.agent_profile = None;
+        session.runtime.execution.agent_mode = None;
+        session.runtime.execution.agent_hidden = false;
+        session.runtime.execution.agent_color = None;
+        session.runtime.execution.system_prompt_override = None;
+        session.runtime.set_allowed_tools(Vec::new());
+        session.runtime.execution.agent_permission = state.config.permission.clone();
+        session.runtime.execution.agent_run = crate::agent::AgentRunConfig::default();
+        session.runtime.set_model_override(None, None);
+        session.runtime.set_model_variant_override(None);
+        Ok(session)
     }
 
     async fn apply_requested_agent_profile(
@@ -4465,153 +4625,45 @@ fn resolve_pending_tool(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_tool_message(
-    ids: ReservedMessageIds,
-    pending_tool: &ResolvedPendingTool,
-    attachments: Vec<ToolAttachment>,
-    output_text: String,
-    blocks: Vec<ToolResultBlock>,
-    details: ToolOutput,
-    lifecycle: TimeRange,
-    error_message: Option<String>,
-    extra_part_contents: Vec<PartContent>,
-) -> Message {
-    let created_at = Utc::now();
-    let message_state = if error_message.is_some() {
-        MessageStatus::Failed
-    } else {
-        MessageStatus::Completed
-    };
-    let content = match error_message {
-        Some(error_message) => PartContent::ToolExecution(ToolExecutionPart::Failed {
-            call_id: pending_tool.call_id,
-            invocation: pending_tool.invocation.clone(),
-            error_message,
-            output_text,
-            blocks,
-            attachments,
-            details,
-            lifecycle,
-        }),
-        None => PartContent::ToolExecution(ToolExecutionPart::Completed {
-            call_id: pending_tool.call_id,
-            invocation: pending_tool.invocation.clone(),
-            output_text,
-            blocks,
-            attachments,
-            details,
-            lifecycle,
-        }),
-    };
-
-    let mut part = MessagePart::with_content(
-        ids.part_ids[0],
-        ids.message_id,
-        created_at,
-        part_status(&content),
-        content,
-    );
-    part.operation_id = Some(pending_tool.operation_id.clone());
-    part.part_index = 0;
-
-    let mut parts = vec![part];
-    parts.extend(build_extra_message_parts(
-        ids.part_ids[1..].iter().copied(),
-        ids.message_id,
-        created_at,
-        extra_part_contents,
-    ));
-
-    Message {
-        id: ids.message_id,
-        role: Role::Tool,
-        state: message_state,
-        parts,
-        created_at,
-        metadata: MessageMetadata {
-            source: MessageSource::Tool,
-            parent_message_id: Some(pending_tool.pending.part.message_id),
-            generated_by_call_id: Some(pending_tool.call_id),
-            model_provider_id: String::new(),
-            model_id: String::new(),
-            model_variant: None,
-            provider_metadata: None,
-            tags: Vec::new(),
-        },
-        usage: None,
-        finish: None,
-    }
-}
-
-fn build_extra_message_parts(
-    part_ids: impl IntoIterator<Item = i64>,
-    message_id: i64,
-    created_at: chrono::DateTime<Utc>,
-    contents: Vec<PartContent>,
-) -> Vec<MessagePart> {
-    contents
-        .into_iter()
-        .zip(part_ids)
-        .enumerate()
-        .map(|(index, (content, part_id))| {
-            let mut part = MessagePart::with_content(
-                part_id,
-                message_id,
-                created_at,
-                part_status(&content),
-                content,
-            );
-            part.part_index = index as i32 + 1;
-            part
-        })
-        .collect()
-}
-
-fn tool_message_extra_part_contents(
+fn operation_blocks_from_tool_output(
     invocation: &ToolInvocation,
     details: &ToolOutput,
     attachments: &[ToolAttachment],
-    blocks: &[ToolResultBlock],
-) -> Vec<PartContent> {
-    let mut contents = Vec::new();
+    output_text: &str,
+) -> Vec<OperationBlock> {
+    let mut blocks = text_result_blocks(output_text);
 
-    if let Some(file_change) = file_change_part_from_tool_output(invocation, details) {
-        contents.push(PartContent::FileChange(file_change));
-    }
-
-    if let Some(todo) = todo_part_from_tool_output(invocation, details) {
-        contents.push(PartContent::TodoList(todo));
-    }
-
-    let attachment_items = attachment_items_from_tool_output(details, attachments, blocks);
-    if !attachment_items.is_empty() {
-        contents.push(PartContent::attachments(attachment_items));
-    }
-
-    contents
-}
-
-fn file_change_part_from_tool_output(
-    invocation: &ToolInvocation,
-    details: &ToolOutput,
-) -> Option<FileChangePart> {
     match crate::tool::ToolPayloadOutput::from_tool_output(invocation.name.as_str(), details) {
         Some(crate::tool::ToolPayloadOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
-            Some(FileChangePart { changes })
+            blocks.push(OperationBlock::FileChanges { changes });
         }
-        _ => None,
+        Some(crate::tool::ToolPayloadOutput::TodoWrite { items }) if !items.is_empty() => {
+            blocks.push(OperationBlock::Checklist { items });
+        }
+        _ => {}
     }
-}
 
-fn todo_part_from_tool_output(
-    invocation: &ToolInvocation,
-    details: &ToolOutput,
-) -> Option<TodoListPart> {
-    match crate::tool::ToolPayloadOutput::from_tool_output(invocation.name.as_str(), details) {
-        Some(crate::tool::ToolPayloadOutput::TodoWrite { items }) => Some(TodoListPart { items }),
-        _ => None,
+    for block in details.content_blocks() {
+        blocks.push(block);
     }
+
+    for attachment in attachments {
+        blocks.push(OperationBlock::Media {
+            mime_type: attachment.mime.clone(),
+            artifact: crate::message::ArtifactRef {
+                uri: attachment_source_uri(&attachment.source),
+                mime: attachment.mime.clone(),
+                name: attachment
+                    .filename
+                    .clone()
+                    .or_else(|| attachment.title.clone()),
+                size_bytes: attachment.size_bytes,
+                sha256: attachment.sha256.clone(),
+            },
+        });
+    }
+
+    dedupe_operation_blocks(blocks)
 }
 
 fn loaded_tools_from_tool_output(details: &ToolOutput) -> Option<Vec<String>> {
@@ -4631,44 +4683,37 @@ fn custom_payload_value(details: &ToolOutput) -> Option<serde_json::Value> {
     details.to_json_payload()
 }
 
-fn attachment_items_from_tool_output(
-    details: &ToolOutput,
-    attachments: &[ToolAttachment],
-    blocks: &[ToolResultBlock],
-) -> Vec<AttachmentItem> {
-    let mut items = Vec::new();
-
-    for attachment in attachments {
-        push_unique_attachment_item(&mut items, attachment.clone());
-    }
-
-    let payload_blocks = details.content_blocks();
-    let block_source = if payload_blocks.is_empty() {
-        blocks
-    } else {
-        payload_blocks.as_slice()
-    };
-
-    for block in block_source {
-        if let Some(item) = block.to_attachment_item() {
-            push_unique_attachment_item(&mut items, item);
+fn attachment_source_uri(source: &crate::message::AttachmentSource) -> String {
+    match source {
+        crate::message::AttachmentSource::Url { url }
+        | crate::message::AttachmentSource::DataUrl { url } => url.clone(),
+        crate::message::AttachmentSource::LocalPath { path } => path.clone(),
+        crate::message::AttachmentSource::Base64 { .. } => {
+            "data:application/octet-stream;base64".to_string()
         }
+        crate::message::AttachmentSource::FileId { file_id } => format!("file:{file_id}"),
     }
-
-    items
 }
 
-fn push_unique_attachment_item(items: &mut Vec<AttachmentItem>, item: AttachmentItem) {
-    if !items.contains(&item) {
-        items.push(item);
+fn dedupe_operation_blocks(blocks: Vec<OperationBlock>) -> Vec<OperationBlock> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let key = serde_json::to_string(&block).unwrap_or_else(|_| format!("{:?}", block));
+        if seen.insert(key) {
+            deduped.push(block);
+        }
     }
+    deduped
 }
 
 fn part_status(content: &PartContent) -> ExecutionStatus {
     match content {
-        PartContent::ToolExecution(tool) => tool.status(),
-        PartContent::PermissionRequest(permission) => permission.status(),
-        PartContent::UserInputRequest(request) => request.status(),
+        PartContent::Operation(tool) => tool.status(),
+        PartContent::Request(crate::message::RequestPart::Permission(permission)) => {
+            permission.status()
+        }
+        PartContent::Request(crate::message::RequestPart::UserInput(request)) => request.status(),
         _ => ExecutionStatus::Completed,
     }
 }
@@ -4684,7 +4729,7 @@ fn build_permission_part(
         message_id,
         Utc::now(),
         permission.status(),
-        PartContent::PermissionRequest(permission),
+        PartContent::permission_request(permission),
     );
     part.operation_id = Some(operation_id.to_string());
     part
@@ -4701,7 +4746,7 @@ fn build_user_input_part(
         message_id,
         Utc::now(),
         request.status(),
-        PartContent::UserInputRequest(request),
+        PartContent::user_input_request(request),
     );
     part.operation_id = Some(operation_id.to_string());
     part
@@ -4719,11 +4764,11 @@ fn tool_name(invocation: &ToolInvocation) -> String {
     name.clone()
 }
 
-fn text_result_blocks(output_text: &str) -> Vec<ToolResultBlock> {
+fn text_result_blocks(output_text: &str) -> Vec<OperationBlock> {
     if output_text.trim().is_empty() {
         Vec::new()
     } else {
-        vec![ToolResultBlock::Text {
+        vec![OperationBlock::Text {
             text: output_text.to_string(),
         }]
     }
@@ -5036,9 +5081,8 @@ mod tests {
     use crate::event::EventKind;
     use crate::message::{
         ApplyPatchToolInput, AskUserToolInput, AttachmentSource, TodoItem, TodoPriority,
-        TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolOutput,
-        ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
-        UserInputReplyKind,
+        TodoStatus, TodoWriteToolInput, ToolAttachment, ToolOutput, ToolSearchToolInput,
+        UserInputOption, UserInputQuestion, UserInputReply, UserInputReplyKind,
     };
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
@@ -5393,104 +5437,98 @@ mod tests {
                 .unwrap_or_default();
 
             let tool_result = request.messages.iter().find_map(|message| {
-                if message.role != Role::Tool {
-                    return None;
-                }
                 message.parts.iter().find_map(|part| {
                     if part.operation_id.as_deref() != Some("call_apply_patch_1") {
                         return None;
                     }
-                    match part.content.as_ref() {
-                        Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                            output_text,
-                            ..
-                        })) => Some(Ok(output_text.clone())),
-                        Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
-                            error_message,
-                            ..
-                        })) => Some(Err(error_message.clone())),
+                    let operation = match part.content.as_ref() {
+                        Some(PartContent::Operation(operation)) => operation,
+                        _ => return None,
+                    };
+                    match part.status {
+                        ExecutionStatus::Completed => Some(Ok(operation.model_output.text.clone())),
+                        ExecutionStatus::Failed => Some(Err(operation
+                            .error_message()
+                            .unwrap_or(operation.model_output.text.as_str())
+                            .to_string())),
                         _ => None,
                     }
                 })
             });
             let user_input_result = request.messages.iter().find_map(|message| {
-                if message.role != Role::Tool {
-                    return None;
-                }
                 message.parts.iter().find_map(|part| {
                     if part.operation_id.as_deref() != Some("call_ask_user_1") {
                         return None;
                     }
-                    match part.content.as_ref() {
-                        Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                            details,
-                            ..
-                        })) => {
-                            let answers = answers_from_tool_output(details)?;
+                    let operation = match part.content.as_ref() {
+                        Some(PartContent::Operation(operation)) => operation,
+                        _ => return None,
+                    };
+                    match part.status {
+                        ExecutionStatus::Completed => {
+                            let answers = answers_from_tool_output(&operation.details)?;
                             answers
                                 .get("model_choice")
                                 .and_then(|values| values.first().cloned())
                                 .map(Ok)
                         }
-                        Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
-                            error_message,
-                            ..
-                        })) => Some(Err(error_message.clone())),
+                        ExecutionStatus::Failed => Some(Err(operation
+                            .error_message()
+                            .unwrap_or(operation.model_output.text.as_str())
+                            .to_string())),
                         _ => None,
                     }
                 })
             });
             let todo_result = request.messages.iter().find_map(|message| {
-                if message.role != Role::Tool {
-                    return None;
-                }
                 message.parts.iter().find_map(|part| {
                     if part.operation_id.as_deref() != Some("call_todo_1") {
                         return None;
                     }
-                    match part.content.as_ref() {
-                        Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                            ..
-                        })) => Some(Ok(())),
-                        Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
-                            error_message,
-                            ..
-                        })) => Some(Err(error_message.clone())),
+                    let operation = match part.content.as_ref() {
+                        Some(PartContent::Operation(operation)) => operation,
+                        _ => return None,
+                    };
+                    match part.status {
+                        ExecutionStatus::Completed => Some(Ok(())),
+                        ExecutionStatus::Failed => Some(Err(operation
+                            .error_message()
+                            .unwrap_or(operation.model_output.text.as_str())
+                            .to_string())),
                         _ => None,
                     }
                 })
             });
             let stream_tool_result = request.messages.iter().find_map(|message| {
-                if message.role != Role::Tool {
-                    return None;
-                }
                 message.parts.iter().find_map(|part| {
                     if part.operation_id.as_deref() != Some("call_stream_tool_1") {
                         return None;
                     }
-                    match part.content.as_ref() {
-                        Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                            output_text,
-                            ..
-                        })) => Some(Ok(output_text.clone())),
-                        Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
-                            error_message,
-                            ..
-                        })) => Some(Err(error_message.clone())),
+                    let operation = match part.content.as_ref() {
+                        Some(PartContent::Operation(operation)) => operation,
+                        _ => return None,
+                    };
+                    match part.status {
+                        ExecutionStatus::Completed => Some(Ok(operation.model_output.text.clone())),
+                        ExecutionStatus::Failed => Some(Err(operation
+                            .error_message()
+                            .unwrap_or(operation.model_output.text.as_str())
+                            .to_string())),
                         _ => None,
                     }
                 })
             });
             let apply_patch_tool_loaded = request.messages.iter().any(|message| {
                 message.parts.iter().any(|part| {
-                    let details = match part.content.as_ref() {
-                        Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                            details,
-                            ..
-                        })) => details,
+                    let operation = match part.content.as_ref() {
+                        Some(PartContent::Operation(operation))
+                            if part.status == ExecutionStatus::Completed =>
+                        {
+                            operation
+                        }
                         _ => return false,
                     };
-                    loaded_tools_from_tool_output(details).is_some_and(|loaded_tools| {
+                    loaded_tools_from_tool_output(&operation.details).is_some_and(|loaded_tools| {
                         loaded_tools.iter().any(|name| name == "apply_patch")
                     })
                 })
@@ -6210,7 +6248,9 @@ mod tests {
             .iter()
             .flat_map(|message| message.parts.iter())
             .find_map(|part| match part.content.as_ref() {
-                Some(PartContent::PermissionRequest(request)) if request.reply.is_none() => {
+                Some(PartContent::Request(crate::message::RequestPart::Permission(request)))
+                    if request.reply.is_none() =>
+                {
                     Some(request.request.request_id.clone())
                 }
                 _ => None,
@@ -6735,10 +6775,11 @@ mod tests {
                     .iter()
                     .flat_map(|message| message.parts.iter())
                     .find_map(|part| match part.content.as_ref() {
-                        Some(crate::message::PartContent::ToolExecution(
-                            ToolExecutionPart::InProgress { output_text, .. },
-                        )) if part.operation_id.as_deref() == Some("call_stream_tool_1") => {
-                            Some(output_text.clone())
+                        Some(crate::message::PartContent::Operation(operation))
+                            if part.operation_id.as_deref() == Some("call_stream_tool_1")
+                                && part.status == ExecutionStatus::InProgress =>
+                        {
+                            Some(operation.model_output.text.clone())
                         }
                         _ => None,
                     })
@@ -6762,10 +6803,11 @@ mod tests {
             .iter()
             .flat_map(|message| message.parts.iter())
             .find_map(|part| match part.content.as_ref() {
-                Some(crate::message::PartContent::ToolExecution(
-                    ToolExecutionPart::Completed { output_text, .. },
-                )) if part.operation_id.as_deref() == Some("call_stream_tool_1") => {
-                    Some(output_text.clone())
+                Some(crate::message::PartContent::Operation(operation))
+                    if part.operation_id.as_deref() == Some("call_stream_tool_1")
+                        && part.status == ExecutionStatus::Completed =>
+                {
+                    Some(operation.model_output.text.clone())
                 }
                 _ => None,
             })
@@ -6895,9 +6937,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_message_extra_part_contents_materialize_mcp_resources_as_attachments() {
+    fn operation_blocks_materialize_mcp_resources_as_attachment_blocks() {
         let invocation = ToolInvocation::new("resource_tool", Default::default());
-        let contents = tool_message_extra_part_contents(
+        let blocks = operation_blocks_from_tool_output(
             &invocation,
             &ToolOutput::from_json_payload(Some(&serde_json::json!({
                 "server": "fixtures",
@@ -6931,15 +6973,15 @@ mod tests {
                 duration_ms: None,
                 page_count: None,
             }],
-            &[],
+            "",
         );
 
-        assert_eq!(contents.len(), 1);
-        let Some(PartContent::Attachment(part)) = contents.first() else {
-            panic!("expected attachment part");
-        };
-        assert_eq!(part.attachments.len(), 3);
-        assert!(part.attachments.iter().any(|item| {
+        let attachments = blocks
+            .iter()
+            .filter_map(OperationBlock::to_attachment_item)
+            .collect::<Vec<_>>();
+        assert_eq!(attachments.len(), 3);
+        assert!(attachments.iter().any(|item| {
             item.kind == crate::message::AttachmentKind::Image
                 && matches!(
                     item.source,
@@ -6947,7 +6989,7 @@ mod tests {
                         if url == "https://example.com/chart.png"
                 )
         }));
-        assert!(part.attachments.iter().any(|item| {
+        assert!(attachments.iter().any(|item| {
             item.kind == crate::message::AttachmentKind::Pdf
                 && matches!(
                     item.source,
@@ -6955,7 +6997,7 @@ mod tests {
                         if url == "https://example.com/report.pdf"
                 )
         }));
-        assert!(part.attachments.iter().any(|item| {
+        assert!(attachments.iter().any(|item| {
             item.kind == crate::message::AttachmentKind::Audio
                 && matches!(
                     item.source,
@@ -7245,7 +7287,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("reviewer.md"),
-            "---\ndescription: reviewer\nmode: all\nallowed_entries:\n  - read\n  - grep\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted/scripted-model\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
+            "---\ndescription: reviewer\nmode: all\nallowed_entries:\n  - read\n  - grep\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted/scripted-model/audit\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
         )
         .expect("write reviewer profile");
         let service = build_manager(
@@ -7290,10 +7332,7 @@ mod tests {
             spawned.model_provider_id.as_deref(),
             Some(scripted_provider_id().as_str())
         );
-        assert_eq!(
-            spawned.model_id.as_deref(),
-            Some(scripted_model_id().as_str())
-        );
+        assert_eq!(spawned.model_id.as_deref(), Some("scripted-model/audit"));
 
         let child = service
             .get_session(spawned.session.id)
@@ -7343,7 +7382,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("planner.md"),
-            "---\ndescription: planner\nallowed_entries:\n  - read\n  - grep\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  entries:\n    names:\n      bash: ask\n    rules:\n      bash:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted/scripted-model\naliases: [\"plan\"]\n---\nYou are a precise planner.",
+            "---\ndescription: planner\nallowed_entries:\n  - read\n  - grep\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  entries:\n    names:\n      bash: ask\n    rules:\n      bash:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted/scripted-model/plan\naliases: [\"plan\"]\n---\nYou are a precise planner.",
         )
         .expect("write planner profile");
         let service = build_manager(
@@ -7421,7 +7460,7 @@ mod tests {
         );
         assert_eq!(
             session.runtime.execution.model_id.as_deref(),
-            Some(scripted_model_id().as_str())
+            Some("scripted-model/plan")
         );
         let user_message = session
             .messages
@@ -7433,7 +7472,70 @@ mod tests {
             user_message.metadata.model_provider_id,
             scripted_provider_id().as_str()
         );
-        assert_eq!(user_message.metadata.model_id, scripted_model_id().as_str());
+        assert_eq!(user_message.metadata.model_id, "scripted-model/plan");
+    }
+
+    #[tokio::test]
+    async fn switch_session_agent_pushes_and_restores_runtime_profile() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let session = service
+            .create_session(SessionCreateRequest {
+                title: "agent switch".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let switched = service
+            .switch_session_agent(session.id, Some("planner".to_string()), true)
+            .await
+            .expect("switch to planner");
+        assert_eq!(switched.previous_agent, None);
+        assert_eq!(switched.current_agent.as_deref(), Some("planner"));
+        assert_eq!(switched.stack_depth, 1);
+
+        let loaded = service
+            .get_session(session.id)
+            .await
+            .expect("load switched session");
+        assert_eq!(
+            loaded.runtime.execution.agent_profile.as_deref(),
+            Some("planner")
+        );
+        assert_eq!(loaded.runtime.execution.agent_stack, vec![None]);
+        assert!(
+            loaded
+                .runtime
+                .execution
+                .system_prompt_override
+                .as_deref()
+                .is_some_and(|prompt| prompt.contains("planning agent"))
+        );
+
+        let restored = service
+            .restore_session_agent(session.id)
+            .await
+            .expect("restore previous agent");
+        assert!(restored.restored);
+        assert_eq!(restored.previous_agent.as_deref(), Some("planner"));
+        assert_eq!(restored.current_agent, None);
+        assert_eq!(restored.stack_depth, 0);
+
+        let loaded = service
+            .get_session(session.id)
+            .await
+            .expect("load restored session");
+        assert_eq!(loaded.runtime.execution.agent_profile, None);
+        assert!(loaded.runtime.execution.agent_stack.is_empty());
+        assert_eq!(loaded.runtime.execution.system_prompt_override, None);
+        assert!(loaded.runtime.allowed_tools().is_empty());
     }
 
     #[tokio::test]
@@ -8196,55 +8298,72 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn append_only_prefix_digest_stable_across_different_trailing_user_message() {
-        use crate::session::history::ProviderTranscriptBuilder;
-        use crate::session::history::fold_history;
+    #[test]
+    fn append_only_prefix_digest_stable_across_different_trailing_user_message() {
+        std::thread::Builder::new()
+            .name("append-only-prefix-digest".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("test runtime");
+                runtime.block_on(async {
+                    use crate::session::history::ProviderTranscriptBuilder;
+                    use crate::session::history::fold_history;
 
-        let workspace = TempWorkspace::new();
-        let service = build_manager(
-            &workspace.root,
-            PermissionPolicy::allow_all(),
-            SessionManagerConfig::default(),
-        )
-        .await;
+                    let workspace = TempWorkspace::new();
+                    let service = build_manager(
+                        &workspace.root,
+                        PermissionPolicy::allow_all(),
+                        SessionManagerConfig::default(),
+                    )
+                    .await;
 
-        async fn run_prefix_then(service: &SessionManager, trailing: &str) -> blake3::Hash {
-            let created = service
-                .create_session(SessionCreateRequest {
-                    title: "digest".into(),
-                    parent_session_id: None,
-                })
-                .await
-                .expect("create session");
-            service
-                .submit_user_turn(SessionUserTurnRequest {
-                    session_id: created.id,
-                    options: run_options(),
-                    parts: vec![PartContent::text("shared prefix")],
-                })
-                .await
-                .expect("first turn");
-            let records = service
-                .list_session_events(created.id)
-                .await
-                .expect("records");
-            // Take only the closed prefix (everything before the trailing
-            // edit) — for this single-turn test the entire prefix is closed.
-            let prefix_records: Vec<_> = records.to_vec();
-            let _ = trailing; // Trailing message is intentionally unused: we compare digests of the closed prefix only.
-            let transcript = fold_history::<ProviderTranscriptBuilder>(prefix_records.as_slice())
-                .expect("fold")
-                .expect("transcript");
-            transcript.digest()
-        }
+                    async fn run_prefix_then(
+                        service: &SessionManager,
+                        trailing: &str,
+                    ) -> blake3::Hash {
+                        let created = service
+                            .create_session(SessionCreateRequest {
+                                title: "digest".into(),
+                                parent_session_id: None,
+                            })
+                            .await
+                            .expect("create session");
+                        service
+                            .submit_user_turn(SessionUserTurnRequest {
+                                session_id: created.id,
+                                options: run_options(),
+                                parts: vec![PartContent::text("shared prefix")],
+                            })
+                            .await
+                            .expect("first turn");
+                        let records = service
+                            .list_session_events(created.id)
+                            .await
+                            .expect("records");
+                        // Trailing message is intentionally unused: compare only the closed prefix.
+                        let prefix_records: Vec<_> = records.to_vec();
+                        let _ = trailing;
+                        let transcript =
+                            fold_history::<ProviderTranscriptBuilder>(prefix_records.as_slice())
+                                .expect("fold")
+                                .expect("transcript");
+                        transcript.digest()
+                    }
 
-        let a = run_prefix_then(&service, "follow-up A").await;
-        let b = run_prefix_then(&service, "follow-up B").await;
-        assert_eq!(
-            a, b,
-            "prefix digest must be stable across different trailing messages"
-        );
+                    let a = run_prefix_then(&service, "follow-up A").await;
+                    let b = run_prefix_then(&service, "follow-up B").await;
+                    assert_eq!(
+                        a, b,
+                        "prefix digest must be stable across different trailing messages"
+                    );
+                });
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("test thread should finish");
     }
 
     #[tokio::test]

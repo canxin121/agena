@@ -31,6 +31,8 @@ pub enum ExecutionStatus {
     Completed,
     #[sea_orm(num_value = 4)]
     Failed,
+    #[sea_orm(num_value = 5)]
+    Cancelled,
 }
 
 impl ExecutionStatus {
@@ -43,7 +45,11 @@ impl ExecutionStatus {
         matches!(
             (self, next),
             (Self::Pending, Self::InProgress | Self::Failed)
-                | (Self::InProgress, Self::Completed | Self::Failed)
+                | (Self::Pending, Self::Cancelled)
+                | (
+                    Self::InProgress,
+                    Self::Completed | Self::Failed | Self::Cancelled
+                )
         )
     }
 }
@@ -86,21 +92,11 @@ pub enum PartKind {
     #[sea_orm(num_value = 2)]
     Reasoning,
     #[sea_orm(num_value = 3)]
-    ToolExecution,
+    Operation,
     #[sea_orm(num_value = 4)]
-    CommandExecution,
-    #[sea_orm(num_value = 5)]
-    FileChange,
-    #[sea_orm(num_value = 6)]
-    WebSearch,
-    #[sea_orm(num_value = 7)]
-    TodoList,
-    #[sea_orm(num_value = 8)]
-    Error,
-    #[sea_orm(num_value = 9)]
     Attachment,
-    #[sea_orm(num_value = 10)]
-    PermissionRequest,
-    #[sea_orm(num_value = 11)]
-    UserInputRequest,
+    #[sea_orm(num_value = 5)]
+    Request,
+    #[sea_orm(num_value = 6)]
+    Error,
 }

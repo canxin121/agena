@@ -10,15 +10,14 @@
 ///   - respecting `MESSAGE_TAG_TOOL_RESULT_PRUNED` and
 ///     `MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED` metadata tags
 ///   - resolving the tool-call ID from `part.operation_id` with fallback
-///   - rendering `TodoList` parts as plain text (skipped inside tool messages)
+///   - carrying operation outputs through one provider-neutral projection path
 ///   - emitting an empty output for still-pending / in-progress tool executions
 use base64::Engine as _;
 
 use crate::message::{
-    AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, TodoListPart,
-    TodoPriority, TodoStatus, ToolExecutionPart, ToolInvocation,
+    AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, Message, OperationPart,
+    PartContent, ToolInvocation,
 };
-use crate::role::Role;
 use crate::session::{MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_TOOL_RESULT_PRUNED};
 
 pub(crate) const PRUNED_TOOL_RESULT_PLACEHOLDER: &str = "[Old tool result content cleared]";
@@ -64,8 +63,7 @@ impl WirePart {
 
 /// Normalise a [`Message`] into a flat list of provider-ready [`WirePart`]s.
 pub fn project(message: &Message) -> Vec<WirePart> {
-    let pruned_tool_result =
-        message.role == Role::Tool && message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED);
+    let pruned_tool_result = message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED);
     let stripped_attachments = message
         .metadata
         .has_tag(MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED);
@@ -99,50 +97,32 @@ pub fn project(message: &Message) -> Vec<WirePart> {
                     }
                 }
             }
-            PartContent::TodoList(todo) if message.role != Role::Tool => {
-                parts.push(WirePart::Text {
-                    text: render_todo_list(todo),
-                });
-            }
-            PartContent::TodoList(_) => {}
-            PartContent::ToolExecution(exec) => {
+            PartContent::Operation(exec) => {
                 let call_id = part
                     .operation_id
                     .clone()
                     .unwrap_or_else(|| exec.call_id().to_string());
 
-                if message.role == Role::Tool {
+                let (name, arguments_json) = project_tool_invocation(exec, message);
+                parts.push(WirePart::ToolCall {
+                    id: call_id.clone(),
+                    name: name.clone(),
+                    arguments_json,
+                });
+
+                if matches!(
+                    part.status,
+                    ExecutionStatus::Completed | ExecutionStatus::Failed
+                ) {
                     let output_json = if pruned_tool_result {
                         PRUNED_TOOL_RESULT_PLACEHOLDER.to_owned()
                     } else {
-                        match exec {
-                            ToolExecutionPart::Pending { .. }
-                            | ToolExecutionPart::InProgress { .. } => String::new(),
-                            ToolExecutionPart::Completed { output_text, .. } => output_text.clone(),
-                            ToolExecutionPart::Failed {
-                                output_text,
-                                error_message,
-                                ..
-                            } => {
-                                if output_text.is_empty() {
-                                    error_message.clone()
-                                } else {
-                                    output_text.clone()
-                                }
-                            }
-                        }
+                        project_operation_output(part.status, exec)
                     };
                     parts.push(WirePart::ToolResult {
                         tool_call_id: call_id,
-                        tool_name: exec.invocation().name.clone(),
+                        tool_name: name,
                         output_json,
-                    });
-                } else {
-                    let (name, arguments_json) = project_tool_invocation(exec, message);
-                    parts.push(WirePart::ToolCall {
-                        id: call_id,
-                        name,
-                        arguments_json,
                     });
                 }
             }
@@ -158,7 +138,7 @@ pub fn project(message: &Message) -> Vec<WirePart> {
 pub(crate) fn project_text_lossy(message: &Message) -> String {
     let parts = project(message);
     if parts.is_empty() {
-        if message.role == Role::Tool && message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
+        if message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
             return PRUNED_TOOL_RESULT_PLACEHOLDER.to_owned();
         }
         message.as_text_lossy()
@@ -175,28 +155,6 @@ pub fn parts_text_lossy(parts: &[WirePart]) -> String {
         .map(WirePart::as_text_lossy)
         .collect::<Vec<_>>()
         .join("")
-}
-
-pub fn tool_results(parts: &[WirePart]) -> Vec<(String, String)> {
-    parts
-        .iter()
-        .filter_map(|part| match part {
-            WirePart::ToolResult {
-                tool_call_id,
-                output_json,
-                ..
-            } => Some((tool_call_id.clone(), output_json.clone())),
-            _ => None,
-        })
-        .collect()
-}
-
-pub fn non_tool_result_parts(parts: &[WirePart]) -> Vec<WirePart> {
-    parts
-        .iter()
-        .filter(|part| !matches!(part, WirePart::ToolResult { .. }))
-        .cloned()
-        .collect()
 }
 
 // ─── Attachment helpers ───────────────────────────────────────────────────────
@@ -355,17 +313,31 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
-fn project_tool_invocation(exec: &ToolExecutionPart, _message: &Message) -> (String, String) {
+fn project_tool_invocation(exec: &OperationPart, _message: &Message) -> (String, String) {
     invocation_name_and_args(exec.invocation())
 }
 
 fn invocation_name_and_args(invocation: &ToolInvocation) -> (String, String) {
-    let ToolInvocation { name, input } = invocation;
+    let ToolInvocation { name, input, .. } = invocation;
     let json_value: serde_json::Value = input.clone().into();
     (
         name.clone(),
         serde_json::to_string(&json_value).unwrap_or_else(|_| "{}".to_owned()),
     )
+}
+
+fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -> String {
+    match status {
+        ExecutionStatus::Pending | ExecutionStatus::InProgress | ExecutionStatus::Cancelled => {
+            String::new()
+        }
+        ExecutionStatus::Completed => exec.model_output.text.clone(),
+        ExecutionStatus::Failed => exec
+            .output_text()
+            .or_else(|| exec.error_message())
+            .unwrap_or_default()
+            .to_string(),
+    }
 }
 
 fn attachment_file_content_value(item: &AttachmentItem) -> Option<serde_json::Value> {
@@ -417,39 +389,6 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
     Some((mime, encoded.to_owned()))
 }
 
-fn render_todo_list(todo: &TodoListPart) -> String {
-    if todo.items.is_empty() {
-        return "Todo list is empty.".to_string();
-    }
-    let mut lines = vec!["Todo list:".to_string()];
-    for item in &todo.items {
-        lines.push(format!(
-            "- [{}][{}] {}",
-            todo_status_label(item.status),
-            todo_priority_label(item.priority),
-            item.content
-        ));
-    }
-    lines.join("\n")
-}
-
-fn todo_status_label(status: TodoStatus) -> &'static str {
-    match status {
-        TodoStatus::Pending => "pending",
-        TodoStatus::InProgress => "in_progress",
-        TodoStatus::Completed => "completed",
-        TodoStatus::Cancelled => "cancelled",
-    }
-}
-
-fn todo_priority_label(priority: TodoPriority) -> &'static str {
-    match priority {
-        TodoPriority::High => "high",
-        TodoPriority::Medium => "medium",
-        TodoPriority::Low => "low",
-    }
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -459,97 +398,16 @@ mod tests {
     use super::*;
     use crate::message::{
         AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, MessageMetadata,
-        MessagePart, MessageStatus, TodoItem, ToolOutput,
+        MessagePart, MessageStatus, ToolOutput,
     };
+    use crate::role::Role;
     use crate::session::{MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_TOOL_RESULT_PRUNED};
-
-    #[test]
-    fn project_renders_non_tool_todo_lists_as_text() {
-        let message = crate::message::Message {
-            id: 7,
-            role: Role::Assistant,
-            state: MessageStatus::Completed,
-            parts: vec![MessagePart::with_content(
-                1,
-                7,
-                Utc::now(),
-                ExecutionStatus::Completed,
-                PartContent::TodoList(crate::message::TodoListPart {
-                    items: vec![TodoItem {
-                        content: "Inspect tool behavior".to_string(),
-                        status: TodoStatus::InProgress,
-                        priority: TodoPriority::High,
-                    }],
-                }),
-            )],
-            created_at: Utc::now(),
-            metadata: MessageMetadata::default(),
-            usage: None,
-            finish: None,
-        };
-
-        let parts = project(&message);
-        assert_eq!(
-            parts,
-            vec![WirePart::Text {
-                text: "Todo list:\n- [in_progress][high] Inspect tool behavior".to_string()
-            }]
-        );
-    }
-
-    #[test]
-    fn project_skips_todo_list_inside_tool_message() {
-        let message = crate::message::Message {
-            id: 8,
-            role: Role::Tool,
-            state: MessageStatus::Completed,
-            parts: vec![
-                MessagePart::with_content(
-                    1,
-                    8,
-                    Utc::now(),
-                    ExecutionStatus::Completed,
-                    PartContent::ToolExecution(crate::message::ToolExecutionPart::Completed {
-                        call_id: 3,
-                        invocation: crate::tool::ToolPayloadInput::ToolSearch(
-                            crate::message::ToolSearchToolInput {
-                                query: "patch".to_string(),
-                                load: vec!["apply_patch".to_string()],
-                                limit: None,
-                            },
-                        )
-                        .into_invocation(),
-                        output_text: "Loaded deferred tools.".to_string(),
-                        blocks: Vec::new(),
-                        attachments: Vec::new(),
-                        details: ToolOutput::default(),
-                        lifecycle: crate::message::TimeRange::default(),
-                    }),
-                ),
-                MessagePart::with_content(
-                    2,
-                    8,
-                    Utc::now(),
-                    ExecutionStatus::Completed,
-                    PartContent::TodoList(crate::message::TodoListPart { items: Vec::new() }),
-                ),
-            ],
-            created_at: Utc::now(),
-            metadata: MessageMetadata::default(),
-            usage: None,
-            finish: None,
-        };
-
-        let parts = project(&message);
-        assert_eq!(parts.len(), 1);
-        assert!(matches!(parts[0], WirePart::ToolResult { .. }));
-    }
 
     #[test]
     fn project_keeps_tool_attachment_images() {
         let message = crate::message::Message {
             id: 9,
-            role: Role::Tool,
+            role: Role::Assistant,
             state: MessageStatus::Completed,
             parts: vec![
                 MessagePart::with_content(
@@ -557,18 +415,22 @@ mod tests {
                     9,
                     Utc::now(),
                     ExecutionStatus::Completed,
-                    PartContent::ToolExecution(crate::message::ToolExecutionPart::Completed {
-                        call_id: 4,
-                        invocation: crate::message::ToolInvocation {
+                    PartContent::Operation(crate::message::OperationPart::completed(
+                        4,
+                        crate::message::ToolInvocation {
                             name: "resource_tool".to_string(),
+                            plugin_name: Some("resource_plugin".to_string()),
                             input: crate::message::StructuredObject::default(),
                         },
-                        output_text: "resource ready".to_string(),
-                        blocks: Vec::new(),
-                        attachments: Vec::new(),
-                        details: ToolOutput::default(),
-                        lifecycle: crate::message::TimeRange::default(),
-                    }),
+                        "resource ready",
+                        Vec::new(),
+                        Vec::new(),
+                        ToolOutput::default(),
+                        crate::message::TimeRange {
+                            start_ms: 0,
+                            end_ms: Some(1),
+                        },
+                    )),
                 ),
                 MessagePart::with_content(
                     2,
@@ -599,10 +461,11 @@ mod tests {
         };
 
         let parts = project(&message);
-        assert_eq!(parts.len(), 2);
-        assert!(matches!(parts[0], WirePart::ToolResult { .. }));
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(parts[0], WirePart::ToolCall { .. }));
+        assert!(matches!(parts[1], WirePart::ToolResult { .. }));
         assert_eq!(
-            parts[1],
+            parts[2],
             WirePart::Attachment {
                 item: AttachmentItem {
                     kind: AttachmentKind::Image,
@@ -627,7 +490,7 @@ mod tests {
     fn project_replaces_pruned_tool_result_with_placeholder() {
         let mut message = crate::message::Message {
             id: 11,
-            role: Role::Tool,
+            role: Role::Assistant,
             state: MessageStatus::Completed,
             parts: vec![
                 MessagePart::with_content(
@@ -635,18 +498,22 @@ mod tests {
                     11,
                     Utc::now(),
                     ExecutionStatus::Completed,
-                    PartContent::ToolExecution(crate::message::ToolExecutionPart::Completed {
-                        call_id: 5,
-                        invocation: crate::message::ToolInvocation {
+                    PartContent::Operation(crate::message::OperationPart::completed(
+                        5,
+                        crate::message::ToolInvocation {
                             name: "resource_tool".to_string(),
+                            plugin_name: Some("resource_plugin".to_string()),
                             input: crate::message::StructuredObject::default(),
                         },
-                        output_text: "very long original output".to_string(),
-                        blocks: Vec::new(),
-                        attachments: Vec::new(),
-                        details: ToolOutput::default(),
-                        lifecycle: crate::message::TimeRange::default(),
-                    }),
+                        "very long original output",
+                        Vec::new(),
+                        Vec::new(),
+                        ToolOutput::default(),
+                        crate::message::TimeRange {
+                            start_ms: 0,
+                            end_ms: Some(1),
+                        },
+                    )),
                 ),
                 MessagePart::with_content(
                     2,
@@ -684,11 +551,18 @@ mod tests {
         let parts = project(&message);
         assert_eq!(
             parts,
-            vec![WirePart::ToolResult {
-                tool_call_id: "call_5".to_string(),
-                tool_name: "resource_tool".to_string(),
-                output_json: PRUNED_TOOL_RESULT_PLACEHOLDER.to_string(),
-            }]
+            vec![
+                WirePart::ToolCall {
+                    id: "call_5".to_string(),
+                    name: "resource_tool".to_string(),
+                    arguments_json: "{}".to_string(),
+                },
+                WirePart::ToolResult {
+                    tool_call_id: "call_5".to_string(),
+                    tool_name: "resource_tool".to_string(),
+                    output_json: PRUNED_TOOL_RESULT_PLACEHOLDER.to_string(),
+                },
+            ]
         );
     }
 

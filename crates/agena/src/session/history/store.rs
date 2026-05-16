@@ -824,37 +824,25 @@ impl SessionHistoryStore {
                             })?;
                     }
                 }
-                EventKind::ToolCallCompleted(payload) => {
-                    let synthetic_part = project_tool_result_part(payload)?;
-                    upsert_message_projection(
-                        &self.db,
-                        activity_message::Model {
-                            message_id: payload.message_id.raw(),
-                            session_id,
-                            role: Role::Tool,
-                            state: crate::message::ExecutionStatus::Completed,
-                            created_at_ms: payload.completed_at.timestamp_millis(),
-                            updated_at_ms: payload.completed_at.timestamp_millis(),
-                            metadata: Default::default(),
-                            usage: None,
-                            finish: None,
-                            part_count: 1,
-                            is_compacted: false,
-                        },
-                    )
-                    .await
-                    .map_err(|err| {
-                        DbErr::Custom(format!(
-                            "project tool message {}: {err}",
-                            payload.message_id.raw()
-                        ))
-                    })?;
-                    upsert_part_projection(&self.db, session_id, &synthetic_part)
+                EventKind::ToolCallIssued(payload) => {
+                    project_tool_call_issued(&self.db, session_id, payload)
                         .await
                         .map_err(|err| {
                             DbErr::Custom(format!(
-                                "project tool part {} for message {}: {err}",
-                                synthetic_part.id, synthetic_part.message_id
+                                "project tool call for message {} call {}: {err}",
+                                payload.message_id.raw(),
+                                payload.call_id
+                            ))
+                        })?;
+                }
+                EventKind::ToolCallCompleted(payload) => {
+                    update_tool_result_projection(&self.db, session_id, payload)
+                        .await
+                        .map_err(|err| {
+                            DbErr::Custom(format!(
+                                "project tool result for message {} call {}: {err}",
+                                payload.message_id.raw(),
+                                payload.call_id
                             ))
                         })?;
                 }
@@ -1071,6 +1059,21 @@ async fn upsert_part_projection(
         return Ok(());
     }
 
+    if let Some(operation_id) = part.operation_id.as_deref() {
+        let existing = activity_part::Entity::find()
+            .filter(activity_part::Column::MessageId.eq(part.message_id))
+            .filter(activity_part::Column::OperationId.eq(operation_id))
+            .all(db)
+            .await?;
+        for row in existing {
+            if row.part_id != part.id {
+                activity_part::Entity::delete_by_id(row.part_id)
+                    .exec(db)
+                    .await?;
+            }
+        }
+    }
+
     activity_part::ActiveModel {
         part_id: ActiveValue::Set(part.id),
         message_id: ActiveValue::Set(part.message_id),
@@ -1097,6 +1100,24 @@ async fn count_parts_for_message(db: &DatabaseConnection, message_id: i64) -> Re
         .await?)
 }
 
+async fn touch_message_projection(
+    db: &DatabaseConnection,
+    message_id: i64,
+    updated_at_ms: i64,
+) -> Result<(), DbErr> {
+    if let Some(message) = activity_message::Entity::find_by_id(message_id)
+        .one(db)
+        .await?
+    {
+        let part_count = count_parts_for_message(db, message_id).await? as i64;
+        let mut active: activity_message::ActiveModel = message.into();
+        active.updated_at_ms = ActiveValue::Set(updated_at_ms);
+        active.part_count = ActiveValue::Set(part_count);
+        active.update(db).await?;
+    }
+    Ok(())
+}
+
 fn project_system_notice_part(payload: &super::SystemNoticeAppended) -> MessagePart {
     let mut part = MessagePart::with_content(
         payload.message_id.raw(),
@@ -1109,20 +1130,167 @@ fn project_system_notice_part(payload: &super::SystemNoticeAppended) -> MessageP
     part
 }
 
-fn project_tool_result_part(payload: &super::ToolCallCompleted) -> Result<MessagePart, DbErr> {
-    let summary = match &payload.output {
+async fn project_tool_call_issued(
+    db: &DatabaseConnection,
+    session_id: i64,
+    payload: &super::ToolCallIssued,
+) -> Result<(), DbErr> {
+    if activity_message::Entity::find_by_id(payload.message_id.raw())
+        .one(db)
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
+
+    let part_id = synthetic_tool_call_part_id(payload.message_id.raw(), payload.call_id.as_str());
+    let part_index = count_parts_for_message(db, payload.message_id.raw()).await? as i32;
+    let invocation = crate::message::ToolInvocation {
+        name: payload.name.to_string(),
+        plugin_name: None,
+        input: crate::message::StructuredObject::try_from(payload.arguments.clone())
+            .unwrap_or_default(),
+    };
+    let mut part = MessagePart::with_content(
+        part_id,
+        payload.message_id.raw(),
+        payload.created_at,
+        crate::message::ExecutionStatus::Pending,
+        crate::message::PartContent::Operation(crate::message::OperationPart::pending(
+            0,
+            invocation,
+            payload.name.to_string(),
+            crate::message::TimeRange::default(),
+        )),
+    );
+    part.part_index = part_index;
+    part.operation_id = Some(payload.call_id.as_str().to_owned());
+
+    upsert_part_projection(db, session_id, &part).await?;
+    touch_message_projection(
+        db,
+        payload.message_id.raw(),
+        payload.created_at.timestamp_millis(),
+    )
+    .await
+}
+
+async fn update_tool_result_projection(
+    db: &DatabaseConnection,
+    session_id: i64,
+    payload: &super::ToolCallCompleted,
+) -> Result<(), DbErr> {
+    let existing = activity_part::Entity::find()
+        .filter(activity_part::Column::MessageId.eq(payload.message_id.raw()))
+        .filter(activity_part::Column::OperationId.eq(payload.call_id.as_str()))
+        .one(db)
+        .await?;
+
+    let output_text = match &payload.output {
         super::transcript::TranscriptToolOutput::Text { text } => text.clone(),
         super::transcript::TranscriptToolOutput::Pruned { replacement } => replacement.clone(),
         super::transcript::TranscriptToolOutput::Error { message } => message.clone(),
     };
+    let (part_id, part_index, call_id, invocation, mut lifecycle) = match existing {
+        Some(existing) => {
+            let (call_id, invocation, lifecycle) = match existing.content.as_ref() {
+                Some(crate::message::PartContent::Operation(operation)) => (
+                    operation.call_id,
+                    operation.invocation.clone(),
+                    operation.lifecycle.clone(),
+                ),
+                _ => (
+                    0,
+                    crate::message::ToolInvocation::new(
+                        payload.tool_name.as_str().to_owned(),
+                        crate::message::StructuredObject::default(),
+                    ),
+                    crate::message::TimeRange::default(),
+                ),
+            };
+            (
+                existing.part_id,
+                existing.part_index,
+                call_id,
+                invocation,
+                lifecycle,
+            )
+        }
+        None => (
+            synthetic_tool_call_part_id(payload.message_id.raw(), payload.call_id.as_str()),
+            count_parts_for_message(db, payload.message_id.raw()).await? as i32,
+            0,
+            crate::message::ToolInvocation::new(
+                payload.tool_name.as_str().to_owned(),
+                crate::message::StructuredObject::default(),
+            ),
+            crate::message::TimeRange::default(),
+        ),
+    };
+    if lifecycle.end_ms.is_none() {
+        lifecycle.end_ms = Some(payload.completed_at.timestamp_millis());
+    }
+
+    let status = match &payload.output {
+        super::transcript::TranscriptToolOutput::Error { .. } => {
+            crate::message::ExecutionStatus::Failed
+        }
+        super::transcript::TranscriptToolOutput::Text { .. }
+        | super::transcript::TranscriptToolOutput::Pruned { .. } => {
+            crate::message::ExecutionStatus::Completed
+        }
+    };
+    let content = match &payload.output {
+        super::transcript::TranscriptToolOutput::Error { message } => {
+            crate::message::PartContent::Operation(crate::message::OperationPart::failed(
+                call_id,
+                invocation,
+                message.clone(),
+                output_text,
+                Vec::new(),
+                Vec::new(),
+                crate::message::ToolOutput::default(),
+                lifecycle,
+            ))
+        }
+        super::transcript::TranscriptToolOutput::Text { .. }
+        | super::transcript::TranscriptToolOutput::Pruned { .. } => {
+            crate::message::PartContent::Operation(crate::message::OperationPart::completed(
+                call_id,
+                invocation,
+                output_text,
+                Vec::new(),
+                Vec::new(),
+                crate::message::ToolOutput::default(),
+                lifecycle,
+            ))
+        }
+    };
+
     let mut part = MessagePart::with_content(
-        payload.message_id.raw(),
+        part_id,
         payload.message_id.raw(),
         payload.completed_at,
-        crate::message::ExecutionStatus::Completed,
-        crate::message::PartContent::text(summary),
+        status,
+        content,
     );
-    part.part_index = 0;
+    part.part_index = part_index;
     part.operation_id = Some(payload.call_id.as_str().to_owned());
-    Ok(part)
+    upsert_part_projection(db, session_id, &part).await?;
+
+    touch_message_projection(
+        db,
+        payload.message_id.raw(),
+        payload.completed_at.timestamp_millis(),
+    )
+    .await
+}
+
+fn synthetic_tool_call_part_id(message_id: i64, call_id: &str) -> i64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in message_id.to_le_bytes().iter().chain(call_id.as_bytes()) {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    -((hash & 0x0000_3fff_ffff_ffff) as i64) - 1_000_000
 }

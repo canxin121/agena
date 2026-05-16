@@ -101,7 +101,6 @@ flash-clipboard-copy-failed = 剪貼簿複製失敗：{$error}
 message-role-user = 使用者
 message-role-assistant = 助手
 message-role-system = 系統
-message-role-tool = 工具
 
 message-state-pending = 待處理
 message-state-in-progress = 進行中

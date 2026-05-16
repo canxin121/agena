@@ -10,7 +10,7 @@ use smol_str::SmolStr;
 
 use crate::{
     message::{
-        AttachmentSource, Message, MessagePart, MessageSource, PartContent, ToolExecutionPart,
+        AttachmentSource, ExecutionStatus, Message, MessagePart, OperationPart, PartContent,
         ToolInvocation,
     },
     plugin::registry::PluginEntry as RegistryPluginEntry,
@@ -176,6 +176,8 @@ pub(crate) struct PromptTokenEstimate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingToolCallOutput {
     tool_call_id: String,
+    call_id: i64,
+    invocation: ToolInvocation,
     output_text: String,
 }
 
@@ -335,49 +337,19 @@ pub(crate) fn normalize_prompt_messages(messages: &[Message]) -> Vec<Message> {
     let mut next_synthetic_message_id = -1_i64;
 
     for message in messages {
-        match message.role {
-            Role::Tool => {
-                let tool_call_ids = tool_result_ids(message);
-                if !tool_call_ids.is_empty() {
-                    let matched_tool_call_ids = tool_call_ids
-                        .into_iter()
-                        .filter(|tool_call_id| {
-                            pending_tool_outputs
-                                .iter()
-                                .any(|pending| pending.tool_call_id == *tool_call_id)
-                        })
-                        .collect::<HashSet<_>>();
-                    if !matched_tool_call_ids.is_empty() {
-                        pending_tool_outputs.retain(|pending| {
-                            !matched_tool_call_ids.contains(pending.tool_call_id.as_str())
-                        });
-                        append_normalized_prompt_tool_messages(
-                            &mut normalized,
-                            message,
-                            &matched_tool_call_ids,
-                            &mut next_synthetic_message_id,
-                        );
-                    }
-                } else {
-                    flush_synthetic_tool_results(
-                        &mut normalized,
-                        &mut pending_tool_outputs,
-                        &mut next_synthetic_message_id,
-                    );
-                    normalized.push(message.clone());
-                }
-            }
-            _ => {
-                flush_synthetic_tool_results(
-                    &mut normalized,
-                    &mut pending_tool_outputs,
-                    &mut next_synthetic_message_id,
-                );
-                normalized.push(message.clone());
-                if message.role == Role::Assistant {
-                    extend_pending_tool_outputs(&mut pending_tool_outputs, message);
-                }
-            }
+        if message.role == Role::Assistant {
+            remove_pending_outputs_satisfied_by_message(&mut pending_tool_outputs, message);
+        }
+        if message.role != Role::Assistant {
+            flush_synthetic_tool_results(
+                &mut normalized,
+                &mut pending_tool_outputs,
+                &mut next_synthetic_message_id,
+            );
+        }
+        normalized.push(message.clone());
+        if message.role == Role::Assistant {
+            extend_pending_tool_outputs(&mut pending_tool_outputs, message);
         }
     }
 
@@ -388,6 +360,17 @@ pub(crate) fn normalize_prompt_messages(messages: &[Message]) -> Vec<Message> {
     );
     normalized.retain(message_has_visible_prompt_payload);
     normalized
+}
+
+fn remove_pending_outputs_satisfied_by_message(
+    pending: &mut Vec<PendingToolCallOutput>,
+    message: &Message,
+) {
+    let completed_ids = completed_tool_result_ids(message);
+    if completed_ids.is_empty() {
+        return;
+    }
+    pending.retain(|item| !completed_ids.contains(item.tool_call_id.as_str()));
 }
 
 fn goal_context_message(goal_context: &str) -> Option<Message> {
@@ -407,65 +390,6 @@ fn prompt_messages_for_request(messages: &[Message], goal_context: Option<&str>)
         prompt_messages.push(goal_message);
     }
     prompt_messages
-}
-
-fn append_normalized_prompt_tool_messages(
-    normalized: &mut Vec<Message>,
-    message: &Message,
-    matched_tool_call_ids: &HashSet<String>,
-    next_synthetic_message_id: &mut i64,
-) {
-    if matched_tool_call_ids.is_empty() {
-        normalized.push(message.clone());
-        return;
-    }
-
-    let projected_parts = project_session_parts(message);
-    let has_visible_payload = projected_parts.iter().any(prompt_part_has_visible_payload);
-    if has_visible_payload {
-        normalized.push(message.clone());
-        return;
-    }
-
-    let mut synthetic_results = Vec::new();
-    let mut seen = HashSet::new();
-    for part in &message.parts {
-        let Some(PartContent::ToolExecution(exec)) = part.content.as_ref() else {
-            continue;
-        };
-        let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
-            continue;
-        };
-        if !matched_tool_call_ids.contains(tool_call_id.as_str())
-            || !seen.insert(tool_call_id.clone())
-        {
-            continue;
-        }
-
-        let output_text = fallback_tool_result_output(exec);
-        if output_text.trim().is_empty() {
-            continue;
-        }
-        synthetic_results.push((tool_call_id, output_text));
-    }
-
-    if synthetic_results.is_empty() {
-        normalized.push(message.clone());
-        return;
-    }
-
-    for (index, (tool_call_id, output_text)) in synthetic_results.into_iter().enumerate() {
-        let message_id = if index == 0 {
-            message.id
-        } else {
-            let synthetic_message_id = *next_synthetic_message_id;
-            *next_synthetic_message_id -= 1;
-            synthetic_message_id
-        };
-        let mut synthetic = synthetic_tool_result_message(message_id, tool_call_id, output_text);
-        synthetic.created_at = message.created_at;
-        normalized.push(synthetic);
-    }
 }
 
 fn message_has_visible_prompt_payload(message: &Message) -> bool {
@@ -581,37 +505,10 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
     for message in messages {
         let parts = project_session_parts(message);
         match message.role {
-            Role::Tool => {
-                for part in parts {
-                    if let ProjectedSessionPart::ToolResult {
-                        tool_call_id,
-                        output_json,
-                        ..
-                    } = part
-                    {
-                        if output_json.is_empty() {
-                            // Empty tool results are equivalent to "no result yet" —
-                            // keep digest stable across the placeholder/synthesized
-                            // states (see existing tests covering this behavior).
-                            continue;
-                        }
-                        let output = if output_json == PRUNED_TOOL_RESULT_PLACEHOLDER {
-                            TranscriptToolOutput::Pruned {
-                                replacement: output_json,
-                            }
-                        } else {
-                            TranscriptToolOutput::Text { text: output_json }
-                        };
-                        transcript.push(TranscriptFragment::ToolResult {
-                            call_id: ToolCallId::from(SmolStr::from(tool_call_id)),
-                            output,
-                        });
-                    }
-                }
-            }
             Role::Assistant => {
                 let mut content = TranscriptContent::default();
                 let mut tool_calls = Vec::new();
+                let mut tool_results = Vec::new();
                 let mut had_any = false;
                 for part in parts {
                     match part {
@@ -637,8 +534,25 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                                 arguments: arguments_json,
                             });
                         }
-                        ProjectedSessionPart::ToolResult { .. } => {
-                            // Tool results never appear under assistant role.
+                        ProjectedSessionPart::ToolResult {
+                            tool_call_id,
+                            output_json,
+                            ..
+                        } => {
+                            if output_json.is_empty() {
+                                continue;
+                            }
+                            let output = if output_json == PRUNED_TOOL_RESULT_PLACEHOLDER {
+                                TranscriptToolOutput::Pruned {
+                                    replacement: output_json,
+                                }
+                            } else {
+                                TranscriptToolOutput::Text { text: output_json }
+                            };
+                            tool_results.push(TranscriptFragment::ToolResult {
+                                call_id: ToolCallId::from(SmolStr::from(tool_call_id)),
+                                output,
+                            });
                         }
                     }
                 }
@@ -654,6 +568,9 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                         content,
                         tool_calls,
                     });
+                }
+                for result in tool_results {
+                    transcript.push(result);
                 }
             }
             Role::User | Role::System => {
@@ -982,7 +899,7 @@ pub(crate) fn provider_metadata_with_response_id(
 
 #[cfg(test)]
 pub(crate) fn prune_tool_result_message(message: &mut Message) -> bool {
-    if message.role != Role::Tool || message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
+    if message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
         return false;
     }
 
@@ -1077,7 +994,6 @@ fn summary_sections(messages: &[Message]) -> SummarySections {
                 }
             }
             Role::Assistant => push_unique(&mut sections.accomplished, text, 5),
-            Role::Tool => push_unique(&mut sections.discoveries, text, 5),
         }
     }
 
@@ -1101,12 +1017,11 @@ fn summary_sections(messages: &[Message]) -> SummarySections {
 }
 
 fn summary_message_text(message: &Message) -> Option<String> {
-    let text =
-        if message.role == Role::Tool && message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
-            PRUNED_TOOL_RESULT_PLACEHOLDER.to_owned()
-        } else {
-            project_session_text_lossy(message)
-        };
+    let text = if message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
+        PRUNED_TOOL_RESULT_PLACEHOLDER.to_owned()
+    } else {
+        project_session_text_lossy(message)
+    };
     normalize_summary_text(text)
 }
 
@@ -1201,28 +1116,11 @@ fn tail_messages_to_keep(
 }
 
 fn tool_result_output_chars(message: &Message) -> usize {
-    if message.role != Role::Tool {
-        return 0;
-    }
-
     message
         .parts
         .iter()
         .map(|part| match part.content.as_ref() {
-            Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                output_text, ..
-            })) => output_text.len(),
-            Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
-                output_text,
-                error_message,
-                ..
-            })) => {
-                if output_text.trim().is_empty() {
-                    error_message.len()
-                } else {
-                    output_text.len()
-                }
-            }
+            Some(PartContent::Operation(exec)) => tool_result_output_text(part, exec).len(),
             _ => 0,
         })
         .sum()
@@ -1244,7 +1142,7 @@ fn assistant_tool_call_payload_chars(message: &Message) -> usize {
         .parts
         .iter()
         .map(|part| {
-            let Some(PartContent::ToolExecution(exec)) = part.content.as_ref() else {
+            let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
                 return 0;
             };
             let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
@@ -1261,7 +1159,7 @@ fn assistant_tool_call_payload_chars(message: &Message) -> usize {
 }
 
 fn tool_result_extra_payload_chars(message: &Message) -> usize {
-    if message.role != Role::Tool || message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
+    if message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
         return 0;
     }
 
@@ -1269,20 +1167,7 @@ fn tool_result_extra_payload_chars(message: &Message) -> usize {
         .parts
         .iter()
         .map(|part| match part.content.as_ref() {
-            Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                output_text, ..
-            })) => output_text.len(),
-            Some(PartContent::ToolExecution(ToolExecutionPart::Failed {
-                output_text,
-                error_message,
-                ..
-            })) => {
-                if output_text.trim().is_empty() {
-                    error_message.len()
-                } else {
-                    output_text.len()
-                }
-            }
+            Some(PartContent::Operation(exec)) => tool_result_output_text(part, exec).len(),
             _ => 0,
         })
         .sum()
@@ -1291,7 +1176,13 @@ fn tool_result_extra_payload_chars(message: &Message) -> usize {
 fn extend_pending_tool_outputs(pending: &mut Vec<PendingToolCallOutput>, assistant: &Message) {
     let mut seen = HashSet::new();
     for part in &assistant.parts {
-        let Some(PartContent::ToolExecution(exec)) = part.content.as_ref() else {
+        if !matches!(
+            part.status,
+            ExecutionStatus::Pending | ExecutionStatus::InProgress
+        ) {
+            continue;
+        }
+        let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
             continue;
         };
         let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
@@ -1306,7 +1197,9 @@ fn extend_pending_tool_outputs(pending: &mut Vec<PendingToolCallOutput>, assista
         }
         pending.push(PendingToolCallOutput {
             tool_call_id,
-            output_text: fallback_tool_result_output(exec),
+            call_id: exec.call_id,
+            invocation: tool_execution_invocation(exec).clone(),
+            output_text: fallback_tool_result_output(part, exec),
         });
     }
 }
@@ -1320,6 +1213,8 @@ fn flush_synthetic_tool_results(
         normalized.push(synthetic_tool_result_message(
             *next_synthetic_message_id,
             item.tool_call_id,
+            item.call_id,
+            item.invocation,
             item.output_text,
         ));
         *next_synthetic_message_id -= 1;
@@ -1329,23 +1224,54 @@ fn flush_synthetic_tool_results(
 fn synthetic_tool_result_message(
     message_id: i64,
     tool_call_id: String,
+    call_id: i64,
+    invocation: ToolInvocation,
     output_text: String,
 ) -> Message {
-    let mut message = Message::prompt_tool_result(tool_call_id, output_text);
+    let mut message = Message::prompt_parts(
+        Role::Assistant,
+        vec![PartContent::Operation(OperationPart::completed(
+            call_id,
+            invocation,
+            output_text,
+            Vec::new(),
+            Vec::new(),
+            crate::message::ToolOutput::default(),
+            crate::message::TimeRange::default(),
+        ))],
+    );
     message.id = message_id;
-    message.metadata.source = MessageSource::Tool;
+    if let Some(part) = message.parts.first_mut() {
+        part.operation_id = Some(tool_call_id);
+    }
     message
 }
 
-fn tool_result_ids(message: &Message) -> Vec<String> {
-    if message.role != Role::Tool {
-        return Vec::new();
-    }
+fn completed_tool_result_ids(message: &Message) -> HashSet<String> {
+    message
+        .parts
+        .iter()
+        .filter(|part| {
+            matches!(
+                part.status,
+                ExecutionStatus::Completed | ExecutionStatus::Failed
+            )
+        })
+        .filter_map(|part| {
+            let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
+                return None;
+            };
+            tool_execution_call_id(part, exec)
+        })
+        .collect()
+}
 
+#[cfg(test)]
+fn tool_result_ids(message: &Message) -> Vec<String> {
     let mut ids = Vec::new();
     let mut seen = HashSet::new();
     for part in &message.parts {
-        let Some(PartContent::ToolExecution(exec)) = part.content.as_ref() else {
+        let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
             continue;
         };
         let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
@@ -1363,41 +1289,39 @@ fn primary_tool_result_id(message: &Message) -> Option<String> {
     tool_result_ids(message).into_iter().next()
 }
 
-fn fallback_tool_result_output(exec: &ToolExecutionPart) -> String {
-    match exec {
-        ToolExecutionPart::Pending { .. } | ToolExecutionPart::InProgress { .. } => {
+fn fallback_tool_result_output(part: &MessagePart, exec: &OperationPart) -> String {
+    match part.status {
+        ExecutionStatus::Pending | ExecutionStatus::InProgress => {
             SYNTHETIC_TOOL_INTERRUPTED_PLACEHOLDER.to_string()
         }
-        ToolExecutionPart::Completed { output_text, .. } => {
+        ExecutionStatus::Completed => {
+            let output_text = exec.model_output.text.as_str();
             if output_text.trim().is_empty() {
                 SYNTHETIC_TOOL_COMPLETED_PLACEHOLDER.to_string()
             } else {
-                output_text.clone()
+                output_text.to_string()
             }
         }
-        ToolExecutionPart::Failed {
-            output_text,
-            error_message,
-            ..
-        } => {
+        ExecutionStatus::Failed => {
+            let output_text = exec.model_output.text.as_str();
             if !output_text.trim().is_empty() {
-                output_text.clone()
-            } else if !error_message.trim().is_empty() {
-                error_message.clone()
+                output_text.to_string()
+            } else if let Some(error_message) = exec.error_message() {
+                if !error_message.trim().is_empty() {
+                    error_message.to_string()
+                } else {
+                    SYNTHETIC_TOOL_FAILED_PLACEHOLDER.to_string()
+                }
             } else {
                 SYNTHETIC_TOOL_FAILED_PLACEHOLDER.to_string()
             }
         }
+        ExecutionStatus::Cancelled => SYNTHETIC_TOOL_INTERRUPTED_PLACEHOLDER.to_string(),
     }
 }
 
-fn tool_execution_call_id(part: &MessagePart, exec: &ToolExecutionPart) -> Option<String> {
-    let fallback = match exec {
-        ToolExecutionPart::Pending { call_id, .. }
-        | ToolExecutionPart::InProgress { call_id, .. }
-        | ToolExecutionPart::Completed { call_id, .. }
-        | ToolExecutionPart::Failed { call_id, .. } => call_id.to_string(),
-    };
+fn tool_execution_call_id(part: &MessagePart, exec: &OperationPart) -> Option<String> {
+    let fallback = exec.call_id.to_string();
     let tool_call_id = part
         .operation_id
         .as_deref()
@@ -1409,12 +1333,19 @@ fn tool_execution_call_id(part: &MessagePart, exec: &ToolExecutionPart) -> Optio
     (!tool_call_id.trim().is_empty()).then_some(tool_call_id)
 }
 
-fn tool_execution_invocation(exec: &ToolExecutionPart) -> &ToolInvocation {
-    match exec {
-        ToolExecutionPart::Pending { invocation, .. }
-        | ToolExecutionPart::InProgress { invocation, .. }
-        | ToolExecutionPart::Completed { invocation, .. }
-        | ToolExecutionPart::Failed { invocation, .. } => invocation,
+fn tool_execution_invocation(exec: &OperationPart) -> &ToolInvocation {
+    &exec.invocation
+}
+
+fn tool_result_output_text(part: &MessagePart, exec: &OperationPart) -> String {
+    match part.status {
+        ExecutionStatus::Failed => exec
+            .output_text()
+            .or_else(|| exec.error_message())
+            .unwrap_or_default()
+            .to_string(),
+        ExecutionStatus::Completed => exec.output_text().unwrap_or_default().to_string(),
+        _ => String::new(),
     }
 }
 
@@ -1538,6 +1469,38 @@ mod tests {
             .tags(tags)
             .concurrency_safe(true),
         )
+    }
+
+    fn completed_operation(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+    ) -> PartContent {
+        PartContent::Operation(OperationPart::completed(
+            call_id,
+            invocation,
+            output_text.into(),
+            Vec::new(),
+            Vec::new(),
+            crate::message::ToolOutput::default(),
+            crate::message::TimeRange {
+                start_ms: 0,
+                end_ms: Some(1),
+            },
+        ))
+    }
+
+    fn pending_operation(
+        call_id: i64,
+        invocation: ToolInvocation,
+        title: impl Into<String>,
+    ) -> PartContent {
+        PartContent::Operation(OperationPart::pending(
+            call_id,
+            invocation,
+            title.into(),
+            crate::message::TimeRange::default(),
+        ))
     }
 
     #[test]
@@ -1866,7 +1829,7 @@ mod tests {
 
         assert_eq!(
             plan.summary_text,
-            "Conversation summary (compacted):\n\n## Goal\n- Update crates/agena/src/session/manager.rs\n\n## Instructions\n- Always answer in Chinese.\n\n## Discoveries\n- [tool_result:call_1]\n\n## Accomplished\n- Wired the compaction worker.\n\n## Relevant files / directories\n- crates/agena/src/session/manager.rs"
+            "Conversation summary (compacted):\n\n## Goal\n- Update crates/agena/src/session/manager.rs\n\n## Instructions\n- Always answer in Chinese.\n\n## Discoveries\n- [tool_call:tool:call_1][tool_result:call_1]\n- Wired the compaction worker.\n\n## Accomplished\n- [tool_call:tool:call_1][tool_result:call_1]\n- Wired the compaction worker.\n\n## Relevant files / directories\n- crates/agena/src/session/manager.rs"
         );
     }
 
@@ -1943,7 +1906,7 @@ mod tests {
         assert_eq!(message.as_text_lossy(), "very long output".to_string());
         assert_eq!(
             crate::provider::project_session_text_lossy(&message),
-            "[tool_result:call_1]".to_string()
+            "[tool_call:tool:call_1][tool_result:call_1]".to_string()
         );
     }
 
@@ -1989,21 +1952,18 @@ mod tests {
     fn normalize_prompt_messages_synthesizes_missing_tool_results_before_next_turn() {
         let mut assistant = Message::prompt_parts(
             Role::Assistant,
-            vec![PartContent::ToolExecution(ToolExecutionPart::Completed {
-                call_id: 17,
-                invocation: ToolInvocation {
+            vec![completed_operation(
+                17,
+                ToolInvocation {
                     name: "edit".to_string(),
+                    plugin_name: None,
                     input: crate::message::StructuredObject::try_from(
                         serde_json::json!({ "path": "src/main.rs" }),
                     )
                     .expect("structured tool input"),
                 },
-                output_text: "patched".to_string(),
-                blocks: Vec::new(),
-                attachments: Vec::new(),
-                details: crate::message::ToolOutput::default(),
-                lifecycle: crate::message::TimeRange::default(),
-            })],
+                "patched",
+            )],
         );
         assistant.id = 1;
         assistant.parts[0].operation_id = Some("call_edit".to_string());
@@ -2012,15 +1972,15 @@ mod tests {
         user.id = 2;
 
         let normalized = normalize_prompt_messages(&[assistant, user.clone()]);
-        assert_eq!(normalized.len(), 3);
+        assert_eq!(normalized.len(), 2);
         assert_eq!(normalized[0].id, 1);
-        assert_eq!(normalized[2].id, user.id);
-        assert_eq!(normalized[1].role, Role::Tool);
+        assert_eq!(normalized[1].id, user.id);
+        assert_eq!(normalized[0].role, Role::Assistant);
         assert_eq!(
-            primary_tool_result_id(&normalized[1]).as_deref(),
+            primary_tool_result_id(&normalized[0]).as_deref(),
             Some("call_edit")
         );
-        assert!(normalized[1].as_text_lossy().contains("patched"));
+        assert!(normalized[0].as_text_lossy().contains("patched"));
     }
 
     #[test]
@@ -2028,6 +1988,7 @@ mod tests {
     {
         let invocation = ToolInvocation {
             name: "edit".to_string(),
+            plugin_name: None,
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),
             )
@@ -2036,24 +1997,8 @@ mod tests {
         let mut assistant = Message::prompt_parts(
             Role::Assistant,
             vec![
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 17,
-                    invocation: invocation.clone(),
-                    output_text: "patched main".to_string(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: crate::message::ToolOutput::default(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 18,
-                    invocation: invocation.clone(),
-                    output_text: "patched lib".to_string(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: crate::message::ToolOutput::default(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
+                completed_operation(17, invocation.clone(), "patched main"),
+                completed_operation(18, invocation.clone(), "patched lib"),
             ],
         );
         assistant.id = 1;
@@ -2061,26 +2006,10 @@ mod tests {
         assistant.parts[1].operation_id = Some("call_edit_lib".to_string());
 
         let mut tool = Message::prompt_parts(
-            Role::Tool,
+            Role::Assistant,
             vec![
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 17,
-                    invocation: invocation.clone(),
-                    output_text: "patched main".to_string(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: crate::message::ToolOutput::default(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 18,
-                    invocation,
-                    output_text: "patched lib".to_string(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: crate::message::ToolOutput::default(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
+                completed_operation(17, invocation.clone(), "patched main"),
+                completed_operation(18, invocation, "patched lib"),
             ],
         );
         tool.id = 2;
@@ -2109,10 +2038,14 @@ mod tests {
     }
 
     #[test]
-    fn normalize_prompt_messages_drops_orphan_tool_results() {
+    fn normalize_prompt_messages_keeps_standalone_operation_results() {
         let orphan = Message::prompt_tool_result("call_missing", "stale output");
         let normalized = normalize_prompt_messages(&[orphan]);
-        assert!(normalized.is_empty());
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(
+            primary_tool_result_id(&normalized[0]).as_deref(),
+            Some("call_missing")
+        );
     }
 
     #[test]
@@ -2132,6 +2065,7 @@ mod tests {
     fn normalize_prompt_messages_replaces_empty_matching_tool_results_with_placeholder() {
         let invocation = ToolInvocation {
             name: "edit".to_string(),
+            plugin_name: None,
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),
             )
@@ -2139,43 +2073,25 @@ mod tests {
         };
         let mut assistant = Message::prompt_parts(
             Role::Assistant,
-            vec![PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: 17,
-                invocation: invocation.clone(),
-                title: "editing".to_string(),
-                lifecycle: crate::message::TimeRange::default(),
-            })],
+            vec![pending_operation(17, invocation.clone(), "editing")],
         );
         assistant.id = 1;
+        assistant.parts[0].status = ExecutionStatus::Pending;
         assistant.parts[0].operation_id = Some("call_edit".to_string());
-
-        let mut tool = Message::prompt_parts(
-            Role::Tool,
-            vec![PartContent::ToolExecution(ToolExecutionPart::InProgress {
-                call_id: 17,
-                invocation,
-                title: String::new(),
-                output_text: String::new(),
-                lifecycle: crate::message::TimeRange::default(),
-            })],
-        );
-        tool.id = 2;
-        tool.parts[0].operation_id = Some("call_edit".to_string());
 
         let mut user = Message::prompt_text(Role::User, "continue");
         user.id = 3;
 
-        let normalized = normalize_prompt_messages(&[assistant, tool.clone(), user]);
+        let normalized = normalize_prompt_messages(&[assistant, user]);
         assert_eq!(normalized.len(), 3);
-        assert_eq!(normalized[1].id, tool.id);
-        assert_eq!(normalized[1].role, Role::Tool);
+        assert_eq!(normalized[1].role, Role::Assistant);
         assert_eq!(
             primary_tool_result_id(&normalized[1]).as_deref(),
             Some("call_edit")
         );
         assert_eq!(
             project_session_text_lossy(&normalized[1]),
-            "[tool_result:call_edit]".to_string()
+            "[tool_call:edit:call_edit][tool_result:call_edit]".to_string()
         );
         assert!(
             normalized[1]
@@ -2188,6 +2104,7 @@ mod tests {
     fn normalize_prompt_messages_expands_empty_multi_tool_results_into_placeholders() {
         let invocation = ToolInvocation {
             name: "edit".to_string(),
+            plugin_name: None,
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),
             )
@@ -2196,57 +2113,26 @@ mod tests {
         let mut assistant = Message::prompt_parts(
             Role::Assistant,
             vec![
-                PartContent::ToolExecution(ToolExecutionPart::Pending {
-                    call_id: 17,
-                    invocation: invocation.clone(),
-                    title: "editing main".to_string(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
-                PartContent::ToolExecution(ToolExecutionPart::Pending {
-                    call_id: 18,
-                    invocation: invocation.clone(),
-                    title: "editing lib".to_string(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
+                pending_operation(17, invocation.clone(), "editing main"),
+                pending_operation(18, invocation.clone(), "editing lib"),
             ],
         );
         assistant.id = 1;
+        assistant.parts[0].status = ExecutionStatus::Pending;
+        assistant.parts[1].status = ExecutionStatus::Pending;
         assistant.parts[0].operation_id = Some("call_edit_main".to_string());
         assistant.parts[1].operation_id = Some("call_edit_lib".to_string());
-
-        let mut tool = Message::prompt_parts(
-            Role::Tool,
-            vec![
-                PartContent::ToolExecution(ToolExecutionPart::InProgress {
-                    call_id: 17,
-                    invocation: invocation.clone(),
-                    title: String::new(),
-                    output_text: String::new(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
-                PartContent::ToolExecution(ToolExecutionPart::InProgress {
-                    call_id: 18,
-                    invocation,
-                    title: String::new(),
-                    output_text: String::new(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
-            ],
-        );
-        tool.id = 2;
-        tool.parts[0].operation_id = Some("call_edit_main".to_string());
-        tool.parts[1].operation_id = Some("call_edit_lib".to_string());
 
         let mut user = Message::prompt_text(Role::User, "continue");
         user.id = 3;
 
-        let normalized = normalize_prompt_messages(&[assistant, tool, user]);
+        let normalized = normalize_prompt_messages(&[assistant, user]);
         assert_eq!(normalized.len(), 4);
         assert_eq!(
             normalized
                 .iter()
-                .filter(|message| message.role == Role::Tool)
-                .map(|message| primary_tool_result_id(message).expect("tool result id"))
+                .skip(1)
+                .filter_map(primary_tool_result_id)
                 .collect::<Vec<_>>(),
             vec!["call_edit_main", "call_edit_lib"]
         );
@@ -2266,6 +2152,7 @@ mod tests {
     fn prompt_transcript_digest_treats_empty_tool_results_like_synthesized_placeholders() {
         let invocation = ToolInvocation {
             name: "edit".to_string(),
+            plugin_name: None,
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),
             )
@@ -2273,42 +2160,27 @@ mod tests {
         };
         let mut assistant = Message::prompt_parts(
             Role::Assistant,
-            vec![PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: 17,
-                invocation: invocation.clone(),
-                title: "editing".to_string(),
-                lifecycle: crate::message::TimeRange::default(),
-            })],
+            vec![pending_operation(17, invocation.clone(), "editing")],
         );
         assistant.id = 1;
+        assistant.parts[0].status = ExecutionStatus::Pending;
         assistant.parts[0].operation_id = Some("call_edit".to_string());
-
-        let mut empty_tool = Message::prompt_parts(
-            Role::Tool,
-            vec![PartContent::ToolExecution(ToolExecutionPart::InProgress {
-                call_id: 17,
-                invocation,
-                title: String::new(),
-                output_text: String::new(),
-                lifecycle: crate::message::TimeRange::default(),
-            })],
-        );
-        empty_tool.id = 2;
-        empty_tool.parts[0].operation_id = Some("call_edit".to_string());
 
         let mut user = Message::prompt_text(Role::User, "continue");
         user.id = 3;
 
-        let digest_without_tool = prompt_transcript_digest(&[assistant.clone(), user.clone()]);
-        let digest_with_empty_tool = prompt_transcript_digest(&[assistant, empty_tool, user]);
+        let normalized = normalize_prompt_messages(&[assistant.clone(), user.clone()]);
+        let digest_without_tool = prompt_transcript_digest(&[assistant, user]);
+        let digest_with_normalized = prompt_transcript_digest(&normalized);
 
-        assert_eq!(digest_with_empty_tool, digest_without_tool);
+        assert_eq!(digest_with_normalized, digest_without_tool);
     }
 
     #[test]
     fn prompt_transcript_digest_treats_empty_multi_tool_results_like_synthesized_placeholders() {
         let invocation = ToolInvocation {
             name: "edit".to_string(),
+            plugin_name: None,
             input: crate::message::StructuredObject::try_from(
                 serde_json::json!({ "path": "src/main.rs" }),
             )
@@ -2317,54 +2189,24 @@ mod tests {
         let mut assistant = Message::prompt_parts(
             Role::Assistant,
             vec![
-                PartContent::ToolExecution(ToolExecutionPart::Pending {
-                    call_id: 17,
-                    invocation: invocation.clone(),
-                    title: "editing main".to_string(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
-                PartContent::ToolExecution(ToolExecutionPart::Pending {
-                    call_id: 18,
-                    invocation: invocation.clone(),
-                    title: "editing lib".to_string(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
+                pending_operation(17, invocation.clone(), "editing main"),
+                pending_operation(18, invocation.clone(), "editing lib"),
             ],
         );
         assistant.id = 1;
+        assistant.parts[0].status = ExecutionStatus::Pending;
+        assistant.parts[1].status = ExecutionStatus::Pending;
         assistant.parts[0].operation_id = Some("call_edit_main".to_string());
         assistant.parts[1].operation_id = Some("call_edit_lib".to_string());
-
-        let mut empty_tool = Message::prompt_parts(
-            Role::Tool,
-            vec![
-                PartContent::ToolExecution(ToolExecutionPart::InProgress {
-                    call_id: 17,
-                    invocation: invocation.clone(),
-                    title: String::new(),
-                    output_text: String::new(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
-                PartContent::ToolExecution(ToolExecutionPart::InProgress {
-                    call_id: 18,
-                    invocation,
-                    title: String::new(),
-                    output_text: String::new(),
-                    lifecycle: crate::message::TimeRange::default(),
-                }),
-            ],
-        );
-        empty_tool.id = 2;
-        empty_tool.parts[0].operation_id = Some("call_edit_main".to_string());
-        empty_tool.parts[1].operation_id = Some("call_edit_lib".to_string());
 
         let mut user = Message::prompt_text(Role::User, "continue");
         user.id = 3;
 
-        let digest_without_tool = prompt_transcript_digest(&[assistant.clone(), user.clone()]);
-        let digest_with_empty_tool = prompt_transcript_digest(&[assistant, empty_tool, user]);
+        let normalized = normalize_prompt_messages(&[assistant.clone(), user.clone()]);
+        let digest_without_tool = prompt_transcript_digest(&[assistant, user]);
+        let digest_with_normalized = prompt_transcript_digest(&normalized);
 
-        assert_eq!(digest_with_empty_tool, digest_without_tool);
+        assert_eq!(digest_with_normalized, digest_without_tool);
     }
 
     #[test]

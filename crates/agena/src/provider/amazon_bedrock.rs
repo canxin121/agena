@@ -544,14 +544,17 @@ impl AmazonBedrockProvider {
 
     fn anthropic_content_to_blocks(message: &Message) -> Vec<BedrockAnthropicTextBlock> {
         let projected = wire_message::project(message);
+        Self::anthropic_blocks_from_projected_parts(message, projected.as_slice())
+    }
+
+    fn anthropic_blocks_from_projected_parts(
+        message: &Message,
+        projected: &[wire_message::WirePart],
+    ) -> Vec<BedrockAnthropicTextBlock> {
         if projected.is_empty() {
             let text = message.as_text_lossy();
             if text.is_empty() {
                 return Vec::new();
-            }
-
-            if message.role == Role::Tool {
-                return vec![BedrockAnthropicTextBlock::tool_result("tool", text)];
             }
 
             return vec![BedrockAnthropicTextBlock::text(text)];
@@ -561,32 +564,94 @@ impl AmazonBedrockProvider {
         for part in projected {
             match part {
                 wire_message::WirePart::Text { text } => {
-                    blocks.push(BedrockAnthropicTextBlock::text(text));
+                    blocks.push(BedrockAnthropicTextBlock::text(text.clone()));
                 }
                 wire_message::WirePart::Attachment { item } => {
-                    blocks.extend(Self::anthropic_attachment_blocks(&item));
+                    blocks.extend(Self::anthropic_attachment_blocks(item));
                 }
                 wire_message::WirePart::ToolCall {
                     id,
                     name,
                     arguments_json,
                 } => blocks.push(BedrockAnthropicTextBlock::tool_use(
-                    id,
-                    name,
-                    arguments_json,
+                    id.clone(),
+                    name.clone(),
+                    arguments_json.clone(),
                 )),
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
                     ..
                 } => blocks.push(BedrockAnthropicTextBlock::tool_result(
-                    tool_call_id,
-                    output_json,
+                    tool_call_id.clone(),
+                    output_json.clone(),
                 )),
             }
         }
 
         blocks
+    }
+
+    fn anthropic_assistant_messages_from_parts(message: &Message) -> Vec<BedrockAnthropicMessage> {
+        let projected = wire_message::project(message);
+        if !projected
+            .iter()
+            .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
+        {
+            return vec![BedrockAnthropicMessage {
+                role: "assistant".to_owned(),
+                content: Self::anthropic_blocks_from_projected_parts(message, projected.as_slice()),
+            }];
+        }
+
+        let mut messages = Vec::new();
+        let mut buffered = Vec::<wire_message::WirePart>::new();
+        for part in &projected {
+            match part {
+                wire_message::WirePart::ToolResult {
+                    tool_call_id,
+                    output_json,
+                    ..
+                } if !tool_call_id.trim().is_empty() => {
+                    Self::flush_anthropic_assistant_blocks(message, &mut messages, &mut buffered);
+                    messages.push(BedrockAnthropicMessage {
+                        role: "user".to_owned(),
+                        content: vec![BedrockAnthropicTextBlock::tool_result(
+                            tool_call_id.clone(),
+                            output_json.clone(),
+                        )],
+                    });
+                }
+                wire_message::WirePart::ToolResult { output_json, .. } => {
+                    buffered.push(wire_message::WirePart::Text {
+                        text: output_json.clone(),
+                    });
+                }
+                other => buffered.push(other.clone()),
+            }
+        }
+        Self::flush_anthropic_assistant_blocks(message, &mut messages, &mut buffered);
+
+        messages
+    }
+
+    fn flush_anthropic_assistant_blocks(
+        message: &Message,
+        messages: &mut Vec<BedrockAnthropicMessage>,
+        buffered: &mut Vec<wire_message::WirePart>,
+    ) {
+        if buffered.is_empty() {
+            return;
+        }
+        let content = Self::anthropic_blocks_from_projected_parts(message, buffered.as_slice());
+        buffered.clear();
+        if content.is_empty() {
+            return;
+        }
+        messages.push(BedrockAnthropicMessage {
+            role: "assistant".to_owned(),
+            content,
+        });
     }
 
     fn anthropic_attachment_blocks(item: &AttachmentItem) -> Vec<BedrockAnthropicTextBlock> {
@@ -673,11 +738,10 @@ impl AmazonBedrockProvider {
                         system_chunks.push(BedrockAnthropicTextBlock::text(text));
                     }
                 }
-                Role::Assistant => messages.push(BedrockAnthropicMessage {
-                    role: "assistant".to_owned(),
-                    content: Self::anthropic_content_to_blocks(&msg),
-                }),
-                Role::User | Role::Tool => messages.push(BedrockAnthropicMessage {
+                Role::Assistant => {
+                    messages.extend(Self::anthropic_assistant_messages_from_parts(&msg))
+                }
+                Role::User => messages.push(BedrockAnthropicMessage {
                     role: "user".to_owned(),
                     content: Self::anthropic_content_to_blocks(&msg),
                 }),
@@ -1416,31 +1480,10 @@ fn convert_messages(system: Option<String>, messages: Vec<Message>) -> Vec<ChatM
                 });
             }
             Role::Assistant => {
-                let (content, tool_calls) =
-                    assistant_content_and_tool_calls(&message, &projected_parts);
-                result.push(ChatMessage {
-                    role: "assistant".to_owned(),
-                    content,
-                    tool_call_id: None,
-                    tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
-                });
-            }
-            Role::Tool => {
-                let ordered_messages =
-                    ordered_tool_and_user_messages_from_parts(projected_parts.as_slice());
-                if ordered_messages.is_empty() {
-                    result.push(ChatMessage {
-                        role: "tool".to_owned(),
-                        content: Some(Value::String(session_text_lossy(
-                            &message,
-                            &projected_parts,
-                        ))),
-                        tool_call_id: Some("tool".to_owned()),
-                        tool_calls: None,
-                    });
-                } else {
-                    result.extend(ordered_messages);
-                }
+                result.extend(openai_assistant_messages_from_parts(
+                    &message,
+                    &projected_parts,
+                ));
             }
         }
     }
@@ -1577,16 +1620,15 @@ fn assistant_content_and_tool_calls(
     (content, tool_calls)
 }
 
-fn ordered_tool_and_user_messages_from_parts(parts: &[wire_message::WirePart]) -> Vec<ChatMessage> {
-    let has_tool_message = parts.iter().any(|part| {
-        matches!(
-            part,
-            wire_message::WirePart::ToolResult { tool_call_id, .. }
-                if !tool_call_id.trim().is_empty()
-        )
-    });
-    if !has_tool_message {
-        return Vec::new();
+fn openai_assistant_messages_from_parts(
+    message: &Message,
+    parts: &[wire_message::WirePart],
+) -> Vec<ChatMessage> {
+    if !parts
+        .iter()
+        .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
+    {
+        return vec![openai_assistant_message(message, parts)];
     }
 
     let mut messages = Vec::new();
@@ -1599,15 +1641,7 @@ fn ordered_tool_and_user_messages_from_parts(parts: &[wire_message::WirePart]) -
                 output_json,
                 ..
             } if !tool_call_id.trim().is_empty() => {
-                if !buffered_parts.is_empty() {
-                    messages.push(ChatMessage {
-                        role: "user".to_owned(),
-                        content: Some(projected_parts_to_openai_value(buffered_parts.as_slice())),
-                        tool_call_id: None,
-                        tool_calls: None,
-                    });
-                    buffered_parts.clear();
-                }
+                flush_openai_assistant_message(message, &mut messages, &mut buffered_parts);
 
                 messages.push(ChatMessage {
                     role: "tool".to_owned(),
@@ -1625,16 +1659,35 @@ fn ordered_tool_and_user_messages_from_parts(parts: &[wire_message::WirePart]) -
         }
     }
 
-    if !buffered_parts.is_empty() {
-        messages.push(ChatMessage {
-            role: "user".to_owned(),
-            content: Some(projected_parts_to_openai_value(buffered_parts.as_slice())),
-            tool_call_id: None,
-            tool_calls: None,
-        });
-    }
+    flush_openai_assistant_message(message, &mut messages, &mut buffered_parts);
 
     messages
+}
+
+fn flush_openai_assistant_message(
+    message: &Message,
+    messages: &mut Vec<ChatMessage>,
+    buffered_parts: &mut Vec<wire_message::WirePart>,
+) {
+    if buffered_parts.is_empty() {
+        return;
+    }
+    let next = openai_assistant_message(message, buffered_parts.as_slice());
+    buffered_parts.clear();
+    if next.content.is_none() && next.tool_calls.is_none() {
+        return;
+    }
+    messages.push(next);
+}
+
+fn openai_assistant_message(message: &Message, parts: &[wire_message::WirePart]) -> ChatMessage {
+    let (content, tool_calls) = assistant_content_and_tool_calls(message, parts);
+    ChatMessage {
+        role: "assistant".to_owned(),
+        content,
+        tool_call_id: None,
+        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+    }
 }
 
 fn session_text_lossy(message: &Message, projected_parts: &[wire_message::WirePart]) -> String {
@@ -2477,6 +2530,73 @@ mod tests {
         )
     }
 
+    fn completed_operation_message() -> Message {
+        use crate::message::{
+            OperationPart, PartContent, StructuredObject, TimeRange, ToolInvocation, ToolOutput,
+        };
+
+        let mut message = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::text("Before"),
+                PartContent::Operation(OperationPart::completed(
+                    1,
+                    ToolInvocation {
+                        name: "lookup".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
+                        input: StructuredObject::default(),
+                    },
+                    "{\"ok\":true}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
+                PartContent::text("After"),
+            ],
+        );
+        message.parts[1].operation_id = Some("call_lookup".to_owned());
+        message
+    }
+
+    #[test]
+    fn native_anthropic_request_projects_assistant_tool_results_as_user_blocks() {
+        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+            model: ModelId::new("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+            system: None,
+            messages: vec![completed_operation_message()],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            response_format: None,
+        });
+
+        assert_eq!(body.messages.len(), 3);
+        assert_eq!(body.messages[0].role, "assistant");
+        assert_eq!(body.messages[0].content[0].kind, "text");
+        assert_eq!(body.messages[0].content[1].kind, "tool_use");
+        assert_eq!(
+            body.messages[0].content[1].id.as_deref(),
+            Some("call_lookup")
+        );
+        assert_eq!(body.messages[1].role, "user");
+        assert_eq!(body.messages[1].content[0].kind, "tool_result");
+        assert_eq!(
+            body.messages[1].content[0].tool_use_id.as_deref(),
+            Some("call_lookup")
+        );
+        assert_eq!(body.messages[2].role, "assistant");
+        assert_eq!(body.messages[2].content[0].text.as_deref(), Some("After"));
+    }
+
     #[test]
     fn keeps_existing_cross_region_prefix() {
         assert_eq!(
@@ -2687,38 +2807,36 @@ mod tests {
     #[test]
     fn convert_messages_preserves_interleaved_tool_result_and_follow_up_order() {
         let mut message = crate::message::Message::prompt_parts(
-            Role::Tool,
+            Role::Assistant,
             vec![
                 crate::message::PartContent::text("Before"),
-                crate::message::PartContent::ToolExecution(
-                    crate::message::ToolExecutionPart::Completed {
-                        call_id: 1,
-                        invocation: crate::message::ToolInvocation {
-                            name: "tool_one".to_owned(),
-                            input: crate::message::StructuredObject::default(),
-                        },
-                        output_text: "{\"result\":1}".to_owned(),
-                        blocks: Vec::new(),
-                        attachments: Vec::new(),
-                        details: crate::message::ToolOutput::default(),
-                        lifecycle: crate::message::TimeRange::default(),
+                crate::message::PartContent::Operation(crate::message::OperationPart::completed(
+                    1,
+                    crate::message::ToolInvocation {
+                        name: "tool_one".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
+                        input: crate::message::StructuredObject::default(),
                     },
-                ),
+                    "{\"result\":1}",
+                    Vec::new(),
+                    Vec::new(),
+                    crate::message::ToolOutput::default(),
+                    crate::message::TimeRange::default(),
+                )),
                 crate::message::PartContent::text("Middle"),
-                crate::message::PartContent::ToolExecution(
-                    crate::message::ToolExecutionPart::Completed {
-                        call_id: 2,
-                        invocation: crate::message::ToolInvocation {
-                            name: "tool_two".to_owned(),
-                            input: crate::message::StructuredObject::default(),
-                        },
-                        output_text: "{\"result\":2}".to_owned(),
-                        blocks: Vec::new(),
-                        attachments: Vec::new(),
-                        details: crate::message::ToolOutput::default(),
-                        lifecycle: crate::message::TimeRange::default(),
+                crate::message::PartContent::Operation(crate::message::OperationPart::completed(
+                    2,
+                    crate::message::ToolInvocation {
+                        name: "tool_two".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
+                        input: crate::message::StructuredObject::default(),
                     },
-                ),
+                    "{\"result\":2}",
+                    Vec::new(),
+                    Vec::new(),
+                    crate::message::ToolOutput::default(),
+                    crate::message::TimeRange::default(),
+                )),
                 crate::message::PartContent::text("After"),
             ],
         );
@@ -2728,10 +2846,10 @@ mod tests {
         let messages = convert_messages(None, vec![message]);
 
         assert_eq!(messages.len(), 5);
-        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].role, "assistant");
         assert_eq!(
             messages[0].content,
-            Some(serde_json::json!([{ "type": "text", "text": "Before" }]))
+            Some(Value::String("Before".to_owned()))
         );
         assert_eq!(messages[1].role, "tool");
         assert_eq!(messages[1].tool_call_id.as_deref(), Some("call_1"));
@@ -2739,10 +2857,10 @@ mod tests {
             messages[1].content,
             Some(Value::String("{\"result\":1}".to_owned()))
         );
-        assert_eq!(messages[2].role, "user");
+        assert_eq!(messages[2].role, "assistant");
         assert_eq!(
             messages[2].content,
-            Some(serde_json::json!([{ "type": "text", "text": "Middle" }]))
+            Some(Value::String("Middle".to_owned()))
         );
         assert_eq!(messages[3].role, "tool");
         assert_eq!(messages[3].tool_call_id.as_deref(), Some("call_2"));
@@ -2750,11 +2868,8 @@ mod tests {
             messages[3].content,
             Some(Value::String("{\"result\":2}".to_owned()))
         );
-        assert_eq!(messages[4].role, "user");
-        assert_eq!(
-            messages[4].content,
-            Some(serde_json::json!([{ "type": "text", "text": "After" }]))
-        );
+        assert_eq!(messages[4].role, "assistant");
+        assert_eq!(messages[4].content, Some(Value::String("After".to_owned())));
     }
 
     #[test]

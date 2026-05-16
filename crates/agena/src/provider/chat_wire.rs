@@ -486,23 +486,7 @@ pub(crate) fn request_to_chat_messages(request: &CompletionRequest) -> Vec<ChatM
                 parts.as_slice(),
             ))),
             Role::Assistant => {
-                let (content, tool_calls) = assistant_content_and_tool_calls(message, &parts);
-                messages.push(ChatMessage::assistant(
-                    content,
-                    (!tool_calls.is_empty()).then_some(tool_calls),
-                ));
-            }
-            Role::Tool => {
-                let ordered = ordered_tool_and_user_messages(&parts);
-                if ordered.is_empty() {
-                    // Fallback: no recognised tool-result parts — treat as user text.
-                    messages.push(ChatMessage::user(Value::String(session_text_lossy(
-                        message,
-                        parts.as_slice(),
-                    ))));
-                } else {
-                    messages.extend(ordered);
-                }
+                messages.extend(assistant_messages_from_parts(message, &parts));
             }
         }
     }
@@ -523,6 +507,64 @@ fn message_content_value(message: &Message, parts: &[wire_message::WirePart]) ->
         return Value::String(message.as_text_lossy());
     }
     wire_message::parts_to_openai_content_array(parts)
+}
+
+fn assistant_messages_from_parts(
+    message: &Message,
+    parts: &[wire_message::WirePart],
+) -> Vec<ChatMessage> {
+    let has_tool_result = parts
+        .iter()
+        .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }));
+    if !has_tool_result {
+        let (content, tool_calls) = assistant_content_and_tool_calls(message, parts);
+        return vec![ChatMessage::assistant(
+            content,
+            (!tool_calls.is_empty()).then_some(tool_calls),
+        )];
+    }
+
+    let mut messages = Vec::new();
+    let mut buffered = Vec::new();
+    for part in parts {
+        match part {
+            wire_message::WirePart::ToolResult {
+                tool_call_id,
+                output_json,
+                ..
+            } if !tool_call_id.trim().is_empty() => {
+                if !buffered.is_empty() {
+                    let (content, tool_calls) =
+                        assistant_content_and_tool_calls(message, &buffered);
+                    messages.push(ChatMessage::assistant(
+                        content,
+                        (!tool_calls.is_empty()).then_some(tool_calls),
+                    ));
+                    buffered.clear();
+                }
+                messages.push(ChatMessage::tool_result(
+                    tool_call_id.clone(),
+                    Value::String(output_json.clone()),
+                ));
+            }
+            wire_message::WirePart::ToolResult { output_json, .. } => {
+                buffered.push(wire_message::WirePart::Text {
+                    text: output_json.clone(),
+                });
+            }
+            other => buffered.push(other.clone()),
+        }
+    }
+
+    if !buffered.is_empty() {
+        let (content, tool_calls) = assistant_content_and_tool_calls(message, &buffered);
+        messages.push(ChatMessage::assistant(
+            content,
+            (!tool_calls.is_empty()).then_some(tool_calls),
+        ));
+    }
+
+    messages
 }
 
 fn assistant_content_and_tool_calls(
@@ -562,60 +604,4 @@ fn assistant_content_and_tool_calls(
     }
     let content = (!text_chunks.is_empty()).then(|| Value::String(text_chunks.join("")));
     (content, tool_calls)
-}
-
-/// Expand a `Role::Tool` message's parts into individual `ChatMessage`s,
-/// interleaving tool-result messages with any follow-up user content.
-///
-/// Returns an empty `Vec` when no tool-result parts with a valid ID are found
-/// (the caller falls back to sending the message as a plain user message).
-fn ordered_tool_and_user_messages(parts: &[wire_message::WirePart]) -> Vec<ChatMessage> {
-    let has_identified_result = parts.iter().any(|part| {
-        matches!(
-            part,
-            wire_message::WirePart::ToolResult { tool_call_id, .. }
-                if !tool_call_id.trim().is_empty()
-        )
-    });
-    if !has_identified_result {
-        return Vec::new();
-    }
-
-    let mut messages = Vec::new();
-    let mut buffered: Vec<wire_message::WirePart> = Vec::new();
-
-    for part in parts {
-        match part {
-            wire_message::WirePart::ToolResult {
-                tool_call_id,
-                output_json,
-                ..
-            } if !tool_call_id.trim().is_empty() => {
-                if !buffered.is_empty() {
-                    messages.push(ChatMessage::user(
-                        wire_message::parts_to_openai_content_array(buffered.as_slice()),
-                    ));
-                    buffered.clear();
-                }
-                messages.push(ChatMessage::tool_result(
-                    tool_call_id.clone(),
-                    Value::String(output_json.clone()),
-                ));
-            }
-            wire_message::WirePart::ToolResult { output_json, .. } => {
-                buffered.push(wire_message::WirePart::Text {
-                    text: output_json.clone(),
-                });
-            }
-            other => buffered.push(other.clone()),
-        }
-    }
-
-    if !buffered.is_empty() {
-        messages.push(ChatMessage::user(
-            wire_message::parts_to_openai_content_array(buffered.as_slice()),
-        ));
-    }
-
-    messages
 }

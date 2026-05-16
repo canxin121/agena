@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     message::{
         ExecutionStatus, Message, MessagePart, MessageStatus, PartContent, PermissionRequestPart,
-        TimeRange, ToolExecutionPart, ToolInvocation, UserInputRequest, UserInputRequestPart,
+        RequestPart, TimeRange, ToolInvocation, UserInputRequest, UserInputRequestPart,
     },
     role::Role,
 };
@@ -409,6 +409,8 @@ pub struct SessionExecutionContext {
     pub agent_hidden: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_stack: Vec<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_skill_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -443,6 +445,7 @@ impl SessionExecutionContext {
             && self.agent_mode.is_none()
             && !self.agent_hidden
             && self.agent_color.is_none()
+            && self.agent_stack.is_empty()
             && self.active_skill_name.is_none()
             && self.system_prompt_override.is_none()
             && self.allowed_tools.is_empty()
@@ -841,15 +844,18 @@ impl Session {
     }
 
     fn should_run_model(&self) -> bool {
-        matches!(
-            self.last_conversation_message()
-                .map(|message| (message.role, message.state)),
-            Some((Role::User | Role::Tool, _))
-                | Some((
+        let Some(message) = self.last_conversation_message() else {
+            return false;
+        };
+        message.role == Role::User
+            || message_has_completed_operation(message)
+            || matches!(
+                (message.role, message.state),
+                (
                     Role::Assistant,
                     MessageStatus::Pending | MessageStatus::InProgress
-                ))
-        )
+                )
+            )
     }
 
     pub(crate) fn last_conversation_message(&self) -> Option<&Message> {
@@ -900,13 +906,13 @@ impl Session {
                 };
 
                 match part.content.as_ref() {
-                    Some(PartContent::PermissionRequest(_)) => {
+                    Some(PartContent::Request(RequestPart::Permission(_))) => {
                         permission_parts.insert(
                             operation_id,
                             SessionPartRef::new(message_index, message, part_index, part),
                         );
                     }
-                    Some(PartContent::UserInputRequest(_)) => {
+                    Some(PartContent::Request(RequestPart::UserInput(_))) => {
                         user_input_parts.insert(
                             operation_id,
                             SessionPartRef::new(message_index, message, part_index, part),
@@ -924,11 +930,9 @@ impl Session {
                 let Some(operation_id) = part.operation_id.as_deref() else {
                     continue;
                 };
-                let Some(PartContent::ToolExecution(ToolExecutionPart::Pending { .. })) =
-                    part.content.as_ref()
-                else {
+                if !matches!(part.content.as_ref(), Some(PartContent::Operation(_))) {
                     continue;
-                };
+                }
                 if completed_tool_operations.contains(operation_id) {
                     continue;
                 }
@@ -1008,23 +1012,22 @@ impl Session {
         pending: &SessionPendingTool,
     ) -> Option<(i64, &ToolInvocation, &TimeRange)> {
         let part = self.part(&pending.part)?;
-        let (call_id, invocation, lifecycle) = match part.content.as_ref()? {
-            PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id,
-                invocation,
-                lifecycle,
-                ..
-            })
-            | PartContent::ToolExecution(ToolExecutionPart::InProgress {
-                call_id,
-                invocation,
-                lifecycle,
-                ..
-            }) => (call_id, invocation, lifecycle),
+        if !matches!(
+            part.status,
+            ExecutionStatus::Pending | ExecutionStatus::InProgress
+        ) {
+            return None;
+        }
+        let operation = match part.content.as_ref()? {
+            PartContent::Operation(operation) => operation,
             _ => return None,
         };
 
-        Some((*call_id, invocation, lifecycle))
+        Some((
+            operation.call_id,
+            &operation.invocation,
+            &operation.lifecycle,
+        ))
     }
 
     pub(crate) fn pending_permission_request(
@@ -1032,10 +1035,12 @@ impl Session {
         pending: &SessionPendingPermission,
     ) -> Option<&crate::permission::PermissionRequest> {
         let part = self.part(&pending.request)?;
-        let PartContent::PermissionRequest(PermissionRequestPart { request, .. }) =
-            part.content.as_ref()?
-        else {
-            return None;
+        let request = match part.content.as_ref()? {
+            PartContent::Request(RequestPart::Permission(PermissionRequestPart {
+                request,
+                ..
+            })) => request,
+            _ => return None,
         };
 
         Some(request)
@@ -1046,10 +1051,11 @@ impl Session {
         pending: &SessionPendingUserInput,
     ) -> Option<&UserInputRequest> {
         let part = self.part(&pending.request)?;
-        let PartContent::UserInputRequest(UserInputRequestPart { request, .. }) =
-            part.content.as_ref()?
-        else {
-            return None;
+        let request = match part.content.as_ref()? {
+            PartContent::Request(RequestPart::UserInput(UserInputRequestPart {
+                request, ..
+            })) => request,
+            _ => return None,
         };
 
         Some(request)
@@ -1058,11 +1064,25 @@ impl Session {
     fn completed_tool_operations(&self) -> HashSet<&str> {
         self.messages
             .iter()
-            .filter(|message| message.role == Role::Tool)
             .flat_map(|message| message.parts.iter())
+            .filter(|part| {
+                matches!(
+                    part.status,
+                    ExecutionStatus::Completed | ExecutionStatus::Failed
+                )
+            })
             .filter_map(|part| part.operation_id.as_deref())
             .collect()
     }
+}
+
+fn message_has_completed_operation(message: &Message) -> bool {
+    message.parts.iter().any(|part| {
+        matches!(
+            part.status,
+            ExecutionStatus::Completed | ExecutionStatus::Failed
+        ) && matches!(part.content, Some(PartContent::Operation(_)))
+    })
 }
 
 fn tool_invocation_name(invocation: &ToolInvocation) -> String {
@@ -1072,12 +1092,7 @@ fn tool_invocation_name(invocation: &ToolInvocation) -> String {
 
 fn extract_call_id(part: &MessagePart) -> Option<i64> {
     part.content.as_ref().and_then(|content| match content {
-        PartContent::ToolExecution(tool) => match tool {
-            ToolExecutionPart::Pending { call_id, .. }
-            | ToolExecutionPart::InProgress { call_id, .. }
-            | ToolExecutionPart::Completed { call_id, .. }
-            | ToolExecutionPart::Failed { call_id, .. } => Some(*call_id),
-        },
+        PartContent::Operation(tool) => Some(tool.call_id),
         _ => None,
     })
 }
@@ -1091,8 +1106,8 @@ mod tests {
     use chrono::Utc;
 
     use crate::message::{
-        ExecutionStatus, MessageMetadata, MessagePart, MessageStatus, PartContent, TimeRange,
-        TodoWriteToolInput, ToolExecutionPart, UserInputQuestion,
+        ExecutionStatus, MessageMetadata, MessagePart, MessageStatus, OperationPart, PartContent,
+        TimeRange, TodoWriteToolInput, UserInputQuestion,
     };
     use crate::permission::{PermissionAction, PermissionRequest};
     use crate::role::Role;
@@ -1245,12 +1260,12 @@ mod tests {
             message_id,
             Utc::now(),
             ExecutionStatus::Pending,
-            PartContent::ToolExecution(ToolExecutionPart::Pending {
+            PartContent::Operation(OperationPart::pending(
                 call_id,
                 invocation,
-                title: format!("tool {operation_id}"),
-                lifecycle: TimeRange::default(),
-            }),
+                format!("tool {operation_id}"),
+                TimeRange::default(),
+            )),
         );
         part.operation_id = Some(operation_id.to_string());
         part
@@ -1267,7 +1282,7 @@ mod tests {
             message_id,
             Utc::now(),
             ExecutionStatus::Pending,
-            PartContent::PermissionRequest(PermissionRequestPart::pending(PermissionRequest {
+            PartContent::permission_request(PermissionRequestPart::pending(PermissionRequest {
                 request_id: request_id.to_string(),
                 session_id: Some(1),
                 action: PermissionAction::Tool {
@@ -1305,7 +1320,7 @@ mod tests {
             message_id,
             Utc::now(),
             ExecutionStatus::Pending,
-            PartContent::UserInputRequest(UserInputRequestPart::pending(UserInputRequest {
+            PartContent::user_input_request(UserInputRequestPart::pending(UserInputRequest {
                 request_id: request_id.to_string(),
                 session_id: Some(1),
                 questions: vec![UserInputQuestion {

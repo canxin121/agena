@@ -91,6 +91,7 @@ pub fn message_state_label(i18n: &I18n, state: MessageStatus) -> String {
         MessageStatus::InProgress => t(i18n, "message-state-in-progress"),
         MessageStatus::Completed => t(i18n, "message-state-completed"),
         MessageStatus::Failed => t(i18n, "message-state-failed"),
+        MessageStatus::Cancelled => t(i18n, "todo-status-cancelled"),
     }
 }
 
@@ -100,6 +101,7 @@ pub fn execution_status_label(i18n: &I18n, status: ExecutionStatus) -> String {
         ExecutionStatus::InProgress => t(i18n, "message-state-in-progress"),
         ExecutionStatus::Completed => t(i18n, "message-state-completed"),
         ExecutionStatus::Failed => t(i18n, "message-state-failed"),
+        ExecutionStatus::Cancelled => t(i18n, "todo-status-cancelled"),
     }
 }
 
@@ -238,16 +240,6 @@ pub fn message_question_line(i18n: &I18n, question: &str, id: &str) -> String {
         i18n.text_args(
             "message-question-line",
             &fl_args!("question" => question, "id" => id),
-        )
-    )
-}
-
-pub fn message_tool_result_blocks(i18n: &I18n, count: usize) -> String {
-    format!(
-        "    {}",
-        i18n.text_args(
-            "message-tool-result-blocks",
-            &fl_args!("count" => count as i64),
         )
     )
 }

@@ -42,16 +42,12 @@ describe('chatRenderModel', () => {
       parts: [
         messagePart(2, {
           content: {
-            type: 'tool_execution',
-            output_text: 'applied patch',
+            type: 'operation',
+            model_output: { text: 'applied patch' },
             details: {
-              source: 'custom',
-              output: {
-                name: 'apply_patch',
-                payload: {
-                  diff: '--- a/file\n+++ b/file',
-                  changes: [{ path: 'file' }],
-                },
+              payload: {
+                diff: '--- a/file\n+++ b/file',
+                changes: [{ path: 'file' }],
               },
             },
           },
@@ -69,7 +65,7 @@ describe('chatRenderModel', () => {
     const summaryOnly = message(4, {
       parts: [
         messagePart(4, {
-          kind: 'permission_request',
+          kind: 'request',
           summary: 'Awaiting permission: Need to inspect git status',
           has_detail: true,
           content: undefined,

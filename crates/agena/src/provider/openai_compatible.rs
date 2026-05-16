@@ -1042,8 +1042,8 @@ mod tests {
 
     use super::*;
     use crate::message::{
-        AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, StructuredObject,
-        TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
+        AttachmentItem, AttachmentKind, AttachmentSource, Message, OperationPart, PartContent,
+        StructuredObject, TimeRange, ToolInvocation, ToolOutput,
     };
     use crate::model::ModelId;
     use crate::plugin::PluginToolDecl;
@@ -1217,20 +1217,21 @@ mod tests {
 
     fn tool_result_message_with_image(tool_call_id: &str) -> Message {
         let mut message = Message::prompt_parts(
-            crate::role::Role::Tool,
+            crate::role::Role::Assistant,
             vec![
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 0,
-                    invocation: ToolInvocation {
+                PartContent::Operation(OperationPart::completed(
+                    0,
+                    ToolInvocation {
                         name: "tool".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
                         input: StructuredObject::default(),
                     },
-                    output_text: "{\"ok\":true}".to_owned(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: ToolOutput::default(),
-                    lifecycle: TimeRange::default(),
-                }),
+                    "{\"ok\":true}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
                 PartContent::attachments(vec![AttachmentItem {
                     kind: AttachmentKind::Image,
                     mime: "image/png".to_owned(),
@@ -1339,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_messages_splits_tool_result_and_image_follow_up() {
+    fn convert_messages_splits_assistant_tool_result_and_follow_up_parts() {
         let request = CompletionRequest {
             model: ModelId::new("gpt-4o"),
             system: None,
@@ -1359,55 +1360,63 @@ mod tests {
         };
         let messages = chat_wire::request_to_chat_messages(&request);
 
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].role, "tool");
-        assert_eq!(messages[0].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].role, "assistant");
+        let tool_calls = messages[0]
+            .tool_calls
+            .as_ref()
+            .expect("assistant message should contain the tool call");
+        assert_eq!(tool_calls[0].id, "call_1");
+
+        assert_eq!(messages[1].role, "tool");
+        assert_eq!(messages[1].tool_call_id.as_deref(), Some("call_1"));
         assert_eq!(
-            messages[0].content,
+            messages[1].content,
             Some(Value::String("{\"ok\":true}".to_owned()))
         );
 
-        assert_eq!(messages[1].role, "user");
-        assert!(messages[1].tool_call_id.is_none());
-        let content = messages[1]
+        assert_eq!(messages[2].role, "assistant");
+        assert!(messages[2].tool_call_id.is_none());
+        let content = messages[2]
             .content
             .as_ref()
-            .expect("follow-up user message should have content");
-        assert_eq!(content[0]["type"], "image_url");
-        assert_eq!(content[0]["image_url"]["url"], sample_png_data_url());
+            .expect("follow-up assistant message should have content");
+        assert!(content.as_str().unwrap_or_default().contains("[image:"));
     }
 
     #[test]
     fn convert_messages_preserves_interleaved_tool_result_and_follow_up_order() {
         let mut message = Message::prompt_parts(
-            crate::role::Role::Tool,
+            crate::role::Role::Assistant,
             vec![
                 PartContent::text("Before"),
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 1,
-                    invocation: ToolInvocation {
+                PartContent::Operation(OperationPart::completed(
+                    1,
+                    ToolInvocation {
                         name: "tool_one".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
                         input: StructuredObject::default(),
                     },
-                    output_text: "{\"result\":1}".to_owned(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: ToolOutput::default(),
-                    lifecycle: TimeRange::default(),
-                }),
+                    "{\"result\":1}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
                 PartContent::text("Middle"),
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 2,
-                    invocation: ToolInvocation {
+                PartContent::Operation(OperationPart::completed(
+                    2,
+                    ToolInvocation {
                         name: "tool_two".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
                         input: StructuredObject::default(),
                     },
-                    output_text: "{\"result\":2}".to_owned(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: ToolOutput::default(),
-                    lifecycle: TimeRange::default(),
-                }),
+                    "{\"result\":2}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
                 PartContent::text("After"),
             ],
         );
@@ -1434,10 +1443,10 @@ mod tests {
         let messages = chat_wire::request_to_chat_messages(&request);
 
         assert_eq!(messages.len(), 5);
-        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].role, "assistant");
         assert_eq!(
             messages[0].content,
-            Some(serde_json::json!([{ "type": "text", "text": "Before" }]))
+            Some(Value::String("Before".to_owned()))
         );
         assert_eq!(messages[1].role, "tool");
         assert_eq!(messages[1].tool_call_id.as_deref(), Some("call_1"));
@@ -1445,10 +1454,10 @@ mod tests {
             messages[1].content,
             Some(Value::String("{\"result\":1}".to_owned()))
         );
-        assert_eq!(messages[2].role, "user");
+        assert_eq!(messages[2].role, "assistant");
         assert_eq!(
             messages[2].content,
-            Some(serde_json::json!([{ "type": "text", "text": "Middle" }]))
+            Some(Value::String("Middle".to_owned()))
         );
         assert_eq!(messages[3].role, "tool");
         assert_eq!(messages[3].tool_call_id.as_deref(), Some("call_2"));
@@ -1456,11 +1465,8 @@ mod tests {
             messages[3].content,
             Some(Value::String("{\"result\":2}".to_owned()))
         );
-        assert_eq!(messages[4].role, "user");
-        assert_eq!(
-            messages[4].content,
-            Some(serde_json::json!([{ "type": "text", "text": "After" }]))
-        );
+        assert_eq!(messages[4].role, "assistant");
+        assert_eq!(messages[4].content, Some(Value::String("After".to_owned())));
     }
 
     #[tokio::test]

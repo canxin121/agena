@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::message::{AttachmentItem, ToolResultBlock};
+use crate::message::{AttachmentItem, OperationBlock};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, NetworkAccessSpec, Plugin, PluginManifest,
@@ -328,7 +328,7 @@ fn invoke_tool_output(
         )));
     }
 
-    let blocks: Vec<ToolResultBlock> = result
+    let blocks: Vec<OperationBlock> = result
         .content
         .iter()
         .filter_map(content_block_to_result_block)
@@ -336,14 +336,14 @@ fn invoke_tool_output(
     let output_text = blocks
         .iter()
         .filter_map(|block| match block {
-            ToolResultBlock::Text { text } => Some(text.as_str()),
+            OperationBlock::Text { text } => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n");
     let attachments = blocks
         .iter()
-        .filter_map(ToolResultBlock::to_attachment_item)
+        .filter_map(OperationBlock::to_attachment_item)
         .collect::<Vec<AttachmentItem>>();
     let payload = serde_json::json!({
         "server": server,
@@ -413,7 +413,7 @@ fn read_resource_output(
         .collect::<Vec<_>>();
     let attachments = blocks
         .iter()
-        .filter_map(ToolResultBlock::to_attachment_item)
+        .filter_map(OperationBlock::to_attachment_item)
         .collect::<Vec<AttachmentItem>>();
     let output_text = result
         .contents
@@ -527,10 +527,10 @@ fn get_prompt_output(
     })
 }
 
-fn content_block_to_result_block(block: &ContentBlock) -> Option<ToolResultBlock> {
+fn content_block_to_result_block(block: &ContentBlock) -> Option<OperationBlock> {
     match block {
-        ContentBlock::Text { text } => Some(ToolResultBlock::Text { text: text.clone() }),
-        ContentBlock::Image { data, mime_type } => Some(ToolResultBlock::Image {
+        ContentBlock::Text { text } => Some(OperationBlock::Text { text: text.clone() }),
+        ContentBlock::Image { data, mime_type } => Some(OperationBlock::Image {
             mime: mime_type.clone(),
             url: format!("data:{};base64,{}", mime_type, data),
         }),
@@ -539,8 +539,8 @@ fn content_block_to_result_block(block: &ContentBlock) -> Option<ToolResultBlock
     }
 }
 
-fn resource_contents_to_result_block(resource: &ResourceContents) -> ToolResultBlock {
-    ToolResultBlock::EmbeddedResource {
+fn resource_contents_to_result_block(resource: &ResourceContents) -> OperationBlock {
+    OperationBlock::EmbeddedResource {
         uri: resource.uri.clone(),
         mime: resource.mime_type.clone().unwrap_or_default(),
         text: resource.text.clone(),

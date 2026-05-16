@@ -1233,11 +1233,20 @@ impl OpenAiProvider {
                     Self::push_responses_text_message(input, "assistant", message.as_text_lossy());
                 } else {
                     let mut text_chunks = Vec::new();
+                    let mut pending_output: Option<(String, String, Vec<wire_message::WirePart>)> =
+                        None;
                     for part in projected_parts {
                         match part {
-                            wire_message::WirePart::Text { text } => text_chunks.push(text),
+                            wire_message::WirePart::Text { text } => {
+                                Self::flush_responses_function_output(input, &mut pending_output);
+                                text_chunks.push(text);
+                            }
                             wire_message::WirePart::Attachment { item } => {
-                                text_chunks.push(wire_message::hint_text(&item));
+                                if let Some((_, _, extra_parts)) = pending_output.as_mut() {
+                                    extra_parts.push(wire_message::WirePart::Attachment { item });
+                                } else {
+                                    text_chunks.push(wire_message::hint_text(&item));
+                                }
                             }
                             wire_message::WirePart::ToolCall {
                                 id,
@@ -1245,6 +1254,7 @@ impl OpenAiProvider {
                                 arguments_json,
                             } => {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
+                                Self::flush_responses_function_output(input, &mut pending_output);
                                 if !id.trim().is_empty() && !name.trim().is_empty() {
                                     input.push(OpenAiResponsesInputItem::FunctionCall(
                                         OpenAiFunctionCallItem {
@@ -1263,106 +1273,15 @@ impl OpenAiProvider {
                                 ..
                             } => {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
+                                Self::flush_responses_function_output(input, &mut pending_output);
                                 if !tool_call_id.trim().is_empty() {
-                                    input.push(OpenAiResponsesInputItem::FunctionCallOutput(
-                                        OpenAiFunctionCallOutputItem {
-                                            kind: "function_call_output",
-                                            call_id: tool_call_id,
-                                            output: serde_json::Value::String(output_json),
-                                            copilot_cache_control: None,
-                                        },
-                                    ));
+                                    pending_output = Some((tool_call_id, output_json, Vec::new()));
                                 }
                             }
                         }
                     }
+                    Self::flush_responses_function_output(input, &mut pending_output);
                     Self::flush_assistant_responses_text(input, &mut text_chunks);
-                }
-            }
-            Role::Tool => {
-                if projected_parts.is_empty() {
-                    Self::push_responses_text_message(input, "user", message.as_text_lossy());
-                } else {
-                    let tool_results = wire_message::tool_results(projected_parts.as_slice());
-                    let extra_parts =
-                        wire_message::non_tool_result_parts(projected_parts.as_slice());
-
-                    if tool_results.len() > 1 {
-                        let mut buffered_parts = Vec::new();
-                        for part in projected_parts {
-                            match part {
-                                wire_message::WirePart::ToolResult {
-                                    tool_call_id,
-                                    output_json,
-                                    ..
-                                } => {
-                                    if !buffered_parts.is_empty() {
-                                        Self::push_responses_message_from_parts(
-                                            input,
-                                            "user",
-                                            buffered_parts.as_slice(),
-                                        );
-                                        buffered_parts.clear();
-                                    }
-
-                                    if tool_call_id.trim().is_empty() {
-                                        buffered_parts.push(wire_message::WirePart::Text {
-                                            text: output_json,
-                                        });
-                                    } else {
-                                        input.push(OpenAiResponsesInputItem::FunctionCallOutput(
-                                            OpenAiFunctionCallOutputItem {
-                                                kind: "function_call_output",
-                                                call_id: tool_call_id,
-                                                output: serde_json::Value::String(output_json),
-                                                copilot_cache_control: None,
-                                            },
-                                        ));
-                                    }
-                                }
-                                other => buffered_parts.push(other),
-                            }
-                        }
-
-                        if !buffered_parts.is_empty() {
-                            Self::push_responses_message_from_parts(
-                                input,
-                                "user",
-                                buffered_parts.as_slice(),
-                            );
-                        }
-                    } else if let Some((tool_call_id, output_json)) =
-                        tool_results.into_iter().next()
-                    {
-                        if tool_call_id.trim().is_empty() {
-                            let mut fallback_parts =
-                                vec![wire_message::WirePart::Text { text: output_json }];
-                            fallback_parts.extend(extra_parts);
-                            Self::push_responses_message_from_parts(
-                                input,
-                                "user",
-                                fallback_parts.as_slice(),
-                            );
-                        } else {
-                            input.push(OpenAiResponsesInputItem::FunctionCallOutput(
-                                OpenAiFunctionCallOutputItem {
-                                    kind: "function_call_output",
-                                    call_id: tool_call_id,
-                                    output: Self::multimodal_function_output_value(
-                                        output_json.as_str(),
-                                        extra_parts.as_slice(),
-                                    ),
-                                    copilot_cache_control: None,
-                                },
-                            ));
-                        }
-                    } else {
-                        Self::push_responses_message_from_parts(
-                            input,
-                            "user",
-                            projected_parts.as_slice(),
-                        );
-                    }
                 }
             }
         }
@@ -1392,6 +1311,7 @@ impl OpenAiProvider {
             .collect()
     }
 
+    #[allow(dead_code)]
     fn multimodal_function_output_value(
         output_json: &str,
         extra_parts: &[wire_message::WirePart],
@@ -1408,6 +1328,26 @@ impl OpenAiProvider {
         }
         content.extend(Self::responses_input_contents_from_parts(extra_parts));
         serde_json::to_value(content).expect("openai function_call_output content should serialize")
+    }
+
+    fn flush_responses_function_output(
+        input: &mut Vec<OpenAiResponsesInputItem>,
+        pending_output: &mut Option<(String, String, Vec<wire_message::WirePart>)>,
+    ) {
+        let Some((call_id, output_json, extra_parts)) = pending_output.take() else {
+            return;
+        };
+        input.push(OpenAiResponsesInputItem::FunctionCallOutput(
+            OpenAiFunctionCallOutputItem {
+                kind: "function_call_output",
+                call_id,
+                output: Self::multimodal_function_output_value(
+                    output_json.as_str(),
+                    extra_parts.as_slice(),
+                ),
+                copilot_cache_control: None,
+            },
+        ));
     }
 
     fn parse_responses_tool_calls(
@@ -2352,8 +2292,8 @@ mod tests {
     use tokio::net::TcpListener;
 
     use crate::message::{
-        AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent, StructuredObject,
-        TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
+        AttachmentItem, AttachmentKind, AttachmentSource, Message, OperationPart, PartContent,
+        StructuredObject, TimeRange, ToolInvocation, ToolOutput,
     };
     use crate::model::ModelId;
     use crate::plugin::PluginToolDecl;
@@ -2425,20 +2365,21 @@ mod tests {
 
     fn tool_result_message_with_image(tool_call_id: &str) -> Message {
         let mut message = Message::prompt_parts(
-            crate::role::Role::Tool,
+            crate::role::Role::Assistant,
             vec![
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 0,
-                    invocation: ToolInvocation {
+                PartContent::Operation(OperationPart::completed(
+                    0,
+                    ToolInvocation {
                         name: "tool".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
                         input: StructuredObject::default(),
                     },
-                    output_text: "{\"ok\":true}".to_owned(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: ToolOutput::default(),
-                    lifecycle: TimeRange::default(),
-                }),
+                    "{\"ok\":true}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
                 PartContent::attachments(vec![AttachmentItem {
                     kind: AttachmentKind::Image,
                     mime: "image/png".to_owned(),
@@ -2464,20 +2405,21 @@ mod tests {
 
     fn tool_result_message_with_pdf(tool_call_id: &str) -> Message {
         let mut message = Message::prompt_parts(
-            crate::role::Role::Tool,
+            crate::role::Role::Assistant,
             vec![
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 0,
-                    invocation: ToolInvocation {
+                PartContent::Operation(OperationPart::completed(
+                    0,
+                    ToolInvocation {
                         name: "tool".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
                         input: StructuredObject::default(),
                     },
-                    output_text: "{\"ok\":true}".to_owned(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: ToolOutput::default(),
-                    lifecycle: TimeRange::default(),
-                }),
+                    "{\"ok\":true}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
                 PartContent::attachments(vec![AttachmentItem {
                     kind: AttachmentKind::Pdf,
                     mime: "application/pdf".to_owned(),
@@ -2504,21 +2446,22 @@ mod tests {
     fn multi_tool_result_message(tool_call_ids: &[&str]) -> Message {
         let mut parts = Vec::new();
         for (index, _) in tool_call_ids.iter().enumerate() {
-            parts.push(PartContent::ToolExecution(ToolExecutionPart::Completed {
-                call_id: index as i64,
-                invocation: ToolInvocation {
+            parts.push(PartContent::Operation(OperationPart::completed(
+                index as i64,
+                ToolInvocation {
                     name: format!("tool_{index}"),
+                    plugin_name: Some("test_plugin".to_owned()),
                     input: StructuredObject::default(),
                 },
-                output_text: format!("{{\"result\":{index}}}"),
-                blocks: Vec::new(),
-                attachments: Vec::new(),
-                details: ToolOutput::default(),
-                lifecycle: TimeRange::default(),
-            }));
+                format!("{{\"result\":{index}}}"),
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                TimeRange::default(),
+            )));
         }
 
-        let mut message = Message::prompt_parts(crate::role::Role::Tool, parts);
+        let mut message = Message::prompt_parts(crate::role::Role::Assistant, parts);
         for (index, tool_call_id) in tool_call_ids.iter().enumerate() {
             if let Some(part) = message.parts.get_mut(index) {
                 part.operation_id = Some((*tool_call_id).to_owned());
@@ -3375,14 +3318,16 @@ mod tests {
         let json = serde_json::to_value(&input).expect("responses input should serialize");
         let items = json.as_array().expect("responses input should be an array");
 
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["type"], "function_call_output");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["type"], "function_call");
         assert_eq!(items[0]["call_id"], "call_1");
-        assert!(items[0]["output"].is_array());
-        assert_eq!(items[0]["output"][0]["type"], "input_text");
-        assert_eq!(items[0]["output"][0]["text"], "{\"ok\":true}");
-        assert_eq!(items[0]["output"][1]["type"], "input_image");
-        assert_eq!(items[0]["output"][1]["image_url"], sample_png_data_url());
+        assert_eq!(items[1]["type"], "function_call_output");
+        assert_eq!(items[1]["call_id"], "call_1");
+        assert!(items[1]["output"].is_array());
+        assert_eq!(items[1]["output"][0]["type"], "input_text");
+        assert_eq!(items[1]["output"][0]["text"], "{\"ok\":true}");
+        assert_eq!(items[1]["output"][1]["type"], "input_image");
+        assert_eq!(items[1]["output"][1]["image_url"], sample_png_data_url());
     }
 
     #[test]
@@ -3415,15 +3360,17 @@ mod tests {
         let json = serde_json::to_value(&input).expect("responses input should serialize");
         let items = json.as_array().expect("responses input should be an array");
 
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["type"], "function_call_output");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["type"], "function_call");
         assert_eq!(items[0]["call_id"], "call_1");
-        assert!(items[0]["output"].is_array());
-        assert_eq!(items[0]["output"][0]["type"], "input_text");
-        assert_eq!(items[0]["output"][0]["text"], "{\"ok\":true}");
-        assert_eq!(items[0]["output"][1]["type"], "input_file");
-        assert_eq!(items[0]["output"][1]["file_data"], sample_pdf_data_url());
-        assert_eq!(items[0]["output"][1]["filename"], "report.pdf");
+        assert_eq!(items[1]["type"], "function_call_output");
+        assert_eq!(items[1]["call_id"], "call_1");
+        assert!(items[1]["output"].is_array());
+        assert_eq!(items[1]["output"][0]["type"], "input_text");
+        assert_eq!(items[1]["output"][0]["text"], "{\"ok\":true}");
+        assert_eq!(items[1]["output"][1]["type"], "input_file");
+        assert_eq!(items[1]["output"][1]["file_data"], sample_pdf_data_url());
+        assert_eq!(items[1]["output"][1]["filename"], "report.pdf");
     }
 
     #[test]
@@ -3434,20 +3381,19 @@ mod tests {
             assistant.id,
             assistant.created_at,
             crate::message::ExecutionStatus::Completed,
-            crate::message::PartContent::ToolExecution(
-                crate::message::ToolExecutionPart::Completed {
-                    call_id: 1,
-                    invocation: crate::message::ToolInvocation {
-                        name: "search".to_owned(),
-                        input: crate::message::StructuredObject::default(),
-                    },
-                    output_text: String::new(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: crate::message::ToolOutput::default(),
-                    lifecycle: crate::message::TimeRange::default(),
+            crate::message::PartContent::Operation(crate::message::OperationPart::completed(
+                1,
+                crate::message::ToolInvocation {
+                    name: "search".to_owned(),
+                    plugin_name: Some("test_plugin".to_owned()),
+                    input: crate::message::StructuredObject::default(),
                 },
-            ),
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                crate::message::ToolOutput::default(),
+                crate::message::TimeRange::default(),
+            )),
         ));
         if let Some(part) = assistant.parts.last_mut() {
             part.operation_id = Some("call_1".to_owned());
@@ -3488,47 +3434,52 @@ mod tests {
         let json = serde_json::to_value(&input).expect("responses input should serialize");
         let items = json.as_array().expect("responses input should be an array");
 
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 4);
         assert_eq!(items[0]["role"], "assistant");
         assert_eq!(items[0]["content"][0]["text"], "Before ");
         assert_eq!(items[1]["type"], "function_call");
         assert_eq!(items[1]["call_id"], "call_1");
         assert_eq!(items[1]["name"], "search");
-        assert_eq!(items[2]["role"], "assistant");
-        assert_eq!(items[2]["content"][0]["text"], "After");
+        assert_eq!(items[2]["type"], "function_call_output");
+        assert_eq!(items[2]["call_id"], "call_1");
+        assert_eq!(items[2]["output"], "");
+        assert_eq!(items[3]["role"], "assistant");
+        assert_eq!(items[3]["content"][0]["text"], "After");
     }
 
     #[test]
     fn chat_messages_preserve_interleaved_tool_result_and_follow_up_order() {
         let mut message = Message::prompt_parts(
-            crate::role::Role::Tool,
+            crate::role::Role::Assistant,
             vec![
                 PartContent::text("Before"),
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 1,
-                    invocation: ToolInvocation {
+                PartContent::Operation(OperationPart::completed(
+                    1,
+                    ToolInvocation {
                         name: "tool_one".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
                         input: StructuredObject::default(),
                     },
-                    output_text: "{\"result\":1}".to_owned(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: ToolOutput::default(),
-                    lifecycle: TimeRange::default(),
-                }),
+                    "{\"result\":1}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
                 PartContent::text("Middle"),
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 2,
-                    invocation: ToolInvocation {
+                PartContent::Operation(OperationPart::completed(
+                    2,
+                    ToolInvocation {
                         name: "tool_two".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
                         input: StructuredObject::default(),
                     },
-                    output_text: "{\"result\":2}".to_owned(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: ToolOutput::default(),
-                    lifecycle: TimeRange::default(),
-                }),
+                    "{\"result\":2}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
                 PartContent::text("After"),
             ],
         );
@@ -3562,22 +3513,22 @@ mod tests {
         let items = json.as_array().expect("chat messages should be an array");
 
         assert_eq!(items.len(), 5);
-        assert_eq!(items[0]["role"], "user");
-        assert_eq!(items[0]["content"][0]["text"], "Before");
+        assert_eq!(items[0]["role"], "assistant");
+        assert_eq!(items[0]["content"], "Before");
         assert_eq!(items[1]["role"], "tool");
         assert_eq!(items[1]["tool_call_id"], "call_1");
         assert_eq!(items[1]["content"], "{\"result\":1}");
-        assert_eq!(items[2]["role"], "user");
-        assert_eq!(items[2]["content"][0]["text"], "Middle");
+        assert_eq!(items[2]["role"], "assistant");
+        assert_eq!(items[2]["content"], "Middle");
         assert_eq!(items[3]["role"], "tool");
         assert_eq!(items[3]["tool_call_id"], "call_2");
         assert_eq!(items[3]["content"], "{\"result\":2}");
-        assert_eq!(items[4]["role"], "user");
-        assert_eq!(items[4]["content"][0]["text"], "After");
+        assert_eq!(items[4]["role"], "assistant");
+        assert_eq!(items[4]["content"], "After");
     }
 
     #[test]
-    fn responses_input_emits_all_tool_results_from_single_tool_message() {
+    fn responses_input_emits_all_tool_results_from_single_assistant_message() {
         let request = CompletionRequest {
             model: ModelId::new("gpt-5"),
             system: None,
@@ -3606,13 +3557,17 @@ mod tests {
         let json = serde_json::to_value(&input).expect("responses input should serialize");
         let items = json.as_array().expect("responses input should be an array");
 
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0]["type"], "function_call_output");
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0]["type"], "function_call");
         assert_eq!(items[0]["call_id"], "call_1");
-        assert_eq!(items[0]["output"], "{\"result\":0}");
         assert_eq!(items[1]["type"], "function_call_output");
-        assert_eq!(items[1]["call_id"], "call_2");
-        assert_eq!(items[1]["output"], "{\"result\":1}");
+        assert_eq!(items[1]["call_id"], "call_1");
+        assert_eq!(items[1]["output"], "{\"result\":0}");
+        assert_eq!(items[2]["type"], "function_call");
+        assert_eq!(items[2]["call_id"], "call_2");
+        assert_eq!(items[3]["type"], "function_call_output");
+        assert_eq!(items[3]["call_id"], "call_2");
+        assert_eq!(items[3]["output"], "{\"result\":1}");
     }
 
     #[test]

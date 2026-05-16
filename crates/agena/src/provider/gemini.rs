@@ -168,6 +168,13 @@ impl GeminiProvider {
 
     fn message_parts(message: &Message) -> Vec<GeminiPart> {
         let projected_parts = wire_message::project(message);
+        Self::parts_from_projected_parts(message, projected_parts.as_slice())
+    }
+
+    fn parts_from_projected_parts(
+        message: &Message,
+        projected_parts: &[wire_message::WirePart],
+    ) -> Vec<GeminiPart> {
         if projected_parts.is_empty() {
             let text = message.as_text_lossy();
             return if text.trim().is_empty() {
@@ -179,24 +186,85 @@ impl GeminiProvider {
 
         projected_parts
             .iter()
-            .map(|part| match part {
-                wire_message::WirePart::Text { text } => GeminiPart::text(text.clone()),
-                wire_message::WirePart::Attachment { item } => Self::attachment_part(item),
-                wire_message::WirePart::ToolCall {
-                    name,
-                    arguments_json,
-                    ..
-                } => GeminiPart::function_call(name.clone(), parse_json_or_object(arguments_json)),
+            .map(Self::part_from_wire_part)
+            .collect()
+    }
+
+    fn part_from_wire_part(part: &wire_message::WirePart) -> GeminiPart {
+        match part {
+            wire_message::WirePart::Text { text } => GeminiPart::text(text.clone()),
+            wire_message::WirePart::Attachment { item } => Self::attachment_part(item),
+            wire_message::WirePart::ToolCall {
+                name,
+                arguments_json,
+                ..
+            } => GeminiPart::function_call(name.clone(), parse_json_or_object(arguments_json)),
+            wire_message::WirePart::ToolResult {
+                tool_name,
+                output_json,
+                ..
+            } => GeminiPart::function_response(
+                gemini_tool_response_name(tool_name),
+                parse_json_or_string_object(output_json),
+            ),
+        }
+    }
+
+    fn assistant_contents(message: &Message) -> Vec<GeminiContent> {
+        let projected = wire_message::project(message);
+        if !projected
+            .iter()
+            .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
+        {
+            return vec![GeminiContent {
+                role: Some("model".to_owned()),
+                parts: Self::parts_from_projected_parts(message, projected.as_slice()),
+            }];
+        }
+
+        let mut contents = Vec::new();
+        let mut buffered = Vec::<wire_message::WirePart>::new();
+        for part in &projected {
+            match part {
                 wire_message::WirePart::ToolResult {
                     tool_name,
                     output_json,
                     ..
-                } => GeminiPart::function_response(
-                    tool_name.clone(),
-                    parse_json_or_string_object(output_json),
-                ),
-            })
-            .collect()
+                } => {
+                    Self::flush_model_content(message, &mut contents, &mut buffered);
+                    contents.push(GeminiContent {
+                        role: Some("user".to_owned()),
+                        parts: vec![GeminiPart::function_response(
+                            gemini_tool_response_name(tool_name),
+                            parse_json_or_string_object(output_json),
+                        )],
+                    });
+                }
+                other => buffered.push(other.clone()),
+            }
+        }
+        Self::flush_model_content(message, &mut contents, &mut buffered);
+
+        contents
+    }
+
+    fn flush_model_content(
+        message: &Message,
+        contents: &mut Vec<GeminiContent>,
+        buffered: &mut Vec<wire_message::WirePart>,
+    ) {
+        if buffered.is_empty() {
+            return;
+        }
+        let parts = Self::parts_from_projected_parts(message, buffered.as_slice());
+        buffered.clear();
+        if parts.is_empty() {
+            return;
+        }
+        contents.push(GeminiContent {
+            role: Some("model".to_owned()),
+            parts,
+        });
     }
 
     fn attachment_part(item: &AttachmentItem) -> GeminiPart {
@@ -341,11 +409,8 @@ impl ModelProvider for GeminiProvider {
         for msg in request.messages {
             match msg.role {
                 Role::System => system_chunks.push(msg.as_text_lossy()),
-                Role::Assistant => contents.push(GeminiContent {
-                    role: Some("model".to_owned()),
-                    parts: Self::message_parts(&msg),
-                }),
-                Role::User | Role::Tool => contents.push(GeminiContent {
+                Role::Assistant => contents.extend(Self::assistant_contents(&msg)),
+                Role::User => contents.push(GeminiContent {
                     role: Some("user".to_owned()),
                     parts: Self::message_parts(&msg),
                 }),
@@ -444,11 +509,8 @@ impl ModelProvider for GeminiProvider {
         for msg in request.messages {
             match msg.role {
                 Role::System => system_chunks.push(msg.as_text_lossy()),
-                Role::Assistant => contents.push(GeminiContent {
-                    role: Some("model".to_owned()),
-                    parts: Self::message_parts(&msg),
-                }),
-                Role::User | Role::Tool => contents.push(GeminiContent {
+                Role::Assistant => contents.extend(Self::assistant_contents(&msg)),
+                Role::User => contents.push(GeminiContent {
                     role: Some("user".to_owned()),
                     parts: Self::message_parts(&msg),
                 }),
@@ -600,6 +662,15 @@ impl ModelProvider for GeminiProvider {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+fn gemini_tool_response_name(tool_name: &str) -> String {
+    let trimmed = tool_name.trim();
+    if trimmed.is_empty() {
+        "tool_result".to_owned()
+    } else {
+        trimmed.to_owned()
     }
 }
 
@@ -1765,8 +1836,8 @@ mod tests {
     #[test]
     fn message_parts_serialize_tool_call_and_tool_result_natively() {
         use crate::message::{
-            ExecutionStatus, Message, MessageMetadata, MessagePart, MessageStatus, TimeRange,
-            ToolExecutionPart, ToolInvocation, ToolOutput,
+            ExecutionStatus, Message, MessageMetadata, MessagePart, MessageStatus, OperationPart,
+            TimeRange, ToolInvocation, ToolOutput,
         };
         use chrono::Utc;
 
@@ -1774,22 +1845,20 @@ mod tests {
             10,
             42,
             Utc::now(),
-            ExecutionStatus::Completed,
-            crate::message::PartContent::ToolExecution(ToolExecutionPart::Completed {
-                call_id: 7,
-                invocation: ToolInvocation {
+            ExecutionStatus::Pending,
+            crate::message::PartContent::Operation(OperationPart::pending(
+                7,
+                ToolInvocation {
                     name: "lookup".to_owned(),
+                    plugin_name: Some("test_plugin".to_owned()),
                     input: crate::message::StructuredObject::try_from(
                         serde_json::json!({"q": "rust"}),
                     )
                     .expect("structured object"),
                 },
-                output_text: String::new(),
-                blocks: Vec::new(),
-                attachments: Vec::new(),
-                details: ToolOutput::default(),
-                lifecycle: TimeRange::default(),
-            }),
+                "lookup",
+                TimeRange::default(),
+            )),
         );
         assistant_part.operation_id = Some("call_7".to_owned());
         let assistant_msg = Message {
@@ -1816,23 +1885,24 @@ mod tests {
             43,
             Utc::now(),
             ExecutionStatus::Completed,
-            crate::message::PartContent::ToolExecution(ToolExecutionPart::Completed {
-                call_id: 7,
-                invocation: ToolInvocation {
+            crate::message::PartContent::Operation(OperationPart::completed(
+                7,
+                ToolInvocation {
                     name: "lookup".to_owned(),
+                    plugin_name: Some("test_plugin".to_owned()),
                     input: crate::message::StructuredObject::default(),
                 },
-                output_text: "ok".to_owned(),
-                blocks: Vec::new(),
-                attachments: Vec::new(),
-                details: ToolOutput::default(),
-                lifecycle: TimeRange::default(),
-            }),
+                "ok",
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                TimeRange::default(),
+            )),
         );
         tool_part.operation_id = Some("call_7".to_owned());
         let tool_msg = Message {
             id: 43,
-            role: crate::role::Role::Tool,
+            role: crate::role::Role::Assistant,
             state: MessageStatus::Completed,
             parts: vec![tool_part],
             created_at: Utc::now(),
@@ -1841,12 +1911,63 @@ mod tests {
             finish: None,
         };
         let parts = GeminiProvider::message_parts(&tool_msg);
-        assert_eq!(parts.len(), 1);
-        let resp = parts[0]
+        assert_eq!(parts.len(), 2);
+        let resp = parts[1]
             .function_response
             .as_ref()
             .expect("function_response emitted");
         assert_eq!(resp.name, "lookup");
         assert_eq!(resp.response["result"], "ok");
+    }
+
+    #[test]
+    fn assistant_contents_project_tool_results_as_user_function_responses() {
+        use crate::message::{
+            OperationPart, PartContent, StructuredObject, TimeRange, ToolInvocation, ToolOutput,
+        };
+
+        let mut message = Message::prompt_parts(
+            crate::role::Role::Assistant,
+            vec![
+                PartContent::text("Before"),
+                PartContent::Operation(OperationPart::completed(
+                    1,
+                    ToolInvocation {
+                        name: "lookup".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
+                        input: StructuredObject::default(),
+                    },
+                    "{\"ok\":true}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
+                PartContent::text("After"),
+            ],
+        );
+        message.parts[1].operation_id = Some("call_lookup".to_owned());
+
+        let contents = GeminiProvider::assistant_contents(&message);
+
+        assert_eq!(contents.len(), 3);
+        assert_eq!(contents[0].role.as_deref(), Some("model"));
+        assert_eq!(contents[0].parts[0].text.as_deref(), Some("Before"));
+        assert_eq!(
+            contents[0].parts[1]
+                .function_call
+                .as_ref()
+                .map(|call| call.name.as_str()),
+            Some("lookup")
+        );
+        assert_eq!(contents[1].role.as_deref(), Some("user"));
+        let response = contents[1].parts[0]
+            .function_response
+            .as_ref()
+            .expect("function_response emitted under user role");
+        assert_eq!(response.name, "lookup");
+        assert_eq!(response.response["ok"], true);
+        assert_eq!(contents[2].role.as_deref(), Some("model"));
+        assert_eq!(contents[2].parts[0].text.as_deref(), Some("After"));
     }
 }

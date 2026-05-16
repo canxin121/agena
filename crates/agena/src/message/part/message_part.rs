@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AttachmentPart, ExecutionStatus, ExecutionStatusTransitionError, FileChangeEntry,
-    FileChangeKind, FileChangePart, PartContent, PartKind, ToolExecutionPart, ToolInvocation,
+    AttachmentPart, ExecutionStatus, ExecutionStatusTransitionError, PartContent, PartKind,
+    RequestPart, ToolInvocation,
 };
 
 /// Alias kept for ergonomic reuse at MessagePart call sites; the underlying
@@ -167,11 +167,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
     match content {
         PartContent::Text(_) => Some("text".to_string()),
         PartContent::Reasoning(_) => Some("reasoning".to_string()),
-        PartContent::ToolExecution(tool) => Some(tool_name(tool.invocation())),
-        PartContent::CommandExecution(_) => Some("command".to_string()),
-        PartContent::FileChange(_) => Some("file_change".to_string()),
-        PartContent::WebSearch(_) => Some("web_search".to_string()),
-        PartContent::TodoList(_) => Some("todo_list".to_string()),
+        PartContent::Operation(operation) => Some(tool_name(operation.invocation())),
         PartContent::Error(error) => {
             let code = error.code.trim();
             if code.is_empty() {
@@ -181,8 +177,8 @@ fn name_from_content(content: &PartContent) -> Option<String> {
             }
         }
         PartContent::Attachment(_) => Some("attachment".to_string()),
-        PartContent::PermissionRequest(_) => Some("permission_request".to_string()),
-        PartContent::UserInputRequest(_) => Some("user_input_request".to_string()),
+        PartContent::Request(RequestPart::Permission(_)) => Some("permission".to_string()),
+        PartContent::Request(RequestPart::UserInput(_)) => Some("user_input".to_string()),
     }
 }
 
@@ -196,42 +192,22 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
                 truncate_summary(&reasoning.raw_content.join(" "))
             }
         }
-        PartContent::ToolExecution(tool) => {
-            let invocation = tool.invocation();
-            let candidate = match tool {
-                ToolExecutionPart::Pending { title, .. }
-                | ToolExecutionPart::InProgress { title, .. } => Some(title.as_str()),
-                ToolExecutionPart::Completed { output_text, .. } => Some(output_text.as_str()),
-                ToolExecutionPart::Failed {
-                    error_message,
-                    output_text,
-                    ..
-                } => {
-                    if !error_message.trim().is_empty() {
-                        Some(error_message.as_str())
-                    } else {
-                        Some(output_text.as_str())
-                    }
-                }
-            };
+        PartContent::Operation(operation) => {
+            let invocation = operation.invocation();
+            let candidate = operation
+                .error_message()
+                .or_else(|| operation.output_text())
+                .or_else(|| operation.title())
+                .or_else(|| (!operation.summary.is_empty()).then_some(operation.summary.as_str()));
             candidate
                 .and_then(truncate_summary)
                 .or_else(|| truncate_summary(&tool_name(invocation)))
-        }
-        PartContent::CommandExecution(command) => truncate_summary(&command.command),
-        PartContent::FileChange(change) => file_change_part_summary(change),
-        PartContent::WebSearch(search) => truncate_summary(&search.query),
-        PartContent::TodoList(todo) => {
-            truncate_summary(&format!("{} todo item(s)", todo.items.len()))
         }
         PartContent::Error(error) => {
             truncate_summary(&format!("{}: {}", error.code.trim(), error.message.trim()))
         }
         PartContent::Attachment(attachment) => attachment_part_summary(attachment),
-        PartContent::PermissionRequest(permission) => {
-            truncate_summary(permission.summary_text().as_str())
-        }
-        PartContent::UserInputRequest(request) => truncate_summary(request.summary_text().as_str()),
+        PartContent::Request(request) => truncate_summary(request.summary_text().as_str()),
     }
 }
 
@@ -251,43 +227,6 @@ fn attachment_part_summary(part: &AttachmentPart) -> Option<String> {
         truncate_summary(&format!("1 attachment: {first}"))
     } else {
         truncate_summary(&format!("{count} attachments (first: {first})"))
-    }
-}
-
-fn file_change_part_summary(part: &FileChangePart) -> Option<String> {
-    let count = part.changes.len();
-    if count == 0 {
-        return Some("0 file changes".to_string());
-    }
-
-    let first = part
-        .changes
-        .first()
-        .map(file_change_entry_summary)
-        .unwrap_or_else(|| "file change".to_string());
-
-    if count == 1 {
-        truncate_summary(&format!("1 file change: {first}"))
-    } else {
-        truncate_summary(&format!("{count} file changes (first: {first})"))
-    }
-}
-
-fn file_change_entry_summary(change: &FileChangeEntry) -> String {
-    if change.kind == FileChangeKind::Moved
-        && let Some(from_path) = change.from_path.as_deref()
-    {
-        return format!("{from_path} -> {} (moved)", change.path);
-    }
-    format!("{} ({})", change.path, file_change_kind_label(change.kind))
-}
-
-const fn file_change_kind_label(kind: FileChangeKind) -> &'static str {
-    match kind {
-        FileChangeKind::Added => "added",
-        FileChangeKind::Updated => "updated",
-        FileChangeKind::Deleted => "deleted",
-        FileChangeKind::Moved => "moved",
     }
 }
 
@@ -404,7 +343,7 @@ mod tests {
             2,
             Utc::now(),
             ExecutionStatus::Pending,
-            PartContent::PermissionRequest(crate::message::PermissionRequestPart::pending(
+            PartContent::permission_request(crate::message::PermissionRequestPart::pending(
                 PermissionRequest {
                     request_id: "req_1".to_string(),
                     session_id: Some(2),
@@ -430,35 +369,11 @@ mod tests {
             )),
         );
 
-        assert_eq!(part.kind, PartKind::PermissionRequest);
-        assert_eq!(part.name.as_deref(), Some("permission_request"));
+        assert_eq!(part.kind, PartKind::Request);
+        assert_eq!(part.name.as_deref(), Some("permission"));
         assert_eq!(
             part.summary.as_deref(),
             Some("Awaiting permission: tool 'apply_patch' requires confirmation by policy")
-        );
-    }
-
-    #[test]
-    fn file_change_part_sets_summary_from_first_change() {
-        let part = MessagePart::with_content(
-            12,
-            3,
-            Utc::now(),
-            ExecutionStatus::Completed,
-            PartContent::FileChange(FileChangePart {
-                changes: vec![crate::message::FileChangeEntry {
-                    path: "result.txt".to_string(),
-                    kind: FileChangeKind::Added,
-                    from_path: None,
-                }],
-            }),
-        );
-
-        assert_eq!(part.kind, PartKind::FileChange);
-        assert_eq!(part.name.as_deref(), Some("file_change"));
-        assert_eq!(
-            part.summary.as_deref(),
-            Some("1 file change: result.txt (added)")
         );
     }
 }

@@ -11,8 +11,8 @@ use std::{
 use agena::{
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
-        AttachmentKind, FileChangeKind, MessagePart, PartContent, ToolExecutionPart,
-        ToolInvocation, UserInputReply, UserInputReplyKind, UserInputRequest,
+        AttachmentKind, MessagePart, OperationPart, PartContent, ToolInvocation, UserInputReply,
+        UserInputReplyKind, UserInputRequest,
     },
     model::ModelRef,
     permission::{
@@ -10255,10 +10255,15 @@ mod tests {
         let path = write_test_runtime_config(
             r#"
 [providers.openai]
-kind = "openai"
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
 base_url = "https://api.openai.com/v1"
-default_model = "gpt-4.1-mini"
 api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let workspace_root = path
@@ -10329,10 +10334,15 @@ api_key = "test"
         let path = write_test_runtime_config(
             r#"
 [providers.openai]
-kind = "openai"
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
 base_url = "https://api.openai.com/v1"
-default_model = "gpt-4.1-mini"
 api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let workspace_root = path
@@ -10396,10 +10406,15 @@ api_key = "test"
         let path = write_test_runtime_config(
             r#"
 [providers.openai]
-kind = "openai"
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
 base_url = "https://api.openai.com/v1"
-default_model = "gpt-4.1-mini"
 api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
 "#,
         );
         let workspace_root = path
@@ -10527,7 +10542,7 @@ api_key = "test"
             .description("Operator surface")
             .author("Agena")
             .hooks(agena::plugin::HookSubscription::EVENT)
-            .entry(
+            .tool(
                 agena::plugin::PluginToolDecl::new("inspect", json!({"type": "object"}))
                     .tag(agena::plugin::sdk::ToolTag::Task)
                     .host_capabilities([
@@ -10535,7 +10550,7 @@ api_key = "test"
                         agena::plugin::sdk::HostCapability::ReadConfig,
                     ]),
             )
-            .entry(
+            .tool(
                 agena::plugin::PluginToolDecl::new("logs", json!({"type": "object"}))
                     .host_capability(agena::plugin::sdk::HostCapability::PluginStatus),
             )
@@ -11230,6 +11245,7 @@ api_key = "test"
             message_count: 0,
             child_session_count: 0,
             last_message_at: None,
+            goal: None,
         }
     }
 

@@ -101,7 +101,6 @@ flash-clipboard-copy-failed = echec de la copie vers le presse-papiers : {$error
 message-role-user = utilisateur
 message-role-assistant = assistant
 message-role-system = systeme
-message-role-tool = outil
 
 message-state-pending = pending
 message-state-in-progress = in_progress

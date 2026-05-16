@@ -101,7 +101,6 @@ flash-clipboard-copy-failed = クリップボードへのコピーに失敗し�
 message-role-user = user
 message-role-assistant = assistant
 message-role-system = system
-message-role-tool = tool
 
 message-state-pending = pending
 message-state-in-progress = in_progress

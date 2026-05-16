@@ -30,8 +30,6 @@ pub enum MessageSource {
     Assistant,
     #[sea_orm(num_value = 3)]
     System,
-    #[sea_orm(num_value = 4)]
-    Tool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]

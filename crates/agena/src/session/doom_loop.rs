@@ -70,7 +70,7 @@ pub fn detect(messages: &[Message], policy: DoomLoopPolicy) -> Option<DoomLoopHi
             continue;
         }
         for part in message.parts.iter().rev() {
-            let Some(PartContent::ToolExecution(exec)) = part.content.as_ref() else {
+            let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
                 continue;
             };
             let signature = signature_of(exec.invocation());
@@ -100,7 +100,7 @@ pub fn detect(messages: &[Message], policy: DoomLoopPolicy) -> Option<DoomLoopHi
 }
 
 fn signature_of(invocation: &ToolInvocation) -> (String, String) {
-    let ToolInvocation { name, input } = invocation;
+    let ToolInvocation { name, input, .. } = invocation;
     (
         name.clone(),
         serde_json::to_string(input).unwrap_or_default(),
@@ -111,8 +111,8 @@ fn signature_of(invocation: &ToolInvocation) -> (String, String) {
 mod tests {
     use super::*;
     use crate::message::{
-        ExecutionStatus, PartContent, StructuredField, StructuredObject, StructuredValue,
-        TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
+        ExecutionStatus, OperationPart, PartContent, StructuredField, StructuredObject,
+        StructuredValue, TimeRange, ToolInvocation, ToolOutput,
     };
     use crate::role::Role;
     use chrono::Utc;
@@ -128,6 +128,7 @@ mod tests {
         };
         ToolInvocation {
             name: name.to_string(),
+            plugin_name: None,
             input,
         }
     }
@@ -137,15 +138,15 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(idx, inv)| {
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: message_id * 1000 + idx as i64 + 1,
-                    invocation: inv,
-                    output_text: String::new(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: ToolOutput::default(),
-                    lifecycle: TimeRange::default(),
-                })
+                PartContent::Operation(OperationPart::completed(
+                    message_id * 1000 + idx as i64 + 1,
+                    inv,
+                    String::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                ))
             })
             .collect();
 

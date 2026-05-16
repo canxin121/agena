@@ -101,7 +101,6 @@ flash-clipboard-copy-failed = fallo al copiar al portapapeles: {$error}
 message-role-user = usuario
 message-role-assistant = asistente
 message-role-system = sistema
-message-role-tool = herramienta
 
 message-state-pending = pending
 message-state-in-progress = in_progress

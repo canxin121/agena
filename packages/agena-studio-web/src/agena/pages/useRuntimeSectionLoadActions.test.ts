@@ -3,6 +3,7 @@ import { ref } from 'vue'
 
 import type {
   AuthProvider,
+  ModelCatalogEntry,
   PermissionRuleResource,
   PluginInspect,
   PluginLogEntry,
@@ -50,6 +51,7 @@ function createState(section: RuntimeRouteSection = 'runtime') {
     activePluginsTab: ref<PluginsTab>('installed'),
     activeSettingsTab: ref<SettingsTab>('providers'),
     authProviders: ref<AuthProvider[]>([]),
+    catalogEntries: ref<ModelCatalogEntry[]>([]),
     desktopEnabled: ref(true),
     loadDesktopPanel: async () => {
       calls.push('loadDesktopPanel')

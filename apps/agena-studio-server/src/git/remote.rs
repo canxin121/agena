@@ -533,7 +533,7 @@ async fn ssh_signing_probe(
     args.push("--no-verify".to_string());
     args.push("-S".to_string());
     args.push("-m".to_string());
-    args.push("opencode ssh signing probe".to_string());
+    args.push("agena ssh signing probe".to_string());
 
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let env = [("LC_ALL", "C")];

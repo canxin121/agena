@@ -126,10 +126,7 @@ impl OpenAiCompatibleProvider {
         if let Some(enabled) = self.top_level_prompt_cache_override {
             return enabled;
         }
-        matches!(
-            self.id.as_str(),
-            "openrouter" | "zenmux" | "kilo" | "opencode" | "opencode-go"
-        )
+        matches!(self.id.as_str(), "openrouter" | "zenmux" | "kilo")
     }
 
     fn stream_mode_key(&self) -> &'static str {
@@ -1120,10 +1117,15 @@ mod tests {
         unsafe { std::env::set_var(key.as_str(), "sk-first") };
 
         let provider = OpenAiCompatibleProvider::new_managed(
-            "opencode",
+            "agena-compatible",
             reqwest::Client::new(),
-            ManagedCredential::environment("opencode env", "opencode", "api_key", key.as_str()),
-            "https://opencode.ai/zen/v1",
+            ManagedCredential::environment(
+                "agena compatible env",
+                "agena-compatible",
+                "api_key",
+                key.as_str(),
+            ),
+            "https://models.agena.local/v1",
             "gemini-3-pro",
         );
         let shape_a = provider
@@ -1142,27 +1144,27 @@ mod tests {
     #[test]
     fn prompt_cache_shape_ignores_volatile_or_secret_extra_headers() {
         let provider_a = OpenAiCompatibleProvider::new(
-            "opencode",
+            "agena-compatible",
             reqwest::Client::new(),
             "sk-test",
-            "https://opencode.ai/zen/v1",
+            "https://models.agena.local/v1",
             "gemini-3-pro",
         )
         .with_extra_headers(HashMap::from([
-            ("x-opencode-route".to_owned(), "backend-a".to_owned()),
+            ("x-agena-route".to_owned(), "backend-a".to_owned()),
             ("x-request-id".to_owned(), "req-a".to_owned()),
             ("traceparent".to_owned(), "trace-a".to_owned()),
             ("authorization".to_owned(), "Bearer secret-a".to_owned()),
         ]));
         let provider_b = OpenAiCompatibleProvider::new(
-            "opencode",
+            "agena-compatible",
             reqwest::Client::new(),
             "sk-test",
-            "https://opencode.ai/zen/v1",
+            "https://models.agena.local/v1",
             "gemini-3-pro",
         )
         .with_extra_headers(HashMap::from([
-            ("x-opencode-route".to_owned(), "backend-a".to_owned()),
+            ("x-agena-route".to_owned(), "backend-a".to_owned()),
             ("x-request-id".to_owned(), "req-b".to_owned()),
             ("traceparent".to_owned(), "trace-b".to_owned()),
             ("authorization".to_owned(), "Bearer secret-b".to_owned()),
@@ -1181,25 +1183,25 @@ mod tests {
     #[test]
     fn prompt_cache_shape_changes_when_stable_extra_headers_change() {
         let provider_a = OpenAiCompatibleProvider::new(
-            "opencode",
+            "agena-compatible",
             reqwest::Client::new(),
             "sk-test",
-            "https://opencode.ai/zen/v1",
+            "https://models.agena.local/v1",
             "gemini-3-pro",
         )
         .with_extra_headers(HashMap::from([(
-            "x-opencode-route".to_owned(),
+            "x-agena-route".to_owned(),
             "backend-a".to_owned(),
         )]));
         let provider_b = OpenAiCompatibleProvider::new(
-            "opencode",
+            "agena-compatible",
             reqwest::Client::new(),
             "sk-test",
-            "https://opencode.ai/zen/v1",
+            "https://models.agena.local/v1",
             "gemini-3-pro",
         )
         .with_extra_headers(HashMap::from([(
-            "x-opencode-route".to_owned(),
+            "x-agena-route".to_owned(),
             "backend-b".to_owned(),
         )]));
 
@@ -1653,7 +1655,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opencode_requests_include_top_level_cache_control_and_prompt_cache_key() {
+    async fn opt_in_compatible_requests_include_top_level_cache_control_and_prompt_cache_key() {
         let mut server = mockito::Server::new_async().await;
         let _mock = server
             .mock("POST", "/chat/completions")
@@ -1683,12 +1685,13 @@ mod tests {
             .await;
 
         let provider = OpenAiCompatibleProvider::new(
-            "opencode",
+            "agena-compatible",
             reqwest::Client::new(),
             "sk-test",
             server.url(),
             "gpt-4o-mini",
-        );
+        )
+        .with_top_level_prompt_cache(true);
 
         let response = provider
             .complete(CompletionRequest {
@@ -1714,33 +1717,20 @@ mod tests {
         assert_eq!(response.text, "ok");
     }
 
-    #[tokio::test]
-    async fn list_models_rejects_invalid_shape() {
-        let mut server = mockito::Server::new_async().await;
-        let _mock = server
-            .mock("GET", "/models")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(
-                serde_json::json!({
-                    "data": [{ "name": "missing id" }]
-                })
-                .to_string(),
-            )
-            .create_async()
-            .await;
-
+    #[test]
+    fn parse_models_rejects_invalid_shape() {
         let provider = OpenAiCompatibleProvider::new(
             "mock-provider",
             reqwest::Client::new(),
             "sk-test",
-            server.url(),
+            "http://localhost/v1",
             "gpt-4o-mini",
         );
 
         let err = provider
-            .list_models()
-            .await
+            .parse_models(serde_json::json!({
+                "data": [{ "name": "missing id" }]
+            }))
             .expect_err("invalid model payload should fail");
 
         assert!(matches!(err, AppError::Provider(_)));

@@ -167,11 +167,6 @@ pub(crate) async fn publish_settings_replace(settings: Value) {
     }))
     .unwrap_or_else(|_| "{}".to_string());
 
-    // Also publish into the global SSE hub so frontends can use a single connection.
-    if crate::global_sse_hub::downstream_client_count() > 0 {
-        crate::global_sse_hub::publish_downstream_json(&payload);
-    }
-
     let evt = SequencedSettingsEvent { seq, payload };
     // Settings are usually small, but can grow (e.g. large bookmark arrays).
     // If a single payload exceeds the replay budget, skip buffering it and force

@@ -1,14 +1,9 @@
-use std::path::Path;
 use std::sync::Arc;
 
-use axum::{
-    Json,
-    extract::{Path as AxumPath, Query, State},
-    http::HeaderMap,
-};
+use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 
-use crate::{ApiResult, AppError, fs, opencode_auth, opencode_config};
+use crate::ApiResult;
 
 #[derive(Debug, Deserialize)]
 pub struct EnvCheckRequest {
@@ -62,78 +57,4 @@ pub async fn env_check_post(
     }
 
     Ok(Json(EnvCheckResponse { present, missing }))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ProviderDirectoryQuery {
-    pub directory: Option<String>,
-}
-
-pub async fn provider_source_get(
-    State(_state): State<Arc<crate::AppState>>,
-    headers: HeaderMap,
-    Query(q): Query<ProviderDirectoryQuery>,
-    AxumPath(provider_id): AxumPath<String>,
-) -> ApiResult<Json<ProviderSourceResponse>> {
-    let provider_id = provider_id.trim().to_string();
-    if provider_id.is_empty() {
-        return Err(AppError::bad_request("Provider ID is required"));
-    }
-
-    // Directory is optional. If a directory header/query is provided and invalid, return 400.
-    let requested = headers
-        .get("x-opencode-directory")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .or_else(|| {
-            q.directory
-                .as_deref()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-        });
-
-    let working_directory: Option<String> = if let Some(req) = requested {
-        let abs = fs::validate_directory(&req).await?;
-        Some(abs.to_string_lossy().into_owned())
-    } else {
-        None
-    };
-
-    let working_path = working_directory.as_deref().map(Path::new);
-    let sources = match opencode_config::get_provider_sources(&provider_id, working_path) {
-        Ok(v) => v,
-        Err(err) => return Err(AppError::internal(err.to_string())),
-    };
-
-    let auth_exists = opencode_auth::get_provider_auth(&provider_id)
-        .ok()
-        .flatten()
-        .is_some();
-
-    // Ensure response shape stays stable for the UI.
-    let mut out_sources = sources;
-    if let Some(auth) = out_sources
-        .get_mut("sources")
-        .and_then(|v| v.as_object_mut())
-        .and_then(|m| m.get_mut("auth"))
-        .and_then(|v| v.as_object_mut())
-    {
-        auth.insert("exists".to_string(), serde_json::Value::Bool(auth_exists));
-    }
-
-    Ok(Json(ProviderSourceResponse {
-        provider_id,
-        sources: out_sources
-            .get("sources")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
-    }))
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderSourceResponse {
-    pub provider_id: String,
-    pub sources: serde_json::Value,
 }

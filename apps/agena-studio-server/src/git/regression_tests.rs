@@ -166,7 +166,7 @@ fn mk_remote_suite(root: &Path) -> PathBuf {
     run_git_ok(root, &["clone", "-q", remote_s.as_str(), repo_a_s.as_str()]);
 
     run_git_ok(&repo_a, &["branch", "-M", "main"]);
-    run_git_ok(&repo_a, &["config", "user.name", "OC2 Fixture"]);
+    run_git_ok(&repo_a, &["config", "user.name", "Agena Fixture"]);
     run_git_ok(
         &repo_a,
         &["config", "user.email", "fixture@agena-studio.local"],
@@ -184,7 +184,7 @@ fn mk_remote_suite(root: &Path) -> PathBuf {
 
     run_git_ok(root, &["clone", "-q", remote_s.as_str(), repo_b_s.as_str()]);
     run_git_ok(&repo_b, &["checkout", "-q", "main"]);
-    run_git_ok(&repo_b, &["config", "user.name", "OC2 Fixture"]);
+    run_git_ok(&repo_b, &["config", "user.name", "Agena Fixture"]);
     run_git_ok(
         &repo_b,
         &["config", "user.email", "fixture@agena-studio.local"],

@@ -15,7 +15,6 @@ mod multi_adapter;
 mod ollama;
 mod openai;
 mod openai_compatible;
-mod opencode;
 mod prompt_cache;
 mod prompt_cache_shape;
 mod registry;
@@ -50,7 +49,6 @@ pub use multi_adapter::{MultiAdapterProvider, ProviderModelRoute};
 pub use ollama::OllamaProvider;
 pub use openai::{OpenAiApiMode, OpenAiBackend, OpenAiProfile, OpenAiProvider, OpenAiStreamMode};
 pub use openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleStreamMode};
-pub use opencode::OpencodeProvider;
 pub use prompt_cache_shape::{PromptCacheShape, PromptCacheShapeChange, PromptCacheShapeDiff};
 pub use registry::{NamedProvider, ProviderRegistry};
 pub use runtime::{

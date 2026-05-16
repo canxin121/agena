@@ -322,6 +322,7 @@ export type ProviderModelVariant = {
   display_name?: string | null
   description?: string | null
   thinking?: Record<string, unknown> | null
+  disabled?: boolean
 }
 
 export type AuthProvider = {

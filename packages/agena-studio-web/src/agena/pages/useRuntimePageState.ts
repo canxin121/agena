@@ -388,7 +388,6 @@ export function useRuntimePageState(input: {
     syncMarketplaceRegistryAction,
     routeSection,
     runtime,
-    catalogEntries,
     runtimeSnapshotFacts,
     saveApiKey,
     startBrowserAuth,

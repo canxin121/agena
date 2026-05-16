@@ -302,12 +302,12 @@ impl TurnBuffer {
     /// matching `ToolCallCompleted` so that any reader that streams events
     /// can rely on `call_id` being introduced before it is referenced again.
     ///
-    /// `ids` allocates a `MessageId` for the synthetic tool-result message
-    /// that accompanies each `ToolCallCompleted`; the projection no longer
-    /// has to invent one from a hash of the call id.
+    /// `ids` is kept in the signature for callers that already allocate turn
+    /// message ids before committing; tool completions now update the owning
+    /// assistant message instead of allocating synthetic tool messages.
     pub fn commit<A: MessageIdAllocator>(
         self,
-        ids: &mut A,
+        _ids: &mut A,
     ) -> Result<Vec<EventKind>, TurnBufferError> {
         let TurnBuffer { turn_id, sections } = self;
         let mut items = Vec::with_capacity(sections.len() * 2);
@@ -381,12 +381,8 @@ impl TurnBuffer {
                             created_at: entry.issued_at,
                         }));
                         if let Some(output) = entry.output {
-                            // Allocate a dedicated `message_id` for the synthetic
-                            // tool-result message so the projection no longer has
-                            // to derive one from a hash of `call_id`.
-                            let tool_message_id = ids.next_message_id();
                             completions.push(EventKind::ToolCallCompleted(ToolCallCompleted {
-                                message_id: tool_message_id,
+                                message_id,
                                 call_id,
                                 turn_id,
                                 tool_name: name,

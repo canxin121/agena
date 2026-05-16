@@ -34,10 +34,22 @@ export function partBody(part: MessagePart): string {
     if (summary) return summary
   }
 
-  if (type === 'command_execution') {
-    const command = typeof content.command === 'string' ? content.command : ''
-    const output = typeof content.output === 'string' ? content.output : ''
-    return [command, output].filter((item) => item.trim().length > 0).join('\n\n') || part.summary || ''
+  if (type === 'operation') {
+    const modelOutput = asRecord(content.model_output)
+    const output = readString(modelOutput?.text)
+    if (output) return output
+
+    const error = asRecord(content.error)
+    const errorMessage = readString(error?.message)
+    if (errorMessage) return errorMessage
+
+    const title = readString(content.title)
+    if (title) return title
+  }
+
+  if (type === 'request') {
+    const requestType = readString(content.request_type) || 'request'
+    return part.summary || requestType
   }
 
   if (type === 'error') {
@@ -50,12 +62,16 @@ export function partBody(part: MessagePart): string {
 }
 
 export function applyPatchPayload(content: Record<string, unknown> | null): Record<string, unknown> | null {
-  if (!content || content.type !== 'tool_execution') return null
+  if (!content || content.type !== 'operation') return null
+
+  const structured = asRecord(content.structured)
+  if (structured && (Array.isArray(structured.changes) || typeof structured.diff === 'string')) return structured
+
   const details = asRecord(content.details)
-  if (!details || details.source !== 'custom') return null
-  const output = asRecord(details.output)
-  if (!output || output.name !== 'apply_patch') return null
-  return asRecord(output.payload)
+  const payload = asRecord(details?.payload)
+  if (payload && (Array.isArray(payload.changes) || typeof payload.diff === 'string')) return payload
+
+  return null
 }
 
 export function applyPatchDiffSummary(payload: Record<string, unknown>): string {
@@ -68,7 +84,8 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
   const content = part.content || null
   const applyPatch = applyPatchPayload(content)
   if (applyPatch) {
-    const output = content ? readString(content.output_text) : null
+    const modelOutput = content ? asRecord(content.model_output) : null
+    const output = readString(modelOutput?.text)
     const diff = readString(applyPatch.diff)
     const blocks: RenderBlock[] = []
     if (output) {
@@ -84,8 +101,57 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
     if (blocks.length) return blocks
   }
 
+  const operationBlocks = operationRenderBlocks(content)
+  if (operationBlocks.length) return operationBlocks
+
   const body = partBody(part)
   return body.trim().length > 0 ? [{ body, kind: 'text' }] : []
+}
+
+function operationRenderBlocks(content: Record<string, unknown> | null): RenderBlock[] {
+  if (!content || content.type !== 'operation') return []
+  const blocks = Array.isArray(content.blocks) ? content.blocks : []
+  const rendered: RenderBlock[] = []
+
+  for (const item of blocks) {
+    const block = asRecord(item)
+    if (!block) continue
+    const blockType = readString(block.type)
+    if (blockType === 'text' || blockType === 'markdown' || blockType === 'log') {
+      const body = readString(block.text)
+      if (body) rendered.push({ body, kind: 'text' })
+      continue
+    }
+    if (blockType === 'diff') {
+      const body = readString(block.diff)
+      if (body) rendered.push({ body, kind: 'diff', summary: 'Diff' })
+      continue
+    }
+    if (blockType === 'command') {
+      const command = readString(block.command)
+      const stdout = readString(block.stdout)
+      const stderr = readString(block.stderr)
+      const body = [command ? `$ ${command}` : '', stdout, stderr].filter((value): value is string => Boolean(value)).join('\n\n')
+      if (body) rendered.push({ body, kind: 'text' })
+      continue
+    }
+    if (blockType === 'file_changes') {
+      const changes = Array.isArray(block.changes) ? block.changes : []
+      if (changes.length) rendered.push({ body: `${changes.length} file change${changes.length === 1 ? '' : 's'}`, kind: 'text' })
+      continue
+    }
+    if (blockType === 'checklist') {
+      const items = Array.isArray(block.items) ? block.items : []
+      const lines = items
+        .map((value) => asRecord(value))
+        .filter((value): value is Record<string, unknown> => Boolean(value))
+        .map((value) => readString(value.content))
+        .filter((value): value is string => Boolean(value))
+      if (lines.length) rendered.push({ body: lines.map((line) => `- ${line}`).join('\n'), kind: 'text' })
+    }
+  }
+
+  return rendered
 }
 
 export function messageBlocks(message: MessageResource): RenderBlock[] {

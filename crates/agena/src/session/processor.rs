@@ -12,7 +12,7 @@ use crate::event::{
 };
 use crate::message::{
     ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus,
-    PartContent, ReasoningPart, StructuredObject, TimeRange, ToolExecutionPart, ToolInvocation,
+    OperationPart, PartContent, ReasoningPart, StructuredObject, TimeRange, ToolInvocation,
 };
 use crate::model::ModelRef;
 use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
@@ -190,7 +190,6 @@ impl SessionProcessor {
             let role = match msg.role {
                 crate::role::Role::User => "user",
                 crate::role::Role::Assistant => "assistant",
-                crate::role::Role::Tool => "tool",
                 crate::role::Role::System => "system",
             };
             let chat_msg = crate::plugin::ChatMessage {
@@ -247,7 +246,6 @@ impl SessionProcessor {
                 let role = match msg.role {
                     crate::role::Role::User => "user",
                     crate::role::Role::Assistant => "assistant",
-                    crate::role::Role::Tool => "tool",
                     crate::role::Role::System => "system",
                 };
                 Some(crate::plugin::ChatMessage {
@@ -274,7 +272,6 @@ impl SessionProcessor {
                         let role = match m.role {
                             crate::role::Role::User => "user",
                             crate::role::Role::Assistant => "assistant",
-                            crate::role::Role::Tool => "tool",
                             crate::role::Role::System => "system",
                         };
                         role == sdk_msg.role
@@ -771,15 +768,15 @@ impl SessionProcessor {
                 assistant.id,
                 start,
                 ExecutionStatus::Pending,
-                PartContent::ToolExecution(ToolExecutionPart::Pending {
+                PartContent::Operation(OperationPart::pending(
                     call_id,
                     invocation,
-                    title: tool_execution_title(pending.name.as_deref()),
-                    lifecycle: TimeRange {
+                    tool_execution_title(pending.name.as_deref()),
+                    TimeRange {
                         start_ms: start.timestamp_millis(),
                         end_ms: None,
                     },
-                }),
+                )),
             );
             part.part_index = assistant.parts.len() as i32;
             assistant.parts.push(part);
@@ -888,15 +885,15 @@ impl SessionProcessor {
                         "tool part missing from assistant snapshot: {part_id}"
                     ))
                 })?;
-            part.set_content(PartContent::ToolExecution(ToolExecutionPart::Pending {
+            part.set_content(PartContent::Operation(OperationPart::pending(
                 call_id,
                 invocation,
-                title: tool_execution_title(Some(tool_name.as_str())),
-                lifecycle: TimeRange {
+                tool_execution_title(Some(tool_name.as_str())),
+                TimeRange {
                     start_ms: pending.started_at_ms.unwrap_or_default(),
                     end_ms: None,
                 },
-            }));
+            )));
 
             // Re-assert name on TurnBuffer (final, authoritative). The
             // accumulated `arguments_json` was already streamed in chunks via
@@ -1067,6 +1064,7 @@ fn placeholder_tool_invocation(
     else {
         return ToolInvocation {
             name: requested_name.to_string(),
+            plugin_name: None,
             input: StructuredObject::default(),
         };
     };
@@ -1097,6 +1095,7 @@ fn tool_invocation_for_definition(
 ) -> ToolInvocation {
     ToolInvocation {
         name: tool.exposed_name.clone(),
+        plugin_name: Some(tool.plugin_name.clone()),
         input,
     }
 }
@@ -1316,7 +1315,7 @@ mod tests {
             parse_tool_invocation("plugin_echo", "{\"message\":\"hello\"}", tools.as_slice())
                 .expect("custom tool call should parse");
 
-        let ToolInvocation { name, input } = invocation;
+        let ToolInvocation { name, input, .. } = invocation;
         assert_eq!(name, "plugin_echo");
         let payload = serde_json::Value::from(input);
         assert_eq!(payload["message"], "hello");
@@ -1538,13 +1537,10 @@ mod tests {
             .as_ref()
             .expect("tool part should have content");
         match tool_part {
-            PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id,
-                invocation,
-                ..
-            }) => {
-                assert_eq!(*call_id, 300);
-                let ToolInvocation { name, input } = invocation;
+            PartContent::Operation(operation) => {
+                assert_eq!(operation.call_id, 300);
+                let invocation = &operation.invocation;
+                let ToolInvocation { name, input, .. } = invocation;
                 assert_eq!(name, "search");
                 let payload = serde_json::Value::from(input.clone());
                 assert_eq!(payload["q"], "rust");

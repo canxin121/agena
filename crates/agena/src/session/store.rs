@@ -2310,7 +2310,7 @@ mod tests {
         let mut second_new = Message::prompt_text(Role::Assistant, "second-new");
         second_new.id = 2;
         second_new.finish = Some("done".to_string());
-        let mut third = Message::prompt_text(Role::Tool, "third");
+        let mut third = Message::prompt_text(Role::Assistant, "third");
         third.id = 3;
 
         let session = Session::new(99, 1, "ordered", now).with_messages(vec![

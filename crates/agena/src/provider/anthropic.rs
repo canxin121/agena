@@ -240,14 +240,17 @@ impl AnthropicProvider {
 
     fn content_to_blocks(message: &Message) -> Vec<AnthropicTextBlock> {
         let projected = wire_message::project(message);
+        Self::blocks_from_projected_parts(message, projected.as_slice())
+    }
+
+    fn blocks_from_projected_parts(
+        message: &Message,
+        projected: &[wire_message::WirePart],
+    ) -> Vec<AnthropicTextBlock> {
         if projected.is_empty() {
             let text = message.as_text_lossy();
             if text.is_empty() {
                 return Vec::new();
-            }
-
-            if message.role == Role::Tool {
-                return vec![AnthropicTextBlock::tool_result("tool", text)];
             }
 
             return vec![AnthropicTextBlock::text(text)];
@@ -257,25 +260,94 @@ impl AnthropicProvider {
         for part in projected {
             match part {
                 wire_message::WirePart::Text { text } => {
-                    blocks.push(AnthropicTextBlock::text(text));
+                    blocks.push(AnthropicTextBlock::text(text.clone()));
                 }
                 wire_message::WirePart::Attachment { item } => {
-                    blocks.extend(Self::attachment_blocks(&item));
+                    blocks.extend(Self::attachment_blocks(item));
                 }
                 wire_message::WirePart::ToolCall {
                     id,
                     name,
                     arguments_json,
-                } => blocks.push(AnthropicTextBlock::tool_use(id, name, arguments_json)),
+                } => blocks.push(AnthropicTextBlock::tool_use(
+                    id.clone(),
+                    name.clone(),
+                    arguments_json.clone(),
+                )),
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
                     ..
-                } => blocks.push(AnthropicTextBlock::tool_result(tool_call_id, output_json)),
+                } => blocks.push(AnthropicTextBlock::tool_result(
+                    tool_call_id.clone(),
+                    output_json.clone(),
+                )),
             }
         }
 
         blocks
+    }
+
+    fn assistant_messages_from_parts(message: &Message) -> Vec<AnthropicMessage> {
+        let projected = wire_message::project(message);
+        if !projected
+            .iter()
+            .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
+        {
+            return vec![AnthropicMessage {
+                role: "assistant".to_owned(),
+                content: Self::blocks_from_projected_parts(message, projected.as_slice()),
+            }];
+        }
+
+        let mut messages = Vec::new();
+        let mut buffered = Vec::<wire_message::WirePart>::new();
+        for part in &projected {
+            match part {
+                wire_message::WirePart::ToolResult {
+                    tool_call_id,
+                    output_json,
+                    ..
+                } if !tool_call_id.trim().is_empty() => {
+                    Self::flush_assistant_blocks(message, &mut messages, &mut buffered);
+                    messages.push(AnthropicMessage {
+                        role: "user".to_owned(),
+                        content: vec![AnthropicTextBlock::tool_result(
+                            tool_call_id.clone(),
+                            output_json.clone(),
+                        )],
+                    });
+                }
+                wire_message::WirePart::ToolResult { output_json, .. } => {
+                    buffered.push(wire_message::WirePart::Text {
+                        text: output_json.clone(),
+                    });
+                }
+                other => buffered.push(other.clone()),
+            }
+        }
+        Self::flush_assistant_blocks(message, &mut messages, &mut buffered);
+
+        messages
+    }
+
+    fn flush_assistant_blocks(
+        message: &Message,
+        messages: &mut Vec<AnthropicMessage>,
+        buffered: &mut Vec<wire_message::WirePart>,
+    ) {
+        if buffered.is_empty() {
+            return;
+        }
+        let content = Self::blocks_from_projected_parts(message, buffered.as_slice());
+        buffered.clear();
+        if content.is_empty() {
+            return;
+        }
+        messages.push(AnthropicMessage {
+            role: "assistant".to_owned(),
+            content,
+        });
     }
 
     fn attachment_blocks(item: &AttachmentItem) -> Vec<AnthropicTextBlock> {
@@ -559,11 +631,8 @@ impl ModelProvider for AnthropicProvider {
                         system_chunks.push(AnthropicTextBlock::text(text));
                     }
                 }
-                Role::Assistant => messages.push(AnthropicMessage {
-                    role: "assistant".to_owned(),
-                    content: Self::content_to_blocks(msg),
-                }),
-                Role::User | Role::Tool => messages.push(AnthropicMessage {
+                Role::Assistant => messages.extend(Self::assistant_messages_from_parts(msg)),
+                Role::User => messages.push(AnthropicMessage {
                     role: "user".to_owned(),
                     content: Self::content_to_blocks(msg),
                 }),
@@ -688,11 +757,8 @@ impl ModelProvider for AnthropicProvider {
                         system_chunks.push(AnthropicTextBlock::text(text));
                     }
                 }
-                Role::Assistant => messages.push(AnthropicMessage {
-                    role: "assistant".to_owned(),
-                    content: Self::content_to_blocks(msg),
-                }),
-                Role::User | Role::Tool => messages.push(AnthropicMessage {
+                Role::Assistant => messages.extend(Self::assistant_messages_from_parts(msg)),
+                Role::User => messages.push(AnthropicMessage {
                     role: "user".to_owned(),
                     content: Self::content_to_blocks(msg),
                 }),
@@ -1397,6 +1463,55 @@ mod tests {
             .tag(crate::plugin::sdk::ToolTag::ReadOnly)
             .concurrency_safe(true),
         )
+    }
+
+    fn completed_operation_message() -> Message {
+        use crate::message::{
+            OperationPart, PartContent, StructuredObject, TimeRange, ToolInvocation, ToolOutput,
+        };
+
+        let mut message = Message::prompt_parts(
+            crate::role::Role::Assistant,
+            vec![
+                PartContent::text("Before"),
+                PartContent::Operation(OperationPart::completed(
+                    1,
+                    ToolInvocation {
+                        name: "lookup".to_owned(),
+                        plugin_name: Some("test_plugin".to_owned()),
+                        input: StructuredObject::default(),
+                    },
+                    "{\"ok\":true}",
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    TimeRange::default(),
+                )),
+                PartContent::text("After"),
+            ],
+        );
+        message.parts[1].operation_id = Some("call_lookup".to_owned());
+        message
+    }
+
+    #[test]
+    fn assistant_tool_results_are_projected_as_user_blocks() {
+        let messages =
+            AnthropicProvider::assistant_messages_from_parts(&completed_operation_message());
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].role, "assistant");
+        assert_eq!(messages[0].content[0].kind, "text");
+        assert_eq!(messages[0].content[1].kind, "tool_use");
+        assert_eq!(messages[0].content[1].id.as_deref(), Some("call_lookup"));
+        assert_eq!(messages[1].role, "user");
+        assert_eq!(messages[1].content[0].kind, "tool_result");
+        assert_eq!(
+            messages[1].content[0].tool_use_id.as_deref(),
+            Some("call_lookup")
+        );
+        assert_eq!(messages[2].role, "assistant");
+        assert_eq!(messages[2].content[0].text.as_deref(), Some("After"));
     }
 
     #[test]

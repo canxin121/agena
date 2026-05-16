@@ -26,7 +26,7 @@ use chrono::{DateTime, Utc};
 use crate::{
     message::{
         ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus,
-        PartContent, ReasoningPart, StructuredObject, TextPart, TimeRange, ToolExecutionPart,
+        OperationPart, PartContent, ReasoningPart, StructuredObject, TextPart, TimeRange,
         ToolInvocation, ToolOutput,
     },
     role::Role,
@@ -250,6 +250,7 @@ impl SessionViewBuilder {
         let buffered = &mut turn.messages[assistant_index];
         let invocation = ToolInvocation {
             name: payload.name.to_string(),
+            plugin_name: None,
             input: structured_from_json(&payload.arguments),
         };
         let mut part = MessagePart::with_content(
@@ -257,12 +258,12 @@ impl SessionViewBuilder {
             buffered.message.id,
             payload.created_at,
             ExecutionStatus::Pending,
-            PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: 0,
+            PartContent::Operation(OperationPart::pending(
+                0,
                 invocation,
-                title: payload.name.to_string(),
-                lifecycle: TimeRange::default(),
-            }),
+                payload.name.to_string(),
+                TimeRange::default(),
+            )),
         );
         part.operation_id = Some(payload.call_id.as_str().to_owned());
         buffered.message.push_part(part);
@@ -282,10 +283,8 @@ impl SessionViewBuilder {
         &mut self,
         payload: &ToolCallCompleted,
     ) -> Result<(), SessionViewError> {
-        // Tool results live as a `Role::Tool` message that immediately follows
-        // the assistant message that issued the call — this matches the
-        // convention used by `prompt_window::messages_to_provider_transcript`.
-        let part_id = self.alloc_part_id();
+        // Tool completion updates the operation part on the assistant message
+        // that issued the call; it does not create a standalone tool message.
         let location = self.tool_call_index.get(&payload.call_id).copied();
         let Some(location) = location else {
             return Err(SessionViewError::UnknownToolCall(payload.call_id.clone()));
@@ -296,51 +295,34 @@ impl SessionViewBuilder {
             TranscriptToolOutput::Error { message } => message.clone(),
         };
 
-        let message_id = payload.message_id.raw();
-        let mut part = MessagePart::with_content(
-            part_id,
-            message_id,
-            payload.completed_at,
-            ExecutionStatus::Completed,
-            PartContent::ToolExecution(ToolExecutionPart::Completed {
-                call_id: 0,
-                invocation: ToolInvocation::new(
-                    payload.tool_name.as_str().to_owned(),
-                    StructuredObject::default(),
-                ),
-                output_text,
-                blocks: Vec::new(),
-                attachments: Vec::new(),
-                details: ToolOutput::default(),
-                lifecycle: TimeRange::default(),
-            }),
-        );
-        part.operation_id = Some(payload.call_id.as_str().to_owned());
-
-        let metadata = MessageMetadata {
-            source: MessageSource::Tool,
-            ..MessageMetadata::default()
-        };
-        let message = Message {
-            id: message_id,
-            role: Role::Tool,
-            state: MessageStatus::Completed,
-            parts: vec![part],
-            created_at: payload.completed_at,
-            metadata,
-            usage: None,
-            finish: None,
-        };
-
-        let key = MessageKey::new(payload.completed_at, MessageId(message_id));
         if let Some(turn) = self.turn_state.get_mut(&location.turn_id) {
-            turn.messages.push(BufferedMessage {
-                key,
+            let Some(buffered) = turn.messages.get_mut(location.assistant_index) else {
+                return Err(SessionViewError::UnknownToolCall(payload.call_id.clone()));
+            };
+            complete_tool_part(
+                &mut buffered.message,
+                &payload.call_id,
+                payload.tool_name.as_str(),
+                output_text,
+                &payload.output,
+                payload.completed_at,
+            );
+            return Ok(());
+        }
+
+        let assistant = self
+            .finalized
+            .values_mut()
+            .find(|message| message.id == payload.message_id.raw());
+        if let Some(message) = assistant {
+            complete_tool_part(
                 message,
-                issued_calls: Vec::new(),
-            });
-        } else {
-            self.finalized.insert(key, message);
+                &payload.call_id,
+                payload.tool_name.as_str(),
+                output_text,
+                &payload.output,
+                payload.completed_at,
+            );
         }
         Ok(())
     }
@@ -530,6 +512,67 @@ fn apply_message_part_update(message: &mut Message, payload: &MessagePartUpdated
     }
 }
 
+fn complete_tool_part(
+    message: &mut Message,
+    call_id: &ToolCallId,
+    tool_name: &str,
+    output_text: String,
+    output: &TranscriptToolOutput,
+    completed_at: DateTime<Utc>,
+) {
+    let Some(part) = message
+        .parts
+        .iter_mut()
+        .find(|part| part.operation_id.as_deref() == Some(call_id.as_str()))
+    else {
+        return;
+    };
+
+    let (numeric_call_id, invocation, mut lifecycle) = match part.content.as_ref() {
+        Some(PartContent::Operation(operation)) => (
+            operation.call_id,
+            operation.invocation.clone(),
+            operation.lifecycle.clone(),
+        ),
+        _ => (
+            0,
+            ToolInvocation::new(tool_name.to_owned(), StructuredObject::default()),
+            TimeRange::default(),
+        ),
+    };
+    if lifecycle.end_ms.is_none() {
+        lifecycle.end_ms = Some(completed_at.timestamp_millis());
+    }
+
+    match output {
+        TranscriptToolOutput::Error { message } => {
+            part.set_content(PartContent::Operation(OperationPart::failed(
+                numeric_call_id,
+                invocation,
+                message.clone(),
+                output_text,
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                lifecycle,
+            )));
+            part.status = ExecutionStatus::Failed;
+        }
+        TranscriptToolOutput::Text { .. } | TranscriptToolOutput::Pruned { .. } => {
+            part.set_content(PartContent::Operation(OperationPart::completed(
+                numeric_call_id,
+                invocation,
+                output_text,
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                lifecycle,
+            )));
+            part.status = ExecutionStatus::Completed;
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn with_source(mut metadata: MessageMetadata, source: MessageSource) -> MessageMetadata {
     metadata.source = source;
@@ -716,7 +759,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_with_tool_call_emits_assistant_then_tool_message() {
+    fn turn_with_tool_call_updates_assistant_operation_part() {
         let turn_id = TurnId::new();
         let call: ToolCallId = "call_alpha".into();
         let records = vec![
@@ -731,7 +774,7 @@ mod tests {
                 created_at: Utc::now(),
             })),
             record(EventKind::ToolCallCompleted(ToolCallCompleted {
-                message_id: MessageId(11),
+                message_id: MessageId(10),
                 call_id: call.clone(),
                 turn_id,
                 tool_name: SmolStr::new("read_file"),
@@ -743,28 +786,18 @@ mod tests {
             turn_completed(turn_id, FinishReason::ToolCalls),
         ];
         let view = run(records);
-        assert_eq!(view.messages.len(), 2);
+        assert_eq!(view.messages.len(), 1);
         assert_eq!(view.messages[0].role, Role::Assistant);
-        // Assistant message should now have 2 parts: the text + the tool call.
+        // Assistant message has text plus the completed tool operation part.
         assert_eq!(view.messages[0].parts.len(), 2);
         let tool_part = &view.messages[0].parts[1];
         assert!(matches!(
             tool_part.content.as_ref(),
-            Some(PartContent::ToolExecution(
-                ToolExecutionPart::Pending { .. }
-            ))
+            Some(PartContent::Operation(_))
         ));
+        assert_eq!(tool_part.status, ExecutionStatus::Completed);
         assert_eq!(tool_part.operation_id.as_deref(), Some("call_alpha"));
-
-        // Tool result lives in the trailing Role::Tool message keyed by the
-        // same call id via operation_id.
-        assert_eq!(view.messages[1].role, Role::Tool);
-        assert_eq!(view.messages[1].parts.len(), 1);
-        assert_eq!(
-            view.messages[1].parts[0].operation_id.as_deref(),
-            Some("call_alpha")
-        );
-        assert_eq!(view.messages[1].as_text_lossy(), "fn main(){}");
+        assert_eq!(view.messages[0].as_text_lossy(), "running\nfn main(){}");
     }
 
     #[test]

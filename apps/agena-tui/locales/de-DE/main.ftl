@@ -101,7 +101,6 @@ flash-clipboard-copy-failed = Zwischenablage-Kopie fehlgeschlagen: {$error}
 message-role-user = benutzer
 message-role-assistant = assistent
 message-role-system = system
-message-role-tool = werkzeug
 
 message-state-pending = pending
 message-state-in-progress = in_progress

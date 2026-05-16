@@ -114,9 +114,9 @@ pub struct ToolCallIssued {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCallCompleted {
-    /// `MessageId` allocated for the synthetic `Role::Tool` message that
-    /// carries this tool result in the projected view. Stored on the event so
-    /// the projection no longer has to invent one from a hash of `call_id`.
+    /// Assistant `MessageId` that owns the operation part for this tool call.
+    /// Tool completion updates that part; it never creates a standalone tool
+    /// message.
     pub message_id: MessageId,
     pub call_id: ToolCallId,
     pub turn_id: TurnId,

@@ -101,7 +101,6 @@ flash-clipboard-copy-failed = 클립보드 복사 실패: {$error}
 message-role-user = 사용자
 message-role-assistant = 어시스턴트
 message-role-system = 시스템
-message-role-tool = 도구
 
 message-state-pending = pending
 message-state-in-progress = in_progress

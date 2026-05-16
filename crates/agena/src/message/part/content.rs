@@ -2,9 +2,8 @@ use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AttachmentItem, AttachmentPart, CommandExecutionPart, ErrorPart, ExecutionStatus,
-    FileChangePart, PartKind, PermissionRequestPart, ReasoningPart, TextPart, TodoListPart,
-    ToolExecutionPart, UserInputRequestPart, WebSearchPart,
+    AttachmentItem, AttachmentPart, ErrorPart, OperationPart, PartKind, PermissionRequestPart,
+    ReasoningPart, RequestPart, TextPart, UserInputRequestPart,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
@@ -12,15 +11,10 @@ use super::{
 pub enum PartContent {
     Text(TextPart),
     Reasoning(ReasoningPart),
-    ToolExecution(ToolExecutionPart),
-    CommandExecution(CommandExecutionPart),
-    FileChange(FileChangePart),
-    WebSearch(WebSearchPart),
-    TodoList(TodoListPart),
-    Error(ErrorPart),
+    Operation(OperationPart),
     Attachment(AttachmentPart),
-    PermissionRequest(PermissionRequestPart),
-    UserInputRequest(UserInputRequestPart),
+    Request(RequestPart),
+    Error(ErrorPart),
 }
 
 impl PartContent {
@@ -44,19 +38,22 @@ impl PartContent {
         Self::Attachment(AttachmentPart { attachments: items })
     }
 
+    pub fn permission_request(part: PermissionRequestPart) -> Self {
+        Self::Request(RequestPart::Permission(part))
+    }
+
+    pub fn user_input_request(part: UserInputRequestPart) -> Self {
+        Self::Request(RequestPart::UserInput(part))
+    }
+
     pub const fn kind(&self) -> PartKind {
         match self {
             Self::Text(_) => PartKind::Text,
             Self::Reasoning(_) => PartKind::Reasoning,
-            Self::ToolExecution(_) => PartKind::ToolExecution,
-            Self::CommandExecution(_) => PartKind::CommandExecution,
-            Self::FileChange(_) => PartKind::FileChange,
-            Self::WebSearch(_) => PartKind::WebSearch,
-            Self::TodoList(_) => PartKind::TodoList,
-            Self::Error(_) => PartKind::Error,
+            Self::Operation(_) => PartKind::Operation,
             Self::Attachment(_) => PartKind::Attachment,
-            Self::PermissionRequest(_) => PartKind::PermissionRequest,
-            Self::UserInputRequest(_) => PartKind::UserInputRequest,
+            Self::Request(_) => PartKind::Request,
+            Self::Error(_) => PartKind::Error,
         }
     }
 
@@ -105,22 +102,16 @@ impl PartContent {
     }
 
     pub fn append_command_output_delta(&mut self, delta: &str) -> bool {
-        match self {
-            Self::CommandExecution(part) => {
-                part.status = ExecutionStatus::InProgress;
-                match &mut part.output {
-                    Some(text) => text.push_str(delta),
-                    None => part.output = Some(delta.to_string()),
-                }
-                true
-            }
-            _ => false,
-        }
+        self.append_operation_output_delta(delta)
     }
 
     pub fn append_tool_output_delta(&mut self, delta: &str) -> bool {
+        self.append_operation_output_delta(delta)
+    }
+
+    pub fn append_operation_output_delta(&mut self, delta: &str) -> bool {
         match self {
-            Self::ToolExecution(part) => part.append_output_delta(delta),
+            Self::Operation(part) => part.append_output_delta(delta),
             _ => false,
         }
     }

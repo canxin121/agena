@@ -37,7 +37,7 @@ use thiserror::Error;
 use crate::agent::Agent;
 use crate::message::{
     AskUserToolInput, FilesystemEffect, Message, PartContent, PluginInvocation, StructuredObject,
-    ToolExecutionPart, ToolInvocation, ToolOutput,
+    ToolInvocation, ToolOutput,
 };
 use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
@@ -947,7 +947,11 @@ impl ToolExecutor {
         let input = StructuredObject::try_from(input_value)
             .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
         Ok((
-            ToolInvocation::new(invocation.name.clone(), input),
+            ToolInvocation {
+                name: invocation.name.clone(),
+                plugin_name: invocation.plugin_name.clone(),
+                input,
+            },
             Some(prepared_shell),
         ))
     }
@@ -981,8 +985,12 @@ impl ToolExecutor {
         let input_json = serde_json::to_string(&hooked.input)
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
+        let mut prepared_invocation =
+            parse_invocation_from_json(tool_name.as_str(), input_json.as_str())?;
+        prepared_invocation.plugin_name = Some(plugin_name);
+
         Ok(PreparedToolInvocation {
-            invocation: parse_invocation_from_json(tool_name.as_str(), input_json.as_str())?,
+            invocation: prepared_invocation,
             title_override: hooked.title_override,
             metadata: hooked.metadata.into_iter().collect(),
         })
@@ -1649,6 +1657,7 @@ fn parse_invocation_from_json(
 
     Ok(ToolInvocation {
         name: tool_name.to_string(),
+        plugin_name: None,
         input,
     })
 }
@@ -1661,8 +1670,10 @@ fn collect_loaded_tool_names(
         .iter()
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.content.as_ref() {
-            Some(PartContent::ToolExecution(ToolExecutionPart::Completed { details, .. })) => {
-                loaded_tools_from_tool_output(details)
+            Some(PartContent::Operation(operation))
+                if part.status == crate::message::ExecutionStatus::Completed =>
+            {
+                loaded_tools_from_tool_output(&operation.details)
             }
             _ => None,
         })
@@ -1850,9 +1861,9 @@ mod tests {
     use crate::message::{
         ApplyPatchToolInput, BashToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
         FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput, Message,
-        PartContent, ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TimeRange,
-        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation,
-        ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
+        OperationPart, PartContent, ReadToolInput, StructuredObject, TaskSubagentType,
+        TaskToolInput, TimeRange, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
+        ToolInvocation, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -2268,31 +2279,31 @@ mod tests {
     fn loaded_tool_search_message(loaded_tools: &[&str]) -> Message {
         Message {
             id: 99,
-            role: Role::Tool,
+            role: Role::Assistant,
             state: crate::message::MessageStatus::Completed,
             parts: vec![crate::message::MessagePart::with_content(
                 1,
                 99,
                 Utc::now(),
                 crate::message::ExecutionStatus::Completed,
-                PartContent::ToolExecution(ToolExecutionPart::Completed {
-                    call_id: 1,
-                    invocation: ToolPayloadInput::ToolSearch(ToolSearchToolInput {
+                PartContent::Operation(OperationPart::completed(
+                    1,
+                    ToolPayloadInput::ToolSearch(ToolSearchToolInput {
                         query: "load mutating tools".to_string(),
                         load: loaded_tools.iter().map(|name| name.to_string()).collect(),
                         limit: None,
                     })
                     .into_invocation(),
-                    output_text: "loaded deferred tools".to_string(),
-                    blocks: Vec::new(),
-                    attachments: Vec::new(),
-                    details: (ToolPayloadOutput::ToolSearch {
+                    "loaded deferred tools",
+                    Vec::new(),
+                    Vec::new(),
+                    (ToolPayloadOutput::ToolSearch {
                         results: Vec::new(),
                         loaded_tools: loaded_tools.iter().map(|name| name.to_string()).collect(),
                     })
                     .into_tool_output(),
-                    lifecycle: TimeRange::default(),
-                }),
+                    TimeRange::default(),
+                )),
             )],
             created_at: Utc::now(),
             metadata: crate::message::MessageMetadata::default(),
@@ -2718,7 +2729,7 @@ mod tests {
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let available = executor
-            .available_tools()
+            .searchable_tools()
             .into_iter()
             .map(|item| item.exposed_name)
             .collect::<std::collections::BTreeSet<_>>();
@@ -2972,6 +2983,7 @@ mod tests {
 
         let invocation = ToolInvocation {
             name: "plugin_echo".to_string(),
+            plugin_name: None,
             input: StructuredObject::try_from(json!({ "message": "hello" }))
                 .expect("structured object should build"),
         };
@@ -3023,8 +3035,13 @@ mod tests {
             .prepare_invocation(&invocation, 7, 9)
             .expect("prepare should succeed for provided");
 
-        let ToolInvocation { name, input } = prepared.invocation;
+        let ToolInvocation {
+            name,
+            input,
+            plugin_name,
+        } = prepared.invocation;
         assert_eq!(name, "read");
+        assert_eq!(plugin_name.as_deref(), Some(super::fs_plugin_id()));
         let payload = serde_json::Value::from(input);
         assert_eq!(payload["file_path"], "notes.txt");
         assert_eq!(payload["offset"], 3);
@@ -3037,6 +3054,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
         let invocation = ToolInvocation {
             name: "mcp:docs:search".to_string(),
+            plugin_name: None,
             input: StructuredObject::try_from(json!({ "query": "plugin host" }))
                 .expect("structured object should build"),
         };
@@ -3045,8 +3063,13 @@ mod tests {
             .prepare_invocation(&invocation, 7, 9)
             .expect("prepare should preserve plugin tool invocation");
 
-        let ToolInvocation { name, input } = prepared.invocation;
+        let ToolInvocation {
+            name,
+            input,
+            plugin_name,
+        } = prepared.invocation;
         assert_eq!(name, "mcp:docs:search");
+        assert_eq!(plugin_name.as_deref(), Some("custom"));
         let payload = serde_json::Value::from(input);
         assert_eq!(payload["query"], "plugin host");
     }
@@ -3058,6 +3081,7 @@ mod tests {
             .with_plugin_manager(build_plugin_manager(&workspace.root));
         let invocation = ToolInvocation {
             name: "plugin_paths".to_string(),
+            plugin_name: None,
             input: StructuredObject::try_from(json!({
                 "file_path": "docs/spec.md",
                 "extra_paths": ["notes/a.md", "notes/b.md"],

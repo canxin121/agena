@@ -1825,9 +1825,7 @@ impl VisibleMessageProjection {
 fn visible_message_role(role: agena::role::Role) -> agena_api::resource::MessageRole {
     match role {
         agena::role::Role::User => agena_api::resource::MessageRole::User,
-        agena::role::Role::Assistant | agena::role::Role::Tool => {
-            agena_api::resource::MessageRole::Assistant
-        }
+        agena::role::Role::Assistant => agena_api::resource::MessageRole::Assistant,
         agena::role::Role::System => agena_api::resource::MessageRole::System,
     }
 }
@@ -1889,63 +1887,15 @@ fn visible_part_count(part_counts: &HashMap<i64, u64>, message: &Message) -> u64
 
 fn project_visible_messages(messages: Vec<Message>) -> VisibleMessageProjection {
     let mut visible = Vec::with_capacity(messages.len());
-    let mut hidden_message_aliases = HashMap::new();
-    let mut assistant_indices_by_id = HashMap::<i64, usize>::new();
-    let mut assistant_indices_by_operation = HashMap::<String, usize>::new();
 
     for mut message in messages {
-        if message.role != agena::role::Role::Tool {
-            normalize_message_parts(&mut message);
-            let visible_index = visible.len();
-            if message.role == agena::role::Role::Assistant {
-                assistant_indices_by_id.insert(message.id, visible_index);
-                index_assistant_operations(
-                    &message,
-                    visible_index,
-                    &mut assistant_indices_by_operation,
-                );
-            }
-            visible.push(message);
-            continue;
-        }
-
-        let target_index = visible_tool_parent_index(
-            &message,
-            visible.as_slice(),
-            &assistant_indices_by_id,
-            &assistant_indices_by_operation,
-        );
-
-        let Some(target_index) = target_index else {
-            message.role = agena::role::Role::Assistant;
-            normalize_message_parts(&mut message);
-            let visible_index = visible.len();
-            assistant_indices_by_id.insert(message.id, visible_index);
-            index_assistant_operations(
-                &message,
-                visible_index,
-                &mut assistant_indices_by_operation,
-            );
-            visible.push(message);
-            continue;
-        };
-
-        let target_message_id = visible[target_index].id;
-        hidden_message_aliases.insert(message.id, target_message_id);
-
-        for mut part in message.parts {
-            part.message_id = target_message_id;
-            part.part_index = visible[target_index].parts.len() as i32;
-            if let Some(operation_id) = part.operation_id.clone() {
-                assistant_indices_by_operation.insert(operation_id, target_index);
-            }
-            visible[target_index].parts.push(part);
-        }
+        normalize_message_parts(&mut message);
+        visible.push(message);
     }
 
     VisibleMessageProjection {
         messages: visible,
-        hidden_message_aliases,
+        hidden_message_aliases: HashMap::new(),
     }
 }
 
@@ -1954,50 +1904,6 @@ fn normalize_message_parts(message: &mut Message) {
         part.message_id = message.id;
         part.part_index = index as i32;
     }
-}
-
-fn index_assistant_operations(
-    message: &Message,
-    visible_index: usize,
-    assistant_indices_by_operation: &mut HashMap<String, usize>,
-) {
-    for operation_id in message
-        .parts
-        .iter()
-        .filter_map(|part| part.operation_id.as_ref())
-    {
-        assistant_indices_by_operation.insert(operation_id.clone(), visible_index);
-    }
-}
-
-fn visible_tool_parent_index(
-    tool_message: &Message,
-    visible: &[Message],
-    assistant_indices_by_id: &HashMap<i64, usize>,
-    assistant_indices_by_operation: &HashMap<String, usize>,
-) -> Option<usize> {
-    if let Some(parent_message_id) = tool_message.metadata.parent_message_id {
-        if let Some(index) = assistant_indices_by_id.get(&parent_message_id).copied() {
-            return Some(index);
-        }
-    }
-
-    for operation_id in tool_message
-        .parts
-        .iter()
-        .filter_map(|part| part.operation_id.as_deref())
-    {
-        if let Some(index) = assistant_indices_by_operation.get(operation_id).copied() {
-            return Some(index);
-        }
-    }
-
-    visible
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, message)| message.role == agena::role::Role::Assistant)
-        .map(|(index, _)| index)
 }
 
 fn paginate_visible_messages(
@@ -2099,7 +2005,7 @@ fn command_available(command: &str) -> bool {
 #[cfg(test)]
 mod visible_message_projection_tests {
     use super::*;
-    use agena::message::{MessageMetadata, ToolExecutionPart, ToolInvocation};
+    use agena::message::{MessageMetadata, OperationPart, ToolInvocation};
     use agena::role::Role;
     use chrono::Utc;
 
@@ -2110,12 +2016,12 @@ mod visible_message_projection_tests {
             message_id,
             created_at,
             ExecutionStatus::Pending,
-            PartContent::ToolExecution(ToolExecutionPart::Pending {
-                call_id: 0,
-                invocation: ToolInvocation::new("read", Default::default()),
-                title: "read".to_string(),
-                lifecycle: Default::default(),
-            }),
+            PartContent::Operation(OperationPart::pending(
+                0,
+                ToolInvocation::new("read", Default::default()),
+                "read",
+                Default::default(),
+            )),
         );
         part.operation_id = Some(operation_id.to_string());
         Message {
@@ -2130,67 +2036,22 @@ mod visible_message_projection_tests {
         }
     }
 
-    fn tool_result_message(
-        message_id: i64,
-        parent_message_id: i64,
-        operation_id: &str,
-        output_text: &str,
-    ) -> Message {
-        let created_at = Utc::now();
-        let mut part = MessagePart::with_content(
-            20,
-            message_id,
-            created_at,
-            ExecutionStatus::Completed,
-            PartContent::ToolExecution(ToolExecutionPart::Completed {
-                call_id: 0,
-                invocation: ToolInvocation::new("read", Default::default()),
-                output_text: output_text.to_string(),
-                blocks: Vec::new(),
-                attachments: Vec::new(),
-                details: Default::default(),
-                lifecycle: Default::default(),
-            }),
-        );
-        part.operation_id = Some(operation_id.to_string());
-        Message {
-            id: message_id,
-            role: Role::Tool,
-            state: MessageStatus::Completed,
-            parts: vec![part],
-            created_at,
-            metadata: MessageMetadata {
-                parent_message_id: Some(parent_message_id),
-                ..MessageMetadata::default()
-            },
-            usage: None,
-            finish: None,
-        }
-    }
-
     #[test]
-    fn visible_projection_merges_tool_messages_into_assistant() {
-        let projection = project_visible_messages(vec![
-            assistant_with_tool_call(1, "call_read_1"),
-            tool_result_message(2, 1, "call_read_1", "README body"),
-        ]);
+    fn visible_projection_preserves_assistant_operation_parts() {
+        let projection = project_visible_messages(vec![assistant_with_tool_call(1, "call_read_1")]);
 
         assert_eq!(projection.messages.len(), 1);
-        assert_eq!(projection.hidden_message_aliases.get(&2), Some(&1));
+        assert!(projection.hidden_message_aliases.is_empty());
 
         let message = &projection.messages[0];
         assert_eq!(message.role, Role::Assistant);
-        assert_eq!(message.parts.len(), 2);
-        assert_eq!(message.parts[1].message_id, 1);
+        assert_eq!(message.parts.len(), 1);
+        assert_eq!(message.parts[0].message_id, 1);
+        assert_eq!(message.parts[0].part_index, 0);
         assert_eq!(
-            message.parts[1].operation_id.as_deref(),
+            message.parts[0].operation_id.as_deref(),
             Some("call_read_1")
         );
-        assert!(matches!(
-            message.parts[1].content.as_ref(),
-            Some(PartContent::ToolExecution(ToolExecutionPart::Completed { output_text, .. }))
-                if output_text == "README body"
-        ));
     }
 }
 
@@ -2456,12 +2317,12 @@ fn pending_permission_requests(session: &Session) -> Vec<agena::permission::Perm
                 return None;
             }
 
-            let PartContent::PermissionRequest(PermissionRequestPart { request, reply }) =
-                part.content.as_ref()?
-            else {
-                return None;
-            };
-            reply.is_none().then_some(request.clone())
+            match part.content.as_ref()? {
+                PartContent::Request(agena::message::RequestPart::Permission(
+                    PermissionRequestPart { request, reply },
+                )) => reply.is_none().then_some(request.clone()),
+                _ => None,
+            }
         })
         .collect()
 }
@@ -2476,12 +2337,12 @@ fn pending_user_input_requests(session: &Session) -> Vec<UserInputRequest> {
                 return None;
             }
 
-            let PartContent::UserInputRequest(UserInputRequestPart { request, reply }) =
-                part.content.as_ref()?
-            else {
-                return None;
-            };
-            reply.is_none().then_some(request.clone())
+            match part.content.as_ref()? {
+                PartContent::Request(agena::message::RequestPart::UserInput(
+                    UserInputRequestPart { request, reply },
+                )) => reply.is_none().then_some(request.clone()),
+                _ => None,
+            }
         })
         .collect()
 }

@@ -408,7 +408,6 @@ fn role_name(role: Role) -> &'static str {
         Role::User => "user",
         Role::Assistant => "assistant",
         Role::System => "system",
-        Role::Tool => "tool",
     }
 }
 

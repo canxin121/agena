@@ -5,11 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::permission::{PermissionReply, PermissionReplyKind, PermissionRequest};
 
-use super::{ExecutionStatus, TimeRange};
-
-fn default_execution_pending() -> ExecutionStatus {
-    ExecutionStatus::Pending
-}
+use super::ExecutionStatus;
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -64,25 +60,6 @@ pub struct ReasoningPart {
     pub encrypted_content: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CommandExecutionPart {
-    pub command: String,
-    #[serde(default = "default_execution_pending")]
-    pub status: ExecutionStatus,
-    #[serde(default)]
-    pub lifecycle: TimeRange,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FileChangePart {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub changes: Vec<FileChangeEntry>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileChangeEntry {
     pub path: String,
@@ -101,24 +78,11 @@ pub enum FileChangeKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WebSearchPart {
-    pub query: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub results: Vec<WebSearchResult>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WebSearchResult {
     pub title: String,
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snippet: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct TodoListPart {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub items: Vec<TodoItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -149,6 +113,29 @@ pub enum TodoPriority {
 pub struct ErrorPart {
     pub code: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "request_type", rename_all = "snake_case")]
+pub enum RequestPart {
+    Permission(PermissionRequestPart),
+    UserInput(UserInputRequestPart),
+}
+
+impl RequestPart {
+    pub const fn status(&self) -> ExecutionStatus {
+        match self {
+            Self::Permission(part) => part.status(),
+            Self::UserInput(part) => part.status(),
+        }
+    }
+
+    pub fn summary_text(&self) -> String {
+        match self {
+            Self::Permission(part) => part.summary_text(),
+            Self::UserInput(part) => part.summary_text(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

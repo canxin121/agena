@@ -247,7 +247,6 @@ runtime-status-default = 使用会话默认设置
 message-role-user = 用户
 message-role-assistant = 助手
 message-role-system = 系统
-message-role-tool = 工具
 
 message-state-pending = 待处理
 message-state-in-progress = 进行中

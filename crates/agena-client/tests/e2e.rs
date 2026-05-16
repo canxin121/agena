@@ -157,11 +157,10 @@ impl ModelProvider for PermissionTestProvider {
             .map(agena::message::Message::as_text_lossy)
             .unwrap_or_default();
         let todo_done = request.messages.iter().any(|message| {
-            message.role == Role::Tool
-                && message
-                    .parts
-                    .iter()
-                    .any(|part| part.operation_id.as_deref() == Some("call_todo_1"))
+            message
+                .parts
+                .iter()
+                .any(|part| part.operation_id.as_deref() == Some("call_todo_1"))
         });
 
         if last_user_text.contains("permission todo") && !todo_done {

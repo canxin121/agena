@@ -725,14 +725,15 @@ impl SessionHistoryStore {
         &self,
         update: &MessagePartUpdatedEvent,
     ) -> Result<(), DbErr> {
-        upsert_part_projection(&self.db, update.session_id, &update.part).await?;
-
         let Some(message_row) = activity_message::Entity::find_by_id(update.message_id)
             .one(&self.db)
             .await?
         else {
             return Ok(());
         };
+
+        upsert_part_projection(&self.db, update.session_id, &update.part).await?;
+
         let mut active: activity_message::ActiveModel = message_row.into();
         active.state = ActiveValue::Set(update.message_state);
         active.updated_at_ms = ActiveValue::Set(update.ts_ms);
@@ -768,9 +769,22 @@ impl SessionHistoryStore {
                             is_compacted: false,
                         },
                     )
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        DbErr::Custom(format!(
+                            "project user message {}: {err}",
+                            payload.message_id.raw()
+                        ))
+                    })?;
                     for part in &payload.parts {
-                        upsert_part_projection(&self.db, session_id, part).await?;
+                        upsert_part_projection(&self.db, session_id, part)
+                            .await
+                            .map_err(|err| {
+                                DbErr::Custom(format!(
+                                    "project user part {} for message {}: {err}",
+                                    part.id, part.message_id
+                                ))
+                            })?;
                     }
                 }
                 EventKind::AssistantMessageCompleted(payload) => {
@@ -792,9 +806,22 @@ impl SessionHistoryStore {
                             is_compacted: false,
                         },
                     )
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        DbErr::Custom(format!(
+                            "project assistant message {}: {err}",
+                            payload.message_id.raw()
+                        ))
+                    })?;
                     for part in &payload.parts {
-                        upsert_part_projection(&self.db, session_id, part).await?;
+                        upsert_part_projection(&self.db, session_id, part)
+                            .await
+                            .map_err(|err| {
+                                DbErr::Custom(format!(
+                                    "project assistant part {} for message {}: {err}",
+                                    part.id, part.message_id
+                                ))
+                            })?;
                     }
                 }
                 EventKind::ToolCallCompleted(payload) => {
@@ -815,8 +842,21 @@ impl SessionHistoryStore {
                             is_compacted: false,
                         },
                     )
-                    .await?;
-                    upsert_part_projection(&self.db, session_id, &synthetic_part).await?;
+                    .await
+                    .map_err(|err| {
+                        DbErr::Custom(format!(
+                            "project tool message {}: {err}",
+                            payload.message_id.raw()
+                        ))
+                    })?;
+                    upsert_part_projection(&self.db, session_id, &synthetic_part)
+                        .await
+                        .map_err(|err| {
+                            DbErr::Custom(format!(
+                                "project tool part {} for message {}: {err}",
+                                synthetic_part.id, synthetic_part.message_id
+                            ))
+                        })?;
                 }
                 EventKind::SystemNoticeAppended(payload) => {
                     let synthetic_part = project_system_notice_part(payload);
@@ -841,9 +881,22 @@ impl SessionHistoryStore {
                             .unwrap_or(false),
                         },
                     )
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        DbErr::Custom(format!(
+                            "project system notice {}: {err}",
+                            payload.message_id.raw()
+                        ))
+                    })?;
                     if !matches!(payload.kind, SystemNoticeKind::RewindCheckpoint) {
-                        upsert_part_projection(&self.db, session_id, &synthetic_part).await?;
+                        upsert_part_projection(&self.db, session_id, &synthetic_part)
+                            .await
+                            .map_err(|err| {
+                                DbErr::Custom(format!(
+                                    "project system notice part {} for message {}: {err}",
+                                    synthetic_part.id, synthetic_part.message_id
+                                ))
+                            })?;
                     }
                 }
                 EventKind::MessageRevised(MessageRevised {
@@ -871,7 +924,14 @@ impl SessionHistoryStore {
                     }
                 }
                 EventKind::MessagePartUpdated(update) => {
-                    self.apply_message_part_update(update).await?;
+                    self.apply_message_part_update(update)
+                        .await
+                        .map_err(|err| {
+                            DbErr::Custom(format!(
+                                "project part update {} for message {}: {err}",
+                                update.part.id, update.message_id
+                            ))
+                        })?;
                 }
                 _ => {}
             }

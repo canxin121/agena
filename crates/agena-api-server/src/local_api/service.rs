@@ -513,7 +513,7 @@ impl ApiService {
             .map_err(api_error_from_app)?;
 
         // Newest-first, then apply cursor + limit, then re-sort ascending so
-        // the response matches the legacy on-the-wire ordering.
+        // each returned page is stable for clients that append rows in order.
         let mut newest_first: Vec<_> = all.into_iter().collect();
         newest_first.sort_by(|a, b| b.meta.seq_global.cmp(&a.meta.seq_global));
         if let Some(cursor) = cursor {
@@ -546,11 +546,19 @@ impl ApiService {
         let visible =
             load_visible_message_projection(manager, session_id, query.parts == PartLoadMode::Full)
                 .await?;
+        let part_counts = load_visible_part_counts(manager, session_id, &visible).await?;
         let (messages, has_more, next_cursor) =
             paginate_visible_messages(visible.messages.as_slice(), cursor, limit);
         let items: Vec<MessageResource> = messages
             .iter()
-            .map(|message| message_resource_from_message(session_id, message, query.parts))
+            .map(|message| {
+                message_resource_from_message(
+                    session_id,
+                    message,
+                    query.parts,
+                    visible_part_count(&part_counts, message),
+                )
+            })
             .collect();
 
         build_page(
@@ -578,9 +586,15 @@ impl ApiService {
         let visible =
             load_visible_message_projection(manager, session_id, parts == PartLoadMode::Full)
                 .await?;
-        Ok(visible
-            .find_message(message_id)
-            .map(|message| message_resource_from_message(session_id, message, parts)))
+        let part_counts = load_visible_part_counts(manager, session_id, &visible).await?;
+        Ok(visible.find_message(message_id).map(|message| {
+            message_resource_from_message(
+                session_id,
+                message,
+                parts,
+                visible_part_count(&part_counts, message),
+            )
+        }))
     }
 
     pub async fn list_message_parts(
@@ -1744,15 +1758,13 @@ fn permission_action_from_write_request(
     }
 }
 
-/// Project a `Message` (from the in-memory `Session.messages`) into the
-/// HTTP API `MessageResource` shape that the legacy SQL-backed code path
-/// produced from row models.
+/// Project a `Message` into the HTTP API `MessageResource` shape.
 fn message_resource_from_message(
     session_id: i64,
     message: &Message,
     parts_mode: PartLoadMode,
+    part_count: u64,
 ) -> MessageResource {
-    let part_count = message.parts.len() as u64;
     let parts = match parts_mode {
         PartLoadMode::None => None,
         PartLoadMode::Summary | PartLoadMode::Full => Some(
@@ -1830,6 +1842,49 @@ async fn load_visible_message_projection(
         .await
         .map_err(api_error_from_app)?;
     Ok(project_visible_messages(messages))
+}
+
+async fn load_visible_part_counts(
+    manager: &SessionManager,
+    session_id: i64,
+    projection: &VisibleMessageProjection,
+) -> ApiResult<HashMap<i64, u64>> {
+    let headers = manager
+        .list_projected_message_headers(session_id)
+        .await
+        .map_err(api_error_from_app)?;
+    let header_counts = headers
+        .into_iter()
+        .map(|header| (header.id, header.part_count))
+        .collect::<HashMap<_, _>>();
+
+    let mut counts = HashMap::<i64, u64>::new();
+    for message in &projection.messages {
+        if let Some(part_count) = header_counts.get(&message.id).copied() {
+            counts.insert(message.id, part_count);
+        }
+    }
+
+    for (hidden_message_id, visible_message_id) in &projection.hidden_message_aliases {
+        if let Some(part_count) = header_counts.get(hidden_message_id).copied() {
+            *counts.entry(*visible_message_id).or_default() += part_count;
+        }
+    }
+
+    for message in &projection.messages {
+        let loaded_part_count = message.parts.len() as u64;
+        let count = counts.entry(message.id).or_default();
+        *count = (*count).max(loaded_part_count);
+    }
+
+    Ok(counts)
+}
+
+fn visible_part_count(part_counts: &HashMap<i64, u64>, message: &Message) -> u64 {
+    part_counts
+        .get(&message.id)
+        .copied()
+        .unwrap_or(message.parts.len() as u64)
 }
 
 fn project_visible_messages(messages: Vec<Message>) -> VisibleMessageProjection {
@@ -1954,25 +2009,29 @@ fn paginate_visible_messages(
         .iter()
         .filter(|message| match cursor {
             Some(cursor) => {
-                let key = (message.created_at.timestamp_millis(), message.id);
-                key > (cursor.created_at_ms, cursor.id)
+                let key = message_cursor_key(message);
+                key < (cursor.created_at_ms, cursor.id)
             }
             None => true,
         })
         .cloned()
         .collect::<Vec<_>>();
 
+    filtered.sort_by(|left, right| message_cursor_key(right).cmp(&message_cursor_key(left)));
     let has_more = filtered.len() > limit as usize;
     filtered.truncate(limit as usize);
     let next_cursor = if has_more {
-        filtered
-            .last()
-            .map(|message| (message.created_at.timestamp_millis(), message.id))
+        filtered.last().map(message_cursor_key)
     } else {
         None
     };
+    filtered.sort_by_key(message_cursor_key);
 
     (filtered, has_more, next_cursor)
+}
+
+fn message_cursor_key(message: &Message) -> (i64, i64) {
+    (message.created_at.timestamp_millis(), message.id)
 }
 
 fn project_part(mut part: MessagePart, mode: PartLoadMode) -> MessagePart {

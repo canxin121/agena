@@ -2031,8 +2031,14 @@ async fn session_action_routes_cover_rewind_tree_checkpoints_export_and_import()
         )
         .await
         .unwrap();
-    assert_eq!(import.status(), StatusCode::OK);
+    let import_status = import.status();
     let import_body = import.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        import_status,
+        StatusCode::OK,
+        "import response body: {}",
+        String::from_utf8_lossy(&import_body)
+    );
     let imported: serde_json::Value = serde_json::from_slice(&import_body).unwrap();
     assert_ne!(
         imported

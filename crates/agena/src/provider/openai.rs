@@ -2396,52 +2396,6 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct MemoryAuthStore {
-        values: Mutex<HashMap<String, crate::provider::auth::AuthData>>,
-    }
-
-    impl crate::provider::auth::AuthStore for MemoryAuthStore {
-        fn all(&self) -> Result<HashMap<String, crate::provider::auth::AuthData>, AppError> {
-            Ok(self
-                .values
-                .lock()
-                .expect("auth store lock should succeed")
-                .clone())
-        }
-
-        fn get(
-            &self,
-            provider_id: &str,
-        ) -> Result<Option<crate::provider::auth::AuthData>, AppError> {
-            Ok(self
-                .values
-                .lock()
-                .expect("auth store lock should succeed")
-                .get(provider_id)
-                .cloned())
-        }
-
-        fn set(
-            &self,
-            provider_id: &str,
-            auth: crate::provider::auth::AuthData,
-        ) -> Result<(), AppError> {
-            self.values
-                .lock()
-                .expect("auth store lock should succeed")
-                .insert(provider_id.to_owned(), auth);
-            Ok(())
-        }
-
-        fn remove(&self, provider_id: &str) -> Result<(), AppError> {
-            self.values
-                .lock()
-                .expect("auth store lock should succeed")
-                .remove(provider_id);
-            Ok(())
-        }
-    }
     fn sample_tool_definition() -> RegistryPluginEntry {
         RegistryPluginEntry::new(
             "fixture",

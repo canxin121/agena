@@ -846,45 +846,6 @@ impl SessionStore {
         Ok(super::cost::summarize(&session.messages))
     }
 
-    pub(crate) async fn find_session_id_for_message(
-        &self,
-        message_id: i64,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Option<i64>, AppError> {
-        let session_ids = self.list_workspace_session_ids().await?;
-        for session_id in session_ids {
-            let session = self.load_session(session_id, cache_policy).await?;
-            if session
-                .messages
-                .iter()
-                .any(|message| message.id == message_id)
-            {
-                return Ok(Some(session_id));
-            }
-        }
-        Ok(None)
-    }
-
-    pub(crate) async fn find_session_id_for_part(
-        &self,
-        part_id: i64,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Option<i64>, AppError> {
-        let session_ids = self.list_workspace_session_ids().await?;
-        for session_id in session_ids {
-            let session = self.load_session(session_id, cache_policy).await?;
-            if session
-                .messages
-                .iter()
-                .flat_map(|message| message.parts.iter())
-                .any(|part| part.id == part_id)
-            {
-                return Ok(Some(session_id));
-            }
-        }
-        Ok(None)
-    }
-
     pub(crate) async fn rewind_to_message(
         &self,
         session_id: i64,
@@ -1250,11 +1211,20 @@ impl SessionStore {
         // current process has already handed out — fork/turn appends after
         // the import would silently overwrite an imported message.
         let mut max_imported_id: i64 = 0;
+        let mut max_imported_part_id: i64 = 0;
         for event in &events {
             visit_event_message_ids(event, |id| max_imported_id = max_imported_id.max(id));
+            visit_event_part_ids(event, |id| {
+                max_imported_part_id = max_imported_part_id.max(id)
+            });
         }
         let id_offset = if max_imported_id > 0 {
             self.reserve_message_id_block(max_imported_id).await?
+        } else {
+            0
+        };
+        let part_id_offset = if max_imported_part_id > 0 {
+            self.reserve_part_id_block(max_imported_part_id).await?
         } else {
             0
         };
@@ -1263,9 +1233,17 @@ impl SessionStore {
                 rewrite_event_message_ids(event, |id| id + id_offset);
             }
         }
+        if part_id_offset != 0 {
+            for event in &mut events {
+                rewrite_event_part_ids(event, |id| id + part_id_offset);
+            }
+        }
 
         let session = self.create_session(meta.title, None, cache_policy).await?;
         let new_session_id = session.id;
+        for event in &mut events {
+            rewrite_event_session_ids(event, new_session_id);
+        }
         // Silent: imported events are historical; subscribers should not see
         // them as fresh activity.
         let mut session = self
@@ -1321,6 +1299,15 @@ impl SessionStore {
         self.ensure_id_allocator(&mut allocator).await?;
         let first = allocator.next_message_id;
         allocator.next_message_id = first.saturating_add(count);
+        Ok(first - 1)
+    }
+
+    async fn reserve_part_id_block(&self, count: i64) -> Result<i64, AppError> {
+        debug_assert!(count > 0);
+        let mut allocator = self.ids.lock().await;
+        self.ensure_id_allocator(&mut allocator).await?;
+        let first = allocator.next_part_id;
+        allocator.next_part_id = first.saturating_add(count);
         Ok(first - 1)
     }
 
@@ -1928,19 +1915,24 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
     match kind {
         EventKind::UserMessageAppended(p) => {
             visit(p.message_id.raw());
+            visit_message_metadata_ids(&p.metadata, &mut visit);
             for part in &p.parts {
                 visit(part.message_id);
             }
         }
         EventKind::AssistantMessageCompleted(p) => {
             visit(p.message_id.raw());
+            visit_message_metadata_ids(&p.metadata, &mut visit);
             for part in &p.parts {
                 visit(part.message_id);
             }
         }
         EventKind::ToolCallIssued(p) => visit(p.message_id.raw()),
         EventKind::ToolCallCompleted(p) => visit(p.message_id.raw()),
-        EventKind::SystemNoticeAppended(p) => visit(p.message_id.raw()),
+        EventKind::SystemNoticeAppended(p) => {
+            visit(p.message_id.raw());
+            visit_rewind_checkpoint_ids(p, &mut visit);
+        }
         EventKind::MessageRevised(p) => visit(p.target_message_id),
         EventKind::MessagePartUpdated(p) => {
             visit(p.message_id);
@@ -1967,6 +1959,30 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
     }
 }
 
+fn visit_message_metadata_ids(
+    metadata: &crate::message::MessageMetadata,
+    mut visit: impl FnMut(i64),
+) {
+    if let Some(parent_message_id) = metadata.parent_message_id {
+        visit(parent_message_id);
+    }
+}
+
+fn visit_rewind_checkpoint_ids(
+    notice: &super::history::SystemNoticeAppended,
+    mut visit: impl FnMut(i64),
+) {
+    if notice.kind != super::history::SystemNoticeKind::RewindCheckpoint {
+        return;
+    }
+    if let Ok(checkpoint) = serde_json::from_str::<super::history::RewindCheckpoint>(&notice.text) {
+        visit(checkpoint.target_message_id);
+        for entry in checkpoint.dropped {
+            visit(entry.message_id);
+        }
+    }
+}
+
 fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
     match kind {
         EventKind::UserMessageAppended(p) => {
@@ -1981,6 +1997,11 @@ fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         }
         EventKind::MessagePartUpdated(p) => {
             visit(p.part.id);
+        }
+        EventKind::MessageRevised(p) => {
+            if let super::history::RevisionKind::AttachmentStripped { part_id } = &p.kind {
+                visit(*part_id);
+            }
         }
         EventKind::RunStarted(_)
         | EventKind::RunFailed(_)
@@ -2001,8 +2022,7 @@ fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::PluginEvent(_)
         | EventKind::ToolCallIssued(_)
         | EventKind::ToolCallCompleted(_)
-        | EventKind::SystemNoticeAppended(_)
-        | EventKind::MessageRevised(_) => {}
+        | EventKind::SystemNoticeAppended(_) => {}
     }
 }
 
@@ -2013,12 +2033,14 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
     match kind {
         EventKind::UserMessageAppended(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
+            rewrite_message_metadata_ids(&mut p.metadata, &mut f);
             for part in &mut p.parts {
                 part.message_id = f(part.message_id);
             }
         }
         EventKind::AssistantMessageCompleted(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
+            rewrite_message_metadata_ids(&mut p.metadata, &mut f);
             for part in &mut p.parts {
                 part.message_id = f(part.message_id);
             }
@@ -2031,6 +2053,7 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
         }
         EventKind::SystemNoticeAppended(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
+            rewrite_rewind_checkpoint_ids(p, &mut f);
         }
         EventKind::MessageRevised(p) => {
             p.target_message_id = f(p.target_message_id);
@@ -2055,6 +2078,113 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
         | EventKind::TurnStarted(_)
         | EventKind::TurnCompleted(_)
         | EventKind::TurnAborted(_)
+        | EventKind::PluginEvent(_) => {}
+    }
+}
+
+fn rewrite_message_metadata_ids(
+    metadata: &mut crate::message::MessageMetadata,
+    mut f: impl FnMut(i64) -> i64,
+) {
+    if let Some(parent_message_id) = metadata.parent_message_id.as_mut() {
+        *parent_message_id = f(*parent_message_id);
+    }
+}
+
+fn rewrite_rewind_checkpoint_ids(
+    notice: &mut super::history::SystemNoticeAppended,
+    mut f: impl FnMut(i64) -> i64,
+) {
+    if notice.kind != super::history::SystemNoticeKind::RewindCheckpoint {
+        return;
+    }
+    if let Ok(mut checkpoint) =
+        serde_json::from_str::<super::history::RewindCheckpoint>(&notice.text)
+    {
+        checkpoint.target_message_id = f(checkpoint.target_message_id);
+        for entry in &mut checkpoint.dropped {
+            entry.message_id = f(entry.message_id);
+        }
+        if let Ok(text) = serde_json::to_string(&checkpoint) {
+            notice.text = text;
+        }
+    }
+}
+
+/// Rewrite every `part_id` in `kind` through `f`. Mirror of
+/// [`visit_event_part_ids`].
+fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
+    match kind {
+        EventKind::UserMessageAppended(p) => {
+            for part in &mut p.parts {
+                part.id = f(part.id);
+            }
+        }
+        EventKind::AssistantMessageCompleted(p) => {
+            for part in &mut p.parts {
+                part.id = f(part.id);
+            }
+        }
+        EventKind::MessagePartUpdated(p) => {
+            p.part.id = f(p.part.id);
+        }
+        EventKind::MessageRevised(p) => {
+            if let super::history::RevisionKind::AttachmentStripped { part_id } = &mut p.kind {
+                *part_id = f(*part_id);
+            }
+        }
+        EventKind::RunStarted(_)
+        | EventKind::RunFailed(_)
+        | EventKind::StreamError(_)
+        | EventKind::MessagePartDelta(_)
+        | EventKind::CommandBegin(_)
+        | EventKind::CommandOutputDelta(_)
+        | EventKind::CommandEnd(_)
+        | EventKind::PermissionRequested(_)
+        | EventKind::PermissionReplied(_)
+        | EventKind::PermissionRuleCreated(_)
+        | EventKind::PermissionRuleUpdated(_)
+        | EventKind::PermissionRuleRevoked(_)
+        | EventKind::SessionGoalUpdated(_)
+        | EventKind::TurnStarted(_)
+        | EventKind::TurnCompleted(_)
+        | EventKind::TurnAborted(_)
+        | EventKind::ToolCallIssued(_)
+        | EventKind::ToolCallCompleted(_)
+        | EventKind::SystemNoticeAppended(_)
+        | EventKind::PluginEvent(_) => {}
+    }
+}
+
+fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
+    match kind {
+        EventKind::RunStarted(p) => p.session_id = session_id,
+        EventKind::RunFailed(p) => p.session_id = session_id,
+        EventKind::StreamError(p) => p.session_id = session_id,
+        EventKind::MessagePartUpdated(p) => p.session_id = session_id,
+        EventKind::MessagePartDelta(p) => p.session_id = session_id,
+        EventKind::CommandBegin(p) => p.context.session_id = session_id,
+        EventKind::CommandOutputDelta(p) => p.context.session_id = session_id,
+        EventKind::CommandEnd(p) => p.context.session_id = session_id,
+        EventKind::PermissionRequested(p) => p.session_id = session_id,
+        EventKind::PermissionReplied(p) => p.session_id = session_id,
+        EventKind::PermissionRuleCreated(p)
+        | EventKind::PermissionRuleUpdated(p)
+        | EventKind::PermissionRuleRevoked(p) => {
+            if p.session_id.is_some() {
+                p.session_id = Some(session_id);
+            }
+        }
+        EventKind::SessionGoalUpdated(p) => p.session_id = session_id,
+        EventKind::TurnStarted(_)
+        | EventKind::TurnCompleted(_)
+        | EventKind::TurnAborted(_)
+        | EventKind::UserMessageAppended(_)
+        | EventKind::AssistantMessageCompleted(_)
+        | EventKind::ToolCallIssued(_)
+        | EventKind::ToolCallCompleted(_)
+        | EventKind::SystemNoticeAppended(_)
+        | EventKind::MessageRevised(_)
         | EventKind::PluginEvent(_) => {}
     }
 }

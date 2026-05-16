@@ -10,7 +10,7 @@ function createRule(overrides: Partial<PermissionRuleResource> = {}): Permission
   return {
     id: 7,
     action_key: 'Bash:ls',
-    subject_kind: 'builtin_tool',
+    subject_kind: 'tool',
     tool_name: 'bash',
     qualifier: 'ls *',
     path_access_kind: null,
@@ -55,7 +55,7 @@ function createState() {
     activeSettingsTab: ref<SettingsTab>('providers'),
     editingPermissionRuleId: ref<number | null>(null),
     permissionDraft: {
-      subjectKind: 'builtin_tool',
+      subjectKind: 'tool',
       toolName: 'bash',
       qualifier: 'git status *',
       pathAccessKind: 'read',
@@ -124,7 +124,7 @@ describe('useRuntimePermissionActions', () => {
 
     actions.resetPermissionDraft()
 
-    expect(state.permissionDraft.subjectKind).toBe('builtin_tool')
+    expect(state.permissionDraft.subjectKind).toBe('tool')
     expect(state.permissionDraft.toolName).toBe('')
     expect(state.editingPermissionRuleId.value).toBe(null)
   })
@@ -148,7 +148,7 @@ describe('useRuntimePermissionActions', () => {
 
     await actions.savePermissionRule()
 
-    expect(apiCalls).toEqual(['create:builtin_tool:bash:ask'])
+    expect(apiCalls).toEqual(['create:tool:bash:ask'])
     expect(calls).toEqual(['load'])
     expect(state.actionMessage.value).toBe('Created permission rule for bash · git status *.')
     expect(state.editingPermissionRuleId.value).toBe(null)
@@ -168,7 +168,7 @@ describe('useRuntimePermissionActions', () => {
     await actions.savePermissionRule()
 
     expect(apiCalls).toEqual([
-      'create:builtin_tool:bash:ask',
+      'create:tool:bash:ask',
       'update:11:path_access:src/**:allow',
     ])
     expect(calls).toEqual(['load'])

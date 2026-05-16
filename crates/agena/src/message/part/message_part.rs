@@ -408,7 +408,7 @@ mod tests {
                 PermissionRequest {
                     request_id: "req_1".to_string(),
                     session_id: Some(2),
-                    action: PermissionAction::BuiltinTool {
+                    action: PermissionAction::Tool {
                         tool_name: "apply_patch".to_string(),
                         qualifier: None,
                     },

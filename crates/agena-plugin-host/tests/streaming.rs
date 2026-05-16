@@ -16,8 +16,8 @@ impl Plugin for StreamingPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("streamy", "0.1.0")
             .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::TOOL_INVOKE_STREAM)
-            .entry(
-                PluginEntryDecl::new(
+            .tool(
+                PluginToolDecl::new(
                     "count",
                     json!({"type":"object","properties":{"n":{"type":"integer"}}}),
                 )
@@ -59,7 +59,7 @@ async fn streaming_emulation_yields_one_chunk() {
     let resolved = host.lookup_entry("count").expect("count exposed");
     let mut stream = host
         .invoke_tool_stream(
-            &resolved.handle,
+            &resolved,
             ToolInvokeInput {
                 tool_name: "count".into(),
                 session_id: 1,

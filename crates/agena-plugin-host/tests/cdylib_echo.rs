@@ -68,7 +68,7 @@ async fn cdylib_echo_plugin_loads_and_invokes() {
     let resolved = host.lookup_entry("echo").expect("echo tool exposed");
     let out = host
         .invoke_tool(
-            &resolved.handle,
+            &resolved,
             ToolInvokeInput {
                 tool_name: "echo".into(),
                 session_id: 1,

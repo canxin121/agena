@@ -1,7 +1,7 @@
 //! `agena.skills_fs` — discovery plugin that scans the standard skill
 //! roots (workspace `.agena/skills/`, user `~/.agena/skills/`,
 //! `~/.claude/skills/`) plus user slash-command markdown, and registers
-//! everything it finds as dynamic plugin entries.
+//! everything it finds as dynamic plugin tools.
 //!
 //! Bundled skills shipped with `agena-skills` are also projected here so a
 //! fresh install has workflow-like entries even before any user-defined
@@ -20,9 +20,8 @@ use crate::message::WorkflowPromptToolInput;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostEntryRegisterRequest, HostEntryRemoveRequest};
 use crate::plugin::sdk::{
-    EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
-    Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
-    ToolInvokeOutput,
+    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginToolDecl,
+    PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const SKILLS_FS_PLUGIN_ID: &str = "agena.skills_fs";
@@ -74,13 +73,22 @@ impl SkillsFsPlugin {
         }
     }
 
-    fn entry_decl(name: &str, entry: &DiscoveredEntry) -> PluginEntryDecl {
+    fn entry_decl(name: &str, entry: &DiscoveredEntry) -> PluginToolDecl {
         let category = match entry.kind {
             DiscoveredEntryKind::Skill => "workflow",
             DiscoveredEntryKind::Command => "command",
         };
         let label = if entry.alias { "alias" } else { category };
-        PluginEntryDecl::new(
+        let mut tags = vec![
+            ToolTag::ReadOnly,
+            ToolTag::custom(category).expect("category tags are valid"),
+            ToolTag::custom(format!("skill:{}", entry.skill.frontmatter.name))
+                .expect("skill identity tags are valid"),
+        ];
+        if entry.alias {
+            tags.push(ToolTag::custom("alias").expect("alias tag is valid"));
+        }
+        PluginToolDecl::new(
             name.to_string(),
             crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
         )
@@ -92,12 +100,8 @@ impl SkillsFsPlugin {
         } else {
             entry.skill.frontmatter.description.clone()
         })
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(
-            std::iter::once(category.to_string())
-                .chain(std::iter::once(entry.skill.frontmatter.name.clone()))
-                .chain(entry.skill.frontmatter.aliases.iter().cloned()),
-        )
+        .tags(tags)
+        .concurrency_safe(true)
         .deferred_load()
     }
 
@@ -205,7 +209,7 @@ impl SkillsFsPlugin {
 impl Plugin for SkillsFsPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-skills-fs", env!("CARGO_PKG_VERSION"))
-            .description("Discovers SKILL.md files and slash commands, then registers them as dynamic plugin entries.")
+            .description("Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools.")
             .hooks(HookSubscription::INIT | HookSubscription::TOOL_INVOKE)
             .plugin_capability(HostCapability::EntryRegistry)
             .build()

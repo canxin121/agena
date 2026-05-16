@@ -26,9 +26,9 @@ pub use host_api::{
     HostPermissionCheckResponse, NoopHostClient,
 };
 pub use manifest::{
-    EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,
-    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathKind, PlanModePolicy, PluginEntryDecl,
-    PluginManifest, TransportKind,
+    ToolLoadPriority, ToolStreamingMode, ToolTag, HookSubscription, HostCapability,
+    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
+    PluginToolDecl, PluginManifest, TransportKind, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
 

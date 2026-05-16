@@ -12,7 +12,7 @@ import {
 } from '../lib/agenaApi'
 
 export type RuntimePermissionDraft = {
-  subjectKind: 'builtin_tool' | 'path_access'
+  subjectKind: 'tool' | 'path_access'
   toolName: string
   qualifier: string
   pathAccessKind: string
@@ -59,8 +59,8 @@ function buildPermissionRuleStub(
     id,
     action_key: '',
     subject_kind: draft.subjectKind,
-    tool_name: draft.subjectKind === 'builtin_tool' ? draft.toolName.trim() || null : null,
-    qualifier: draft.subjectKind === 'builtin_tool' ? draft.qualifier.trim() || null : null,
+    tool_name: draft.subjectKind === 'tool' ? draft.toolName.trim() || null : null,
+    qualifier: draft.subjectKind === 'tool' ? draft.qualifier.trim() || null : null,
     path_access_kind: draft.subjectKind === 'path_access' ? draft.pathAccessKind || null : null,
     workspace_root: draft.subjectKind === 'path_access' ? draft.workspaceRoot.trim() || null : null,
     target_path: draft.subjectKind === 'path_access' ? draft.targetPath.trim() || null : null,
@@ -77,7 +77,7 @@ export function useRuntimePermissionActions(
   deps: RuntimePermissionActionsDeps = defaultDeps,
 ) {
   function resetPermissionDraft() {
-    input.permissionDraft.subjectKind = 'builtin_tool'
+    input.permissionDraft.subjectKind = 'tool'
     input.permissionDraft.toolName = ''
     input.permissionDraft.qualifier = ''
     input.permissionDraft.pathAccessKind = 'read'
@@ -90,7 +90,7 @@ export function useRuntimePermissionActions(
   }
 
   function permissionRuleLabel(rule: PermissionRuleResource): string {
-    if (rule.subject_kind === 'builtin_tool') {
+    if (rule.subject_kind === 'tool') {
       return rule.qualifier?.trim() ? `${rule.tool_name} · ${rule.qualifier}` : rule.tool_name || rule.action_key
     }
     if (rule.subject_kind === 'path_access') {
@@ -127,7 +127,7 @@ export function useRuntimePermissionActions(
   }
 
   function permissionRulePreview(rule: PermissionRuleResource): string {
-    if (rule.subject_kind === 'builtin_tool') {
+    if (rule.subject_kind === 'tool') {
       const qualifier = rule.qualifier?.trim()
       return qualifier ? `tool=${rule.tool_name} · qualifier=${qualifier}` : `tool=${rule.tool_name}`
     }
@@ -141,7 +141,7 @@ export function useRuntimePermissionActions(
   }
 
   function editPermissionRule(rule: PermissionRuleResource) {
-    input.permissionDraft.subjectKind = rule.subject_kind === 'path_access' ? 'path_access' : 'builtin_tool'
+    input.permissionDraft.subjectKind = rule.subject_kind === 'path_access' ? 'path_access' : 'tool'
     input.permissionDraft.toolName = rule.tool_name || ''
     input.permissionDraft.qualifier = rule.qualifier || ''
     input.permissionDraft.pathAccessKind = rule.path_access_kind || 'read'
@@ -158,13 +158,13 @@ export function useRuntimePermissionActions(
     const toolName = input.permissionDraft.toolName.trim()
     const qualifier = input.permissionDraft.qualifier.trim()
     const targetPath = input.permissionDraft.targetPath.trim()
-    if (input.permissionDraft.subjectKind === 'builtin_tool' && !toolName) return
+    if (input.permissionDraft.subjectKind === 'tool' && !toolName) return
     if (input.permissionDraft.subjectKind === 'path_access' && !targetPath) return
 
     const payload = {
       subjectKind: input.permissionDraft.subjectKind,
-      toolName: input.permissionDraft.subjectKind === 'builtin_tool' ? toolName : undefined,
-      qualifier: input.permissionDraft.subjectKind === 'builtin_tool' && qualifier ? qualifier : undefined,
+      toolName: input.permissionDraft.subjectKind === 'tool' ? toolName : undefined,
+      qualifier: input.permissionDraft.subjectKind === 'tool' && qualifier ? qualifier : undefined,
       pathAccessKind: input.permissionDraft.subjectKind === 'path_access' ? input.permissionDraft.pathAccessKind : undefined,
       workspaceRoot:
         input.permissionDraft.subjectKind === 'path_access' && input.permissionDraft.workspaceRoot.trim()

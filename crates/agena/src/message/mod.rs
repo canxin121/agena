@@ -13,7 +13,7 @@ pub use part::{
     CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput, CustomToolOutput,
     EnterPlanModeToolInput, EnterWorktreeToolInput, ErrorPart, ExecutionStatus,
     ExitPlanModeToolInput, ExitWorktreeToolInput, FileChangeEntry, FileChangeKind, FileChangePart,
-    FilesystemAccess, FilesystemEffect, FirstPartyToolInput, FirstPartyToolOutput,
+    FilesystemAccess, FilesystemEffect, BundledToolInput, BundledToolOutput,
     GetGoalToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, McpToolOutput, MessagePart,
     MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput, NotebookCellType,

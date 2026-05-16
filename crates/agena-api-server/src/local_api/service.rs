@@ -1528,11 +1528,11 @@ fn permission_rule_resource(
         network_host,
         network_port,
     ) = match action {
-        PermissionAction::BuiltinTool {
+        PermissionAction::Tool {
             tool_name,
             qualifier,
         } => (
-            "builtin_tool".to_string(),
+            "tool".to_string(),
             Some(tool_name),
             qualifier,
             None,
@@ -1659,17 +1659,17 @@ fn permission_action_from_write_request(
     }
 
     match request.subject_kind.as_deref() {
-        Some("builtin_tool") => {
+        Some("tool") => {
             let tool_name = request
                 .tool_name
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
-                    ApiError::bad_request("tool_name is required for builtin_tool rule")
+                    ApiError::bad_request("tool_name is required for tool rule")
                 })?
                 .to_string();
-            Ok(PermissionAction::BuiltinTool {
+            Ok(PermissionAction::Tool {
                 tool_name,
                 qualifier: request
                     .qualifier

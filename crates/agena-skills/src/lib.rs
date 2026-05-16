@@ -3,7 +3,7 @@
 //!
 //! This crate is plumbing only: it parses bundled or on-disk workflow content
 //! and exposes discovery helpers. Runtime registration into the shared plugin
-//! entry registry lives in `agena` inside the bundled `SkillsFsPlugin`.
+//! tool registry lives in `agena` inside the bundled `SkillsFsPlugin`.
 //!
 //! Discovery roots, in priority order:
 //!

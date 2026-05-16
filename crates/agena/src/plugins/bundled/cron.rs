@@ -12,9 +12,8 @@ use async_trait::async_trait;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
-    EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
-    Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
-    ToolInvokeOutput,
+    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginToolDecl,
+    PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 use crate::plugins::bundled::router;
 
@@ -45,13 +44,13 @@ impl Plugin for CronPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-cron", env!("CARGO_PKG_VERSION"))
             .description(
-                "Cron-style and one-shot wakeup scheduling exposed as a first-party plugin.",
+                "Cron-style and one-shot wakeup scheduling exposed as a bundled plugin.",
             )
             .hooks(HookSubscription::TOOL_INVOKE)
-            .entry(cron_create_decl())
-            .entry(cron_list_decl())
-            .entry(cron_delete_decl())
-            .entry(schedule_wakeup_decl())
+            .tool(cron_create_decl())
+            .tool(cron_list_decl())
+            .tool(cron_delete_decl())
+            .tool(schedule_wakeup_decl())
             .build()
     }
 
@@ -67,7 +66,7 @@ impl Plugin for CronPlugin {
         match input.tool_name.as_str() {
             "cron_create" | "cron_list" | "cron_delete" | "schedule_wakeup" => {
                 let _ = self.host()?;
-                router::invoke_first_party_tool(
+                router::invoke_bundled_tool(
                     &input.tool_name,
                     input.input,
                     input.session_id,
@@ -75,7 +74,7 @@ impl Plugin for CronPlugin {
                 )
             }
             other => Err(PluginError::invalid_params(format!(
-                "unknown cron plugin entry '{other}'"
+                "unknown cron plugin tool '{other}'"
             ))),
         }
     }
@@ -84,44 +83,49 @@ impl Plugin for CronPlugin {
 fn deferred_decl<T: schemars::JsonSchema>(
     name: &str,
     description: &str,
-    search_terms: &[&str],
-) -> PluginEntryDecl {
-    PluginEntryDecl::new(name, crate::entry::definition::json_schema_for::<T>())
+    tags: &[ToolTag],
+    concurrency_safe: bool,
+) -> PluginToolDecl {
+    PluginToolDecl::new(name, crate::entry::definition::json_schema_for::<T>())
         .description(description)
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(search_terms.iter().map(|s| s.to_string()))
+        .tags(tags.iter().cloned())
+        .concurrency_safe(concurrency_safe)
         .deferred_load()
         .host_capability(HostCapability::Scheduler)
 }
 
-pub(crate) fn cron_create_decl() -> PluginEntryDecl {
+pub(crate) fn cron_create_decl() -> PluginToolDecl {
     deferred_decl::<crate::message::CronCreateToolInput>(
         "cron_create",
         "Schedule a recurring prompt with a 6-field cron expression.",
-        &["cron", "schedule", "recurring", "background"],
+        &[ToolTag::Mutating, ToolTag::Scheduler],
+        false,
     )
 }
 
-pub(crate) fn cron_list_decl() -> PluginEntryDecl {
+pub(crate) fn cron_list_decl() -> PluginToolDecl {
     deferred_decl::<crate::message::CronListToolInput>(
         "cron_list",
         "List all currently scheduled cron jobs and one-shot wakeups.",
-        &["cron", "list", "scheduled jobs"],
+        &[ToolTag::ReadOnly, ToolTag::Scheduler],
+        true,
     )
 }
 
-pub(crate) fn cron_delete_decl() -> PluginEntryDecl {
+pub(crate) fn cron_delete_decl() -> PluginToolDecl {
     deferred_decl::<crate::message::CronDeleteToolInput>(
         "cron_delete",
         "Delete a scheduled job by id.",
-        &["cron", "delete", "remove", "cancel"],
+        &[ToolTag::Mutating, ToolTag::Scheduler],
+        false,
     )
 }
 
-pub(crate) fn schedule_wakeup_decl() -> PluginEntryDecl {
+pub(crate) fn schedule_wakeup_decl() -> PluginToolDecl {
     deferred_decl::<crate::message::ScheduleWakeupToolInput>(
         "schedule_wakeup",
         "Schedule a one-shot prompt to fire after `delay_seconds`.",
-        &["wakeup", "remind", "later", "delay"],
+        &[ToolTag::Mutating, ToolTag::Scheduler],
+        false,
     )
 }

@@ -34,7 +34,7 @@ use thiserror::Error;
 pub enum AgentScope {
     Project,
     User,
-    FirstParty,
+    Bundled,
 }
 
 impl AgentScope {
@@ -42,7 +42,7 @@ impl AgentScope {
         match self {
             Self::Project => "project",
             Self::User => "user",
-            Self::FirstParty => "first_party",
+            Self::Bundled => "bundled",
         }
     }
 }
@@ -164,7 +164,7 @@ impl SubagentRegistry {
         let mut inner = self.inner.write();
         inner.by_name.clear();
         for profile in builtin_profiles() {
-            agents_upsert(&mut inner.by_name, profile, AgentScope::FirstParty);
+            agents_upsert(&mut inner.by_name, profile, AgentScope::Bundled);
         }
         if let Some(user) = user_root {
             agents_load_dir(&mut inner.by_name, user, AgentScope::User);
@@ -362,7 +362,7 @@ fn collect_project_agent_dirs(workspace_root: &Path) -> Vec<PathBuf> {
 
 fn scope_priority(scope: AgentScope) -> u8 {
     match scope {
-        AgentScope::FirstParty => 0,
+        AgentScope::Bundled => 0,
         AgentScope::User => 1,
         AgentScope::Project => 2,
     }
@@ -386,7 +386,7 @@ fn home_dir() -> Option<PathBuf> {
 fn builtin_permission(
     workspace_write: crate::permission::PermissionMode,
     external: crate::permission::PermissionMode,
-    first_party: &[(&str, crate::permission::PermissionMode)],
+    names: &[(&str, crate::permission::PermissionMode)],
 ) -> crate::agent::AgentPermissionConfig {
     crate::agent::AgentPermissionConfig {
         path: Some(crate::agent::PathPermissionConfig {
@@ -401,7 +401,7 @@ fn builtin_permission(
             ..Default::default()
         }),
         tools: Some(crate::agent::ToolPermissionConfig {
-            first_party: first_party
+            names: names
                 .iter()
                 .map(|(name, mode)| ((*name).to_string(), *mode))
                 .collect(),
@@ -632,7 +632,7 @@ fn builtin_profile(
         },
         prompt: prompt.to_string(),
         source_path: None,
-        scope: AgentScope::FirstParty,
+        scope: AgentScope::Bundled,
     }
 }
 
@@ -771,7 +771,7 @@ mod tests {
         let work = temp_dir("builtins");
         let registry = SubagentRegistry::discover(&work, None);
         let explore = registry.get("explore").expect("builtin explore profile");
-        assert_eq!(explore.scope, AgentScope::FirstParty);
+        assert_eq!(explore.scope, AgentScope::Bundled);
         assert!(
             explore
                 .frontmatter

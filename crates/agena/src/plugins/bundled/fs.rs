@@ -5,75 +5,75 @@ use crate::message::{
     ViewFileToolInput,
 };
 use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
-use crate::plugin::sdk::{EntryBehavior as SdkEntryBehavior, PluginEntryDecl};
-use crate::plugins::bundled::router::FirstPartyRouterPlugin;
+use crate::plugin::sdk::{PluginToolDecl, ToolTag};
+use crate::plugins::bundled::router::BundledRouterPlugin;
 
 pub(crate) const FS_PLUGIN_ID: &str = "agena.fs";
 
-pub(crate) fn new_plugin() -> FirstPartyRouterPlugin {
-    FirstPartyRouterPlugin::new(
+pub(crate) fn new_plugin() -> BundledRouterPlugin {
+    BundledRouterPlugin::new(
         "agena-fs",
         "Filesystem tools (read, view_file, glob, grep, apply_patch, notebook_edit).",
         entries(),
     )
 }
 
-fn entries() -> Vec<PluginEntryDecl> {
+fn entries() -> Vec<PluginToolDecl> {
     vec![
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "read",
             crate::entry::definition::json_schema_for::<ReadToolInput>(),
         )
         .description("Read a UTF-8 text file or list a directory with optional pagination.")
-        .behavior(SdkEntryBehavior::ReadOnly)
+        .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead])
         .input_path(required_path("$.file_path", PathKind::Read))
-        .search_terms(["open file", "view file", "cat", "inspect"])
+        .concurrency_safe(true)
         .always_load(),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "view_file",
             crate::entry::definition::json_schema_for::<ViewFileToolInput>(),
         )
         .description(
             "Load a local file and attach it back to the conversation as inline multimodal input.",
         )
-        .behavior(SdkEntryBehavior::ReadOnly)
+        .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead])
         .input_path(required_path("$.path", PathKind::Read))
-        .search_terms(["file", "image", "pdf", "audio", "document"])
+        .concurrency_safe(true)
         .always_load(),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "glob",
             crate::entry::definition::json_schema_for::<GlobToolInput>(),
         )
         .description("Search files by glob pattern from the workspace or a subdirectory.")
-        .behavior(SdkEntryBehavior::ReadOnly)
+        .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead])
         .input_path(optional_path("$.path", PathKind::Read))
-        .search_terms(["find files", "list files", "pattern search"])
+        .concurrency_safe(true)
         .always_load(),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "grep",
             crate::entry::definition::json_schema_for::<GrepToolInput>(),
         )
         .description("Search file contents by regex pattern with optional include glob.")
-        .behavior(SdkEntryBehavior::ReadOnly)
+        .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead])
         .input_path(optional_path("$.path", PathKind::Read))
-        .search_terms(["search text", "regex search", "ripgrep"])
+        .concurrency_safe(true)
         .always_load(),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "apply_patch",
             crate::entry::definition::json_schema_for::<ApplyPatchToolInput>(),
         )
         .description("Apply a structured patch that can add, update, move, or delete files.")
-        .behavior(SdkEntryBehavior::Mutating)
-        .search_terms(["patch", "diff", "multi-file edit"])
+        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite])
+        .concurrency_safe(false)
         .deferred_load(),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "notebook_edit",
             crate::entry::definition::json_schema_for::<NotebookEditToolInput>(),
         )
         .description("Edit a Jupyter .ipynb cell by replacing, inserting, or deleting a cell.")
-        .behavior(SdkEntryBehavior::Mutating)
+        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite])
         .input_path(required_path("$.notebook_path", PathKind::Write))
-        .search_terms(["notebook", "jupyter", "ipynb", "cell edit"])
+        .concurrency_safe(false)
         .deferred_load(),
     ]
 }

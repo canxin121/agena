@@ -3,8 +3,9 @@
 //! `meta/manifest` JSON-RPC method.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginManifest {
@@ -20,7 +21,7 @@ pub struct PluginManifest {
     #[serde(default)]
     pub hooks: HookSubscription,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<PluginEntryDecl>,
+    pub entries: Vec<PluginToolDecl>,
     /// Plugin-level host capabilities. Useful for plugins that need to
     /// call host APIs without exposing any tool entry. These are merged
     /// into the effective capability set alongside the per-entry
@@ -40,17 +41,143 @@ pub enum TransportKind {
     Http,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ToolTag {
+    ReadOnly,
+    Mutating,
+    Task,
+    FilesystemRead,
+    FilesystemWrite,
+    Network,
+    Internet,
+    Shell,
+    Interactive,
+    Discovery,
+    Planning,
+    Goal,
+    Worktree,
+    Scheduler,
+    Lsp,
+    Mcp,
+    Subtask,
+    PrivateNetwork,
+    Custom(String),
+}
+
+impl ToolTag {
+    pub fn custom(tag: impl AsRef<str>) -> Option<Self> {
+        let normalized = normalize_tool_tag_name(tag)?;
+        Some(Self::Custom(normalized))
+    }
+
+    pub fn from_tag(tag: impl AsRef<str>) -> Option<Self> {
+        let normalized = normalize_tool_tag_name(tag)?;
+        Some(match normalized.as_str() {
+            "read_only" => Self::ReadOnly,
+            "mutating" => Self::Mutating,
+            "task" => Self::Task,
+            "filesystem_read" => Self::FilesystemRead,
+            "filesystem_write" => Self::FilesystemWrite,
+            "network" => Self::Network,
+            "internet" => Self::Internet,
+            "shell" => Self::Shell,
+            "interactive" => Self::Interactive,
+            "discovery" => Self::Discovery,
+            "planning" => Self::Planning,
+            "goal" => Self::Goal,
+            "worktree" => Self::Worktree,
+            "scheduler" => Self::Scheduler,
+            "lsp" => Self::Lsp,
+            "mcp" => Self::Mcp,
+            "subtask" => Self::Subtask,
+            "private_network" => Self::PrivateNetwork,
+            other => Self::Custom(other.to_string()),
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::Mutating => "mutating",
+            Self::Task => "task",
+            Self::FilesystemRead => "filesystem_read",
+            Self::FilesystemWrite => "filesystem_write",
+            Self::Network => "network",
+            Self::Internet => "internet",
+            Self::Shell => "shell",
+            Self::Interactive => "interactive",
+            Self::Discovery => "discovery",
+            Self::Planning => "planning",
+            Self::Goal => "goal",
+            Self::Worktree => "worktree",
+            Self::Scheduler => "scheduler",
+            Self::Lsp => "lsp",
+            Self::Mcp => "mcp",
+            Self::Subtask => "subtask",
+            Self::PrivateNetwork => "private_network",
+            Self::Custom(value) => value.as_str(),
+        }
+    }
+}
+
+impl fmt::Display for ToolTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ToolTag {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolTag {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_tag(value).ok_or_else(|| serde::de::Error::custom("tool tag cannot be empty"))
+    }
+}
+
+impl From<&ToolTag> for ToolTag {
+    fn from(value: &ToolTag) -> Self {
+        value.clone()
+    }
+}
+
+pub fn normalize_tool_tag_name(tag: impl AsRef<str>) -> Option<String> {
+    let normalized = tag
+        .as_ref()
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginEntryDecl {
+pub struct PluginToolDecl {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default = "default_entry_behavior")]
-    pub behavior: EntryBehavior,
     #[serde(default)]
     pub input_schema: serde_json::Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expose_as: Option<String>,
     /// Declarative path-permission specs. The host extracts paths from the
     /// entry input via JSONPath before invocation and audits them as
     /// [`PathKind`]. Use [`Plugin::permission_paths`] for paths that can only
@@ -63,45 +190,74 @@ pub struct PluginEntryDecl {
     /// targets that can only be derived dynamically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_networks: Vec<InputNetworkSpec>,
+    /// Static local filesystem targets used by this entry regardless of input.
+    /// Use this for fixed workspace paths like `.agena/plans`; use
+    /// [`Plugin::permission_paths`] for targets that can only be derived
+    /// dynamically.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_access: Vec<PathAccessSpec>,
     /// Static outbound network targets used by this entry regardless of input.
     /// Typical values are URLs (`https://api.example.com/search`) or
     /// `host:port` patterns (`api.example.com:443`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub network_access: Vec<NetworkAccessSpec>,
     /// Host-policy tags used to derive the tool default permission when the
-    /// entry does not have an exact tool rule.
+    /// entry does not have an exact tool rule. Hosts also use canonical tags
+    /// such as `read_only`, `task`, `network`, and `filesystem_write` to drive
+    /// catalog filtering, plan-mode defaults, and other runtime policy.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub search_terms: Vec<String>,
+    pub tags: Vec<ToolTag>,
     #[serde(default)]
-    pub load_priority: EntryLoadPriority,
-    /// When omitted, hosts should derive the default from behavior
-    /// (`read_only => true`, everything else => false) for backwards
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub concurrency_safe: Option<bool>,
-    #[serde(default)]
-    pub requires_user_interaction: bool,
+    pub load_priority: ToolLoadPriority,
+    pub concurrency_safe: bool,
     #[serde(default)]
     pub strict: bool,
     #[serde(default)]
-    pub plan_mode_policy: PlanModePolicy,
-    #[serde(default)]
-    pub streaming: EntryStreamingMode,
+    pub streaming: ToolStreamingMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_capabilities: Vec<HostCapability>,
 }
 
-fn default_entry_behavior() -> EntryBehavior {
-    EntryBehavior::ReadOnly
-}
+impl PluginToolDecl {
+    pub fn description_text(&self) -> &str {
+        self.description.as_deref().unwrap_or("")
+    }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EntryBehavior {
-    ReadOnly,
-    Mutating,
-    Task,
+    pub fn sanitized_input_schema(&self) -> serde_json::Value {
+        sanitize_schema_json(self.input_schema.clone())
+    }
+
+    pub fn effective_tags(&self) -> Vec<ToolTag> {
+        let mut tags = normalize_tags(self.tags.iter().cloned());
+        for spec in &self.input_paths {
+            match spec.kind {
+                PathKind::Read => push_normalized_tag(&mut tags, ToolTag::FilesystemRead),
+                PathKind::Write => push_normalized_tag(&mut tags, ToolTag::FilesystemWrite),
+            }
+        }
+        for spec in &self.path_access {
+            match spec.kind {
+                PathKind::Read => push_normalized_tag(&mut tags, ToolTag::FilesystemRead),
+                PathKind::Write => push_normalized_tag(&mut tags, ToolTag::FilesystemWrite),
+            }
+        }
+        if !self.input_networks.is_empty() || !self.network_access.is_empty() {
+            push_normalized_tag(&mut tags, ToolTag::Network);
+        }
+        tags
+    }
+
+    pub fn has_tag(&self, tag: ToolTag) -> bool {
+        self.effective_tags().iter().any(|existing| existing == &tag)
+    }
+
+    pub fn should_load_by_default(&self) -> bool {
+        !self.is_deferred()
+    }
+
+    pub fn is_deferred(&self) -> bool {
+        matches!(self.load_priority, ToolLoadPriority::Deferred)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -113,7 +269,7 @@ pub enum PathKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum EntryLoadPriority {
+pub enum ToolLoadPriority {
     Always,
     #[default]
     Standard,
@@ -122,17 +278,7 @@ pub enum EntryLoadPriority {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum PlanModePolicy {
-    #[default]
-    Derived,
-    Allowed,
-    Blocked,
-    ConditionalShellReadOnly,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum EntryStreamingMode {
+pub enum ToolStreamingMode {
     #[default]
     Buffered,
     Streaming,
@@ -193,10 +339,63 @@ pub struct InputNetworkSpec {
     pub optional: bool,
 }
 
-/// One static outbound network target used by a plugin entry.
+/// One static filesystem target used by a plugin tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PathAccessSpec {
+    pub path: String,
+    pub kind: PathKind,
+}
+
+/// One static outbound network target used by a plugin tool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkAccessSpec {
     pub target: String,
+}
+
+fn sanitize_schema_json(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(mut object) => {
+            object.remove("$schema");
+            object.remove("title");
+            let mut cleaned = object
+                .into_iter()
+                .map(|(key, value)| (key, sanitize_schema_json(value)))
+                .collect::<serde_json::Map<String, serde_json::Value>>();
+            if cleaned
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind == "object")
+                && !cleaned.contains_key("properties")
+            {
+                cleaned.insert(
+                    "properties".to_string(),
+                    serde_json::Value::Object(serde_json::Map::new()),
+                );
+            }
+            serde_json::Value::Object(cleaned)
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sanitize_schema_json).collect())
+        }
+        other => other,
+    }
+}
+
+fn push_normalized_tag(tags: &mut Vec<ToolTag>, tag: ToolTag) {
+    if !tags.iter().any(|existing| existing == &tag) {
+        tags.push(tag);
+    }
+}
+
+fn normalize_tags<I>(tags: I) -> Vec<ToolTag>
+where
+    I: IntoIterator<Item = ToolTag>,
+{
+    let mut normalized = Vec::new();
+    for tag in tags {
+        push_normalized_tag(&mut normalized, tag);
+    }
+    normalized
 }
 
 bitflags::bitflags! {
@@ -365,13 +564,13 @@ impl PluginManifestBuilder {
         self
     }
 
-    pub fn entry(mut self, entry: PluginEntryDecl) -> Self {
-        self.inner.entries.push(entry);
+    pub fn tool(mut self, tool: PluginToolDecl) -> Self {
+        self.inner.entries.push(tool);
         self
     }
 
-    pub fn entries(mut self, entries: impl IntoIterator<Item = PluginEntryDecl>) -> Self {
-        self.inner.entries.extend(entries);
+    pub fn tools(mut self, tools: impl IntoIterator<Item = PluginToolDecl>) -> Self {
+        self.inner.entries.extend(tools);
         self
     }
 
@@ -404,41 +603,27 @@ impl PluginManifestBuilder {
     }
 }
 
-impl PluginEntryDecl {
+impl PluginToolDecl {
     pub fn new(name: impl Into<String>, schema: serde_json::Value) -> Self {
         Self {
             name: name.into(),
             description: None,
-            behavior: EntryBehavior::ReadOnly,
             input_schema: schema,
-            expose_as: None,
             input_paths: Vec::new(),
             input_networks: Vec::new(),
+            path_access: Vec::new(),
             network_access: Vec::new(),
             tags: Vec::new(),
-            search_terms: Vec::new(),
-            load_priority: EntryLoadPriority::Standard,
-            concurrency_safe: None,
-            requires_user_interaction: false,
+            load_priority: ToolLoadPriority::Standard,
+            concurrency_safe: false,
             strict: false,
-            plan_mode_policy: PlanModePolicy::Derived,
-            streaming: EntryStreamingMode::Buffered,
+            streaming: ToolStreamingMode::Buffered,
             host_capabilities: Vec::new(),
         }
     }
 
     pub fn description(mut self, d: impl Into<String>) -> Self {
         self.description = Some(d.into());
-        self
-    }
-
-    pub fn behavior(mut self, b: EntryBehavior) -> Self {
-        self.behavior = b;
-        self
-    }
-
-    pub fn expose_as(mut self, name: impl Into<String>) -> Self {
-        self.expose_as = Some(name.into());
         self
     }
 
@@ -452,65 +637,44 @@ impl PluginEntryDecl {
         self
     }
 
+    pub fn path_access(mut self, spec: PathAccessSpec) -> Self {
+        self.path_access.push(spec);
+        self
+    }
+
     pub fn network_access(mut self, spec: NetworkAccessSpec) -> Self {
         self.network_access.push(spec);
         self
     }
 
-    pub fn tag(mut self, tag: impl Into<String>) -> Self {
-        let tag = tag.into();
-        if !tag.trim().is_empty() {
-            self.tags.push(tag);
-        }
+    pub fn tag(mut self, tag: ToolTag) -> Self {
+        self.tags.push(tag);
         self
     }
 
-    pub fn tags<I, S>(mut self, tags: I) -> Self
+    pub fn tags<I>(mut self, tags: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator<Item = ToolTag>,
     {
-        self.tags = tags
-            .into_iter()
-            .map(Into::into)
-            .filter(|tag| !tag.trim().is_empty())
-            .collect();
+        self.tags = tags.into_iter().collect();
         self
     }
 
-    pub fn search_terms<I, S>(mut self, search_terms: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.search_terms = search_terms
-            .into_iter()
-            .map(Into::into)
-            .filter(|term| !term.trim().is_empty())
-            .collect();
-        self
-    }
-
-    pub fn load_priority(mut self, load_priority: EntryLoadPriority) -> Self {
+    pub fn load_priority(mut self, load_priority: ToolLoadPriority) -> Self {
         self.load_priority = load_priority;
         self
     }
 
     pub fn always_load(self) -> Self {
-        self.load_priority(EntryLoadPriority::Always)
+        self.load_priority(ToolLoadPriority::Always)
     }
 
     pub fn deferred_load(self) -> Self {
-        self.load_priority(EntryLoadPriority::Deferred)
+        self.load_priority(ToolLoadPriority::Deferred)
     }
 
     pub fn concurrency_safe(mut self, concurrency_safe: bool) -> Self {
-        self.concurrency_safe = Some(concurrency_safe);
-        self
-    }
-
-    pub fn requires_user_interaction(mut self, requires_user_interaction: bool) -> Self {
-        self.requires_user_interaction = requires_user_interaction;
+        self.concurrency_safe = concurrency_safe;
         self
     }
 
@@ -519,12 +683,7 @@ impl PluginEntryDecl {
         self
     }
 
-    pub fn plan_mode_policy(mut self, policy: PlanModePolicy) -> Self {
-        self.plan_mode_policy = policy;
-        self
-    }
-
-    pub fn streaming(mut self, streaming: EntryStreamingMode) -> Self {
+    pub fn streaming(mut self, streaming: ToolStreamingMode) -> Self {
         self.streaming = streaming;
         self
     }
@@ -543,5 +702,5 @@ impl PluginEntryDecl {
     }
 }
 
-/// Map an entry name and any plugin-scoped options to the registry-side key.
+/// Map an tool name and any plugin-scoped options to the registry-side key.
 pub type Metadata = BTreeMap<String, String>;

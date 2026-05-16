@@ -67,7 +67,7 @@ export function useRuntimePageStore() {
   const permissionSearch = ref('')
   const permissionModeFilter = ref<'all' | PermissionMode>('all')
   const permissionScopeFilter = ref<'all' | 'session' | 'workspace' | 'global'>('all')
-  const permissionSubjectFilter = ref<'all' | 'builtin_tool' | 'path_access'>('all')
+  const permissionSubjectFilter = ref<'all' | 'tool' | 'path_access'>('all')
   const permissionStatusFilter = ref<'all' | 'active' | 'revoked'>('active')
   const marketplaceQuery = ref('')
   const runtimeSkillQuery = ref('')
@@ -86,7 +86,7 @@ export function useRuntimePageStore() {
   const marketplaceInstalled = ref<MarketplaceInstalledPluginResource[]>([])
   const marketplaceOutdated = ref<MarketplaceOutdatedPluginResource[]>([])
   const permissionDraft = reactive<{
-    subjectKind: 'builtin_tool' | 'path_access'
+    subjectKind: 'tool' | 'path_access'
     toolName: string
     qualifier: string
     pathAccessKind: string
@@ -96,7 +96,7 @@ export function useRuntimePageStore() {
     sessionId: string
     mode: PermissionMode
   }>({
-    subjectKind: 'builtin_tool',
+    subjectKind: 'tool',
     toolName: '',
     qualifier: '',
     pathAccessKind: 'read',

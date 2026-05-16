@@ -2,7 +2,7 @@
 //!
 //! A monitor runs a long-lived shell command in the background and captures
 //! every stdout/stderr line as a numbered event. The model interacts with it
-//! through four actions on a single `monitor` first-party tool:
+//! through four actions on a single `monitor` bundled tool:
 //!
 //! * `start`     — spawn a child, return a stable `monitor_id`
 //! * `list`      — enumerate active and recently-finished monitors
@@ -17,7 +17,7 @@
 //!
 //! # Concurrency model
 //!
-//! Tool execution is synchronous (`ToolExecutor::execute_first_party_*`) but the
+//! Tool execution is synchronous (`ToolExecutor::execute_bundled_*`) but the
 //! runner is async. The registry caches a `tokio::runtime::Handle` at
 //! construction time and uses `block_in_place` + `Handle::block_on` when a
 //! sync caller needs to wait for new events. This requires the multi-thread

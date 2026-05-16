@@ -2,65 +2,51 @@
 
 use crate::message::{BashToolInput, MonitorToolInput, PowerShellToolInput};
 use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
-use crate::plugin::sdk::{
-    EntryBehavior as SdkEntryBehavior, EntryStreamingMode, HostCapability, PlanModePolicy,
-    PluginEntryDecl,
-};
-use crate::plugins::bundled::router::FirstPartyRouterPlugin;
+use crate::plugin::sdk::{ToolStreamingMode, HostCapability, PluginToolDecl, ToolTag};
+use crate::plugins::bundled::router::BundledRouterPlugin;
 
 pub(crate) const SHELL_PLUGIN_ID: &str = "agena.shell";
 
-pub(crate) fn new_plugin() -> FirstPartyRouterPlugin {
-    FirstPartyRouterPlugin::new(
+pub(crate) fn new_plugin() -> BundledRouterPlugin {
+    BundledRouterPlugin::new(
         "agena-shell",
-        "Shell tools (bash, powershell, monitor) routed through the shared first-party executor bridge.",
+        "Shell tools (bash, powershell, monitor) routed through the shared bundled executor bridge.",
         entries(),
     )
 }
 
-fn entries() -> Vec<PluginEntryDecl> {
+fn entries() -> Vec<PluginToolDecl> {
     vec![
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "bash",
             crate::entry::definition::json_schema_for::<BashToolInput>(),
         )
         .description("Execute a shell command. The input must declare filesystem_effects for paths the command may read or write.")
-        .behavior(SdkEntryBehavior::Mutating)
+        .tags([ToolTag::Mutating, ToolTag::Shell])
         .input_path(optional_path("$.workdir", PathKind::Read))
-        .search_terms(["shell", "terminal", "command", "script"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::ConditionalShellReadOnly),
-        PluginEntryDecl::new(
+        .concurrency_safe(false)
+        .deferred_load(),
+        PluginToolDecl::new(
             "powershell",
             crate::entry::definition::json_schema_for::<PowerShellToolInput>(),
         )
         .description("Execute a Windows PowerShell command. The input must declare filesystem_effects for paths the command may read or write.")
-        .behavior(SdkEntryBehavior::Mutating)
+        .tags([ToolTag::Mutating, ToolTag::Shell])
         .input_path(optional_path("$.workdir", PathKind::Read))
-        .search_terms(["windows", "powershell", "pwsh", "command"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::ConditionalShellReadOnly),
-        PluginEntryDecl::new(
+        .concurrency_safe(false)
+        .deferred_load(),
+        PluginToolDecl::new(
             "monitor",
             crate::entry::definition::json_schema_for::<MonitorToolInput>(),
         )
         .description(
             "Run a long-lived shell command in the background and stream its stdout/stderr as numbered events. start inputs must declare filesystem_effects for paths the command may read or write. Actions: start (spawn), list (enumerate), read (pull events with optional blocking wait), stop (kill).",
         )
-        .behavior(SdkEntryBehavior::Mutating)
+        .tags([ToolTag::Mutating, ToolTag::Shell])
         .input_path(optional_path("$.workdir", PathKind::Read))
-        .search_terms([
-            "monitor",
-            "background process",
-            "long running",
-            "watch logs",
-            "tail",
-            "follow",
-            "stream output",
-        ])
+        .concurrency_safe(false)
         .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
-        .streaming(EntryStreamingMode::Streaming)
+        .streaming(ToolStreamingMode::Streaming)
         .host_capability(HostCapability::MonitorRegistry),
     ]
 }

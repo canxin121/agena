@@ -4,7 +4,7 @@
 //! must outlive the callback.
 //!
 //! Defaults are intentionally permissive (unlimited): operators opt in
-//! per-plugin via `[plugins.list.<id>.quota]` so first-party high-volume
+//! per-plugin via `[plugins.list.<id>.quota]` so bundled high-volume
 //! plugins (`agena.fs`, `agena.shell`) don't get throttled.
 
 use std::collections::HashMap;

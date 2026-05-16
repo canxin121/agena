@@ -13,7 +13,7 @@ use agena::{
     memory::MemoryStore,
     message::{
         AttachmentItem, AttachmentKind, AttachmentSource, EnterWorktreeToolInput,
-        ExitWorktreeToolInput, FirstPartyToolInput, FirstPartyToolOutput, PartContent,
+        ExitWorktreeToolInput, BundledToolInput, BundledToolOutput, PartContent,
         ToolInvocation, UserInputReply,
     },
     model::ModelRef,
@@ -1165,12 +1165,12 @@ impl Backend {
         session_id: i64,
         name: Option<String>,
         path: Option<String>,
-    ) -> Result<FirstPartyToolOutput> {
+    ) -> Result<BundledToolOutput> {
         let manager = self.session_manager()?;
         manager
             .tool_executor()
-            .execute_first_party_output_for_session(
-                &FirstPartyToolInput::EnterWorktree(EnterWorktreeToolInput { name, path }),
+            .execute_bundled_output_for_session(
+                &BundledToolInput::EnterWorktree(EnterWorktreeToolInput { name, path }),
                 session_id,
             )
             .map_err(|error| anyhow!(error.to_string()))
@@ -1181,12 +1181,12 @@ impl Backend {
         session_id: i64,
         action: String,
         discard_changes: bool,
-    ) -> Result<FirstPartyToolOutput> {
+    ) -> Result<BundledToolOutput> {
         let manager = self.session_manager()?;
         manager
             .tool_executor()
-            .execute_first_party_output_for_session(
-                &FirstPartyToolInput::ExitWorktree(ExitWorktreeToolInput {
+            .execute_bundled_output_for_session(
+                &BundledToolInput::ExitWorktree(ExitWorktreeToolInput {
                     action,
                     discard_changes,
                 }),

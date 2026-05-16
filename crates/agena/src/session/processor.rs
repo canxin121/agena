@@ -15,11 +15,11 @@ use crate::message::{
     PartContent, ReasoningPart, StructuredObject, TimeRange, ToolExecutionPart, ToolInvocation,
 };
 use crate::model::ModelRef;
+use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
 use crate::provider::{
     CompletionFinishReason, CompletionRequest, CompletionStreamEvent, ProviderRegistry,
 };
 use crate::role::Role;
-use crate::tool::EntryDefinition;
 
 use super::history::{
     FinishReason, MessageId as HistoryMessageId, MessageIdAllocator, ToolCallId, TurnBuffer, TurnId,
@@ -1055,7 +1055,7 @@ fn tool_execution_title(name: Option<&str>) -> String {
 
 fn placeholder_tool_invocation(
     name: Option<&str>,
-    available_tools: &[EntryDefinition],
+    available_tools: &[RegistryPluginEntry],
 ) -> ToolInvocation {
     let requested_name = name
         .map(str::trim)
@@ -1063,7 +1063,7 @@ fn placeholder_tool_invocation(
         .unwrap_or("unknown");
     let Some(tool) = available_tools
         .iter()
-        .find(|tool| tool.name == requested_name)
+        .find(|tool| tool.exposed_name == requested_name)
     else {
         return ToolInvocation {
             name: requested_name.to_string(),
@@ -1077,12 +1077,12 @@ fn placeholder_tool_invocation(
 pub(crate) fn parse_tool_invocation(
     name: &str,
     arguments_json: &str,
-    available_tools: &[EntryDefinition],
+    available_tools: &[RegistryPluginEntry],
 ) -> Result<ToolInvocation, AppError> {
     let trimmed_name = name.trim();
     let tool = available_tools
         .iter()
-        .find(|tool| tool.name == trimmed_name)
+        .find(|tool| tool.exposed_name == trimmed_name)
         .ok_or_else(|| {
             AppError::Provider(format!("unsupported tool call from model: {trimmed_name}"))
         })?;
@@ -1092,11 +1092,11 @@ pub(crate) fn parse_tool_invocation(
 }
 
 fn tool_invocation_for_definition(
-    tool: &EntryDefinition,
+    tool: &RegistryPluginEntry,
     input: StructuredObject,
 ) -> ToolInvocation {
     ToolInvocation {
-        name: tool.name.clone(),
+        name: tool.exposed_name.clone(),
         input,
     }
 }
@@ -1154,12 +1154,13 @@ mod tests {
 
     use super::*;
     use crate::event::DomainEvent;
-    use crate::message::{FirstPartyToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
+    use crate::message::{BundledToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
     use crate::model::{ModelId, ModelRef, ProviderId};
+    use crate::plugin::PluginToolDecl;
+    use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
     use crate::provider::{
         CompletionFinishReason, CompletionResponse, ModelProvider, ProviderModel,
     };
-    use crate::tool::{EntryBehavior, EntryDefinition};
 
     /// Construct an in-memory `EventPublisher` whose `MemEventStore` collects
     /// every event the publisher routes to it — including non-persistent
@@ -1276,9 +1277,27 @@ mod tests {
         }
     }
 
+    fn test_plugin_tool(
+        plugin_name: &str,
+        tool_name: &str,
+        description: &str,
+        input_schema: serde_json::Value,
+        tags: impl IntoIterator<Item = crate::plugin::sdk::ToolTag>,
+        concurrency_safe: bool,
+    ) -> RegistryPluginEntry {
+        RegistryPluginEntry::new(
+            plugin_name,
+            PluginToolDecl::new(tool_name, input_schema)
+                .description(description)
+                .tags(tags)
+                .concurrency_safe(concurrency_safe),
+        )
+    }
+
     #[test]
     fn parse_tool_invocation_recognizes_plugin_tools() {
-        let tools = vec![EntryDefinition::plugin(
+        let tools = vec![test_plugin_tool(
+            "fixture",
             "plugin_echo",
             "Echo a message from a plugin.",
             json!({
@@ -1288,8 +1307,8 @@ mod tests {
                 },
                 "required": ["message"]
             }),
-            EntryBehavior::ReadOnly,
-            "fixture",
+            [crate::plugin::sdk::ToolTag::ReadOnly],
+            true,
         )];
 
         let invocation =
@@ -1303,15 +1322,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_invocation_rejects_unloaded_first_party_tools() {
-        let tools = vec![EntryDefinition::first_party::<ReadToolInput>(
+    fn parse_tool_invocation_rejects_unloaded_bundled_tools() {
+        let tools = vec![test_plugin_tool(
+            "fixture",
             "read",
             "Read a file.",
-            crate::tool::EntryBehavior::ReadOnly,
+            crate::entry::definition::json_schema_for::<ReadToolInput>(),
+            [
+                crate::plugin::sdk::ToolTag::ReadOnly,
+                crate::plugin::sdk::ToolTag::FilesystemRead,
+            ],
+            true,
         )];
 
         let err = parse_tool_invocation("bash", "{\"command\":\"pwd\"}", tools.as_slice())
-            .expect_err("unexpected first_party should be rejected");
+            .expect_err("unexpected bundled should be rejected");
 
         assert!(err.to_string().contains("unsupported tool call from model"));
     }
@@ -1327,11 +1352,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_invocation_accepts_first_party_arguments_with_trailing_text() {
-        let tools = vec![EntryDefinition::first_party::<GrepToolInput>(
+    fn parse_tool_invocation_accepts_bundled_arguments_with_trailing_text() {
+        let tools = vec![test_plugin_tool(
+            "fixture",
             "grep",
             "Search files for a pattern.",
-            EntryBehavior::ReadOnly,
+            crate::entry::definition::json_schema_for::<GrepToolInput>(),
+            [
+                crate::plugin::sdk::ToolTag::ReadOnly,
+                crate::plugin::sdk::ToolTag::FilesystemRead,
+            ],
+            true,
         )];
 
         let invocation = parse_tool_invocation(
@@ -1339,15 +1370,15 @@ mod tests {
             "{\"pattern\":\"cache marker\"}\nThen report the result.",
             tools.as_slice(),
         )
-        .expect("valid JSON prefix should parse for first_party tools");
+        .expect("valid JSON prefix should parse for bundled tools");
 
-        match invocation.as_first_party() {
-            Some(FirstPartyToolInput::Grep(payload)) => {
+        match invocation.as_bundled() {
+            Some(BundledToolInput::Grep(payload)) => {
                 assert_eq!(payload.pattern, "cache marker");
                 assert_eq!(payload.path, None);
                 assert_eq!(payload.include, None);
             }
-            other => panic!("expected grep first_party invocation, got {other:?}"),
+            other => panic!("expected grep bundled invocation, got {other:?}"),
         }
     }
 
@@ -1456,7 +1487,8 @@ mod tests {
                     model: ModelId::new("ordered-model"),
                     system: None,
                     messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: vec![EntryDefinition::plugin(
+                    tools: vec![test_plugin_tool(
+                        "fixture",
                         "search",
                         "Search the workspace.",
                         json!({
@@ -1466,8 +1498,8 @@ mod tests {
                             },
                             "required": ["q"]
                         }),
-                        EntryBehavior::ReadOnly,
-                        "fixture",
+                        [crate::plugin::sdk::ToolTag::ReadOnly],
+                        true,
                     )],
                     temperature: None,
                     max_output_tokens: Some(64),
@@ -1666,7 +1698,8 @@ mod tests {
                     model: ModelId::new("ordered-model"),
                     system: None,
                     messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: vec![EntryDefinition::plugin(
+                    tools: vec![test_plugin_tool(
+                        "fixture",
                         "search",
                         "Search the workspace.",
                         json!({
@@ -1676,8 +1709,8 @@ mod tests {
                             },
                             "required": ["q"]
                         }),
-                        EntryBehavior::ReadOnly,
-                        "fixture",
+                        [crate::plugin::sdk::ToolTag::ReadOnly],
+                        true,
                     )],
                     temperature: None,
                     max_output_tokens: Some(64),
@@ -1771,7 +1804,8 @@ mod tests {
                     model: ModelId::new("ordered-model"),
                     system: None,
                     messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
-                    tools: vec![EntryDefinition::plugin(
+                    tools: vec![test_plugin_tool(
+                        "fixture",
                         "search",
                         "Search the workspace.",
                         json!({
@@ -1781,8 +1815,8 @@ mod tests {
                             },
                             "required": ["q"]
                         }),
-                        EntryBehavior::ReadOnly,
-                        "fixture",
+                        [crate::plugin::sdk::ToolTag::ReadOnly],
+                        true,
                     )],
                     temperature: None,
                     max_output_tokens: Some(64),

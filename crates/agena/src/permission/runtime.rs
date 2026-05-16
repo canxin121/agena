@@ -295,7 +295,7 @@ fn plugin_risk_to_core(risk: crate::plugin::sdk::PermissionRiskLevel) -> Permiss
 
 fn permission_subject(action: &PermissionAction) -> serde_json::Value {
     match action {
-        PermissionAction::BuiltinTool { tool_name, .. } => {
+        PermissionAction::Tool { tool_name, .. } => {
             serde_json::json!({
                 "kind": "tool",
                 "tool_name": tool_name,
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn permission_subject_includes_tool_context() {
-        let subject = super::permission_subject(&PermissionAction::BuiltinTool {
+        let subject = super::permission_subject(&PermissionAction::Tool {
             tool_name: "bash".to_string(),
             qualifier: None,
         });
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn ask_decision_creates_pending_request_and_allow_always_persists() {
         let mut runtime = PermissionRuntime::new(TestPermissionStore::default());
-        let action = PermissionAction::BuiltinTool {
+        let action = PermissionAction::Tool {
             tool_name: "bash".to_string(),
             qualifier: None,
         };

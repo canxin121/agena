@@ -17,13 +17,13 @@ impl Plugin for EchoPlugin {
                     | HookSubscription::SHELL_ENV
                     | HookSubscription::CHAT_PARAMS,
             )
-            .entry(
-                PluginEntryDecl::new(
+            .tool(
+                PluginToolDecl::new(
                     "echo",
                     json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}),
                 )
                 .description("Echo via stdio.")
-                .streaming(EntryStreamingMode::Streaming),
+                .streaming(ToolStreamingMode::Streaming),
             )
             .build()
     }

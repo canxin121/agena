@@ -126,7 +126,7 @@ function createChatPageContentState() {
       pending_permission_requests: [
         {
           request_id: 'perm-1',
-          action: { kind: 'builtin_tool', tool_name: 'bash', qualifier: 'git status *' },
+          action: { kind: 'tool', tool_name: 'bash', qualifier: 'git status *' },
           reason: 'Need to inspect git status',
           explanation: 'Needed to verify workspace changes',
           source: 'permission_reply',
@@ -245,7 +245,7 @@ function createChatPageContentState() {
       typeof payload.message_id === 'number' ? payload.message_id : null,
     readPayloadPartId: (payload: Record<string, unknown>) => (typeof payload.part_id === 'number' ? payload.part_id : null),
     scrollToMessage: () => {},
-    permissionActionView: () => ({ title: 'bash · git status *', details: ['kind=builtin_tool'] }),
+    permissionActionView: () => ({ title: 'bash · git status *', details: ['kind=tool'] }),
     permissionRiskLabel: () => 'mutable tool execution',
     permissionExplainability: () => ({
       summary: 'Matched a remembered permission reply · scope=workspace · operator=assistant',

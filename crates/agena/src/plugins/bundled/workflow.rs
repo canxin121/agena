@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::entry::{FirstPartyExecution, ToolExecutionView, ask_user, tool_search};
+use crate::entry::{BundledExecution, ToolExecutionView, ask_user, tool_search};
 use crate::message::{
     AskUserToolInput, ClearGoalToolInput, CreateGoalToolInput, EnterPlanModeToolInput,
-    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, FirstPartyToolOutput,
+    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, BundledToolOutput,
     GetGoalToolInput, TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
     ToolSearchToolInput, WorkflowPromptToolInput,
 };
@@ -24,9 +24,9 @@ use crate::plugin::sdk::host_api::{
     HostUpdateGoalRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
-    EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
-    PathRequest, PlanModePolicy, Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult,
-    ToolInvokeInput, ToolInvokeOutput,
+    HookSubscription, HostCapability, InitContext, InitOutcome, PathAccessSpec, PathRequest,
+    PathKind, Plugin, PluginToolDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
+    ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const WORKFLOW_PLUGIN_ID: &str = "agena.workflow";
@@ -174,19 +174,10 @@ impl WorkflowPlugin {
     }
 
     fn searchable_tool_from_descriptor(descriptor: ToolDescriptor) -> tool_search::SearchableTool {
-        let behavior_label = descriptor.behavior.unwrap_or_else(|| {
-            if descriptor.read_only {
-                "read_only".to_string()
-            } else {
-                "mutating".to_string()
-            }
-        });
         tool_search::SearchableTool {
             name: descriptor.name,
             description: descriptor.description.unwrap_or_default(),
-            search_terms: descriptor.search_terms,
-            behavior_label,
-            read_only: descriptor.read_only,
+            tags: descriptor.tags,
             deferred: descriptor.deferred,
         }
     }
@@ -350,7 +341,7 @@ impl WorkflowPlugin {
         }
 
         let execution = ask_user::execution_from_answers(input, answers);
-        Ok(crate::plugins::bundled::router::first_party_to_invoke_output(execution))
+        Ok(crate::plugins::bundled::router::bundled_to_invoke_output(execution))
     }
 
     async fn invoke_task(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -409,14 +400,14 @@ impl WorkflowPlugin {
             view.metadata.entry(key).or_insert(value);
         }
 
-        let output = FirstPartyToolOutput::Task {
+        let output = BundledToolOutput::Task {
             session_id,
             model_provider_id,
             model_id,
         };
         Ok(
-            crate::plugins::bundled::router::first_party_to_invoke_output(
-                FirstPartyExecution::new(output, view),
+            crate::plugins::bundled::router::bundled_to_invoke_output(
+                BundledExecution::new(output, view),
             ),
         )
     }
@@ -431,7 +422,7 @@ impl WorkflowPlugin {
             .collect::<Vec<_>>();
         let execution = tool_search::execute_with_tools(&catalog, input)
             .map_err(|err| PluginError::invalid_params(err.to_string()))?;
-        Ok(crate::plugins::bundled::router::first_party_to_invoke_output(execution))
+        Ok(crate::plugins::bundled::router::bundled_to_invoke_output(execution))
     }
 }
 
@@ -443,9 +434,9 @@ pub(crate) fn new_plugin() -> WorkflowPlugin {
 impl Plugin for WorkflowPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-workflow", env!("CARGO_PKG_VERSION"))
-            .description("Workflow orchestration tools exposed as a first-party plugin.")
+            .description("Workflow orchestration tools exposed as a bundled plugin.")
             .hooks(HookSubscription::TOOL_INVOKE)
-            .entries(entries())
+            .tools(entries())
             .build()
     }
 
@@ -541,7 +532,7 @@ impl Plugin for WorkflowPlugin {
                 .await
             }
             other => Err(PluginError::invalid_params(format!(
-                "unknown workflow plugin entry '{other}'"
+                "unknown workflow plugin tool '{other}'"
             ))),
         }
     }
@@ -552,7 +543,6 @@ impl Plugin for WorkflowPlugin {
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
         match tool_name {
-            "enter_plan_mode" => Ok(vec![PathRequest::write(".agena/plans")]),
             "enter_worktree" => {
                 let input: EnterWorktreeToolInput = serde_json::from_value(input.clone())?;
                 if let Some(path) = input.path.filter(|path| !path.trim().is_empty()) {
@@ -575,174 +565,155 @@ impl Plugin for WorkflowPlugin {
     }
 }
 
-fn entries() -> Vec<PluginEntryDecl> {
+fn entries() -> Vec<PluginToolDecl> {
     vec![
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "workflow_init",
             crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
         )
         .description("Generate the bundled init workflow prompt so it can be submitted as a normal turn.")
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["bootstrap", "agents", "claude", "init workflow"])
+        .tag(ToolTag::ReadOnly)
         .always_load()
-        .expose_as("init"),
-        PluginEntryDecl::new(
+        .concurrency_safe(true),
+        PluginToolDecl::new(
             "workflow_review",
             crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
         )
         .description("Generate the bundled review workflow prompt so it can be submitted as a normal turn.")
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["review", "code review", "audit branch"])
+        .tag(ToolTag::ReadOnly)
         .always_load()
-        .expose_as("review"),
-        PluginEntryDecl::new(
+        .concurrency_safe(true),
+        PluginToolDecl::new(
             "workflow_security_review",
             crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
         )
         .description("Generate the bundled security review workflow prompt so it can be submitted as a normal turn.")
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["security review", "security audit", "audit branch"])
+        .tag(ToolTag::ReadOnly)
         .always_load()
-        .expose_as("security-review"),
-        PluginEntryDecl::new(
+        .concurrency_safe(true),
+        PluginToolDecl::new(
             "task",
             crate::entry::definition::json_schema_for::<TaskToolInput>(),
         )
         .description(
             "Create or resume a typed subagent task session for explore, implement, or verify delegated work.",
         )
-        .behavior(SdkEntryBehavior::Task)
-        .search_terms(["delegate", "subagent", "parallel work"])
+        .tags([ToolTag::Task, ToolTag::Subtask])
+        .concurrency_safe(false)
         .deferred_load()
         .host_capability(HostCapability::SpawnSubtask),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "tool_search",
             crate::entry::definition::json_schema_for::<ToolSearchToolInput>(),
         )
         .description("Search the tool catalog and optionally load deferred tools for later turns.")
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["discover tools", "load tools", "find capability"])
+        .tags([ToolTag::ReadOnly, ToolTag::Discovery])
         .always_load()
+        .concurrency_safe(true)
         .host_capability(HostCapability::ListTools),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "todo_write",
             crate::entry::definition::json_schema_for::<TodoWriteToolInput>(),
         )
         .description("Replace the session todo list with a short execution plan and updated statuses.")
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["plan", "todo", "track progress"])
+        .tags([ToolTag::Mutating, ToolTag::Planning])
         .always_load(),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "create_goal",
             crate::entry::definition::json_schema_for::<CreateGoalToolInput>(),
         )
         .description(
             "Create a goal only when explicitly requested by the user or system instructions. Starts a new active goal for this session and fails if one already exists. Set `token_budget` only when a budget was explicitly requested.",
         )
-        .behavior(SdkEntryBehavior::Mutating)
-        .search_terms(["goal", "objective", "set goal", "budget"])
+        .tags([ToolTag::Mutating, ToolTag::Goal])
         .always_load()
+        .concurrency_safe(false)
         .host_capability(HostCapability::GoalRegistry),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "get_goal",
             crate::entry::definition::json_schema_for::<GetGoalToolInput>(),
         )
         .description("Get the current runtime goal for this session, including status, budgets, token and elapsed-time usage, and remaining token budget.")
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["goal", "objective", "budget", "status"])
+        .tags([ToolTag::ReadOnly, ToolTag::Goal])
         .always_load()
+        .concurrency_safe(true)
         .host_capability(HostCapability::GoalRegistry),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "clear_goal",
             crate::entry::definition::json_schema_for::<ClearGoalToolInput>(),
         )
         .description("Clear the current runtime goal for this session, if one exists.")
-        .behavior(SdkEntryBehavior::Mutating)
-        .search_terms(["goal", "clear goal", "remove goal", "delete goal"])
+        .tags([ToolTag::Mutating, ToolTag::Goal])
         .always_load()
+        .concurrency_safe(false)
         .host_capability(HostCapability::GoalRegistry),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "update_goal",
             crate::entry::definition::json_schema_for::<WorkflowUpdateGoalToolInput>(),
         )
         .description(
             "Update the existing runtime goal. Use this only to mark the goal achieved with `status = complete` once the objective is actually finished. Pause, resume, and budget-limit transitions are controlled by the user or system. When a budgeted goal completes, report the final usage guidance returned by the tool output to the user.",
         )
-        .behavior(SdkEntryBehavior::Mutating)
-        .search_terms([
-            "goal",
-            "complete goal",
-            "goal achieved",
-            "finish objective",
-        ])
+        .tags([ToolTag::Mutating, ToolTag::Goal])
         .always_load()
+        .concurrency_safe(false)
         .host_capability(HostCapability::GoalRegistry),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "ask_user",
             crate::entry::definition::json_schema_for::<AskUserToolInput>(),
         )
         .description("Ask short questions and wait for answers.")
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms([
-            "ask user",
-            "clarify requirement",
-            "human input",
-            "single select",
-            "multi select",
-            "custom answer",
-            "request user input",
-        ])
+        .tags([ToolTag::ReadOnly, ToolTag::Interactive])
         .always_load()
         .concurrency_safe(false)
-        .requires_user_interaction(true)
         .host_capability(HostCapability::AskUser),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "enter_plan_mode",
             crate::entry::definition::json_schema_for::<EnterPlanModeToolInput>(),
         )
         .description(
             "Enter plan mode. Allocates a fresh plan markdown file under .agena/plans/, blocks mutating tools, and asks the LLM to draft a plan. Pair with `exit_plan_mode` once the plan is complete.",
         )
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["plan", "design", "approach", "outline"])
-        .tag("filesystem_write")
+        .tags([ToolTag::ReadOnly, ToolTag::Planning])
+        .tag(ToolTag::FilesystemWrite)
+        .path_access(PathAccessSpec {
+            path: ".agena/plans".to_string(),
+            kind: PathKind::Write,
+        })
         .always_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
+        .concurrency_safe(true)
         .host_capability(HostCapability::PlanRegistry),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "exit_plan_mode",
             crate::entry::definition::json_schema_for::<ExitPlanModeToolInput>(),
         )
         .description(
             "Leave plan mode and return to normal tool execution. Surfaces a permission ask so the human can review the plan before approving the unblock.",
         )
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["plan", "approve", "exit"])
+        .tags([ToolTag::ReadOnly, ToolTag::Planning])
         .always_load()
-        .plan_mode_policy(PlanModePolicy::Allowed)
+        .concurrency_safe(true)
         .host_capability(HostCapability::PlanRegistry),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "enter_worktree",
             crate::entry::definition::json_schema_for::<EnterWorktreeToolInput>(),
         )
         .description(
             "Create or attach to a git worktree under .agena/worktrees and switch the session into it.",
         )
-        .behavior(SdkEntryBehavior::Mutating)
-        .search_terms(["git", "worktree", "branch", "isolate"])
-        .tag("filesystem_write")
+        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree])
+        .concurrency_safe(false)
         .deferred_load()
         .host_capability(HostCapability::WorktreeRegistry),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "exit_worktree",
             crate::entry::definition::json_schema_for::<ExitWorktreeToolInput>(),
         )
         .description(
             "Leave the current worktree. action=keep preserves the worktree, action=remove deletes it (refuses unless discard_changes=true when there are uncommitted changes).",
         )
-        .behavior(SdkEntryBehavior::Mutating)
-        .search_terms(["git", "worktree", "exit", "cleanup"])
-        .tag("filesystem_write")
+        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree])
+        .concurrency_safe(false)
         .deferred_load()
         .host_capability(HostCapability::WorktreeRegistry),
     ]
@@ -861,10 +832,11 @@ mod tests {
             Ok(vec![ToolDescriptor {
                 name: "bash".to_string(),
                 description: Some("Execute shell commands".to_string()),
-                search_terms: vec!["shell".to_string()],
-                behavior: Some("mutating".to_string()),
+                tags: vec![
+                    crate::plugin::sdk::ToolTag::Mutating,
+                    crate::plugin::sdk::ToolTag::Shell,
+                ],
                 deferred: true,
-                read_only: false,
                 plugin_id: None,
             }])
         }
@@ -873,9 +845,9 @@ mod tests {
             assert_eq!(req.items.len(), 1);
             assert_eq!(req.items[0].content, "ship it");
             Ok(
-                crate::plugins::bundled::router::first_party_to_invoke_output(
-                    FirstPartyExecution::new(
-                        FirstPartyToolOutput::TodoWrite {
+                crate::plugins::bundled::router::bundled_to_invoke_output(
+                    BundledExecution::new(
+                        BundledToolOutput::TodoWrite {
                             items: vec![TodoItem {
                                 content: "ship it".to_string(),
                                 status: TodoStatus::InProgress,
@@ -964,9 +936,9 @@ mod tests {
             _req: HostEnterPlanModeRequest,
         ) -> SdkResult<ToolInvokeOutput> {
             Ok(
-                crate::plugins::bundled::router::first_party_to_invoke_output(
-                    FirstPartyExecution::new(
-                        FirstPartyToolOutput::EnterPlanMode {
+                crate::plugins::bundled::router::bundled_to_invoke_output(
+                    BundledExecution::new(
+                        BundledToolOutput::EnterPlanMode {
                             plan_path: "/tmp/plan.md".to_string(),
                             slug: "demo".to_string(),
                         },
@@ -981,9 +953,9 @@ mod tests {
             _req: HostExitPlanModeRequest,
         ) -> SdkResult<ToolInvokeOutput> {
             Ok(
-                crate::plugins::bundled::router::first_party_to_invoke_output(
-                    FirstPartyExecution::new(
-                        FirstPartyToolOutput::ExitPlanMode {
+                crate::plugins::bundled::router::bundled_to_invoke_output(
+                    BundledExecution::new(
+                        BundledToolOutput::ExitPlanMode {
                             approved: true,
                             plan_path: "/tmp/plan.md".to_string(),
                         },
@@ -1000,9 +972,9 @@ mod tests {
             assert_eq!(req.name.as_deref(), Some("demo"));
             assert_eq!(req.path, None);
             Ok(
-                crate::plugins::bundled::router::first_party_to_invoke_output(
-                    FirstPartyExecution::new(
-                        FirstPartyToolOutput::EnterWorktree {
+                crate::plugins::bundled::router::bundled_to_invoke_output(
+                    BundledExecution::new(
+                        BundledToolOutput::EnterWorktree {
                             path: "/tmp/wt".to_string(),
                             branch: "agena/demo".to_string(),
                         },
@@ -1016,9 +988,9 @@ mod tests {
             assert_eq!(req.action, "keep");
             assert!(!req.discard_changes);
             Ok(
-                crate::plugins::bundled::router::first_party_to_invoke_output(
-                    FirstPartyExecution::new(
-                        FirstPartyToolOutput::ExitWorktree {
+                crate::plugins::bundled::router::bundled_to_invoke_output(
+                    BundledExecution::new(
+                        BundledToolOutput::ExitWorktree {
                             action: "keep".to_string(),
                             path: "/tmp/wt".to_string(),
                         },
@@ -1082,12 +1054,12 @@ mod tests {
             ))
             .await
             .expect("ask_user host invoke");
-        let envelope = crate::plugins::bundled::router::payload_to_first_party_envelope(
+        let envelope = crate::plugins::bundled::router::payload_to_bundled_envelope(
             output.payload.as_ref(),
         )
         .unwrap();
         match envelope.output {
-            FirstPartyToolOutput::AskUser { answers } => {
+            BundledToolOutput::AskUser { answers } => {
                 assert_eq!(answers["color"], vec!["blue".to_string()]);
             }
             other => panic!("unexpected output: {other:?}"),
@@ -1326,12 +1298,12 @@ mod tests {
             ))
             .await
             .expect("task host invoke");
-        let envelope = crate::plugins::bundled::router::payload_to_first_party_envelope(
+        let envelope = crate::plugins::bundled::router::payload_to_bundled_envelope(
             output.payload.as_ref(),
         )
         .unwrap();
         match envelope.output {
-            FirstPartyToolOutput::Task {
+            BundledToolOutput::Task {
                 session_id,
                 model_provider_id,
                 model_id,
@@ -1360,12 +1332,12 @@ mod tests {
             ))
             .await
             .expect("todo_write host invoke");
-        let envelope = crate::plugins::bundled::router::payload_to_first_party_envelope(
+        let envelope = crate::plugins::bundled::router::payload_to_bundled_envelope(
             output.payload.as_ref(),
         )
         .unwrap();
         match envelope.output {
-            FirstPartyToolOutput::TodoWrite { items } => {
+            BundledToolOutput::TodoWrite { items } => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0].content, "ship it");
                 assert_eq!(items[0].status, TodoStatus::InProgress);
@@ -1386,12 +1358,12 @@ mod tests {
             ))
             .await
             .expect("enter_plan_mode host invoke");
-        let enter_plan = crate::plugins::bundled::router::payload_to_first_party_envelope(
+        let enter_plan = crate::plugins::bundled::router::payload_to_bundled_envelope(
             enter_plan.payload.as_ref(),
         )
         .unwrap();
         match enter_plan.output {
-            FirstPartyToolOutput::EnterPlanMode { plan_path, slug } => {
+            BundledToolOutput::EnterPlanMode { plan_path, slug } => {
                 assert_eq!(plan_path, "/tmp/plan.md");
                 assert_eq!(slug, "demo");
             }
@@ -1408,12 +1380,12 @@ mod tests {
             ))
             .await
             .expect("enter_worktree host invoke");
-        let enter_worktree = crate::plugins::bundled::router::payload_to_first_party_envelope(
+        let enter_worktree = crate::plugins::bundled::router::payload_to_bundled_envelope(
             enter_worktree.payload.as_ref(),
         )
         .unwrap();
         match enter_worktree.output {
-            FirstPartyToolOutput::EnterWorktree { path, branch } => {
+            BundledToolOutput::EnterWorktree { path, branch } => {
                 assert_eq!(path, "/tmp/wt");
                 assert_eq!(branch, "agena/demo");
             }
@@ -1430,12 +1402,12 @@ mod tests {
             ))
             .await
             .expect("exit_worktree host invoke");
-        let exit_worktree = crate::plugins::bundled::router::payload_to_first_party_envelope(
+        let exit_worktree = crate::plugins::bundled::router::payload_to_bundled_envelope(
             exit_worktree.payload.as_ref(),
         )
         .unwrap();
         match exit_worktree.output {
-            FirstPartyToolOutput::ExitWorktree { action, path } => {
+            BundledToolOutput::ExitWorktree { action, path } => {
                 assert_eq!(action, "keep");
                 assert_eq!(path, "/tmp/wt");
             }
@@ -1449,12 +1421,12 @@ mod tests {
             ))
             .await
             .expect("exit_plan_mode host invoke");
-        let exit_plan = crate::plugins::bundled::router::payload_to_first_party_envelope(
+        let exit_plan = crate::plugins::bundled::router::payload_to_bundled_envelope(
             exit_plan.payload.as_ref(),
         )
         .unwrap();
         match exit_plan.output {
-            FirstPartyToolOutput::ExitPlanMode {
+            BundledToolOutput::ExitPlanMode {
                 approved,
                 plan_path,
             } => {
@@ -1479,12 +1451,12 @@ mod tests {
             ))
             .await
             .expect("tool_search host invoke");
-        let envelope = crate::plugins::bundled::router::payload_to_first_party_envelope(
+        let envelope = crate::plugins::bundled::router::payload_to_bundled_envelope(
             output.payload.as_ref(),
         )
         .unwrap();
         match envelope.output {
-            FirstPartyToolOutput::ToolSearch { results, .. } => {
+            BundledToolOutput::ToolSearch { results, .. } => {
                 assert_eq!(results, vec!["bash".to_string()]);
             }
             other => panic!("unexpected output: {other:?}"),

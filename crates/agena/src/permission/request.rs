@@ -16,7 +16,7 @@ pub enum PermissionScope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PermissionAction {
-    BuiltinTool {
+    Tool {
         tool_name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         qualifier: Option<String>,

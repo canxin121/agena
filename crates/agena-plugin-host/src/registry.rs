@@ -1,16 +1,16 @@
-//! Plugin entry name → plugin index. Auto-prefixes on collision.
+//! Plugin tool name registry. Collisions are disambiguated as `plugin/tool`.
 
 use std::collections::BTreeMap;
 
-use crate::sdk::{EntryBehavior, HostCapability, PluginEntryDecl};
+use serde::{Deserialize, Serialize};
+
+use crate::sdk::{HostCapability, PluginToolDecl};
 
 #[derive(Debug, Clone)]
 pub struct PluginEntryRegistry {
-    /// `exposed_name → (plugin_index, decl)`. `exposed_name` is the name shown
-    /// to the model: bare `entry` if unique, else `plugin__entry`.
+    /// `exposed_name → entry`. `exposed_name` is the name shown
+    /// to the model: bare `tool` if unique, else `plugin/tool`.
     by_exposed: BTreeMap<String, PluginEntry>,
-    /// All builtins occupy unique reserved keys.
-    builtins: Vec<String>,
     generation: u64,
 }
 
@@ -20,54 +20,90 @@ pub struct PluginEntrySnapshot {
     pub entries: Vec<PluginEntry>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginEntry {
-    pub plugin_index: usize,
     pub plugin_name: String,
     pub original_name: String,
     pub exposed_name: String,
-    pub decl: PluginEntryDecl,
+    pub decl: PluginToolDecl,
+}
+
+impl PluginEntry {
+    pub fn new(plugin_name: impl Into<String>, decl: PluginToolDecl) -> Self {
+        let plugin_name = plugin_name.into();
+        let original_name = decl.name.clone();
+        Self {
+            plugin_name,
+            original_name: original_name.clone(),
+            exposed_name: original_name,
+            decl,
+        }
+    }
+
+    pub fn description_text(&self) -> &str {
+        self.decl.description_text()
+    }
+
+    pub fn sanitized_input_schema(&self) -> serde_json::Value {
+        self.decl.sanitized_input_schema()
+    }
+
+    pub fn effective_tags(&self) -> Vec<crate::sdk::ToolTag> {
+        self.decl.effective_tags()
+    }
+
+    pub fn has_tag(&self, tag: crate::sdk::ToolTag) -> bool {
+        self.decl.has_tag(tag)
+    }
+
+    pub fn should_load_by_default(&self) -> bool {
+        self.decl.should_load_by_default()
+    }
+
+    pub fn is_deferred(&self) -> bool {
+        self.decl.is_deferred()
+    }
 }
 
 impl PluginEntryRegistry {
-    pub fn new(builtins: impl IntoIterator<Item = String>) -> Self {
+    pub fn new() -> Self {
         Self {
             by_exposed: BTreeMap::new(),
-            builtins: builtins.into_iter().collect(),
             generation: 0,
         }
     }
 
     pub fn extend_from_plugin(
         &mut self,
-        plugin_index: usize,
         plugin_name: &str,
-        decls: &[PluginEntryDecl],
+        decls: &[PluginToolDecl],
     ) {
         for decl in decls {
-            self.upsert_from_plugin(plugin_index, plugin_name, decl.clone());
+            self.upsert_from_plugin(plugin_name, decl.clone());
         }
     }
 
     pub fn upsert_from_plugin(
         &mut self,
-        plugin_index: usize,
         plugin_name: &str,
-        decl: PluginEntryDecl,
+        decl: PluginToolDecl,
     ) -> PluginEntry {
-        self.remove_existing_for_plugin(plugin_name, &decl.name);
-        let original = decl.name.clone();
-        let exposed = self.exposed_name_for(plugin_name, &original, decl.expose_as.as_ref());
-        let entry = PluginEntry {
-            plugin_index,
+        let original_name = decl.name.clone();
+        let mut entries = self.entries_owned();
+        entries.retain(|entry| {
+            !(entry.plugin_name == plugin_name && entry.original_name == original_name)
+        });
+        entries.push(PluginEntry {
             plugin_name: plugin_name.to_string(),
-            original_name: original,
-            exposed_name: exposed.clone(),
+            original_name: original_name.clone(),
+            exposed_name: original_name.clone(),
             decl,
-        };
-        self.by_exposed.insert(exposed, entry.clone());
+        });
+        self.rebuild(entries);
         self.generation += 1;
-        entry
+        self.lookup_for_plugin(plugin_name, &original_name)
+            .expect("upserted entry should exist after rebuild")
+            .clone()
     }
 
     pub fn remove_from_plugin(
@@ -75,18 +111,14 @@ impl PluginEntryRegistry {
         plugin_name: &str,
         original_name: &str,
     ) -> Option<PluginEntry> {
-        let key = self
-            .by_exposed
-            .iter()
-            .find(|(_, entry)| {
-                entry.plugin_name == plugin_name && entry.original_name == original_name
-            })
-            .map(|(exposed, _)| exposed.clone())?;
-        let removed = self.by_exposed.remove(&key);
-        if removed.is_some() {
-            self.generation += 1;
-        }
-        removed
+        let removed = self.lookup_for_plugin(plugin_name, original_name)?.clone();
+        let mut entries = self.entries_owned();
+        entries.retain(|entry| {
+            !(entry.plugin_name == plugin_name && entry.original_name == original_name)
+        });
+        self.rebuild(entries);
+        self.generation += 1;
+        Some(removed)
     }
 
     pub fn remove_exposed_from_plugin(
@@ -94,18 +126,12 @@ impl PluginEntryRegistry {
         plugin_name: &str,
         exposed_name: &str,
     ) -> Option<PluginEntry> {
-        if self
+        let original_name = self
             .by_exposed
             .get(exposed_name)
-            .is_none_or(|entry| entry.plugin_name != plugin_name)
-        {
-            return None;
-        }
-        let removed = self.by_exposed.remove(exposed_name);
-        if removed.is_some() {
-            self.generation += 1;
-        }
-        removed
+            .filter(|entry| entry.plugin_name == plugin_name)
+            .map(|entry| entry.original_name.clone())?;
+        self.remove_from_plugin(plugin_name, &original_name)
     }
 
     pub fn lookup(&self, exposed_name: &str) -> Option<&PluginEntry> {
@@ -135,45 +161,39 @@ impl PluginEntryRegistry {
         self.by_exposed.len()
     }
 
-    fn remove_existing_for_plugin(&mut self, plugin_name: &str, original_name: &str) {
-        if let Some(key) = self
-            .by_exposed
-            .iter()
-            .find(|(_, entry)| {
-                entry.plugin_name == plugin_name && entry.original_name == original_name
-            })
-            .map(|(exposed, _)| exposed.clone())
-        {
-            self.by_exposed.remove(&key);
+    fn rebuild(&mut self, mut entries: Vec<PluginEntry>) {
+        let mut counts = BTreeMap::<String, usize>::new();
+        for entry in &entries {
+            *counts.entry(entry.original_name.clone()).or_default() += 1;
         }
+        for entry in &mut entries {
+            entry.exposed_name = if counts.get(&entry.original_name).copied().unwrap_or_default() > 1
+            {
+                format!("{}/{}", entry.plugin_name, entry.original_name)
+            } else {
+                entry.original_name.clone()
+            };
+        }
+        self.by_exposed = entries
+            .into_iter()
+            .map(|entry| (entry.exposed_name.clone(), entry))
+            .collect();
     }
 
-    fn exposed_name_for(
-        &mut self,
-        plugin_name: &str,
-        original: &str,
-        expose_as: Option<&String>,
-    ) -> String {
-        if let Some(forced) = expose_as {
-            return forced.clone();
-        }
-        if self.builtins.iter().any(|b| b == original) || self.by_exposed.contains_key(original) {
-            let new_name = format!("{plugin_name}__{original}");
-            if let Some(existing) = self.by_exposed.remove(original) {
-                let renamed_existing =
-                    format!("{}__{}", existing.plugin_name, existing.original_name);
-                let mut renamed = existing;
-                renamed.exposed_name = renamed_existing.clone();
-                self.by_exposed.insert(renamed_existing, renamed);
-            }
-            new_name
-        } else {
-            original.to_string()
-        }
+    fn lookup_for_plugin(&self, plugin_name: &str, original_name: &str) -> Option<&PluginEntry> {
+        self.by_exposed.values().find(|entry| {
+            entry.plugin_name == plugin_name && entry.original_name == original_name
+        })
     }
 }
 
-pub fn effective_host_capabilities(decls: &[PluginEntryDecl]) -> Vec<HostCapability> {
+impl Default for PluginEntryRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn effective_host_capabilities(decls: &[PluginToolDecl]) -> Vec<HostCapability> {
     let mut capabilities = Vec::new();
     for decl in decls {
         for capability in &decl.host_capabilities {
@@ -190,7 +210,7 @@ pub fn effective_host_capabilities(decls: &[PluginEntryDecl]) -> Vec<HostCapabil
 /// plugins that need host capabilities without exposing any tool entry
 /// (e.g. background skill discovery plugins).
 pub fn effective_host_capabilities_for_manifest(
-    decls: &[PluginEntryDecl],
+    decls: &[PluginToolDecl],
     plugin_capabilities: &[HostCapability],
 ) -> Vec<HostCapability> {
     let mut capabilities = effective_host_capabilities(decls);
@@ -208,23 +228,13 @@ pub fn effective_host_capabilities_for_manifest(
 /// just the entry that needs them rather than leaking them via the union
 /// to every entry the plugin owns.
 pub fn per_entry_host_capabilities(
-    decls: &[PluginEntryDecl],
+    decls: &[PluginToolDecl],
 ) -> std::collections::HashMap<String, Vec<HostCapability>> {
     let mut out = std::collections::HashMap::new();
     for decl in decls {
         out.insert(decl.name.clone(), decl.host_capabilities.clone());
     }
     out
-}
-
-/// A behavior helper for plugin-shipped entries the host has to filter against
-/// the catalog/agent.
-pub fn behavior_label(b: EntryBehavior) -> &'static str {
-    match b {
-        EntryBehavior::ReadOnly => "read-only",
-        EntryBehavior::Mutating => "mutating",
-        EntryBehavior::Task => "task",
-    }
 }
 
 #[cfg(test)]
@@ -234,10 +244,10 @@ mod tests {
     #[test]
     fn effective_host_capabilities_unions_plugin_entries() {
         let decls = vec![
-            PluginEntryDecl::new("one", serde_json::json!({}))
+            PluginToolDecl::new("one", serde_json::json!({}))
                 .host_capability(HostCapability::ReadConfig)
                 .host_capability(HostCapability::ListTools),
-            PluginEntryDecl::new("two", serde_json::json!({}))
+            PluginToolDecl::new("two", serde_json::json!({}))
                 .host_capability(HostCapability::ListTools)
                 .host_capability(HostCapability::InvokeTool),
         ];
@@ -255,8 +265,8 @@ mod tests {
     #[test]
     fn effective_host_capabilities_are_empty_without_declarations() {
         let decls = vec![
-            PluginEntryDecl::new("one", serde_json::json!({})),
-            PluginEntryDecl::new("two", serde_json::json!({})),
+            PluginToolDecl::new("one", serde_json::json!({})),
+            PluginToolDecl::new("two", serde_json::json!({})),
         ];
 
         assert!(effective_host_capabilities(&decls).is_empty());
@@ -264,22 +274,18 @@ mod tests {
 
     #[test]
     fn upsert_increments_generation_and_lookup() {
-        let mut registry = PluginEntryRegistry::new(Vec::<String>::new());
+        let mut registry = PluginEntryRegistry::new();
         assert_eq!(registry.generation(), 0);
 
-        let entry = registry.upsert_from_plugin(
-            0,
-            "alpha",
-            PluginEntryDecl::new("ping", serde_json::json!({})),
-        );
+        let entry =
+            registry.upsert_from_plugin("alpha", PluginToolDecl::new("ping", serde_json::json!({})));
         assert_eq!(entry.exposed_name, "ping");
         assert_eq!(registry.generation(), 1);
         assert!(registry.lookup("ping").is_some());
 
         let updated = registry.upsert_from_plugin(
-            0,
             "alpha",
-            PluginEntryDecl::new("ping", serde_json::json!({"v": 2})).description("v2"),
+            PluginToolDecl::new("ping", serde_json::json!({"v": 2})).description("v2"),
         );
         assert_eq!(updated.exposed_name, "ping");
         assert_eq!(registry.generation(), 2);
@@ -291,58 +297,37 @@ mod tests {
     }
 
     #[test]
-    fn upsert_collision_renames_both_sides_like_extend() {
-        let mut registry = PluginEntryRegistry::new(Vec::<String>::new());
-        registry.upsert_from_plugin(
-            0,
-            "alpha",
-            PluginEntryDecl::new("ping", serde_json::json!({})),
-        );
-        registry.upsert_from_plugin(
-            1,
-            "beta",
-            PluginEntryDecl::new("ping", serde_json::json!({})),
-        );
+    fn upsert_collision_namespaces_both_sides() {
+        let mut registry = PluginEntryRegistry::new();
+        registry.upsert_from_plugin("alpha", PluginToolDecl::new("ping", serde_json::json!({})));
+        registry.upsert_from_plugin("beta", PluginToolDecl::new("ping", serde_json::json!({})));
 
         assert!(registry.lookup("ping").is_none());
-        assert_eq!(registry.lookup("alpha__ping").unwrap().plugin_name, "alpha");
-        assert_eq!(registry.lookup("beta__ping").unwrap().plugin_name, "beta");
+        assert_eq!(registry.lookup("alpha/ping").unwrap().plugin_name, "alpha");
+        assert_eq!(registry.lookup("beta/ping").unwrap().plugin_name, "beta");
     }
 
     #[test]
-    fn remove_increments_generation_and_keeps_namespace_stable() {
-        let mut registry = PluginEntryRegistry::new(Vec::<String>::new());
-        registry.upsert_from_plugin(
-            0,
-            "alpha",
-            PluginEntryDecl::new("ping", serde_json::json!({})),
-        );
-        registry.upsert_from_plugin(
-            1,
-            "beta",
-            PluginEntryDecl::new("ping", serde_json::json!({})),
-        );
+    fn remove_increments_generation_and_restores_unique_name() {
+        let mut registry = PluginEntryRegistry::new();
+        registry.upsert_from_plugin("alpha", PluginToolDecl::new("ping", serde_json::json!({})));
+        registry.upsert_from_plugin("beta", PluginToolDecl::new("ping", serde_json::json!({})));
         let baseline = registry.generation();
 
         let removed = registry
             .remove_from_plugin("beta", "ping")
             .expect("remove existing entry");
-        assert_eq!(removed.exposed_name, "beta__ping");
+        assert_eq!(removed.exposed_name, "beta/ping");
         assert_eq!(registry.generation(), baseline + 1);
 
-        // Phase 2 keeps the surviving entry namespaced; do not de-prefix on remove.
-        assert!(registry.lookup("alpha__ping").is_some());
-        assert!(registry.lookup("ping").is_none());
+        assert!(registry.lookup("alpha/ping").is_none());
+        assert!(registry.lookup("ping").is_some());
     }
 
     #[test]
     fn snapshot_returns_owned_entries_with_generation() {
-        let mut registry = PluginEntryRegistry::new(Vec::<String>::new());
-        registry.upsert_from_plugin(
-            0,
-            "alpha",
-            PluginEntryDecl::new("ping", serde_json::json!({})),
-        );
+        let mut registry = PluginEntryRegistry::new();
+        registry.upsert_from_plugin("alpha", PluginToolDecl::new("ping", serde_json::json!({})));
 
         let snapshot = registry.snapshot();
         assert_eq!(snapshot.generation, registry.generation());

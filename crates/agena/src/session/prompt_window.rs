@@ -13,12 +13,12 @@ use crate::{
         AttachmentSource, Message, MessagePart, MessageSource, PartContent, ToolExecutionPart,
         ToolInvocation,
     },
+    plugin::registry::PluginEntry as RegistryPluginEntry,
     provider::{
         PRUNED_TOOL_RESULT_PLACEHOLDER, ProjectedSessionPart, PromptCacheShape,
         PromptCacheShapeDiff, project_session_parts, project_session_text_lossy,
     },
     role::Role,
-    tool::EntryDefinition,
 };
 
 use super::Session;
@@ -101,7 +101,7 @@ pub(crate) struct PromptRequestOptions<'a> {
     pub goal_context: Option<&'a str>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
-    pub tools: &'a [EntryDefinition],
+    pub tools: &'a [RegistryPluginEntry],
     pub provider_request_shape: Option<&'a PromptCacheShape>,
     pub continuation_supported: bool,
 }
@@ -735,7 +735,7 @@ fn attachment_to_transcript_block(item: &crate::message::AttachmentItem) -> Tran
 
 pub(crate) fn approximate_request_overhead_chars(
     system: Option<&str>,
-    tools: &[EntryDefinition],
+    tools: &[RegistryPluginEntry],
 ) -> usize {
     let system_chars = system
         .map(str::trim)
@@ -755,7 +755,7 @@ pub(crate) fn prompt_char_budget(
     max_output_tokens: Option<u32>,
     fallback_max_prompt_chars: usize,
     system: Option<&str>,
-    tools: &[EntryDefinition],
+    tools: &[RegistryPluginEntry],
 ) -> usize {
     let overhead_chars = approximate_request_overhead_chars(system, tools);
     let fallback_budget = fallback_max_prompt_chars
@@ -1467,7 +1467,7 @@ fn fingerprint_request_options(
     goal_context: Option<&str>,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
-    tools: &[EntryDefinition],
+    tools: &[RegistryPluginEntry],
     provider_request_shape: Option<&PromptCacheShape>,
 ) -> String {
     #[derive(Serialize)]
@@ -1478,7 +1478,7 @@ fn fingerprint_request_options(
         goal_context_fingerprint: Option<String>,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
-        tools: &'a [EntryDefinition],
+        tools: &'a [RegistryPluginEntry],
         provider_request_shape_fingerprint: Option<String>,
     }
 
@@ -1517,12 +1517,27 @@ mod tests {
     use chrono::Utc;
 
     use crate::{
+        plugin::PluginToolDecl,
+        plugin::registry::PluginEntry as RegistryPluginEntry,
         role::Role,
-        tool::{EntryBehavior, EntryDefinition},
     };
 
     use super::*;
     use crate::session::{PromptWindowRuntime, ProviderPromptAnchor, SessionRuntimeState};
+
+    fn test_tool(
+        name: &str,
+        description: &str,
+        tags: impl IntoIterator<Item = crate::plugin::sdk::ToolTag>,
+    ) -> RegistryPluginEntry {
+        RegistryPluginEntry::new(
+            "fixture",
+            PluginToolDecl::new(name, crate::entry::definition::json_schema_for::<serde_json::Value>())
+                .description(description)
+                .tags(tags)
+                .concurrency_safe(true),
+        )
+    }
 
     #[test]
     fn active_prompt_messages_skips_compacted_and_promotes_latest_summary() {
@@ -2391,10 +2406,13 @@ mod tests {
 
     #[test]
     fn fingerprint_request_options_changes_when_tools_change() {
-        let tool = EntryDefinition::first_party::<serde_json::Value>(
+        let tool = test_tool(
             "grep",
             "Search files.",
-            EntryBehavior::ReadOnly,
+            [
+                crate::plugin::sdk::ToolTag::ReadOnly,
+                crate::plugin::sdk::ToolTag::FilesystemRead,
+            ],
         );
 
         let baseline = build_prepared_prompt(
@@ -2622,10 +2640,13 @@ mod tests {
 
     #[test]
     fn prompt_char_budget_uses_model_limits_and_request_overhead() {
-        let tool = EntryDefinition::first_party::<serde_json::Value>(
+        let tool = test_tool(
             "grep",
             "Search files.",
-            EntryBehavior::ReadOnly,
+            [
+                crate::plugin::sdk::ToolTag::ReadOnly,
+                crate::plugin::sdk::ToolTag::FilesystemRead,
+            ],
         );
 
         let budget = prompt_char_budget(

@@ -4,19 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EntrySource {
-    FirstParty,
-    Plugin { plugin: String },
-}
-
 // ── tool.execute.before ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolBeforeInput {
     pub tool_name: String,
-    pub source: EntrySource,
+    pub plugin_name: String,
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
@@ -47,7 +40,7 @@ pub struct ToolBeforePatch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolAfterInput {
     pub tool_name: String,
-    pub source: EntrySource,
+    pub plugin_name: String,
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
@@ -77,7 +70,7 @@ pub struct ToolAfterPatch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolFailureInput {
     pub tool_name: String,
-    pub source: EntrySource,
+    pub plugin_name: String,
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
@@ -93,15 +86,15 @@ pub struct ToolFailureInput {
 /// Sent once per tool before it is listed to the LLM. Plugins can override
 /// the description and/or parameter schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntryDefinitionInput {
+pub struct ToolDefinitionInput {
     pub tool_name: String,
-    pub source: EntrySource,
+    pub plugin_name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EntryDefinitionPatch {
+pub struct ToolDefinitionPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -434,25 +434,54 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     let skills = {
         let mut workflows = Vec::new();
         let mut commands = Vec::new();
-        for entry in snapshot.plugin_manager().entry_entries() {
-            if entry.plugin_name != "agena.skills_fs" || entry.original_name != entry.exposed_name {
+        let entries = snapshot
+            .plugin_manager()
+            .entry_entries()
+            .into_iter()
+            .filter(|entry| entry.plugin_name == "agena.skills_fs")
+            .collect::<Vec<_>>();
+        let skill_key_for = |entry: &agena::plugin::registry::PluginEntry| {
+            entry
+                .decl
+                .tags
+                .iter()
+                .find_map(|tag| match tag {
+                    agena::plugin::sdk::ToolTag::Custom(value) => {
+                        value.strip_prefix("skill:").map(str::to_string)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| entry.original_name.clone())
+        };
+        let has_custom_tag = |entry: &agena::plugin::registry::PluginEntry, expected: &str| {
+            entry.decl.tags.iter().any(|tag| match tag {
+                agena::plugin::sdk::ToolTag::Custom(value) => value == expected,
+                _ => false,
+            })
+        };
+        let mut aliases_by_skill = HashMap::<String, Vec<String>>::new();
+        for entry in &entries {
+            if !has_custom_tag(entry, "alias") {
                 continue;
             }
+            aliases_by_skill
+                .entry(skill_key_for(entry))
+                .or_default()
+                .push(entry.exposed_name.clone());
+        }
+        for entry in entries {
+            if has_custom_tag(&entry, "alias") {
+                continue;
+            }
+            let skill_key = skill_key_for(&entry);
+            let is_command = has_custom_tag(&entry, "command");
             let item = RuntimeSkillResource {
                 name: entry.exposed_name,
                 description: entry.decl.description.unwrap_or_default(),
-                aliases: entry
-                    .decl
-                    .search_terms
-                    .iter()
-                    .filter(|term| {
-                        *term != "workflow" && *term != "command" && *term != &entry.original_name
-                    })
-                    .cloned()
-                    .collect(),
+                aliases: aliases_by_skill.remove(&skill_key).unwrap_or_default(),
                 source_path: None,
             };
-            if entry.decl.search_terms.iter().any(|term| term == "command") {
+            if is_command {
                 commands.push(item);
             } else {
                 workflows.push(item);

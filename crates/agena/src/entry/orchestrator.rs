@@ -1,7 +1,7 @@
-use crate::message::{FileChangeEntry, FileChangeKind, FirstPartyToolInput, FirstPartyToolOutput};
+use crate::message::{FileChangeEntry, FileChangeKind, BundledToolInput, BundledToolOutput};
 
 use super::{
-    FirstPartyExecution, FirstPartyExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
+    BundledExecution, BundledExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
     apply_patch, ask_user, bash, cron, glob, grep, lsp, monitor_tool, notebook_edit, plan,
     powershell, read, task, todo_write, tool_search, view_file, web_fetch, web_search, worktree,
 };
@@ -16,15 +16,15 @@ fn apply_patch_output_text(result: &apply_patch::ApplyPatchExecution) -> String 
     lines.join("\n")
 }
 
-pub(crate) fn execute_first_party(
+pub(crate) fn execute_bundled(
     executor: &ToolExecutor,
-    input: &FirstPartyToolInput,
-    context: FirstPartyExecutionContext,
-) -> Result<FirstPartyExecution, ToolError> {
+    input: &BundledToolInput,
+    context: BundledExecutionContext,
+) -> Result<BundledExecution, ToolError> {
     match input {
-        FirstPartyToolInput::ApplyPatch(payload) => {
+        BundledToolInput::ApplyPatch(payload) => {
             let result = apply_patch::execute(executor, payload)?;
-            let output = FirstPartyToolOutput::ApplyPatch {
+            let output = BundledToolOutput::ApplyPatch {
                 operation_id: result.operation_id.clone(),
                 changes: result
                     .files
@@ -57,45 +57,45 @@ pub(crate) fn execute_first_party(
             view.metadata
                 .insert("changed_files".to_string(), result.files.len().to_string());
 
-            Ok(FirstPartyExecution::new(output, view).with_apply_patch(result.clone()))
+            Ok(BundledExecution::new(output, view).with_apply_patch(result.clone()))
         }
-        FirstPartyToolInput::Read(payload) => read::execute(executor, payload),
-        FirstPartyToolInput::ViewFile(payload) => view_file::execute(executor, payload),
-        FirstPartyToolInput::Glob(payload) => glob::execute(executor, payload),
-        FirstPartyToolInput::Grep(payload) => grep::execute(executor, payload),
-        FirstPartyToolInput::Task(payload) => task::execute(executor, payload),
-        FirstPartyToolInput::ToolSearch(payload) => tool_search::execute(executor, payload),
-        FirstPartyToolInput::TodoWrite(payload) => Ok(todo_write::execute(payload)),
-        FirstPartyToolInput::AskUser(payload) => ask_user::execute(payload),
-        FirstPartyToolInput::Bash(payload) => bash::execute(executor, payload, context),
-        FirstPartyToolInput::Monitor(payload) => monitor_tool::execute(executor, payload),
-        FirstPartyToolInput::WebFetch(payload) => web_fetch::execute(executor, payload),
-        FirstPartyToolInput::WebSearch(payload) => web_search::execute(executor, payload),
-        FirstPartyToolInput::EnterPlanMode(payload) => {
+        BundledToolInput::Read(payload) => read::execute(executor, payload),
+        BundledToolInput::ViewFile(payload) => view_file::execute(executor, payload),
+        BundledToolInput::Glob(payload) => glob::execute(executor, payload),
+        BundledToolInput::Grep(payload) => grep::execute(executor, payload),
+        BundledToolInput::Task(payload) => task::execute(executor, payload),
+        BundledToolInput::ToolSearch(payload) => tool_search::execute(executor, payload),
+        BundledToolInput::TodoWrite(payload) => Ok(todo_write::execute(payload)),
+        BundledToolInput::AskUser(payload) => ask_user::execute(payload),
+        BundledToolInput::Bash(payload) => bash::execute(executor, payload, context),
+        BundledToolInput::Monitor(payload) => monitor_tool::execute(executor, payload),
+        BundledToolInput::WebFetch(payload) => web_fetch::execute(executor, payload),
+        BundledToolInput::WebSearch(payload) => web_search::execute(executor, payload),
+        BundledToolInput::EnterPlanMode(payload) => {
             plan::execute_enter(executor, payload, context.session_id)
         }
-        FirstPartyToolInput::ExitPlanMode(payload) => {
+        BundledToolInput::ExitPlanMode(payload) => {
             plan::execute_exit(executor, payload, context.session_id)
         }
-        FirstPartyToolInput::EnterWorktree(payload) => {
+        BundledToolInput::EnterWorktree(payload) => {
             worktree::execute_enter(executor, payload, context.session_id)
         }
-        FirstPartyToolInput::ExitWorktree(payload) => {
+        BundledToolInput::ExitWorktree(payload) => {
             worktree::execute_exit(executor, payload, context.session_id)
         }
-        FirstPartyToolInput::CronCreate(payload) => {
+        BundledToolInput::CronCreate(payload) => {
             cron::execute_create(executor, payload, context.session_id)
         }
-        FirstPartyToolInput::CronList(payload) => cron::execute_list(executor, payload),
-        FirstPartyToolInput::CronDelete(payload) => cron::execute_delete(executor, payload),
-        FirstPartyToolInput::ScheduleWakeup(payload) => {
+        BundledToolInput::CronList(payload) => cron::execute_list(executor, payload),
+        BundledToolInput::CronDelete(payload) => cron::execute_delete(executor, payload),
+        BundledToolInput::ScheduleWakeup(payload) => {
             cron::execute_wakeup(executor, payload, context.session_id)
         }
-        FirstPartyToolInput::LspDefinition(payload) => lsp::execute_definition(executor, payload),
-        FirstPartyToolInput::LspReferences(payload) => lsp::execute_references(executor, payload),
-        FirstPartyToolInput::LspHover(payload) => lsp::execute_hover(executor, payload),
-        FirstPartyToolInput::LspDiagnostics(payload) => lsp::execute_diagnostics(executor, payload),
-        FirstPartyToolInput::NotebookEdit(payload) => notebook_edit::execute(executor, payload),
-        FirstPartyToolInput::PowerShell(payload) => powershell::execute(executor, payload, context),
+        BundledToolInput::LspDefinition(payload) => lsp::execute_definition(executor, payload),
+        BundledToolInput::LspReferences(payload) => lsp::execute_references(executor, payload),
+        BundledToolInput::LspHover(payload) => lsp::execute_hover(executor, payload),
+        BundledToolInput::LspDiagnostics(payload) => lsp::execute_diagnostics(executor, payload),
+        BundledToolInput::NotebookEdit(payload) => notebook_edit::execute(executor, payload),
+        BundledToolInput::PowerShell(payload) => powershell::execute(executor, payload, context),
     }
 }

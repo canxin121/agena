@@ -1,6 +1,7 @@
 use crate::agent::Agent;
+use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
+use crate::plugin::sdk::ToolTag;
 
-use super::{EntryBehavior, EntryDefinition, EntrySource};
 use crate::plugin::sdk::Plugin;
 use crate::plugins::bundled::{
     cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, shell as bundled_shell,
@@ -52,49 +53,47 @@ impl ToolCatalog {
     pub fn availability_for_definition(
         &self,
         agent: &Agent,
-        definition: &EntryDefinition,
+        tool: &RegistryPluginEntry,
     ) -> ToolAvailability {
-        let enabled = self.is_behavior_enabled(definition.behavior);
+        let enabled = self.is_tool_enabled(tool);
         let reason = if agent.disable {
             format!("agent '{}' is disabled", agent.name)
         } else if enabled {
             format!(
                 "tool '{}' enabled for {:?} profile",
-                definition.name, self.profile
+                tool.exposed_name, self.profile
             )
         } else {
             format!(
                 "tool '{}' disabled for {:?} profile",
-                definition.name, self.profile
+                tool.exposed_name, self.profile
             )
         };
         ToolAvailability {
-            tool_name: definition.name.clone(),
+            tool_name: tool.exposed_name.clone(),
             enabled: enabled && !agent.disable,
             reason,
         }
     }
 
-    pub fn first_party_definitions(&self) -> Vec<EntryDefinition> {
-        first_party_decls()
+    pub fn tools(&self) -> Vec<RegistryPluginEntry> {
+        tool_decls()
             .into_iter()
-            .map(|decl| {
-                EntryDefinition::from_decl(decl.name.clone(), &decl, EntrySource::FirstParty)
-            })
-            .filter(|definition| self.is_behavior_enabled(definition.behavior))
+            .map(|decl| RegistryPluginEntry::new(decl.name.clone(), decl))
+            .filter(|tool| self.is_tool_enabled(tool))
             .collect()
     }
 
-    pub fn is_behavior_enabled(&self, behavior: EntryBehavior) -> bool {
+    pub fn is_tool_enabled(&self, tool: &RegistryPluginEntry) -> bool {
         match self.profile {
             ModelToolProfile::Full => true,
-            ModelToolProfile::ReadOnly => behavior == EntryBehavior::ReadOnly,
-            ModelToolProfile::NoTask => behavior != EntryBehavior::Task,
+            ModelToolProfile::ReadOnly => tool.has_tag(ToolTag::ReadOnly),
+            ModelToolProfile::NoTask => !tool.has_tag(ToolTag::Task),
         }
     }
 }
 
-fn first_party_decls() -> Vec<crate::plugin::sdk::PluginEntryDecl> {
+fn tool_decls() -> Vec<crate::plugin::sdk::PluginToolDecl> {
     let mut decls = Vec::new();
     decls.extend(bundled_lsp::LspPlugin::new().manifest().entries);
     decls.extend(bundled_cron::CronPlugin::new().manifest().entries);
@@ -110,59 +109,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn first_party_catalog_marks_read_tools_as_always_loaded() {
+    fn tool_catalog_marks_read_tools_as_always_loaded() {
         let catalog = ToolCatalog::for_model(None);
-        let definitions = catalog.first_party_definitions();
+        let definitions = catalog.tools();
 
         let read = definitions
             .iter()
-            .find(|tool| tool.name == "read")
-            .expect("read first-party should exist");
+            .find(|tool| tool.exposed_name == "read")
+            .expect("read tool should exist");
         let grep = definitions
             .iter()
-            .find(|tool| tool.name == "grep")
-            .expect("grep first-party should exist");
+            .find(|tool| tool.exposed_name == "grep")
+            .expect("grep tool should exist");
 
-        assert!(read.read_only);
-        assert!(read.concurrency_safe);
+        assert!(read.has_tag(ToolTag::ReadOnly));
+        assert!(read.decl.concurrency_safe);
         assert!(!read.is_deferred());
         assert!(grep.should_load_by_default());
     }
 
     #[test]
-    fn first_party_catalog_defers_mutating_and_task_tools() {
+    fn tool_catalog_defers_mutating_and_task_tools() {
         let catalog = ToolCatalog::for_model(None);
-        let definitions = catalog.first_party_definitions();
+        let definitions = catalog.tools();
 
         for tool_name in ["bash", "apply_patch", "task", "notebook_edit", "powershell"] {
             let definition = definitions
                 .iter()
-                .find(|tool| tool.name == tool_name)
-                .unwrap_or_else(|| panic!("missing first-party definition for {tool_name}"));
+                .find(|tool| tool.exposed_name == tool_name)
+                .unwrap_or_else(|| panic!("missing tool definition for {tool_name}"));
             assert!(definition.is_deferred(), "{tool_name} should be deferred");
         }
     }
 
     #[test]
-    fn readonly_profile_filters_by_behavior_not_name() {
+    fn readonly_profile_filters_by_tags_not_name() {
         let catalog = ToolCatalog::for_model(Some("readonly-model"));
         let agent = Agent::new("test", crate::permission::PermissionPolicy::allow_all());
-        let readonly_plugin = EntryDefinition::plugin(
-            "third_party_read",
-            "read from a third-party plugin",
-            serde_json::json!({"type": "object"}),
-            EntryBehavior::ReadOnly,
+        let readonly_plugin = RegistryPluginEntry::new(
             "third_party",
+            crate::plugin::sdk::PluginToolDecl::new(
+                "third_party_read",
+                serde_json::json!({"type": "object"}),
+            )
+            .description("read from a third-party plugin")
+            .tags([ToolTag::ReadOnly, ToolTag::Network])
+            .concurrency_safe(true),
         );
-        let mutating_first_party = EntryDefinition::first_party::<
-            crate::message::ApplyPatchToolInput,
-        >("apply_patch", "patch files", EntryBehavior::Mutating);
-        let task_plugin = EntryDefinition::plugin(
-            "third_party_task",
-            "delegate work",
-            serde_json::json!({"type": "object"}),
-            EntryBehavior::Task,
+        let mutating_tool = RegistryPluginEntry::new(
+            "fixture",
+            crate::plugin::sdk::PluginToolDecl::new(
+                "apply_patch",
+                serde_json::json!({"type": "object"}),
+            )
+            .description("patch files")
+            .tags([ToolTag::Mutating, ToolTag::FilesystemWrite])
+            .concurrency_safe(false),
+        );
+        let task_plugin = RegistryPluginEntry::new(
             "third_party",
+            crate::plugin::sdk::PluginToolDecl::new(
+                "third_party_task",
+                serde_json::json!({"type": "object"}),
+            )
+            .description("delegate work")
+            .tags([ToolTag::Task, ToolTag::Subtask])
+            .concurrency_safe(false),
         );
 
         assert!(
@@ -172,7 +184,7 @@ mod tests {
         );
         assert!(
             !catalog
-                .availability_for_definition(&agent, &mutating_first_party)
+                .availability_for_definition(&agent, &mutating_tool)
                 .enabled
         );
         assert!(

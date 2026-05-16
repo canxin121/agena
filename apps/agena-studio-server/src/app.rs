@@ -1,11 +1,4 @@
-use std::{
-    collections::HashSet,
-    env,
-    net::SocketAddr,
-    path::PathBuf,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, env, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use agena::config::ConfigLoader;
 use agena::runtime::AgenaRuntime;
@@ -13,6 +6,10 @@ use agena::storage::StorageConfig;
 use agena::tracing as tracing_config;
 use agena_api_server::AppState as ApiV2State;
 use anyhow::{Context, Result, anyhow};
+#[cfg(test)]
+use axum::body::Body;
+#[cfg(test)]
+use axum::http::StatusCode;
 use axum::{
     Json, Router,
     body::to_bytes,
@@ -25,21 +22,12 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-#[cfg(test)]
-use axum::body::Body;
 use axum_extra::extract::cookie::SameSite;
 use futures_util::stream::{self as futures_stream, StreamExt as _};
-#[cfg(test)]
-use std::{
-    path::Path,
-    process::Command,
-};
-#[cfg(test)]
-use axum::{
-    http::StatusCode,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+#[cfg(test)]
+use std::{path::Path, process::Command};
 use tokio::sync::RwLock;
 use tower_http::{
     cors::{AllowOrigin, Any, CorsLayer},
@@ -59,7 +47,8 @@ pub(crate) struct AppState {
     pub(crate) terminal: Arc<crate::terminal::TerminalManager>,
     pub(crate) attachment_cache: Arc<crate::attachment_cache::AttachmentCacheManager>,
     pub(crate) session_activity: crate::session_activity::SessionActivityManager,
-    pub(crate) directory_session_index: crate::directory_session_index::DirectorySessionIndexManager,
+    pub(crate) directory_session_index:
+        crate::directory_session_index::DirectorySessionIndexManager,
     pub(crate) workspace_preview_registry:
         Arc<crate::workspace_preview_registry::WorkspacePreviewRegistry>,
     pub(crate) workspace_preview_runtime:
@@ -421,7 +410,12 @@ async fn hydrate_runtime_session_directory_mappings(
         .iter()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .filter(|value| state.directory_session_index.directory_for_session(value).is_none())
+        .filter(|value| {
+            state
+                .directory_session_index
+                .directory_for_session(value)
+                .is_none()
+        })
         .collect::<Vec<_>>();
     if missing.is_empty() {
         return;
@@ -484,7 +478,9 @@ async fn hydrate_runtime_session_directory_mappings(
         };
 
         for session in extract_sessions_from_payload(&payload) {
-            state.directory_session_index.upsert_summary_from_value(&session);
+            state
+                .directory_session_index
+                .upsert_summary_from_value(&session);
             if let Some(session_id) = parse_session_id(&session) {
                 unresolved.remove(&session_id);
             }
@@ -754,7 +750,10 @@ fn fs_router() -> Router<Arc<AppState>> {
         .route("/api/fs/list", get(crate::fs::fs_list))
         .route("/api/fs/search", get(crate::fs::fs_search))
         .route("/api/fs/search-content", post(crate::fs::fs_content_search))
-        .route("/api/fs/replace-content", post(crate::fs::fs_content_replace))
+        .route(
+            "/api/fs/replace-content",
+            post(crate::fs::fs_content_replace),
+        )
         .route("/api/fs/read", get(crate::fs::fs_read))
         .route("/api/fs/read-chunk", get(crate::fs::fs_read_chunk))
         .route("/api/fs/write", post(crate::fs::fs_write))
@@ -915,8 +914,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
     );
     let settings_value = crate::settings::init_settings(studio_db.as_ref()).await;
     let configured_opencode_port = args.opencode_port;
-    let should_bootstrap_opencode =
-        configured_opencode_port.is_some() || !args.skip_opencode_start;
+    let should_bootstrap_opencode = configured_opencode_port.is_some() || !args.skip_opencode_start;
     let opencode = Arc::new(crate::opencode::OpenCodeManager::new(
         args.opencode_host.clone(),
         configured_opencode_port,
@@ -931,7 +929,9 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         studio_db.clone(),
     ));
     let plugin_runtime = Arc::new(crate::plugin_runtime::PluginRuntime::new());
-    let _ = plugin_runtime.refresh_from_opencode_config_layers(None).await;
+    let _ = plugin_runtime
+        .refresh_from_opencode_config_layers(None)
+        .await;
     let session_activity = crate::session_activity::SessionActivityManager::new();
     let directory_session_index =
         crate::directory_session_index::DirectorySessionIndexManager::new();
@@ -1004,7 +1004,10 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
     );
     let studio_api_routes = fs_router()
         .route("/api/fs/upload", post(crate::fs::fs_upload))
-        .route("/api/config/reload", post(crate::config::config_reload_post))
+        .route(
+            "/api/config/reload",
+            post(crate::config::config_reload_post),
+        )
         .route(
             "/api/config/settings",
             get(crate::config::config_settings_get).put(crate::config::config_settings_put),
@@ -1013,7 +1016,10 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             "/api/provider/{provider_id}/source",
             get(crate::providers::provider_source_get),
         )
-        .route("/api/provider/env/check", post(crate::providers::env_check_post))
+        .route(
+            "/api/provider/env/check",
+            post(crate::providers::env_check_post),
+        )
         .route(
             "/api/config/settings/events",
             get(crate::settings_events::config_settings_events),
@@ -1039,10 +1045,22 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             "/api/plugins/{plugin_id}/assets/{*asset_path}",
             get(crate::plugin_runtime::plugin_asset_get),
         )
-        .route("/api/event", get(crate::opencode_proxy::proxy_opencode_sse_event))
-        .route("/api/global/event", get(crate::global_sse_hub::global_event_sse))
-        .route("/api/global/ws", get(crate::global_sse_hub::global_event_ws))
-        .route("/api/chat-sidebar/state", get(crate::chat_sidebar::chat_sidebar_state))
+        .route(
+            "/api/event",
+            get(crate::opencode_proxy::proxy_opencode_sse_event),
+        )
+        .route(
+            "/api/global/event",
+            get(crate::global_sse_hub::global_event_sse),
+        )
+        .route(
+            "/api/global/ws",
+            get(crate::global_sse_hub::global_event_ws),
+        )
+        .route(
+            "/api/chat-sidebar/state",
+            get(crate::chat_sidebar::chat_sidebar_state),
+        )
         .route(
             "/api/chat-sidebar/commands",
             post(crate::chat_sidebar::chat_sidebar_commands_post),
@@ -1059,7 +1077,10 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             "/api/sessions/summaries",
             get(crate::chat_sidebar::sessions_summaries_get),
         )
-        .route("/api/directories", get(crate::chat_sidebar::directories_get))
+        .route(
+            "/api/directories",
+            get(crate::chat_sidebar::directories_get),
+        )
         .route(
             "/api/directories/{directory_id}/sessions",
             get(crate::chat_sidebar::directory_sessions_by_id_get),
@@ -1088,7 +1109,10 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         )
         .route("/api/lsp", get(crate::opencode_proxy::lsp_list))
         .route("/api/mcp", get(crate::opencode_proxy::mcp_status))
-        .route("/api/permission", get(crate::opencode_proxy::permission_list))
+        .route(
+            "/api/permission",
+            get(crate::opencode_proxy::permission_list),
+        )
         .route("/api/question", get(crate::opencode_proxy::question_list))
         .route(
             "/api/workspace/preview",
@@ -1162,7 +1186,10 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             "/api/git/commit-file-content",
             get(crate::git::git_commit_file_content),
         )
-        .route("/api/git/conflicts/file", get(crate::git::git_conflict_file))
+        .route(
+            "/api/git/conflicts/file",
+            get(crate::git::git_conflict_file),
+        )
         .route(
             "/api/git/conflicts/resolve",
             post(crate::git::git_conflict_resolve),
@@ -1209,7 +1236,10 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         .route("/api/git/stash/apply", post(crate::git::git_stash_apply))
         .route("/api/git/stash/pop", post(crate::git::git_stash_pop))
         .route("/api/git/stash/drop", post(crate::git::git_stash_drop))
-        .route("/api/git/stash/drop-all", post(crate::git::git_stash_drop_all))
+        .route(
+            "/api/git/stash/drop-all",
+            post(crate::git::git_stash_drop_all),
+        )
         .route("/api/git/stash/branch", post(crate::git::git_stash_branch))
         .route(
             "/api/git/rebase/continue",
@@ -1235,7 +1265,10 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             post(crate::git::git_revert_continue),
         )
         .route("/api/git/revert/skip", post(crate::git::git_revert_skip))
-        .route("/api/git/revert-commit", post(crate::git::git_revert_commit))
+        .route(
+            "/api/git/revert-commit",
+            post(crate::git::git_revert_commit),
+        )
         .route("/api/git/merge", post(crate::git::git_merge))
         .route("/api/git/rebase", post(crate::git::git_rebase))
         .route(
@@ -1594,9 +1627,11 @@ include_global = true
             .expect("runtime should build");
 
         let studio_db = Arc::new(
-            crate::studio_db::StudioDb::open_at_path(workspace.path().join(".agena-studio-test.db"))
-                .await
-                .expect("studio db should open"),
+            crate::studio_db::StudioDb::open_at_path(
+                workspace.path().join(".agena-studio-test.db"),
+            )
+            .await
+            .expect("studio db should open"),
         );
         let workspace_preview_registry = Arc::new(
             crate::workspace_preview_registry::WorkspacePreviewRegistry::new(studio_db.clone()),
@@ -1696,9 +1731,11 @@ enabled = true
             .expect("runtime should build");
 
         let studio_db = Arc::new(
-            crate::studio_db::StudioDb::open_at_path(workspace.path().join(".agena-studio-test.db"))
-                .await
-                .expect("studio db should open"),
+            crate::studio_db::StudioDb::open_at_path(
+                workspace.path().join(".agena-studio-test.db"),
+            )
+            .await
+            .expect("studio db should open"),
         );
         let workspace_preview_registry = Arc::new(
             crate::workspace_preview_registry::WorkspacePreviewRegistry::new(studio_db.clone()),
@@ -1782,9 +1819,12 @@ enabled = true
                 .await
                 .expect("json parent directory should exist");
         }
-        tokio::fs::write(path, serde_json::to_vec_pretty(value).expect("json should encode"))
-            .await
-            .expect("json file should write");
+        tokio::fs::write(
+            path,
+            serde_json::to_vec_pretty(value).expect("json should encode"),
+        )
+        .await
+        .expect("json file should write");
     }
 
     fn opencode_storage_root(home: &Path) -> PathBuf {
@@ -1877,7 +1917,6 @@ enabled = true
         }
     }
 
-
     #[test]
     fn normalize_origin_str_accepts_http_and_https_origins() {
         assert_eq!(
@@ -1967,11 +2006,11 @@ enabled = true
                 .as_array()
                 .is_some_and(|values| values.iter().any(|value| value == "PATH"))
         );
-        assert!(
-            payload["missing"].as_array().is_some_and(|values| values
+        assert!(payload["missing"].as_array().is_some_and(|values| {
+            values
                 .iter()
-                .any(|value| value == "AGENA_STUDIO_COMPAT_MISSING_ENV"))
-        );
+                .any(|value| value == "AGENA_STUDIO_COMPAT_MISSING_ENV")
+        }));
         assert!(
             !payload["present"]
                 .as_array()
@@ -1990,7 +2029,10 @@ enabled = true
     async fn compat_config_reload_returns_success_shape() {
         let (state, _db, _config, _workspace) = compat_test_app_state().await;
         let router = Router::new()
-            .route("/api/config/reload", post(crate::config::config_reload_post))
+            .route(
+                "/api/config/reload",
+                post(crate::config::config_reload_post),
+            )
             .with_state(state.clone());
 
         let response = router
@@ -2356,7 +2398,10 @@ enabled = true
         };
 
         let router = Router::new()
-            .route("/api/directories", get(crate::chat_sidebar::directories_get))
+            .route(
+                "/api/directories",
+                get(crate::chat_sidebar::directories_get),
+            )
             .with_state(state.clone());
         let response = router
             .oneshot(
@@ -2858,10 +2903,11 @@ enabled = true
             .expect("response should include files");
         assert_eq!(files[0]["relativePath"], json!("src/app.ts"));
         assert_eq!(files[1]["relativePath"], json!("src/app.test.ts"));
-        assert!(
-            files.iter()
-                .all(|file| file["path"].as_str().is_some_and(|path| !path.contains("node_modules")))
-        );
+        assert!(files.iter().all(|file| {
+            file["path"]
+                .as_str()
+                .is_some_and(|path| !path.contains("node_modules"))
+        }));
     }
 
     #[tokio::test]
@@ -3011,8 +3057,14 @@ enabled = true
         assert_eq!(payload.get("scope").and_then(Value::as_str), Some("staged"));
         assert_eq!(payload.get("totalFiles").and_then(Value::as_u64), Some(4));
         assert_eq!(payload.get("stagedCount").and_then(Value::as_u64), Some(2));
-        assert_eq!(payload.get("unstagedCount").and_then(Value::as_u64), Some(2));
-        assert_eq!(payload.get("untrackedCount").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            payload.get("unstagedCount").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload.get("untrackedCount").and_then(Value::as_u64),
+            Some(1)
+        );
         assert_eq!(payload.get("mergeCount").and_then(Value::as_u64), Some(0));
         assert_eq!(payload.get("offset").and_then(Value::as_u64), Some(0));
         assert_eq!(payload.get("limit").and_then(Value::as_u64), Some(1));
@@ -3022,9 +3074,15 @@ enabled = true
             .and_then(Value::as_array)
             .expect("files should be present");
         assert_eq!(files.len(), 1);
-        assert_eq!(files[0].get("path").and_then(Value::as_str), Some("mixed.txt"));
+        assert_eq!(
+            files[0].get("path").and_then(Value::as_str),
+            Some("mixed.txt")
+        );
         assert_eq!(files[0].get("index").and_then(Value::as_str), Some("M"));
-        assert_eq!(files[0].get("workingDir").and_then(Value::as_str), Some("M"));
+        assert_eq!(
+            files[0].get("workingDir").and_then(Value::as_str),
+            Some("M")
+        );
         assert!(payload.get("diffStats").is_none());
 
         state.runtime.shutdown();
@@ -3055,9 +3113,11 @@ enabled = true
         seed_opencode_session_summary(&home, "global", "ses_other", &other_root, "other", 30.0)
             .await;
 
-        let state =
-            crate::test_support::build_test_app_state(&workspace_root, crate::settings::Settings::default())
-                .await;
+        let state = crate::test_support::build_test_app_state(
+            &workspace_root,
+            crate::settings::Settings::default(),
+        )
+        .await;
         let workspace_directory = workspace_root.display().to_string();
         let directory = urlencoding::encode(&workspace_directory);
         let router = Router::new()
@@ -3128,7 +3188,8 @@ enabled = true
             }],
             ..Default::default()
         };
-        let (state, _db, _config, workspace) = test_app_state_with_opencode_port(port, settings).await;
+        let (state, _db, _config, workspace) =
+            test_app_state_with_opencode_port(port, settings).await;
         let workspace_path = workspace.path().display().to_string();
         *state.settings.write().await = crate::settings::Settings {
             projects: vec![crate::settings::Project {
@@ -3139,11 +3200,13 @@ enabled = true
             }],
             ..Default::default()
         };
-        state.directory_session_index.upsert_summary_from_value(&json!({
-            "id": "ses_locate_1",
-            "directory": workspace_path,
-            "time": { "updated": 0.0 }
-        }));
+        state
+            .directory_session_index
+            .upsert_summary_from_value(&json!({
+                "id": "ses_locate_1",
+                "directory": workspace_path,
+                "time": { "updated": 0.0 }
+            }));
         state
             .opencode
             .ensure_ready(std::time::Duration::from_secs(2))
@@ -3282,7 +3345,10 @@ enabled = true
         let captured = captured.lock().expect("capture mutex");
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].0, directory);
-        assert_eq!(captured[0].1, json!({ "title": "created direct" }).to_string());
+        assert_eq!(
+            captured[0].1,
+            json!({ "title": "created direct" }).to_string()
+        );
 
         state.runtime.shutdown();
         handle.abort();
@@ -3469,13 +3535,18 @@ enabled = true
             .await
             .expect("mock opencode should be ready");
 
-        state.directory_session_index.upsert_summary_from_value(&json!({
-            "id": "ses_delete_1",
-            "directory": workspace.path().display().to_string(),
-            "time": { "updated": 1.0 }
-        }));
+        state
+            .directory_session_index
+            .upsert_summary_from_value(&json!({
+                "id": "ses_delete_1",
+                "directory": workspace.path().display().to_string(),
+                "time": { "updated": 1.0 }
+            }));
         assert!(
-            state.directory_session_index.summary("ses_delete_1").is_some(),
+            state
+                .directory_session_index
+                .summary("ses_delete_1")
+                .is_some(),
             "delete target should be indexed before proxy delete"
         );
 
@@ -3508,7 +3579,10 @@ enabled = true
                 .to_bytes(),
         )
         .expect("response should be valid json");
-        assert_eq!(patch_payload.get("id").and_then(Value::as_str), Some("ses_patch_1"));
+        assert_eq!(
+            patch_payload.get("id").and_then(Value::as_str),
+            Some("ses_patch_1")
+        );
         assert_eq!(
             patch_payload.get("title").and_then(Value::as_str),
             Some("after rename")
@@ -3551,8 +3625,17 @@ enabled = true
             delete_payload.get("title").and_then(Value::as_str),
             Some("delete proxied")
         );
-        assert!(state.directory_session_index.summary("ses_delete_1").is_none());
-        assert!(state.directory_session_index.is_recently_deleted("ses_delete_1"));
+        assert!(
+            state
+                .directory_session_index
+                .summary("ses_delete_1")
+                .is_none()
+        );
+        assert!(
+            state
+                .directory_session_index
+                .is_recently_deleted("ses_delete_1")
+        );
 
         let share_response = router
             .clone()
@@ -3575,7 +3658,10 @@ enabled = true
                 .to_bytes(),
         )
         .expect("response should be valid json");
-        assert_eq!(share_payload.get("id").and_then(Value::as_str), Some("ses_share_1"));
+        assert_eq!(
+            share_payload.get("id").and_then(Value::as_str),
+            Some("ses_share_1")
+        );
         assert_eq!(
             share_payload
                 .get("share")
@@ -3583,7 +3669,12 @@ enabled = true
                 .and_then(Value::as_str),
             Some("https://example.com/share")
         );
-        assert!(share_payload.get("share").and_then(|value| value.get("other")).is_none());
+        assert!(
+            share_payload
+                .get("share")
+                .and_then(|value| value.get("other"))
+                .is_none()
+        );
 
         let unshare_response = router
             .clone()
@@ -3634,7 +3725,10 @@ enabled = true
                 .to_bytes(),
         )
         .expect("response should be valid json");
-        assert_eq!(fork_payload.get("id").and_then(Value::as_str), Some("ses_fork_1"));
+        assert_eq!(
+            fork_payload.get("id").and_then(Value::as_str),
+            Some("ses_fork_1")
+        );
         assert_eq!(
             fork_payload.get("parentID").and_then(Value::as_str),
             Some("ses_parent_1")
@@ -3742,7 +3836,10 @@ enabled = true
                       body: String| {
                     let captured = captured_for_server.clone();
                     async move {
-                        captured.lock().expect("capture mutex").push((session_id, body));
+                        captured
+                            .lock()
+                            .expect("capture mutex")
+                            .push((session_id, body));
                         Json(json!({
                             "ok": true,
                             "queued": true,
@@ -3865,9 +3962,11 @@ enabled = true
         )
         .await;
 
-        let state =
-            crate::test_support::build_test_app_state(&workspace_root, crate::settings::Settings::default())
-                .await;
+        let state = crate::test_support::build_test_app_state(
+            &workspace_root,
+            crate::settings::Settings::default(),
+        )
+        .await;
         let router = Router::new()
             .route(
                 "/api/{*path}",
@@ -3901,13 +4000,19 @@ enabled = true
         assert_eq!(page_payload.get("total").and_then(Value::as_u64), Some(2));
         assert_eq!(page_payload.get("offset").and_then(Value::as_u64), Some(0));
         assert_eq!(page_payload.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(page_payload.get("hasMore").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            page_payload.get("hasMore").and_then(Value::as_bool),
+            Some(true)
+        );
         let items = page_payload
             .get("items")
             .and_then(Value::as_array)
             .expect("items should be present");
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].get("file").and_then(Value::as_str), Some("src/new.ts"));
+        assert_eq!(
+            items[0].get("file").and_then(Value::as_str),
+            Some("src/new.ts")
+        );
         assert_eq!(items[0].get("additions").and_then(Value::as_u64), Some(1));
         assert_eq!(items[0].get("deletions").and_then(Value::as_u64), Some(1));
 
@@ -3960,7 +4065,10 @@ enabled = true
             .upsert_runtime_status("ses_local_1", "idle");
 
         let router = Router::new()
-            .route("/api/session/status", get(crate::opencode_proxy::session_status_get))
+            .route(
+                "/api/session/status",
+                get(crate::opencode_proxy::session_status_get),
+            )
             .with_state(state.clone());
         let response = router
             .oneshot(
@@ -4103,9 +4211,11 @@ enabled = true
         )
         .await;
 
-        let state =
-            crate::test_support::build_test_app_state(&workspace_root, crate::settings::Settings::default())
-                .await;
+        let state = crate::test_support::build_test_app_state(
+            &workspace_root,
+            crate::settings::Settings::default(),
+        )
+        .await;
 
         let router = Router::new()
             .route(
@@ -4348,7 +4458,10 @@ enabled = true
             get_payload.get("sessionId").and_then(Value::as_str),
             Some(session_id.as_str())
         );
-        assert_eq!(get_payload.get("cwd").and_then(Value::as_str), Some(cwd.as_str()));
+        assert_eq!(
+            get_payload.get("cwd").and_then(Value::as_str),
+            Some(cwd.as_str())
+        );
 
         let delete_response = router
             .oneshot(
@@ -4370,7 +4483,10 @@ enabled = true
                 .to_bytes(),
         )
         .expect("response should be valid json");
-        assert_eq!(delete_payload.get("success").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            delete_payload.get("success").and_then(Value::as_bool),
+            Some(true)
+        );
 
         state.runtime.shutdown();
     }
@@ -4422,8 +4538,14 @@ enabled = true
         assert_eq!(payload.get("scope").and_then(Value::as_str), Some("all"));
         assert_eq!(payload.get("totalFiles").and_then(Value::as_u64), Some(2));
         assert_eq!(payload.get("stagedCount").and_then(Value::as_u64), Some(0));
-        assert_eq!(payload.get("unstagedCount").and_then(Value::as_u64), Some(1));
-        assert_eq!(payload.get("untrackedCount").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            payload.get("unstagedCount").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            payload.get("untrackedCount").and_then(Value::as_u64),
+            Some(1)
+        );
         assert_eq!(payload.get("mergeCount").and_then(Value::as_u64), Some(0));
         let files = payload
             .get("files")
@@ -4556,7 +4678,10 @@ enabled = true
         assert_eq!(content_payload["exists"], json!(true));
         assert_eq!(content_payload["binary"], json!(false));
         assert_eq!(content_payload["truncated"], json!(false));
-        assert_eq!(content_payload["content"], json!("alpha\nbeta changed\ncharlie\n"));
+        assert_eq!(
+            content_payload["content"],
+            json!("alpha\nbeta changed\ncharlie\n")
+        );
 
         let missing_response = router
             .oneshot(
@@ -4622,7 +4747,10 @@ enabled = true
         let directory_value = repo.display().to_string();
         let directory = urlencoding::encode(&directory_value);
         let router = Router::new()
-            .route("/api/git/conflicts/file", get(crate::git::git_conflict_file))
+            .route(
+                "/api/git/conflicts/file",
+                get(crate::git::git_conflict_file),
+            )
             .route(
                 "/api/git/conflicts/resolve",
                 post(crate::git::git_conflict_resolve),
@@ -4753,7 +4881,9 @@ enabled = true
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/git/blame?directory={directory}&path=notes.txt"))
+                    .uri(format!(
+                        "/api/git/blame?directory={directory}&path=notes.txt"
+                    ))
                     .body(Body::empty())
                     .expect("request should build"),
             )

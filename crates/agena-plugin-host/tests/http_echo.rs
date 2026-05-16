@@ -47,13 +47,13 @@ impl Plugin for EchoHttpPlugin {
                     | HookSubscription::TOOL_INVOKE_STREAM
                     | HookSubscription::SHELL_ENV,
             )
-            .entry(
-                PluginEntryDecl::new(
+            .tool(
+                PluginToolDecl::new(
                     "echo",
                     json!({"type":"object","properties":{"text":{"type":"string"}}}),
                 )
                 .description("Echo via HTTP.")
-                .streaming(EntryStreamingMode::Streaming),
+                .streaming(ToolStreamingMode::Streaming),
             )
             .build()
     }
@@ -286,7 +286,7 @@ async fn http_transport_round_trip_via_plugin_host() {
     let resolved = host.lookup_entry("echo").expect("tool exposed");
     let out = host
         .invoke_tool(
-            &resolved.handle,
+            &resolved,
             ToolInvokeInput {
                 tool_name: "echo".into(),
                 session_id: 7,
@@ -340,7 +340,7 @@ async fn http_transport_streams_via_callbacks() {
     let resolved = host.lookup_entry("echo").expect("tool exposed");
     let mut stream = host
         .invoke_tool_stream(
-            &resolved.handle,
+            &resolved,
             ToolInvokeInput {
                 tool_name: "echo".into(),
                 session_id: 9,
@@ -397,7 +397,7 @@ async fn http_transport_streams_via_callbacks() {
     );
     assert!(
         observations.saw_expected_entry_name,
-        "expected callback context to preserve entry name"
+        "expected callback context to preserve tool name"
     );
     assert!(
         observations

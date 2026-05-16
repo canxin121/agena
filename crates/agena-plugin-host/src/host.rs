@@ -1,6 +1,6 @@
 //! `PluginHost` — the central handle agena holds. Owns:
 //! - the loaded plugins,
-//! - the plugin entry registry,
+//! - the plugin tool registry,
 //! - the dedicated tokio runtime that drives plugin transports,
 //! - the host-callback router used by stdio/http plugins.
 
@@ -50,10 +50,10 @@ use crate::sdk::{
     ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput, ChatMessagesTransformPatch,
     ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
-    CommandBeforeResponse, ConfigInput, ConfigPatch, EntryDefinitionInput, EntryDefinitionPatch,
+    CommandBeforeResponse, ConfigInput, ConfigPatch, ToolDefinitionInput, ToolDefinitionPatch,
     EventEnvelope, EventFilter, HookSubscription, HostCapability, NotificationInput,
     PermissionAdvice, PermissionAskDecision, PermissionAskInput, PermissionDecision,
-    PluginEntryDecl, PluginError, PluginErrorCode, PluginManifest, PostTurnInput, PreTurnInput,
+    PluginError, PluginErrorCode, PluginManifest, PostTurnInput, PreTurnInput,
     ProviderListInput, ProviderListPatch, SessionCompactedInput, SessionCompactingInput,
     SessionCompactingPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
     ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
@@ -146,8 +146,7 @@ impl LoadedPlugin {
 
     pub fn entry_name_for_tool(&self, tool_name: &str) -> Option<String> {
         self.manifest.entries.iter().find_map(|entry| {
-            (entry.name == tool_name || entry.expose_as.as_deref() == Some(tool_name))
-                .then(|| entry.name.clone())
+            (entry.name == tool_name).then(|| entry.name.clone())
         })
     }
 }
@@ -199,21 +198,6 @@ where
             .join()
             .expect("plugin host fallback runtime thread panicked")
     })
-}
-
-/// Opaque handle returned by `PluginHost::lookup_entry`. Pass it to
-/// `invoke_tool` to actually call the plugin entry.
-#[derive(Debug, Clone)]
-pub struct PluginEntryHandle {
-    pub plugin_id: String,
-    pub original_name: String,
-    pub exposed_name: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct PluginEntryResolution {
-    pub handle: PluginEntryHandle,
-    pub decl: PluginEntryDecl,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -291,7 +275,7 @@ pub struct PluginHost {
 
 impl PluginHost {
     pub fn new_empty() -> Arc<Self> {
-        let entries = Arc::new(RwLock::new(PluginEntryRegistry::new(Vec::<String>::new())));
+        let entries = Arc::new(RwLock::new(PluginEntryRegistry::new()));
         let statuses = Arc::new(crate::status::StatusRegistry::new());
         let logs = Arc::new(PluginLogStore::default());
         let host_handle = Arc::new(HostHandle::new_with_components(
@@ -331,19 +315,12 @@ impl PluginHost {
         (self.plugins.len(), by_kind)
     }
 
-    pub fn lookup_entry(&self, exposed_name: &str) -> Option<PluginEntryResolution> {
+    pub fn lookup_entry(&self, exposed_name: &str) -> Option<RegistryPluginEntry> {
         self.entries
             .read()
             .ok()?
             .lookup(exposed_name)
-            .map(|entry| PluginEntryResolution {
-                handle: PluginEntryHandle {
-                    plugin_id: entry.plugin_name.clone(),
-                    original_name: entry.original_name.clone(),
-                    exposed_name: entry.exposed_name.clone(),
-                },
-                decl: entry.decl.clone(),
-            })
+            .cloned()
     }
 
     pub fn entry_entries(&self) -> Vec<RegistryPluginEntry> {
@@ -561,23 +538,23 @@ impl PluginHost {
 
     pub fn invoke_tool(
         &self,
-        handle: &PluginEntryHandle,
+        entry: &RegistryPluginEntry,
         input: ToolInvokeInput,
     ) -> Result<ToolInvokeOutput, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&handle.plugin_id)
+            .get(&entry.plugin_name)
             .cloned()
-            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id)))?;
+            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name)))?;
         let timeout = self.timeouts.tool_invoke_or(Duration::from_secs(300));
         let mut input = input;
         // ensure tool name is the plugin-original name (in case caller passed exposed)
-        input.tool_name = handle.original_name.clone();
+        input.tool_name = entry.original_name.clone();
         let session_id = input.session_id;
         let call_id = input.call_id;
         let workspace_root = input.workspace_root.clone();
-        let plugin_id = handle.plugin_id.clone();
-        let entry_name = handle.original_name.clone();
+        let plugin_id = entry.plugin_name.clone();
+        let entry_name = entry.original_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let result = self.block_on_static(async move {
@@ -599,21 +576,21 @@ impl PluginHost {
 
     pub fn dispatch_tool_permission_paths(
         &self,
-        handle: &PluginEntryHandle,
+        entry: &RegistryPluginEntry,
         input: ToolPermissionPathsInput,
     ) -> Result<Vec<crate::sdk::PathRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&handle.plugin_id)
+            .get(&entry.plugin_name)
             .cloned()
-            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id)))?;
+            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name)))?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let mut input = input;
-        input.tool_name = handle.original_name.clone();
+        input.tool_name = entry.original_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let plugin_id = handle.plugin_id.clone();
-        let entry_name = handle.original_name.clone();
+        let plugin_id = entry.plugin_name.clone();
+        let entry_name = entry.original_name.clone();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
             host_api::with_host_callback_context(
@@ -633,21 +610,21 @@ impl PluginHost {
 
     pub fn dispatch_tool_permission_networks(
         &self,
-        handle: &PluginEntryHandle,
+        entry: &RegistryPluginEntry,
         input: ToolPermissionNetworksInput,
     ) -> Result<Vec<crate::sdk::NetworkRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&handle.plugin_id)
+            .get(&entry.plugin_name)
             .cloned()
-            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id)))?;
+            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name)))?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let mut input = input;
-        input.tool_name = handle.original_name.clone();
+        input.tool_name = entry.original_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let plugin_id = handle.plugin_id.clone();
-        let entry_name = handle.original_name.clone();
+        let plugin_id = entry.plugin_name.clone();
+        let entry_name = entry.original_name.clone();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
             host_api::with_host_callback_context(
@@ -677,16 +654,16 @@ impl PluginHost {
     /// `tool_invoke` response.
     pub async fn invoke_tool_stream(
         &self,
-        handle: &PluginEntryHandle,
+        entry: &RegistryPluginEntry,
         input: ToolInvokeInput,
     ) -> Result<ToolInvokeStream, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&handle.plugin_id)
+            .get(&entry.plugin_name)
             .cloned()
-            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", handle.plugin_id)))?;
+            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name)))?;
         let mut input = input;
-        input.tool_name = handle.original_name.clone();
+        input.tool_name = entry.original_name.clone();
 
         let context = tool_hook_context(
             &plugin,
@@ -1327,10 +1304,10 @@ impl PluginHost {
 
     pub async fn dispatch_tool_definition(
         &self,
-        input: EntryDefinitionInput,
-    ) -> Result<EntryDefinitionInput, PluginError> {
+        input: ToolDefinitionInput,
+    ) -> Result<ToolDefinitionInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
-        dispatcher::chain_patch_with_context::<EntryDefinitionInput, EntryDefinitionPatch, _, _>(
+        dispatcher::chain_patch_with_context::<ToolDefinitionInput, ToolDefinitionPatch, _, _>(
             &self.plugins,
             method::HOOK_TOOL_DEFINITION,
             HookSubscription::TOOL_DEFINITION,
@@ -1360,8 +1337,8 @@ impl PluginHost {
 
     pub fn dispatch_tool_definition_blocking(
         &self,
-        input: EntryDefinitionInput,
-    ) -> Result<EntryDefinitionInput, PluginError> {
+        input: ToolDefinitionInput,
+    ) -> Result<ToolDefinitionInput, PluginError> {
         self.block_on(self.dispatch_tool_definition(input))
     }
 
@@ -1565,7 +1542,6 @@ pub struct PluginHostBuilder {
     config: PluginsConfig,
     workspace_root: PathBuf,
     agena_version: String,
-    builtin_tool_names: Vec<String>,
     callback_base_url: Option<String>,
     host_client: Option<Arc<dyn HostClient>>,
     /// Optional previous host: for any entry whose config is byte-identical
@@ -1581,7 +1557,6 @@ impl PluginHostBuilder {
             config: PluginsConfig::default(),
             workspace_root: workspace_root.into(),
             agena_version: agena_version.into(),
-            builtin_tool_names: Vec::new(),
             callback_base_url: None,
             host_client: None,
             previous: None,
@@ -1591,11 +1566,6 @@ impl PluginHostBuilder {
 
     pub fn with_config(mut self, config: PluginsConfig) -> Self {
         self.config = config;
-        self
-    }
-
-    pub fn with_builtin_tools(mut self, names: impl IntoIterator<Item = String>) -> Self {
-        self.builtin_tool_names = names.into_iter().collect();
         self
     }
 
@@ -1659,9 +1629,7 @@ impl PluginHostBuilder {
         }
 
         let host_inner = self.host_client.unwrap_or_else(|| Arc::new(NoopHostClient));
-        let entries_shared = Arc::new(RwLock::new(PluginEntryRegistry::new(
-            self.builtin_tool_names,
-        )));
+        let entries_shared = Arc::new(RwLock::new(PluginEntryRegistry::new()));
         let plugin_indices: Arc<RwLock<HashMap<String, usize>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let statuses_shared = Arc::new(crate::status::StatusRegistry::new());
@@ -1747,7 +1715,7 @@ impl PluginHostBuilder {
                         message: e.to_string(),
                     })?;
                 if let Ok(mut reg) = entries_shared.write() {
-                    reg.extend_from_plugin(idx, &reused.id, &reused.manifest.entries);
+                    reg.extend_from_plugin(&reused.id, &reused.manifest.entries);
                 }
                 host_handle
                     .set_plugin_capabilities(
@@ -1793,7 +1761,7 @@ impl PluginHostBuilder {
                 Ok(plugin) => {
                     let plugin = Arc::new(plugin);
                     if let Ok(mut reg) = entries_shared.write() {
-                        reg.extend_from_plugin(idx, &plugin.id, &plugin.manifest.entries);
+                        reg.extend_from_plugin(&plugin.id, &plugin.manifest.entries);
                     }
                     host_handle
                         .set_plugin_capabilities(
@@ -1897,7 +1865,7 @@ impl HostHandle {
     pub fn new(inner: Arc<dyn HostClient>) -> Self {
         Self::new_with_registry(
             inner,
-            Arc::new(RwLock::new(PluginEntryRegistry::new(Vec::<String>::new()))),
+            Arc::new(RwLock::new(PluginEntryRegistry::new())),
             Arc::new(RwLock::new(HashMap::new())),
         )
     }
@@ -3114,20 +3082,23 @@ impl HostHandle {
     fn entry_upsert_for_plugin(
         &self,
         plugin_id: &str,
-        decl: crate::sdk::PluginEntryDecl,
+        decl: crate::sdk::PluginToolDecl,
     ) -> Result<HostEntryMutationResponse, PluginError> {
-        let plugin_index = self
+        let registered = self
             .plugin_indices
             .read()
             .map_err(|_| host_unavailable("plugin index lock poisoned"))?
-            .get(plugin_id)
-            .copied()
-            .ok_or_else(|| host_unavailable(format!("plugin `{plugin_id}` is not registered")))?;
+            .contains_key(plugin_id);
+        if !registered {
+            return Err(host_unavailable(format!(
+                "plugin `{plugin_id}` is not registered"
+            )));
+        }
         let mut entries = self
             .entries
             .write()
-            .map_err(|_| host_unavailable("entry registry lock poisoned"))?;
-        let entry = entries.upsert_from_plugin(plugin_index, plugin_id, decl);
+            .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
+        let entry = entries.upsert_from_plugin(plugin_id, decl);
         Ok(HostEntryMutationResponse {
             generation: entries.generation(),
             exposed_name: Some(entry.exposed_name.clone()),
@@ -3144,7 +3115,7 @@ impl HostHandle {
         let mut entries = self
             .entries
             .write()
-            .map_err(|_| host_unavailable("entry registry lock poisoned"))?;
+            .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
         let removed = if exposed {
             entries.remove_exposed_from_plugin(plugin_id, name)
         } else {
@@ -3161,7 +3132,7 @@ impl HostHandle {
         let snapshot = self
             .entries
             .read()
-            .map_err(|_| host_unavailable("entry registry lock poisoned"))?
+            .map_err(|_| host_unavailable("tool registry lock poisoned"))?
             .snapshot();
         let entries = snapshot
             .entries

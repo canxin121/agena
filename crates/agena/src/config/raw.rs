@@ -74,7 +74,7 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
     for field in ["memory", "mcp", "lsp", "web", "hooks"] {
         if table.contains_key(field) {
             return Err(ConfigError::Validation(format!(
-                "`{field}` must be configured as first-party plugin options under `[plugins.list.\"agena.{field}\".options]`"
+                "`{field}` must be configured as plugin options under `[plugins.list.\"agena.{field}\".options]`"
             )));
         }
     }
@@ -390,12 +390,6 @@ impl PluginRuntimeOptions {
     fn from_plugins(plugins: &PluginConfig) -> Result<Self, ConfigError> {
         let mut out = Self::default();
         for (plugin_id, entry) in &plugins.list {
-            if matches!(
-                plugin_id.as_str(),
-                "agena.memory" | "agena.hooks" | "agena.mcp" | "agena.lsp" | "agena.web"
-            ) {
-                ensure_first_party_static_plugin(plugin_id, entry)?;
-            }
             let options = entry.options();
             if options.is_null() {
                 continue;
@@ -425,19 +419,6 @@ impl PluginRuntimeOptions {
     }
 }
 
-fn ensure_first_party_static_plugin(
-    plugin_id: &str,
-    entry: &agena_plugin_host::PluginEntry,
-) -> Result<(), ConfigError> {
-    if matches!(entry, agena_plugin_host::PluginEntry::Static { .. }) {
-        Ok(())
-    } else {
-        Err(ConfigError::Validation(format!(
-            "plugins.list.{plugin_id} is registered by the runtime and must use `kind = \"static\"`"
-        )))
-    }
-}
-
 fn parse_plugin_options<T>(plugin_id: &str, value: serde_json::Value) -> Result<T, ConfigError>
 where
     T: serde::de::DeserializeOwned,
@@ -456,8 +437,8 @@ impl Merge for RawPluginConfig {
 
 impl Merge for PluginConfig {
     fn merge_from(&mut self, overlay: Self) {
-        // Overlay completely replaces nested plugin entries; otherwise we'd
-        // need entry-level merge logic. List entries from a more-specific
+        // Overlay completely replaces nested plugin tools; otherwise we'd
+        // need tool-level merge logic. List entries from a more-specific
         // mode override the parent.
         self.enabled = overlay.enabled;
         if !overlay.list.is_empty() {

@@ -1,5 +1,5 @@
 //! First-party in-process plugin that exposes configured MCP server capabilities
-//! as plugin entries.
+//! as plugin tools.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -16,9 +16,8 @@ use serde_json::Value;
 use crate::message::{AttachmentItem, ToolResultBlock};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    EntryBehavior as SdkEntryBehavior, HookSubscription, InitContext, InitOutcome,
-    NetworkAccessSpec, Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult,
-    ToolInvokeInput, ToolInvokeOutput,
+    HookSubscription, InitContext, InitOutcome, NetworkAccessSpec, Plugin, PluginToolDecl,
+    PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
@@ -72,7 +71,7 @@ impl Plugin for McpPlugin {
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         let target = target_from_entry_name(input.tool_name.as_str()).ok_or_else(|| {
-            PluginError::invalid_params(format!("invalid MCP plugin entry '{}'", input.tool_name))
+            PluginError::invalid_params(format!("invalid MCP plugin tool '{}'", input.tool_name))
         })?;
         match target {
             McpEntryTarget::Tool { server, tool } => {
@@ -180,9 +179,9 @@ fn manifest_from_snapshot(
         entries.extend(resource_and_prompt_entry_decls(server, network_access));
     }
     PluginManifest::builder("agena-mcp", env!("CARGO_PKG_VERSION"))
-        .description("Agena MCP bridge exposed as first-party plugin entries.")
+        .description("Agena MCP bridge exposed as bundled plugin tools.")
         .hooks(HookSubscription::TOOL_INVOKE)
-        .entries(entries)
+        .tools(entries)
         .build()
 }
 
@@ -201,37 +200,32 @@ fn tool_entry_decl(
     server: String,
     tool: ToolDescriptor,
     network_access: &BTreeMap<String, NetworkAccessSpec>,
-) -> PluginEntryDecl {
+) -> PluginToolDecl {
     let name = format!("mcp:{server}:tool:{}", tool.name);
     let schema = tool
         .input_schema
         .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
-    let entry = PluginEntryDecl::new(name, schema)
+    let entry = PluginToolDecl::new(name, schema)
         .description(tool.description.unwrap_or_default())
-        .behavior(SdkEntryBehavior::Mutating)
-        .search_terms([
-            "mcp".to_string(),
-            server.clone(),
-            "tool".to_string(),
-            tool.name,
-        ]);
+        .tags([ToolTag::Mutating, ToolTag::Mcp])
+        .concurrency_safe(false);
     apply_server_network_access(entry, &server, network_access)
 }
 
 fn resource_and_prompt_entry_decls(
     server: String,
     network_access: &BTreeMap<String, NetworkAccessSpec>,
-) -> Vec<PluginEntryDecl> {
+) -> Vec<PluginToolDecl> {
     let entries = vec![
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             format!("mcp:{server}:resources:list"),
             empty_object_schema(),
         )
         .description(format!("List MCP resources exposed by server '{server}'."))
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["mcp", server.as_str(), "resources", "list"])
+        .tags([ToolTag::ReadOnly, ToolTag::Mcp])
+        .concurrency_safe(true)
         .deferred_load(),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             format!("mcp:{server}:resources:read"),
             serde_json::json!({
                 "type": "object",
@@ -244,15 +238,15 @@ fn resource_and_prompt_entry_decls(
         .description(format!(
             "Read one MCP resource from server '{server}' by URI."
         ))
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["mcp", server.as_str(), "resource", "read"])
+        .tags([ToolTag::ReadOnly, ToolTag::Mcp])
+        .concurrency_safe(true)
         .deferred_load(),
-        PluginEntryDecl::new(format!("mcp:{server}:prompts:list"), empty_object_schema())
+        PluginToolDecl::new(format!("mcp:{server}:prompts:list"), empty_object_schema())
             .description(format!("List MCP prompts exposed by server '{server}'."))
-            .behavior(SdkEntryBehavior::ReadOnly)
-            .search_terms(["mcp", server.as_str(), "prompts", "list"])
+            .tags([ToolTag::ReadOnly, ToolTag::Mcp])
+            .concurrency_safe(true)
             .deferred_load(),
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             format!("mcp:{server}:prompts:get"),
             serde_json::json!({
                 "type": "object",
@@ -269,8 +263,8 @@ fn resource_and_prompt_entry_decls(
         .description(format!(
             "Get one MCP prompt from server '{server}' by name."
         ))
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .search_terms(["mcp", server.as_str(), "prompt", "get"])
+        .tags([ToolTag::ReadOnly, ToolTag::Mcp])
+        .concurrency_safe(true)
         .deferred_load(),
     ];
     entries
@@ -280,12 +274,12 @@ fn resource_and_prompt_entry_decls(
 }
 
 fn apply_server_network_access(
-    entry: PluginEntryDecl,
+    entry: PluginToolDecl,
     server: &str,
     network_access: &BTreeMap<String, NetworkAccessSpec>,
-) -> PluginEntryDecl {
+) -> PluginToolDecl {
     match network_access.get(server) {
-        Some(spec) => entry.network_access(spec.clone()).tag("network"),
+        Some(spec) => entry.network_access(spec.clone()).tag(ToolTag::Network),
         None => entry,
     }
 }
@@ -717,7 +711,7 @@ mod tests {
         assert_eq!(remote_entries.len(), 5);
         for entry in remote_entries {
             assert_eq!(entry.network_access, vec![network_access["remote"].clone()]);
-            assert!(entry.tags.iter().any(|tag| tag == "network"));
+            assert!(entry.tags.iter().any(|tag| tag == &ToolTag::Network));
         }
 
         let local_entries = manifest

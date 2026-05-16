@@ -1,4 +1,4 @@
-//! Shared scaffolding for first-party plugins backed by agena's in-process
+//! Shared scaffolding for bundled plugins backed by agena's in-process
 //! executor implementations.
 
 use std::cell::RefCell;
@@ -8,15 +8,15 @@ use std::sync::{LazyLock, Mutex};
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
-use crate::entry::result::FirstPartyExecution;
-use crate::entry::{FirstPartyExecutionContext, ToolExecutor, orchestrator};
+use crate::entry::result::BundledExecution;
+use crate::entry::{BundledExecutionContext, ToolExecutor, orchestrator};
 use crate::message::{
-    ApplyPatchToolInput, BashToolInput, FirstPartyToolInput, FirstPartyToolOutput, GlobToolInput,
+    ApplyPatchToolInput, BashToolInput, BundledToolInput, BundledToolOutput, GlobToolInput,
     GrepToolInput, MonitorToolInput, PowerShellToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, Plugin, PluginEntryDecl, PluginManifest,
+    HookSubscription, InitContext, InitOutcome, Plugin, PluginToolDecl, PluginManifest,
     Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
 };
 
@@ -78,7 +78,7 @@ fn current_executor(
         .lock()
         .ok()
         .and_then(|contexts| contexts.get(&key).cloned())
-        .ok_or_else(|| PluginError::new("first-party plugin invoked without executor context"))
+        .ok_or_else(|| PluginError::new("bundled plugin invoked without executor context"))
 }
 
 #[cfg(test)]
@@ -110,17 +110,17 @@ pub(crate) fn current_executor_lookup(
         .and_then(|contexts| contexts.get(&key).cloned())
 }
 
-pub(crate) struct FirstPartyRouterPlugin {
+pub(crate) struct BundledRouterPlugin {
     plugin_name: &'static str,
     description: &'static str,
-    entries: Vec<PluginEntryDecl>,
+    entries: Vec<PluginToolDecl>,
 }
 
-impl FirstPartyRouterPlugin {
+impl BundledRouterPlugin {
     pub fn new(
         plugin_name: &'static str,
         description: &'static str,
-        entries: Vec<PluginEntryDecl>,
+        entries: Vec<PluginToolDecl>,
     ) -> Self {
         Self {
             plugin_name,
@@ -131,13 +131,13 @@ impl FirstPartyRouterPlugin {
 }
 
 #[async_trait]
-impl Plugin for FirstPartyRouterPlugin {
+impl Plugin for BundledRouterPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut builder = PluginManifest::builder(self.plugin_name, env!("CARGO_PKG_VERSION"))
             .description(self.description)
             .hooks(HookSubscription::TOOL_INVOKE);
         for entry in &self.entries {
-            builder = builder.entry(entry.clone());
+            builder = builder.tool(entry.clone());
         }
         builder.build()
     }
@@ -151,7 +151,7 @@ impl Plugin for FirstPartyRouterPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        invoke_first_party_tool(
+        invoke_bundled_tool(
             &input.tool_name,
             input.input,
             input.session_id,
@@ -168,24 +168,24 @@ impl Plugin for FirstPartyRouterPlugin {
     }
 }
 
-pub(crate) fn invoke_first_party_tool(
+pub(crate) fn invoke_bundled_tool(
     tool_name: &str,
     input: JsonValue,
     session_id: i64,
     call_id: i64,
 ) -> SdkResult<ToolInvokeOutput> {
-    let first_party = parse_first_party_tool(tool_name, input)
+    let bundled = parse_bundled_tool(tool_name, input)
         .map_err(|err| PluginError::new(format!("parse {tool_name}: {err}")))?;
     let executor = current_executor(session_id, call_id, tool_name)?;
-    let context = FirstPartyExecutionContext {
+    let context = BundledExecutionContext {
         session_id: (session_id >= 0).then_some(session_id),
         call_id: (call_id >= 0).then_some(call_id),
         session_context: None,
         prepared_shell_command: None,
     };
-    let execution = orchestrator::execute_first_party(&executor, &first_party, context)
+    let execution = orchestrator::execute_bundled(&executor, &bundled, context)
         .map_err(|err| PluginError::new(format!("{tool_name}: {err}")))?;
-    Ok(first_party_to_invoke_output(execution))
+    Ok(bundled_to_invoke_output(execution))
 }
 
 pub(crate) fn permission_paths_for(
@@ -234,48 +234,48 @@ fn default_workspace_read(needs_workspace: bool) -> Vec<crate::plugin::sdk::Path
         .collect()
 }
 
-pub(crate) fn parse_first_party_tool(
+pub(crate) fn parse_bundled_tool(
     tool: &str,
     input: JsonValue,
-) -> Result<FirstPartyToolInput, serde_json::Error> {
+) -> Result<BundledToolInput, serde_json::Error> {
     Ok(match tool {
-        "bash" => FirstPartyToolInput::Bash(serde_json::from_value(input)?),
-        "read" => FirstPartyToolInput::Read(serde_json::from_value(input)?),
-        "view_file" => FirstPartyToolInput::ViewFile(serde_json::from_value(input)?),
-        "apply_patch" => FirstPartyToolInput::ApplyPatch(serde_json::from_value(input)?),
-        "glob" => FirstPartyToolInput::Glob(serde_json::from_value(input)?),
-        "grep" => FirstPartyToolInput::Grep(serde_json::from_value(input)?),
-        "task" => FirstPartyToolInput::Task(serde_json::from_value(input)?),
-        "tool_search" => FirstPartyToolInput::ToolSearch(serde_json::from_value(input)?),
-        "todo_write" => FirstPartyToolInput::TodoWrite(serde_json::from_value(input)?),
-        "ask_user" => FirstPartyToolInput::AskUser(serde_json::from_value(input)?),
-        "monitor" => FirstPartyToolInput::Monitor(serde_json::from_value(input)?),
-        "web_fetch" => FirstPartyToolInput::WebFetch(serde_json::from_value(input)?),
-        "web_search" => FirstPartyToolInput::WebSearch(serde_json::from_value(input)?),
-        "enter_plan_mode" => FirstPartyToolInput::EnterPlanMode(serde_json::from_value(input)?),
-        "exit_plan_mode" => FirstPartyToolInput::ExitPlanMode(serde_json::from_value(input)?),
-        "enter_worktree" => FirstPartyToolInput::EnterWorktree(serde_json::from_value(input)?),
-        "exit_worktree" => FirstPartyToolInput::ExitWorktree(serde_json::from_value(input)?),
-        "cron_create" => FirstPartyToolInput::CronCreate(serde_json::from_value(input)?),
-        "cron_list" => FirstPartyToolInput::CronList(serde_json::from_value(input)?),
-        "cron_delete" => FirstPartyToolInput::CronDelete(serde_json::from_value(input)?),
-        "schedule_wakeup" => FirstPartyToolInput::ScheduleWakeup(serde_json::from_value(input)?),
-        "lsp_definition" => FirstPartyToolInput::LspDefinition(serde_json::from_value(input)?),
-        "lsp_references" => FirstPartyToolInput::LspReferences(serde_json::from_value(input)?),
-        "lsp_hover" => FirstPartyToolInput::LspHover(serde_json::from_value(input)?),
-        "lsp_diagnostics" => FirstPartyToolInput::LspDiagnostics(serde_json::from_value(input)?),
-        "notebook_edit" => FirstPartyToolInput::NotebookEdit(serde_json::from_value(input)?),
-        "powershell" => FirstPartyToolInput::PowerShell(serde_json::from_value(input)?),
+        "bash" => BundledToolInput::Bash(serde_json::from_value(input)?),
+        "read" => BundledToolInput::Read(serde_json::from_value(input)?),
+        "view_file" => BundledToolInput::ViewFile(serde_json::from_value(input)?),
+        "apply_patch" => BundledToolInput::ApplyPatch(serde_json::from_value(input)?),
+        "glob" => BundledToolInput::Glob(serde_json::from_value(input)?),
+        "grep" => BundledToolInput::Grep(serde_json::from_value(input)?),
+        "task" => BundledToolInput::Task(serde_json::from_value(input)?),
+        "tool_search" => BundledToolInput::ToolSearch(serde_json::from_value(input)?),
+        "todo_write" => BundledToolInput::TodoWrite(serde_json::from_value(input)?),
+        "ask_user" => BundledToolInput::AskUser(serde_json::from_value(input)?),
+        "monitor" => BundledToolInput::Monitor(serde_json::from_value(input)?),
+        "web_fetch" => BundledToolInput::WebFetch(serde_json::from_value(input)?),
+        "web_search" => BundledToolInput::WebSearch(serde_json::from_value(input)?),
+        "enter_plan_mode" => BundledToolInput::EnterPlanMode(serde_json::from_value(input)?),
+        "exit_plan_mode" => BundledToolInput::ExitPlanMode(serde_json::from_value(input)?),
+        "enter_worktree" => BundledToolInput::EnterWorktree(serde_json::from_value(input)?),
+        "exit_worktree" => BundledToolInput::ExitWorktree(serde_json::from_value(input)?),
+        "cron_create" => BundledToolInput::CronCreate(serde_json::from_value(input)?),
+        "cron_list" => BundledToolInput::CronList(serde_json::from_value(input)?),
+        "cron_delete" => BundledToolInput::CronDelete(serde_json::from_value(input)?),
+        "schedule_wakeup" => BundledToolInput::ScheduleWakeup(serde_json::from_value(input)?),
+        "lsp_definition" => BundledToolInput::LspDefinition(serde_json::from_value(input)?),
+        "lsp_references" => BundledToolInput::LspReferences(serde_json::from_value(input)?),
+        "lsp_hover" => BundledToolInput::LspHover(serde_json::from_value(input)?),
+        "lsp_diagnostics" => BundledToolInput::LspDiagnostics(serde_json::from_value(input)?),
+        "notebook_edit" => BundledToolInput::NotebookEdit(serde_json::from_value(input)?),
+        "powershell" => BundledToolInput::PowerShell(serde_json::from_value(input)?),
         other => {
             return Err(serde::de::Error::custom(format!(
-                "unknown first-party tool `{other}`"
+                "unknown bundled tool `{other}`"
             )));
         }
     })
 }
 
-pub(crate) fn first_party_to_invoke_output(execution: FirstPartyExecution) -> ToolInvokeOutput {
-    let envelope = FirstPartyResponseEnvelope {
+pub(crate) fn bundled_to_invoke_output(execution: BundledExecution) -> ToolInvokeOutput {
+    let envelope = BundledResponseEnvelope {
         output: execution.output,
         apply_patch: execution.apply_patch,
     };
@@ -290,19 +290,19 @@ pub(crate) fn first_party_to_invoke_output(execution: FirstPartyExecution) -> To
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct FirstPartyResponseEnvelope {
-    pub output: FirstPartyToolOutput,
+pub(crate) struct BundledResponseEnvelope {
+    pub output: BundledToolOutput,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apply_patch: Option<crate::entry::apply_patch::ApplyPatchExecution>,
 }
 
-pub(crate) fn payload_to_first_party_envelope(
+pub(crate) fn payload_to_bundled_envelope(
     payload: Option<&JsonValue>,
-) -> Result<FirstPartyResponseEnvelope, serde_json::Error> {
+) -> Result<BundledResponseEnvelope, serde_json::Error> {
     match payload {
         Some(value) => serde_json::from_value(value.clone()),
         None => Err(serde::de::Error::custom(
-            "first-party plugin response missing payload",
+            "bundled plugin response missing payload",
         )),
     }
 }

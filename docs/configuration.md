@@ -20,14 +20,14 @@ agena config validate
 - `[providers.<id>]`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `[runtime]`: 默认 agent。
 - `[agents.<name>]`: 自定义 agent。
-- `[permission]`: 路径、网络、entry 权限。
+- `[permission]`: 路径、网络、tool 权限。
 
 `config.full.toml` 展示了更完整的功能面：
 
 - telemetry。
 - provider HTTP timeout、retry、stream replay。
 - runtime reload、janitor、session cache。
-- permission path/network/entry rules。
+- permission path/network/tool rules。
 - `agena.memory` project instructions。
 - `agena.hooks` shell/HTTP hooks。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
@@ -123,8 +123,8 @@ agena \
 - 顶层可选 struct 通常按字段合并。
 - map 通常按 key 合并。
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
-- `plugins` 的 `enabled` 和 `timeouts` 会被 overlay 替换；非空 plugin list 会替换嵌套 plugin entries。
-- MCP、LSP、web、memory 和 hooks 都作为 first-party static plugin 的 `options` 解析。
+- `plugins` 的 `enabled` 和 `timeouts` 会被 overlay 替换；非空 plugin list 会替换嵌套 plugin tools。
+- MCP、LSP、web、memory 和 hooks 都作为 bundled static plugin 的 `options` 解析。
 - static plugin options 的合并语义跟随对应 plugin 的配置结构，例如 server map 按名称合并，web options 整体替换。
 
 这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
@@ -782,7 +782,7 @@ IPv6 CIDR
 
 Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、`*.localhost` 和 loopback IP；`private` 匹配私有 IP、link-local IP、单段主机名，以及 `.local`、`.lan`、`.internal`、`.corp`、`.home.arpa`；其余走 `internet`。`rules` 命中时优先于这些默认策略。
 
-### Entry permission
+### Tool permission
 
 ```toml
 [permission.entries.tags]
@@ -807,9 +807,9 @@ apply_patch = "ask"
 "*" = "ask"
 ```
 
-`tags` 用于 entry 没有精确规则时的默认策略。Entry 由 plugin manifest 声明自己的 tags，常见 tags 如 `filesystem_read`、`filesystem_write`、`network`、`internet`、`task`、`shell`。`names` 按 entry 名匹配；first-party static plugin entries 和外部 plugin entries 使用同一个名字表。
+`tags` 用于 tool 没有精确规则时的默认策略。Tool 由 plugin manifest 声明自己的 tags，常见 tags 如 `filesystem_read`、`filesystem_write`、`network`、`internet`、`task`、`shell`。`names` 按 tool 名匹配；bundled static plugin tools 和外部 plugin tools 使用同一个名字表。
 
-`rules.<entry>` 可以直接写 mode，也可以写 pattern table。`bash` 的 pattern table 按命令 pattern 覆盖，`"*"` 是 fallback。其他 entry 使用直接 mode；需要 fallback 时也可以写 `rules.<entry>."*" = "ask"`。
+`rules.<tool>` 可以直接写 mode，也可以写 pattern table。`bash` 的 pattern table 按命令 pattern 覆盖，`"*"` 是 fallback。其他 tool 使用直接 mode；需要 fallback 时也可以写 `rules.<tool>."*" = "ask"`。
 
 ## Memory
 
@@ -854,7 +854,7 @@ Hook 字段：
 - `event`: hook 事件名。
 - `command`: 本地 shell command。
 - `url`: HTTP endpoint，hook input 会以 JSON POST 过去。
-- `matcher.tool`: 只匹配指定 entry/tool 名，支持 glob。
+- `matcher.tool`: 只匹配指定 tool 名，支持 glob。
 - `timeout_ms`: 单次调用超时；省略时使用 30000。
 
 支持事件：
@@ -899,7 +899,7 @@ AGENA_CWD
 
 ## Plugins
 
-Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力、LSP、skills、memory、hooks 等都会通过 plugin 或 plugin entry 接入 runtime。完整体系说明见 [Plugin 体系](plugin.md)。
+Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力、LSP、skills、memory、hooks 等都会通过 plugin 或 plugin tool 接入 runtime。完整体系说明见 [Plugin 体系](plugin.md)。
 
 ```toml
 [plugins]
@@ -942,7 +942,7 @@ timeouts = { tool_invoke = "30s" }
 
 Plugin transport kind：
 
-- `static`: 编译期注册的 first-party/static 插件。
+- `static`: 编译期注册的 bundled/static 插件。
 - `cdylib`: 本地动态库。
 - `stdio`: 子进程 JSON-RPC over stdin/stdout。
 - `http`: 远端 JSON-RPC over POST。
@@ -993,7 +993,7 @@ options = { }
 timeouts = { init = "20s" }
 ```
 
-`options` 是传给 plugin 的自由 JSON/TOML 配置；first-party static plugin 也通过 `options` 接收自己的配置。
+`options` 是传给 plugin 的自由 JSON/TOML 配置；bundled static plugin 也通过 `options` 接收自己的配置。
 
 Timeout 字段：
 
@@ -1051,14 +1051,14 @@ auth = { kind = "basic", username = "user", password = "..." }
 auth = { kind = "basic", username = "user", password_env = "PLUGIN_PASSWORD" }
 ```
 
-First-party static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、hooks、MCP 等。它们和外部 plugin 一样进入 plugin host 与 entry registry。
+First-party static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、hooks、MCP 等。它们和外部 plugin 一样进入 plugin host 与 tool registry。
 
 插件存储默认目录是 `~/.agena/plugin-storage`，可通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
 
 ## MCP
 
 MCP server 配置在 `agena.mcp` static plugin options。
-Runtime 会把配置后的 MCP servers 通过 `agena.mcp` static plugin 暴露成 plugin entries，并统一进入 plugin host 和 entry registry。
+Runtime 会把配置后的 MCP servers 通过 `agena.mcp` static plugin 暴露成 plugin tools，并统一进入 plugin host 和 tool registry。
 
 Stdio:
 
@@ -1158,7 +1158,7 @@ initialization_options
 
 `file_extensions` 不带前导 `.`；写空数组表示该 server 匹配所有文件。`root_markers` 是用于识别项目根目录的文件名列表。`initialization_options` 是传给 language server 的 JSON/TOML object。
 
-LSP registry 是 lazy-spawn 的。相关 entry 首次触及匹配文件时才会启动对应 server。
+LSP registry 是 lazy-spawn 的。相关 tool 首次触及匹配文件时才会启动对应 server。
 
 ## Web Plugin
 
@@ -1176,7 +1176,7 @@ exa_api_key = "..."
 brave_api_key = "..."
 ```
 
-`fetch_enabled` 控制 `web_fetch` entry。Search backend 省略时使用 `duck_duck_go_html`。
+`fetch_enabled` 控制 `web_fetch` tool。Search backend 省略时使用 `duck_duck_go_html`。
 
 Search backend：
 

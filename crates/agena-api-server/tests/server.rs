@@ -2057,7 +2057,7 @@ async fn permission_rule_crud_routes_expose_operator_metadata() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "subject_kind": "builtin_tool",
+                        "subject_kind": "tool",
                         "tool_name": "bash",
                         "qualifier": "git status*",
                         "scope": "global",
@@ -2094,7 +2094,7 @@ async fn permission_rule_crud_routes_expose_operator_metadata() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "subject_kind": "builtin_tool",
+                        "subject_kind": "tool",
                         "tool_name": "bash",
                         "qualifier": "git diff*",
                         "scope": "workspace",

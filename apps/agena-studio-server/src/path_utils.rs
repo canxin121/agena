@@ -9,6 +9,7 @@ fn decode_url_encoded_path_component(input: &str) -> String {
         .unwrap_or_else(|_| input.to_string())
 }
 
+#[cfg(test)]
 fn is_windows_drive_path(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() < 2 {
@@ -17,6 +18,7 @@ fn is_windows_drive_path(value: &str) -> bool {
     bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
+#[cfg(test)]
 pub(crate) fn normalize_directory_for_match(input: &str) -> Option<String> {
     let normalized = normalize_directory_path(input);
     let trimmed = normalized.trim();
@@ -92,38 +94,6 @@ pub(crate) fn data_home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-pub(crate) fn cache_home_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("XDG_CACHE_HOME") {
-        let trimmed = dir.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-
-    if cfg!(windows)
-        && let Ok(dir) = std::env::var("LOCALAPPDATA")
-    {
-        let trimmed = dir.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-
-    home_dir_path()
-        .map(|v| v.join(".cache"))
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-pub(crate) fn opencode_config_dir() -> PathBuf {
-    home_dir_path()
-        .map(|v| v.join(".config").join("opencode"))
-        .unwrap_or_else(|| PathBuf::from(".").join("opencode"))
-}
-
-pub(crate) fn opencode_data_dir() -> PathBuf {
-    data_home_dir().join("opencode")
-}
-
 pub(crate) fn normalize_directory_path(input: &str) -> String {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -166,37 +136,6 @@ pub(crate) fn normalize_directory_path(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ENV_LOCK;
-
-    struct EnvVarGuard {
-        key: String,
-        old: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &str, value: String) -> Self {
-            let old = std::env::var(key).ok();
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self {
-                key: key.to_string(),
-                old,
-            }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                if let Some(ref old) = self.old {
-                    std::env::set_var(&self.key, old);
-                } else {
-                    std::env::remove_var(&self.key);
-                }
-            }
-        }
-    }
 
     #[test]
     fn normalize_directory_path_decodes_url_encoded_windows_path() {
@@ -226,37 +165,5 @@ mod tests {
     fn normalize_directory_for_match_handles_encoded_windows_input() {
         let out = normalize_directory_for_match("C%3A%5CUsers%5CAlice%5CRepo").expect("path");
         assert_eq!(out, "c:/users/alice/repo");
-    }
-
-    #[test]
-    fn opencode_data_dir_uses_home_share_dir() {
-        let _env_lock = ENV_LOCK.lock().unwrap();
-        let tmp =
-            std::env::temp_dir().join(format!("opencode-path-utils-data-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&tmp);
-
-        let home = tmp.join("home");
-        let preferred = home.join(".local").join("share").join("opencode");
-        std::fs::create_dir_all(&preferred).unwrap();
-
-        let _home = EnvVarGuard::set("HOME", home.to_string_lossy().to_string());
-
-        assert_eq!(opencode_data_dir(), preferred);
-    }
-
-    #[test]
-    fn opencode_config_dir_uses_home_config_dir() {
-        let _env_lock = ENV_LOCK.lock().unwrap();
-        let tmp =
-            std::env::temp_dir().join(format!("opencode-path-utils-config-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&tmp);
-
-        let home = tmp.join("home");
-        let preferred = home.join(".config").join("opencode");
-        std::fs::create_dir_all(&preferred).unwrap();
-
-        let _home = EnvVarGuard::set("HOME", home.to_string_lossy().to_string());
-
-        assert_eq!(opencode_config_dir(), preferred);
     }
 }

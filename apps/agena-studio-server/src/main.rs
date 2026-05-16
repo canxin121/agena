@@ -7,28 +7,15 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod app;
 mod attachment_cache;
-mod chat_sidebar;
 mod config;
-mod directory_session_index;
-mod directory_sessions;
 mod error;
 mod fs;
-mod fs_watch;
 mod git;
 mod git2_utils;
-mod global_sse_hub;
-mod opencode;
-mod opencode_auth;
-mod opencode_config;
-mod opencode_config_model;
-mod opencode_proxy;
-mod opencode_session;
 mod path_utils;
 mod persistence_paths;
-mod plugin_runtime;
 mod providers;
 mod runtime_config;
-mod session_activity;
 mod settings;
 mod settings_events;
 mod studio_db;
@@ -70,35 +57,6 @@ pub(crate) struct Args {
     /// Enable UI session password
     #[arg(long, env = "AGENA_STUDIO_UI_PASSWORD")]
     pub(crate) ui_password: Option<String>,
-
-    /// Connect to an existing OpenCode server on this port.
-    ///
-    /// When unset, Agena Studio will try to start `opencode serve`.
-    #[arg(long, env = "OPENCODE_PORT")]
-    pub(crate) opencode_port: Option<u16>,
-
-    /// Hostname for the OpenCode server (used with --opencode-port)
-    #[arg(long, env = "OPENCODE_HOST", default_value = "127.0.0.1")]
-    pub(crate) opencode_host: String,
-
-    /// Do not start OpenCode automatically.
-    #[arg(
-        long,
-        env = "AGENA_STUDIO_SKIP_OPENCODE_START",
-        default_value_t = false
-    )]
-    pub(crate) skip_opencode_start: bool,
-
-    /// Log level for the managed `opencode serve` process.
-    ///
-    /// Only used when Agena Studio starts OpenCode itself (i.e. when --opencode-port is unset).
-    #[arg(
-        long,
-        env = "AGENA_STUDIO_OPENCODE_LOG_LEVEL",
-        value_enum,
-        value_name = "LEVEL"
-    )]
-    pub(crate) opencode_log_level: Option<crate::opencode::OpenCodeLogLevel>,
 
     /// Agena workspace root for session/runtime features.
     #[arg(long, env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]

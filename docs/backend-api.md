@@ -28,6 +28,8 @@ Agena API server routes
   /plugin-rpc/{plugin_id}
 ```
 
+Studio 只提供 Agena 原生 API。会话、配置、运行时诊断和文件系统能力都走 `/api/v1/*` 与 Studio public routes。
+
 如果传入 `--ui-dir <dist>`，Studio server 还会服务静态 UI：
 
 - `/assets/...`

@@ -92,7 +92,7 @@ pub(crate) fn normalize_chat_activity_tool_filters(v: Option<&Value>) -> Vec<Str
             continue;
         };
         let mut t = s.trim().to_ascii_lowercase();
-        // Backward compatibility: older builds used `invalid` for untool payloads.
+        // Backward compatibility: older builds used `invalid` for unknown tools.
         if t == "invalid" {
             t = "unknown".to_string();
         }

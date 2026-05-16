@@ -4,7 +4,7 @@ use std::time::Duration;
 use axum::{Json, extract::Query};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_RELEASE_REPO: &str = "canxin121/agena";
+const DEFAULT_RELEASE_REPO: &str = "canxin121/agena-studio";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_WEB_BASE: &str = "https://github.com";
 const SOURCE_KIND: &str = "githubRelease";
@@ -225,21 +225,16 @@ pub async fn update_check(Query(query): Query<UpdateCheckQuery>) -> Json<UpdateC
         .map(|latest| is_newer_version(&service_current_version, latest))
         .unwrap_or(false);
 
-    let release_tag = release.tag_name.trim();
-    let asset_tag = latest_version
-        .as_deref()
-        .map(|version| format!("v{version}"))
-        .unwrap_or_else(|| release_tag.to_string());
-
     if let Some(target) = service_target.as_deref() {
+        let release_tag = release.tag_name.trim();
         let (asset_name, asset_url) = resolve_release_asset_url(
             &release.assets,
             &repo,
             release_tag,
-            service_asset_candidates(target, &asset_tag).as_slice(),
+            service_asset_candidates(target, release_tag).as_slice(),
         );
         if let Some(asset_name) = asset_name.as_deref() {
-            response.service.target = service_asset_target_from_name(asset_name, &asset_tag)
+            response.service.target = service_asset_target_from_name(asset_name, release_tag)
                 .or_else(|| response.service.target.clone());
         }
         response.service.asset_name = asset_name;
@@ -274,10 +269,9 @@ pub async fn update_check(Query(query): Query<UpdateCheckQuery>) -> Json<UpdateC
         let mut assets = installer_assets_for_target(
             &release.assets,
             &repo,
-            release_tag,
             target,
             &runtime.channel,
-            &asset_tag,
+            release.tag_name.trim(),
         );
         assets.sort_by(|a, b| a.name.cmp(&b.name));
         installer.assets = assets;
@@ -349,20 +343,11 @@ fn nonempty(raw: Option<&str>) -> Option<String> {
 }
 
 fn release_repo() -> String {
-    let Some(raw) = env_nonempty(&["AGENA_STUDIO_RELEASE_REPO"]) else {
+    let Some(raw) = nonempty(std::env::var("AGENA_STUDIO_RELEASE_REPO").ok().as_deref()) else {
         return DEFAULT_RELEASE_REPO.to_string();
     };
 
     normalize_repo(&raw).unwrap_or_else(|| DEFAULT_RELEASE_REPO.to_string())
-}
-
-fn env_nonempty(keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Some(value) = nonempty(std::env::var(key).ok().as_deref()) {
-            return Some(value);
-        }
-    }
-    None
 }
 
 fn normalize_repo(raw: &str) -> Option<String> {
@@ -387,16 +372,16 @@ fn normalize_repo(raw: &str) -> Option<String> {
 }
 
 fn current_service_version() -> String {
-    env_nonempty(&["AGENA_STUDIO_UPDATE_SERVICE_VERSION"])
-        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+    nonempty(
+        std::env::var("AGENA_STUDIO_UPDATE_SERVICE_VERSION")
+            .ok()
+            .as_deref(),
+    )
+    .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
 fn normalize_release_tag(raw: &str) -> String {
-    raw.trim()
-        .strip_prefix("agena-studio-")
-        .unwrap_or(raw.trim())
-        .trim_start_matches(['v', 'V'])
-        .to_string()
+    raw.trim().trim_start_matches(['v', 'V']).to_string()
 }
 
 fn release_version(tag: &str) -> Option<String> {
@@ -714,12 +699,11 @@ fn normalize_installer_manager(raw: Option<&str>) -> Option<String> {
 fn installer_assets_for_target(
     assets: &[GithubReleaseAsset],
     repo: &str,
-    release_tag: &str,
     target: &str,
     channel: &str,
-    asset_tag: &str,
+    release_tag: &str,
 ) -> Vec<ReleaseAssetLink> {
-    let prefix = installer_asset_prefix(target, channel, asset_tag);
+    let prefix = installer_asset_prefix(target, channel, release_tag);
 
     let mut links = assets
         .iter()
@@ -738,7 +722,7 @@ fn installer_assets_for_target(
 
     // Only guess URLs when we do not have an asset listing (web fallback mode).
     if links.is_empty() && assets.is_empty() {
-        links = installer_expected_asset_names(target, channel, asset_tag)
+        links = installer_expected_asset_names(target, channel, release_tag)
             .into_iter()
             .filter_map(|name| {
                 let identity = classify_asset_identity(&name)?;
@@ -1051,7 +1035,12 @@ fn release_tag_from_url(url: &reqwest::Url) -> Option<String> {
 }
 
 fn github_api_token() -> Option<String> {
-    env_nonempty(&["AGENA_STUDIO_GITHUB_TOKEN", "GITHUB_TOKEN"])
+    let primary = std::env::var("AGENA_STUDIO_GITHUB_TOKEN").ok();
+    if let Some(token) = nonempty(primary.as_deref()) {
+        return Some(token);
+    }
+    let secondary = std::env::var("GITHUB_TOKEN").ok();
+    nonempty(secondary.as_deref())
 }
 
 #[cfg(test)]
@@ -1179,15 +1168,6 @@ mod tests {
             runtime_target_triple_for("macos", "aarch64", false),
             Some("aarch64-apple-darwin")
         );
-    }
-
-    #[test]
-    fn release_version_accepts_agena_studio_release_tags() {
-        assert_eq!(
-            release_version("agena-studio-v1.2.0").as_deref(),
-            Some("1.2.0")
-        );
-        assert_eq!(release_version("v1.2.0").as_deref(), Some("1.2.0"));
     }
 
     #[test]
@@ -1389,8 +1369,7 @@ mod tests {
     fn installer_assets_for_target_falls_back_to_expected_urls() {
         let assets = installer_assets_for_target(
             &[],
-            "canxin121/agena",
-            "agena-studio-v1.2.0",
+            "canxin121/agena-studio",
             "x86_64-pc-windows-msvc",
             "main",
             "v1.2.0",
@@ -1401,7 +1380,7 @@ mod tests {
         assert_eq!(assets[0].manager, "direct");
         assert_eq!(
             assets[0].url,
-            "https://github.com/canxin121/agena/releases/download/agena-studio-v1.2.0/agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.msi"
+            "https://github.com/canxin121/agena-studio/releases/download/v1.2.0/agena-studio-desktop-x86_64-pc-windows-msvc-v1.2.0.msi"
         );
         assert_eq!(assets[1].installer_type, "exe");
     }

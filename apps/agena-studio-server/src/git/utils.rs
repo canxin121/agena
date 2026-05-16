@@ -654,11 +654,9 @@ pub(crate) async fn git_config_get(
 #[cfg(test)]
 mod path_tests {
     use super::*;
-    use crate::test_support::ENV_LOCK;
 
     #[test]
     fn normalize_directory_path_expands_home() {
-        let _env_lock = ENV_LOCK.lock().unwrap();
         let old = std::env::var_os("HOME");
         // Modifying env vars is process-global; Rust marks it unsafe in newer toolchains.
         unsafe {

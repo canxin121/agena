@@ -57,22 +57,10 @@ pub(crate) async fn build_test_app_state(
         ui_cookie_same_site: SameSite::Strict,
         cors_allowed_origins: Vec::new(),
         cors_allow_all: false,
-        opencode: Arc::new(crate::opencode::OpenCodeManager::new(
-            "127.0.0.1".to_string(),
-            Some(1),
-            true,
-            None,
-            None,
-            crate::ui_auth::UiAuth::Disabled,
-        )),
-        plugin_runtime: Arc::new(crate::plugin_runtime::PluginRuntime::new()),
         terminal,
         attachment_cache: Arc::new(crate::attachment_cache::AttachmentCacheManager::new(
             studio_db.clone(),
         )),
-        session_activity: crate::session_activity::SessionActivityManager::new(),
-        directory_session_index: crate::directory_session_index::DirectorySessionIndexManager::new(
-        ),
         workspace_preview_registry,
         workspace_preview_runtime,
         studio_db,

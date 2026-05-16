@@ -47,6 +47,8 @@ fn resolve_logs_paths(raw: &str, run_dir: &Path) -> ApiResult<ResolvedLogsPaths>
         run_dir.join(path)
     };
 
+    // Backwards-compatible: legacy plugin wrote logsPath as a directory.
+    // If a directory is provided (and exists), write to stdout.log/stderr.log.
     if resolved.is_dir() {
         let stdout = resolved.join("stdout.log");
         let stderr = resolved.join("stderr.log");
@@ -70,10 +72,12 @@ fn resolve_logs_paths(raw: &str, run_dir: &Path) -> ApiResult<ResolvedLogsPaths>
 
 fn resolve_preview_program(program: &str) -> String {
     if program == "bun" {
-        if let Some(value) = std::env::var_os("AGENA_STUDIO_BUN_PATH") {
-            let value = value.to_string_lossy().trim().to_string();
-            if !value.is_empty() {
-                return value;
+        for key in ["AGENA_STUDIO_BUN_PATH"] {
+            if let Some(value) = std::env::var_os(key) {
+                let value = value.to_string_lossy().trim().to_string();
+                if !value.is_empty() {
+                    return value;
+                }
             }
         }
     }

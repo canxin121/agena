@@ -17,10 +17,6 @@ struct BackendRuntimeConfig {
     host: Option<String>,
     port: Option<u16>,
     ui_password: Option<String>,
-    opencode_port: Option<u16>,
-    opencode_host: Option<String>,
-    skip_opencode_start: Option<bool>,
-    opencode_log_level: Option<String>,
     ui_dir: Option<String>,
     cors_origins: Option<Vec<String>>,
     cors_allow_all: Option<bool>,
@@ -72,7 +68,8 @@ fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, String> {
 fn default_runtime_config_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    Some(dir.join(DEFAULT_RUNTIME_CONFIG_FILE))
+    let current = dir.join(DEFAULT_RUNTIME_CONFIG_FILE);
+    Some(current)
 }
 
 fn allow_file_override(matches: &clap::ArgMatches, id: &str) -> bool {
@@ -102,30 +99,6 @@ fn apply_runtime_overrides(
 
     if allow_file_override(matches, "ui_password") {
         args.ui_password = cfg.backend.ui_password.clone();
-    }
-
-    if allow_file_override(matches, "opencode_port") {
-        args.opencode_port = cfg.backend.opencode_port;
-    }
-
-    if allow_file_override(matches, "opencode_host")
-        && let Some(host) = cfg.backend.opencode_host.as_deref().map(str::trim)
-        && !host.is_empty()
-    {
-        args.opencode_host = host.to_string();
-    }
-
-    if allow_file_override(matches, "skip_opencode_start")
-        && let Some(skip) = cfg.backend.skip_opencode_start
-    {
-        args.skip_opencode_start = skip;
-    }
-
-    if allow_file_override(matches, "opencode_log_level") {
-        args.opencode_log_level = match cfg.backend.opencode_log_level.as_deref().map(str::trim) {
-            Some("") | None => None,
-            Some(value) => Some(parse_opencode_log_level(value)?),
-        };
     }
 
     if allow_file_override(matches, "ui_dir") {
@@ -160,22 +133,6 @@ fn apply_runtime_overrides(
     Ok(())
 }
 
-fn parse_opencode_log_level(value: &str) -> Result<crate::opencode::OpenCodeLogLevel, String> {
-    if value.eq_ignore_ascii_case("debug") {
-        Ok(crate::opencode::OpenCodeLogLevel::Debug)
-    } else if value.eq_ignore_ascii_case("info") {
-        Ok(crate::opencode::OpenCodeLogLevel::Info)
-    } else if value.eq_ignore_ascii_case("warn") {
-        Ok(crate::opencode::OpenCodeLogLevel::Warn)
-    } else if value.eq_ignore_ascii_case("error") {
-        Ok(crate::opencode::OpenCodeLogLevel::Error)
-    } else {
-        Err(format!(
-            "invalid backend.opencode_log_level in runtime config: {value}"
-        ))
-    }
-}
-
 fn parse_ui_cookie_samesite(value: &str) -> Result<crate::UiCookieSameSite, String> {
     if value.eq_ignore_ascii_case("auto") {
         Ok(crate::UiCookieSameSite::Auto)
@@ -203,14 +160,17 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_applies_opencode_fields_from_file() {
+    fn runtime_config_applies_backend_fields_from_file() {
         let (mut args, matches) = default_args_and_matches();
         let cfg = RuntimeConfig {
             backend: BackendRuntimeConfig {
-                opencode_port: Some(4317),
-                opencode_host: Some("0.0.0.0".to_string()),
-                skip_opencode_start: Some(true),
-                opencode_log_level: Some("warn".to_string()),
+                host: Some("0.0.0.0".to_string()),
+                port: Some(4317),
+                ui_password: Some("secret".to_string()),
+                ui_dir: Some("/tmp/agena-studio-dist".to_string()),
+                cors_origins: Some(vec!["http://localhost:5173".to_string()]),
+                cors_allow_all: Some(true),
+                ui_cookie_samesite: Some("strict".to_string()),
                 ..BackendRuntimeConfig::default()
             },
         };
@@ -218,66 +178,15 @@ mod tests {
         apply_runtime_overrides(&mut args, &matches, &cfg)
             .expect("runtime config overrides should apply");
 
-        assert_eq!(args.opencode_port, Some(4317));
-        assert_eq!(args.opencode_host, "0.0.0.0");
-        assert!(args.skip_opencode_start);
+        assert_eq!(args.host, "0.0.0.0");
+        assert_eq!(args.port, 4317);
+        assert_eq!(args.ui_password.as_deref(), Some("secret"));
+        assert_eq!(args.ui_dir.as_deref(), Some("/tmp/agena-studio-dist"));
+        assert_eq!(args.cors_origin, vec!["http://localhost:5173"]);
+        assert!(args.cors_allow_all);
         assert!(matches!(
-            args.opencode_log_level,
-            Some(crate::opencode::OpenCodeLogLevel::Warn)
+            args.ui_cookie_samesite,
+            crate::UiCookieSameSite::Strict
         ));
-    }
-
-    #[test]
-    fn cli_values_override_runtime_config_opencode_fields() {
-        let matches = crate::Args::command().get_matches_from([
-            "agena-studio",
-            "--opencode-port",
-            "7000",
-            "--opencode-host",
-            "cli-host",
-            "--skip-opencode-start",
-            "--opencode-log-level",
-            "DEBUG",
-        ]);
-        let mut args =
-            crate::Args::from_arg_matches(&matches).expect("cli args should parse successfully");
-        let cfg = RuntimeConfig {
-            backend: BackendRuntimeConfig {
-                opencode_port: Some(4317),
-                opencode_host: Some("file-host".to_string()),
-                skip_opencode_start: Some(false),
-                opencode_log_level: Some("warn".to_string()),
-                ..BackendRuntimeConfig::default()
-            },
-        };
-
-        apply_runtime_overrides(&mut args, &matches, &cfg)
-            .expect("runtime config overrides should respect cli values");
-
-        assert_eq!(args.opencode_port, Some(7000));
-        assert_eq!(args.opencode_host, "cli-host");
-        assert!(args.skip_opencode_start);
-        assert!(matches!(
-            args.opencode_log_level,
-            Some(crate::opencode::OpenCodeLogLevel::Debug)
-        ));
-    }
-
-    #[test]
-    fn invalid_opencode_log_level_is_rejected() {
-        let (mut args, matches) = default_args_and_matches();
-        let cfg = RuntimeConfig {
-            backend: BackendRuntimeConfig {
-                opencode_log_level: Some("trace".to_string()),
-                ..BackendRuntimeConfig::default()
-            },
-        };
-
-        let error = apply_runtime_overrides(&mut args, &matches, &cfg)
-            .expect_err("invalid log level should be rejected");
-        assert!(
-            error.contains("invalid backend.opencode_log_level"),
-            "unexpected error: {error}"
-        );
     }
 }

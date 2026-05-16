@@ -130,11 +130,7 @@ pub(crate) fn publish_fs_changed_event<I>(
     I: IntoIterator,
     I::Item: AsRef<Path>,
 {
-    if let Some(encoded) =
-        encode_fs_changed_event(root, change_type, changed_paths, old_path, new_path)
-    {
-        crate::global_sse_hub::publish_downstream_json(&encoded);
-    }
+    let _ = encode_fs_changed_event(root, change_type, changed_paths, old_path, new_path);
 }
 
 fn has_parent_dir_component(p: &Path) -> bool {
@@ -236,7 +232,7 @@ pub async fn resolve_project_directory(
     query_directory: Option<&str>,
 ) -> ApiResult<PathBuf> {
     let header_directory = headers
-        .get("x-opencode-directory")
+        .get("x-agena-directory")
         .and_then(|v| v.to_str().ok())
         .map(|v| v.trim())
         .filter(|v| !v.is_empty());
@@ -399,8 +395,6 @@ pub async fn fs_read(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
             _ => AppError::internal(err.to_string()),
         })?;
 
-    crate::fs_watch::hint_watch_path(&abs);
-
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "text/plain")
@@ -499,7 +493,6 @@ pub async fn fs_read_chunk(Query(q): Query<ReadChunkQuery>) -> ApiResult<Json<Re
         .min(MAX_READ_CHUNK_LIMIT);
 
     if limit == 0 {
-        crate::fs_watch::hint_watch_path(&abs);
         let has_more = offset < total_bytes;
         return Ok(Json(ReadChunkResponse {
             path: to_api_path(&abs),
@@ -534,8 +527,6 @@ pub async fn fs_read_chunk(Query(q): Query<ReadChunkQuery>) -> ApiResult<Json<Re
     let (content, consumed_bytes) = decode_utf8_chunk(&buffer)?;
     let loaded_bytes = offset.saturating_add(consumed_bytes);
     let has_more = (loaded_bytes as u64) < total_bytes_u64;
-
-    crate::fs_watch::hint_watch_path(&abs);
 
     Ok(Json(ReadChunkResponse {
         path: to_api_path(&abs),
@@ -629,8 +620,6 @@ pub async fn fs_raw(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
             std::io::ErrorKind::PermissionDenied => AppError::forbidden("Access to file denied"),
             _ => AppError::internal(err.to_string()),
         })?;
-
-    crate::fs_watch::hint_watch_path(&abs);
 
     Ok(Response::builder()
         .status(StatusCode::OK)

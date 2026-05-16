@@ -12,7 +12,6 @@ const DB_POOL_ACQUIRE_TIMEOUT_MS: u64 = 1500;
 const DB_POOL_IDLE_TIMEOUT_SECS: u64 = 120;
 
 pub(crate) const KV_KEY_SETTINGS: &str = "settings";
-pub(crate) const KV_KEY_CHAT_SIDEBAR_PREFERENCES: &str = "ui.chatSidebar.preferences";
 pub(crate) const KV_KEY_TERMINAL_SESSION_REGISTRY: &str = "terminal.sessionRegistry";
 pub(crate) const KV_KEY_WORKSPACE_PREVIEW_STUDIO_STATE: &str = "workspacePreview.state.studio";
 

@@ -1,12 +1,22 @@
 use serde::{Deserialize, Serialize};
 
-/// Structured custom payload for dynamic tools.
-///
-/// NOTE: This is only used by `ToolInput::Custom` / `ToolMetadata::Custom`.
+/// Structured payload shared by dynamic tool inputs and outputs.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct StructuredObject {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<StructuredField>,
+}
+
+impl StructuredObject {
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+
+    pub fn get(&self, name: &str) -> Option<&StructuredValue> {
+        self.fields
+            .iter()
+            .find_map(|field| (field.name == name).then_some(&field.value))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -38,6 +48,22 @@ pub enum StructuredValue {
     Object {
         fields: Vec<StructuredField>,
     },
+}
+
+impl StructuredValue {
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text { value } => Some(value.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&[StructuredValue]> {
+        match self {
+            Self::Array { items } => Some(items.as_slice()),
+            _ => None,
+        }
+    }
 }
 
 impl TryFrom<serde_json::Value> for StructuredObject {

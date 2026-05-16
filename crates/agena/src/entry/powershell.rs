@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 
-use crate::message::{PowerShellToolInput, ToolPayloadOutput};
+use crate::message::PowerShellToolInput;
 
 use super::shell::ShellRequest;
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolRuntimeContext};
+use super::{
+    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
+    ToolRuntimeContext,
+};
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;

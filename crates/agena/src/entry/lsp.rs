@@ -17,10 +17,9 @@ use agena_lsp::lsp_types::{
 
 use crate::message::{
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
-    ToolPayloadOutput,
 };
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 pub(super) fn execute_definition(
     executor: &ToolExecutor,

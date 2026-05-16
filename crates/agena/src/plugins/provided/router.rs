@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
 use crate::entry::result::ToolPayloadExecution;
-use crate::entry::{ToolExecutor, ToolRuntimeContext, orchestrator};
+use crate::entry::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
     PowerShellToolInput,
@@ -244,26 +244,24 @@ fn default_workspace_read(needs_workspace: bool) -> Vec<crate::plugin::sdk::Path
 pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolInvokeOutput {
     let mut metadata = execution.view.metadata;
     match &execution.output {
-        crate::message::ToolPayloadOutput::ApplyPatch { .. } => {
+        ToolPayloadOutput::ApplyPatch { .. } => {
             metadata.insert("agena.effect".to_string(), "file_changes".to_string());
         }
-        crate::message::ToolPayloadOutput::ToolSearch { .. } => {
+        ToolPayloadOutput::ToolSearch { .. } => {
             metadata.insert("agena.effect".to_string(), "load_tools".to_string());
         }
-        crate::message::ToolPayloadOutput::TodoWrite { .. } => {
+        ToolPayloadOutput::TodoWrite { .. } => {
             metadata.insert("agena.effect".to_string(), "todo_list".to_string());
         }
-        crate::message::ToolPayloadOutput::EnterWorktree { .. } => {
+        ToolPayloadOutput::EnterWorktree { .. } => {
             metadata.insert("agena.effect".to_string(), "enter_worktree".to_string());
         }
-        crate::message::ToolPayloadOutput::ExitWorktree { .. } => {
+        ToolPayloadOutput::ExitWorktree { .. } => {
             metadata.insert("agena.effect".to_string(), "exit_worktree".to_string());
         }
         _ => {}
     }
-    let payload = Some(serde_json::Value::from(
-        execution.output.into_custom_output().payload,
-    ));
+    let payload = execution.output.into_tool_output().to_json_payload();
     ToolInvokeOutput {
         title: execution.view.title,
         output_text: execution.view.output_text,
@@ -277,15 +275,10 @@ pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -
 pub(crate) fn payload_to_tool_output(
     tool_name: &str,
     payload: Option<&JsonValue>,
-) -> Result<crate::message::ToolPayloadOutput, serde_json::Error> {
-    let value = payload.cloned().unwrap_or(serde_json::json!({}));
-    let payload = crate::message::StructuredObject::try_from(value)
-        .map_err(|err| serde::de::Error::custom(err.to_string()))?;
-    let output = crate::message::CustomToolOutput {
-        name: tool_name.to_string(),
-        payload,
-    };
-    crate::message::ToolPayloadOutput::from_custom(&output).ok_or_else(|| {
+) -> Result<ToolPayloadOutput, serde_json::Error> {
+    let output =
+        crate::message::ToolOutput::from_json_payload(payload).map_err(serde::de::Error::custom)?;
+    ToolPayloadOutput::from_tool_output(tool_name, &output).ok_or_else(|| {
         serde::de::Error::custom(format!(
             "payload for tool `{tool_name}` did not match tool payload schema"
         ))

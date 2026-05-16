@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::message::{ToolAttachment, ToolOutput, ToolPayloadOutput};
+use crate::message::{ToolAttachment, ToolOutput};
 
-use super::ApplyPatchExecution;
+use super::{ApplyPatchExecution, ToolPayloadOutput};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToolExecutionView {
@@ -75,9 +75,7 @@ impl ToolInvocationExecution {
 impl From<ToolPayloadExecution> for ToolInvocationExecution {
     fn from(value: ToolPayloadExecution) -> Self {
         Self {
-            output: ToolOutput::Custom {
-                output: value.output.into_custom_output(),
-            },
+            output: value.output.into_tool_output(),
             view: value.view,
             apply_patch: value.apply_patch,
         }

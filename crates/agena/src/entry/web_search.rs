@@ -14,9 +14,12 @@
 use serde::Deserialize;
 
 use crate::config::WebSearchBackend;
-use crate::message::{ToolPayloadOutput, WebSearchHit, WebSearchToolInput};
+use crate::message::WebSearchToolInput;
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
+use super::{
+    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
+    WebSearchHit,
+};
 
 const DEFAULT_MAX_RESULTS: u32 = 8;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);

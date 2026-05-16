@@ -8,12 +8,14 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::entry::{ToolExecutionView, ToolPayloadExecution, ask_user, tool_search};
+use crate::entry::{
+    ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user, tool_search,
+};
 use crate::message::{
     AskUserToolInput, ClearGoalToolInput, CreateGoalToolInput, EnterPlanModeToolInput,
     EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, GetGoalToolInput,
-    TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolPayloadOutput,
-    ToolSearchToolInput, WorkflowPromptToolInput,
+    TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput,
+    WorkflowPromptToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{

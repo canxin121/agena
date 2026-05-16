@@ -1366,7 +1366,8 @@ fn normalize_path_string(path: &Path) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::message::{ApplyPatchToolInput, ReadToolInput, ToolPayloadInput};
+    use crate::message::{ApplyPatchToolInput, ReadToolInput};
+    use crate::tool::ToolPayloadInput;
 
     use super::{
         AccessKind, AccessSelector, NetworkPermissionPolicy, NetworkTarget, PermissionDecision,

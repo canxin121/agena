@@ -2,11 +2,9 @@ use std::fs;
 
 use serde_json::{Map, Value};
 
-use crate::message::{
-    NotebookCellType, NotebookEditMode, NotebookEditToolInput, ToolPayloadOutput,
-};
+use crate::message::{NotebookCellType, NotebookEditMode, NotebookEditToolInput};
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 pub(super) fn execute(
     executor: &ToolExecutor,

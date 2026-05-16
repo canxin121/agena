@@ -4,10 +4,11 @@ use globset::Glob;
 use regex::Regex;
 use walkdir::WalkDir;
 
-use crate::message::{GrepToolInput, ToolPayloadOutput};
+use crate::message::GrepToolInput;
 
 use super::{
-    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, normalize_path_for_display,
+    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
+    normalize_path_for_display,
 };
 
 const MAX_MATCHES: usize = 500;

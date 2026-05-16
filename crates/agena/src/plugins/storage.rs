@@ -101,8 +101,12 @@ pub trait PluginStorage: Send + Sync {
         key: &str,
         value: &str,
     ) -> Result<(), PluginStorageError>;
-    fn delete(&self, locator: &StorageLocator, namespace: &str, key: &str)
-    -> Result<(), PluginStorageError>;
+    fn delete(
+        &self,
+        locator: &StorageLocator,
+        namespace: &str,
+        key: &str,
+    ) -> Result<(), PluginStorageError>;
     fn list(
         &self,
         locator: &StorageLocator,
@@ -256,7 +260,9 @@ fn storage_scope_dir(root: &Path, locator: &StorageLocator) -> Result<PathBuf, P
                 .filter(|value| !value.trim().is_empty())
                 .ok_or(PluginStorageError::MissingWorkspaceRoot)?;
             p.push("workspace");
-            p.push(hex::encode(blake3::hash(workspace_root.as_bytes()).as_bytes()));
+            p.push(hex::encode(
+                blake3::hash(workspace_root.as_bytes()).as_bytes(),
+            ));
         }
         HostStorageScope::Global => {
             p.push("global");
@@ -704,9 +710,7 @@ mod tests {
         store
             .set(&alpha_private, "settings", "lang", "rust")
             .unwrap();
-        store
-            .set(&alpha_shared, "registry", "flag", "on")
-            .unwrap();
+        store.set(&alpha_shared, "registry", "flag", "on").unwrap();
         store
             .set(&ws_one, "index", "symbols", "workspace-one")
             .unwrap();
@@ -743,17 +747,11 @@ mod tests {
             "shared global storage should be readable across plugins"
         );
         assert_eq!(
-            store
-                .get(&ws_one, "index", "symbols")
-                .unwrap()
-                .as_deref(),
+            store.get(&ws_one, "index", "symbols").unwrap().as_deref(),
             Some("workspace-one")
         );
         assert_eq!(
-            store
-                .get(&ws_two, "index", "symbols")
-                .unwrap()
-                .as_deref(),
+            store.get(&ws_two, "index", "symbols").unwrap().as_deref(),
             Some("workspace-two")
         );
         assert_eq!(
@@ -779,7 +777,12 @@ mod tests {
         assert_eq!(listed_shared[0].key, "flag");
 
         store.delete(&alpha_shared, "registry", "flag").unwrap();
-        assert!(store.get(&alpha_shared, "registry", "flag").unwrap().is_none());
+        assert!(
+            store
+                .get(&alpha_shared, "registry", "flag")
+                .unwrap()
+                .is_none()
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

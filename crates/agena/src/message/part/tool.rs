@@ -187,7 +187,7 @@ pub struct MonitorEvent {
     pub line: String,
 }
 
-/// Action discriminator for the `monitor` first-party tool.
+/// Action discriminator for the `monitor` bundled tool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MonitorToolInput {
@@ -487,7 +487,7 @@ pub struct PowerShellToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum FirstPartyToolInput {
+pub enum BundledToolInput {
     Bash(BashToolInput),
     Read(ReadToolInput),
     ViewFile(ViewFileToolInput),
@@ -518,7 +518,7 @@ pub enum FirstPartyToolInput {
     PowerShell(PowerShellToolInput),
 }
 
-impl FirstPartyToolInput {
+impl BundledToolInput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
@@ -567,8 +567,8 @@ impl FirstPartyToolInput {
         ToolInvocation::new(name, payload)
     }
 
-    /// Reconstruct a `FirstPartyToolInput` from a [`ToolInvocation`], or `None`
-    /// if the invocation does not name a first-party tool. The look-up is
+    /// Reconstruct a `BundledToolInput` from a [`ToolInvocation`], or `None`
+    /// if the invocation does not name a bundled tool. The look-up is
     /// authoritative: any name that round-trips through [`tool_name`] is
     /// accepted; anything else returns `None`.
     pub fn from_invocation(invocation: &ToolInvocation) -> Option<Self> {
@@ -603,7 +603,7 @@ impl PluginInvocation {
 
 /// A dynamic tool invocation: stable name + structured payload. First-party
 /// tools and plugin-supplied tools share this shape; the typed
-/// [`FirstPartyToolInput`] is recovered on demand via [`Self::as_first_party`].
+/// [`BundledToolInput`] is recovered on demand via [`Self::as_bundled`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolInvocation {
     pub name: String,
@@ -619,16 +619,16 @@ impl ToolInvocation {
         }
     }
 
-    /// If this invocation names a first-party tool, decode its input into a
-    /// strongly-typed [`FirstPartyToolInput`].
-    pub fn as_first_party(&self) -> Option<FirstPartyToolInput> {
-        FirstPartyToolInput::from_invocation(self)
+    /// If this invocation names a bundled tool, decode its input into a
+    /// strongly-typed [`BundledToolInput`].
+    pub fn as_bundled(&self) -> Option<BundledToolInput> {
+        BundledToolInput::from_invocation(self)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
-pub enum FirstPartyToolOutput {
+pub enum BundledToolOutput {
     Bash {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
@@ -829,7 +829,7 @@ pub struct WebSearchHit {
     pub snippet: Option<String>,
 }
 
-impl FirstPartyToolOutput {
+impl BundledToolOutput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
@@ -879,8 +879,8 @@ impl FirstPartyToolOutput {
     }
 
     /// Reverse of [`into_custom_output`]: try to decode a `CustomToolOutput`
-    /// emitted by a first-party tool back into the strongly-typed enum. Returns
-    /// `None` for any name that does not correspond to one of the first-party
+    /// emitted by a bundled tool back into the strongly-typed enum. Returns
+    /// `None` for any name that does not correspond to one of the bundled
     /// variants (serde rejects the unknown tag).
     pub fn from_custom(output: &CustomToolOutput) -> Option<Self> {
         let value: serde_json::Value = output.payload.clone().into();
@@ -1039,11 +1039,11 @@ pub enum ToolOutput {
 }
 
 impl ToolOutput {
-    /// If this output is a `Custom` carrying a first-party tool's payload,
-    /// decode it into a strongly-typed [`FirstPartyToolOutput`].
-    pub fn as_first_party(&self) -> Option<FirstPartyToolOutput> {
+    /// If this output is a `Custom` carrying a bundled tool's payload,
+    /// decode it into a strongly-typed [`BundledToolOutput`].
+    pub fn as_bundled(&self) -> Option<BundledToolOutput> {
         match self {
-            Self::Custom { output } => FirstPartyToolOutput::from_custom(output),
+            Self::Custom { output } => BundledToolOutput::from_custom(output),
             _ => None,
         }
     }

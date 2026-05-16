@@ -14,7 +14,7 @@ function readString(value: unknown): string | null {
 
 export function permissionRiskLabel(action: Record<string, unknown>): string {
   const kind = readString(action.kind)
-  if (kind === 'builtin_tool') {
+  if (kind === 'tool') {
     const toolName = readString(action.tool_name) || ''
     return toolName === 'bash' ? 'mutable tool execution' : 'tool access'
   }
@@ -29,13 +29,13 @@ export function permissionRiskLabel(action: Record<string, unknown>): string {
 
 export function permissionActionView(action: Record<string, unknown>): PermissionActionView {
   const kind = readString(action.kind)
-  if (kind === 'builtin_tool') {
+  if (kind === 'tool') {
     const toolName = readString(action.tool_name) || 'tool'
     const qualifier = readString(action.qualifier)
     return {
       title: qualifier ? `${toolName} · ${qualifier}` : toolName,
       details: [
-        'kind=builtin_tool',
+        'kind=tool',
         `tool=${toolName}`,
         ...(qualifier ? [`qualifier=${qualifier}`] : []),
       ],

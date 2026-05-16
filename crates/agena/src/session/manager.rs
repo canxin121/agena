@@ -16,7 +16,7 @@ use crate::event::{
     RunStartedEvent, SessionGoalEvent,
 };
 use crate::message::{
-    AttachmentItem, ExecutionStatus, FileChangePart, FirstPartyToolOutput, Message,
+    AttachmentItem, ExecutionStatus, FileChangePart, BundledToolOutput, Message,
     MessageMetadata, MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart,
     TaskSubagentType, TimeRange, TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation,
     ToolOutput, ToolResultBlock, UserInputReply, UserInputReplyKind, UserInputRequest,
@@ -114,7 +114,7 @@ impl SessionRunOptions {
         &self,
         system: Option<String>,
         messages: Vec<Message>,
-        tools: Vec<crate::tool::EntryDefinition>,
+        tools: Vec<crate::plugin::registry::PluginEntry>,
         prompt_cache_key: Option<String>,
         previous_response_id: Option<String>,
         prompt_window_generation: Option<u64>,
@@ -2371,7 +2371,7 @@ impl SessionManager {
         &self,
         session: &Session,
         options: &SessionRunOptions,
-        tools: &[crate::tool::EntryDefinition],
+        tools: &[crate::plugin::registry::PluginEntry],
         state: &SessionManagerState,
     ) -> PromptTurnBudget {
         let fallback_budget = state.processor.max_prompt_chars();
@@ -3385,8 +3385,8 @@ impl SessionManager {
             execution.view.attachments.as_slice(),
             blocks.as_slice(),
         );
-        if let Some(FirstPartyToolOutput::ToolSearch { loaded_tools, .. }) =
-            tool_output.as_first_party()
+        if let Some(BundledToolOutput::ToolSearch { loaded_tools, .. }) =
+            tool_output.as_bundled()
         {
             session.runtime.record_loaded_deferred_tools(&loaded_tools);
         }
@@ -4024,16 +4024,16 @@ impl SessionManager {
         session: &mut Session,
         execution: &ToolInvocationExecution,
     ) {
-        let Some(output) = execution.output.as_first_party() else {
+        let Some(output) = execution.output.as_bundled() else {
             return;
         };
         match output {
-            FirstPartyToolOutput::EnterWorktree { path, .. } => {
+            BundledToolOutput::EnterWorktree { path, .. } => {
                 session
                     .runtime
                     .set_effective_workspace_root(Some(PathBuf::from(path)));
             }
-            FirstPartyToolOutput::ExitWorktree { .. } => {
+            BundledToolOutput::ExitWorktree { .. } => {
                 session.runtime.set_effective_workspace_root(None);
             }
             _ => {}
@@ -4309,7 +4309,7 @@ impl SessionManager {
 
 fn permission_subject(action: &PermissionAction) -> serde_json::Value {
     match action {
-        PermissionAction::BuiltinTool { tool_name, .. } => {
+        PermissionAction::Tool { tool_name, .. } => {
             serde_json::json!({
                 "kind": "tool",
                 "tool_name": tool_name,
@@ -4573,8 +4573,8 @@ fn tool_message_extra_part_contents(
 }
 
 fn file_change_part_from_tool_output(details: &ToolOutput) -> Option<FileChangePart> {
-    match details.as_first_party() {
-        Some(FirstPartyToolOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
+    match details.as_bundled() {
+        Some(BundledToolOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
             Some(FileChangePart { changes })
         }
         _ => None,
@@ -4582,8 +4582,8 @@ fn file_change_part_from_tool_output(details: &ToolOutput) -> Option<FileChangeP
 }
 
 fn todo_part_from_tool_output(details: &ToolOutput) -> Option<TodoListPart> {
-    match details.as_first_party() {
-        Some(FirstPartyToolOutput::TodoWrite { items }) => Some(TodoListPart { items }),
+    match details.as_bundled() {
+        Some(BundledToolOutput::TodoWrite { items }) => Some(TodoListPart { items }),
         _ => None,
     }
 }
@@ -4856,7 +4856,7 @@ fn user_input_execution(
 
     Ok(ToolInvocationExecution::new(
         ToolOutput::Custom {
-            output: FirstPartyToolOutput::AskUser { answers }.into_custom_output(),
+            output: BundledToolOutput::AskUser { answers }.into_custom_output(),
         },
         view,
     ))
@@ -4989,10 +4989,10 @@ mod tests {
 
     use crate::agent::Agent;
     use crate::db::init_schema;
-    use crate::entry::FirstPartyExecution;
+    use crate::entry::BundledExecution;
     use crate::event::EventKind;
     use crate::message::{
-        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, FirstPartyToolOutput,
+        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, BundledToolOutput,
         McpToolOutput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment,
         ToolExecutionPart, ToolOutput, ToolResultBlock, ToolSearchToolInput, UserInputOption,
         UserInputQuestion, UserInputReply, UserInputReplyKind,
@@ -5092,8 +5092,8 @@ mod tests {
     impl crate::plugin::sdk::Plugin for HostInvokeSourceFixturePlugin {
         fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
             crate::plugin::sdk::PluginManifest::builder("host-invoke-source-fixture", "0.1.0")
-                .entry(
-                    crate::plugin::sdk::PluginEntryDecl::new(
+                .tool(
+                    crate::plugin::sdk::PluginToolDecl::new(
                         "host_invoke_source",
                         serde_json::json!({"type": "object"}),
                     )
@@ -5140,8 +5140,8 @@ mod tests {
     impl crate::plugin::sdk::Plugin for HostInvokeTargetFixturePlugin {
         fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
             crate::plugin::sdk::PluginManifest::builder("host-invoke-target-fixture", "0.1.0")
-                .entry(
-                    crate::plugin::sdk::PluginEntryDecl::new(
+                .tool(
+                    crate::plugin::sdk::PluginToolDecl::new(
                         "host_invoke_target",
                         serde_json::json!({"type": "object"}),
                     )
@@ -5175,8 +5175,8 @@ mod tests {
         fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
             crate::plugin::sdk::PluginManifest::builder("streaming-fixture", "0.1.0")
                 .hooks(crate::plugin::sdk::HookSubscription::TOOL_INVOKE_STREAM)
-                .entry(
-                    crate::plugin::sdk::PluginEntryDecl::new(
+                .tool(
+                    crate::plugin::sdk::PluginToolDecl::new(
                         "stream_fixture_count",
                         serde_json::json!({
                             "type": "object",
@@ -5184,7 +5184,7 @@ mod tests {
                         }),
                     )
                     .description("Stream fixture count.")
-                    .streaming(crate::plugin::sdk::EntryStreamingMode::Streaming),
+                    .streaming(crate::plugin::sdk::ToolStreamingMode::Streaming),
                 )
                 .build()
         }
@@ -5383,8 +5383,8 @@ mod tests {
                             details,
                             ..
                         })) => {
-                            let answers = match details.as_first_party() {
-                                Some(FirstPartyToolOutput::AskUser { answers }) => answers,
+                            let answers = match details.as_bundled() {
+                                Some(BundledToolOutput::AskUser { answers }) => answers,
                                 _ => return None,
                             };
                             answers
@@ -5451,8 +5451,8 @@ mod tests {
                         _ => return false,
                     };
                     matches!(
-                        details.as_first_party(),
-                        Some(FirstPartyToolOutput::ToolSearch { ref loaded_tools, .. })
+                        details.as_bundled(),
+                        Some(BundledToolOutput::ToolSearch { ref loaded_tools, .. })
                             if loaded_tools.iter().any(|name| name == "apply_patch")
                     )
                 })
@@ -6028,26 +6028,17 @@ mod tests {
                 .executor
                 .searchable_tools()
                 .into_iter()
-                .map(|definition| {
-                    let deferred = definition.is_deferred();
+                .map(|tool| {
+                    let deferred = tool.is_deferred();
+                    let description = tool.description_text().to_string();
+                    let tags = tool.effective_tags();
                     crate::plugin::sdk::host_api::ToolDescriptor {
-                        name: definition.name,
-                        description: Some(definition.description),
-                        search_terms: definition.search_terms,
-                        behavior: Some(
-                            match definition.behavior {
-                                crate::tool::EntryBehavior::Mutating => "mutating",
-                                crate::tool::EntryBehavior::ReadOnly => "read_only",
-                                crate::tool::EntryBehavior::Task => "task",
-                            }
-                            .to_string(),
-                        ),
+                        name: tool.exposed_name,
+                        description: Some(description),
+                        tags,
                         deferred,
-                        read_only: definition.read_only,
-                        plugin_id: match definition.source {
-                            crate::tool::EntrySource::FirstParty => None,
-                            crate::tool::EntrySource::Plugin { plugin_name } => Some(plugin_name),
-                        },
+                        plugin_id: (!tool.plugin_name.trim().is_empty())
+                            .then_some(tool.plugin_name),
                     }
                 })
                 .collect())
@@ -6060,7 +6051,7 @@ mod tests {
             let context =
                 crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
             self.executor
-                .execute_first_party_payload_for_host(
+                .execute_bundled_payload_for_host(
                     "todo_write",
                     serde_json::to_value(req)
                         .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?,
@@ -6089,7 +6080,7 @@ mod tests {
             Agent::new("build", permission_policy.clone()).with_tool_policy(tool_policy.clone()),
         )
         .with_subagent_registry(agents.clone());
-        let plugins = crate::tool::first_party_plugin_host(root).expect("first-party plugin host");
+        let plugins = crate::tool::default_tool_host(root).expect("bundled plugin host");
         plugins
             .host_handle()
             .install_client(Arc::new(SessionTestHostClient {
@@ -7638,8 +7629,8 @@ mod tests {
             .await
             .expect("create session");
 
-        let entered: ToolInvocationExecution = FirstPartyExecution::new(
-            FirstPartyToolOutput::EnterWorktree {
+        let entered: ToolInvocationExecution = BundledExecution::new(
+            BundledToolOutput::EnterWorktree {
                 path: "/tmp/worktree".to_string(),
                 branch: "agena/demo".to_string(),
             },
@@ -7655,8 +7646,8 @@ mod tests {
             Some("/tmp/worktree".to_string())
         );
 
-        let exited: ToolInvocationExecution = FirstPartyExecution::new(
-            FirstPartyToolOutput::ExitWorktree {
+        let exited: ToolInvocationExecution = BundledExecution::new(
+            BundledToolOutput::ExitWorktree {
                 action: "keep".to_string(),
                 path: "/tmp/worktree".to_string(),
             },
@@ -8497,7 +8488,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let db = open_temp_database(&workspace.root, "permission-resume.db").await;
         let tool_policy = ToolPermissionPolicy::allow_all()
-            .with_first_party_mode("todo_write", PermissionMode::Ask);
+            .with_tool_mode("todo_write", PermissionMode::Ask);
         let first = build_manager_with_provider_on_db(
             &workspace.root,
             db.clone(),

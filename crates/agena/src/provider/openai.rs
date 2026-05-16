@@ -1034,15 +1034,15 @@ impl OpenAiProvider {
         })
     }
 
-    fn responses_tools(tools: &[crate::tool::EntryDefinition]) -> Vec<OpenAiResponsesTool> {
+    fn responses_tools(tools: &[crate::plugin::registry::PluginEntry]) -> Vec<OpenAiResponsesTool> {
         tools
             .iter()
             .map(|tool| OpenAiResponsesTool {
                 kind: "function",
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                parameters: tool.input_schema.clone(),
-                strict: tool.strict,
+                name: tool.exposed_name.clone(),
+                description: tool.description_text().to_string(),
+                parameters: tool.sanitized_input_schema(),
+                strict: tool.decl.strict,
             })
             .collect()
     }
@@ -2356,7 +2356,8 @@ mod tests {
         TimeRange, ToolExecutionPart, ToolInvocation, ToolOutput,
     };
     use crate::model::ModelId;
-    use crate::tool::{EntryBehavior, EntryDefinition};
+    use crate::plugin::PluginToolDecl;
+    use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -2441,19 +2442,22 @@ mod tests {
             Ok(())
         }
     }
-    fn sample_tool_definition() -> EntryDefinition {
-        EntryDefinition::plugin(
-            "project_search",
-            "Search project files.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string" }
-                },
-                "required": ["query"]
-            }),
-            EntryBehavior::ReadOnly,
+    fn sample_tool_definition() -> RegistryPluginEntry {
+        RegistryPluginEntry::new(
             "fixture",
+            PluginToolDecl::new(
+                "project_search",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            )
+            .description("Search project files.")
+            .tag(crate::plugin::sdk::ToolTag::ReadOnly)
+            .concurrency_safe(true),
         )
     }
 

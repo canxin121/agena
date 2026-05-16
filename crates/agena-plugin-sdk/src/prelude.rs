@@ -30,13 +30,14 @@ pub use crate::host_api::{
     HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
     HostStorageListRequest, HostStorageListResponse, HostStorageScope, HostStorageSetRequest,
     HostStorageVisibility, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
-    HostThemeRemoveRequest, HostThemeRemoveResponse, HostWorktreeEntry,
-    HostWorktreeListResponse, LogLevel, NoopHostClient,
+    HostThemeRemoveRequest, HostThemeRemoveResponse, HostWorktreeEntry, HostWorktreeListResponse,
+    LogLevel, NoopHostClient,
 };
 pub use crate::manifest::{
-    EntryBehavior, EntryLoadPriority, EntryStreamingMode, HookSubscription, HostCapability,
-    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathKind, PlanModePolicy, PluginEntryDecl,
-    PluginManifest, PluginManifestBuilder, TransportKind,
+    ToolLoadPriority, ToolStreamingMode, ToolTag, HookSubscription, HostCapability,
+    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
+    PluginToolDecl, PluginManifest, PluginManifestBuilder, TransportKind,
+    normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
 

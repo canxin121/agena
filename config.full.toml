@@ -93,7 +93,7 @@ enabled = true
 # `timeouts = { ... }` keys override these). Values like "5s", "2m", "200ms".
 # timeouts = { tool_invoke = "60s", permission_ask = "10s" }
 
-# Each entry under `[plugins.list.<id>]` declares a plugin. The `kind`
+# Each tool under `[plugins.list.<id>]` declares a plugin. The `kind`
 # discriminator picks the transport. Supported kinds:
 #
 #   * static  — compiled-in via `PluginHostBuilder::register_static`
@@ -105,11 +105,11 @@ enabled = true
 # First-party static plugins such as agena.fs, agena.shell, agena.web,
 # agena.workflow, agena.skills_fs, agena.lsp, agena.cron, agena.memory,
 # agena.hooks, and agena.mcp are registered by the runtime. Model-visible
-# built-ins are plugin entries.
+# built-ins are plugin tools.
 #
 # Plugins that call host callbacks must declare matching host_capabilities in
-# their manifest entries. For example, host/config.read requires ReadConfig,
-# host/entry.* requires EntryRegistry, and host/lsp.list_* requires LspRegistry.
+# their manifest tools. For example, host/config.read requires ReadConfig,
+# host/tool.* requires ToolRegistry, and host/lsp.list_* requires LspRegistry.
 #
 # Plugin storage and secrets live under ~/.agena/plugin-storage by default
 # (override with the AGENA_PLUGIN_STORAGE_DIR environment variable). Storage is

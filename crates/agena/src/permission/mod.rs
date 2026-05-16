@@ -10,7 +10,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::message::FirstPartyToolInput;
+use crate::message::BundledToolInput;
+use crate::plugin::sdk::{ToolTag, normalize_tool_tag_name};
 
 pub use request::{
     DecisionTrace, DecisionTraceStep, PendingPermission, PermissionAction, PermissionReply,
@@ -232,16 +233,16 @@ fn bash_rule_qualifier_reverse(command: &str, rules: &[BashPatternRule]) -> Opti
         .map(|rule| rule.pattern.clone())
 }
 
-pub fn builtin_tool_action(
-    input: &FirstPartyToolInput,
+pub fn tool_action(
+    input: &BundledToolInput,
     policy: Option<&ToolPermissionPolicy>,
 ) -> PermissionAction {
-    let tool_name = first_party_tool_name(input).to_string();
+    let tool_name = tool_name_for_input(input).to_string();
     let qualifier = match input {
-        FirstPartyToolInput::Bash(bash) => bash_permission_qualifier(bash.command.as_str(), policy),
+        BundledToolInput::Bash(bash) => bash_permission_qualifier(bash.command.as_str(), policy),
         _ => None,
     };
-    PermissionAction::BuiltinTool {
+    PermissionAction::Tool {
         tool_name,
         qualifier,
     }
@@ -268,20 +269,8 @@ impl ToolPermissionPolicy {
         self
     }
 
-    pub fn with_tag_mode(mut self, tag: impl AsRef<str>, mode: PermissionMode) -> Self {
-        if let Some(tag) = normalize_tool_tag(tag.as_ref()) {
-            self.tag_modes.insert(tag, mode);
-        }
-        self
-    }
-
-    pub fn with_first_party_mode(
-        mut self,
-        first_party_tool_name: &'static str,
-        mode: PermissionMode,
-    ) -> Self {
-        self.tool_modes
-            .insert(first_party_tool_name.to_string(), mode);
+    pub fn with_tag_mode(mut self, tag: ToolTag, mode: PermissionMode) -> Self {
+        self.tag_modes.insert(tag.as_str().to_string(), mode);
         self
     }
 
@@ -293,7 +282,7 @@ impl ToolPermissionPolicy {
     /// Append a bash command pattern rule. Patterns use `globset` glob syntax
     /// against the literal command string (e.g. `git status`, `rm *`,
     /// `pnpm *`). Rules are evaluated in registration order; the first match
-    /// wins. Bash-pattern rules apply *only* to `FirstPartyToolInput::Bash` and
+    /// wins. Bash-pattern rules apply *only* to `BundledToolInput::Bash` and
     /// override the per-tool default for that one invocation when matched.
     pub fn with_bash_pattern_rule(
         mut self,
@@ -345,13 +334,13 @@ impl ToolPermissionPolicy {
         &self.bash_overlay_rules
     }
 
-    pub fn check_first_party(&self, input: &FirstPartyToolInput) -> PermissionDecision {
-        let tool_name = first_party_tool_name(input);
+    pub fn check_tool_input(&self, input: &BundledToolInput) -> PermissionDecision {
+        let tool_name = tool_name_for_input(input);
         let command = match input {
-            FirstPartyToolInput::Bash(bash) => Some(bash.command.as_str()),
+            BundledToolInput::Bash(bash) => Some(bash.command.as_str()),
             _ => None,
         };
-        let tags = first_party_tool_tags(input);
+        let tags = tool_tags_for_input(input);
         self.check_tool(tool_name, command, &tags)
     }
 
@@ -363,7 +352,7 @@ impl ToolPermissionPolicy {
         &self,
         name: &str,
         command: Option<&str>,
-        tags: &[String],
+        tags: &[ToolTag],
     ) -> PermissionDecision {
         if name == "bash"
             && let Some(command) = command
@@ -381,13 +370,12 @@ impl ToolPermissionPolicy {
         self.check_tool_mode_with_tags(name, tags)
     }
 
-    fn check_tool_mode_with_tags(&self, name: &str, tags: &[String]) -> PermissionDecision {
+    fn check_tool_mode_with_tags(&self, name: &str, tags: &[ToolTag]) -> PermissionDecision {
         if let Some(mode) = self.tool_modes.get(name).copied() {
             return self.decision_for_mode(name, mode);
         }
         let matched = tags
             .iter()
-            .filter_map(|tag| normalize_tool_tag(tag))
             .filter_map(|tag| self.tag_modes.get(tag.as_str()).copied())
             .reduce(combine_permission_modes);
         let mode = matched.unwrap_or(self.default_mode);
@@ -481,35 +469,35 @@ impl ToolPermissionPolicy {
     }
 }
 
-pub fn first_party_tool_name(input: &FirstPartyToolInput) -> &'static str {
+pub fn tool_name_for_input(input: &BundledToolInput) -> &'static str {
     match input {
-        FirstPartyToolInput::Bash(_) => "bash",
-        FirstPartyToolInput::Read(_) => "read",
-        FirstPartyToolInput::ViewFile(_) => "view_file",
-        FirstPartyToolInput::ApplyPatch(_) => "apply_patch",
-        FirstPartyToolInput::Glob(_) => "glob",
-        FirstPartyToolInput::Grep(_) => "grep",
-        FirstPartyToolInput::Task(_) => "task",
-        FirstPartyToolInput::ToolSearch(_) => "tool_search",
-        FirstPartyToolInput::TodoWrite(_) => "todo_write",
-        FirstPartyToolInput::AskUser(_) => "ask_user",
-        FirstPartyToolInput::Monitor(_) => "monitor",
-        FirstPartyToolInput::WebFetch(_) => "web_fetch",
-        FirstPartyToolInput::WebSearch(_) => "web_search",
-        FirstPartyToolInput::EnterPlanMode(_) => "enter_plan_mode",
-        FirstPartyToolInput::ExitPlanMode(_) => "exit_plan_mode",
-        FirstPartyToolInput::EnterWorktree(_) => "enter_worktree",
-        FirstPartyToolInput::ExitWorktree(_) => "exit_worktree",
-        FirstPartyToolInput::CronCreate(_) => "cron_create",
-        FirstPartyToolInput::CronList(_) => "cron_list",
-        FirstPartyToolInput::CronDelete(_) => "cron_delete",
-        FirstPartyToolInput::ScheduleWakeup(_) => "schedule_wakeup",
-        FirstPartyToolInput::LspDefinition(_) => "lsp_definition",
-        FirstPartyToolInput::LspReferences(_) => "lsp_references",
-        FirstPartyToolInput::LspHover(_) => "lsp_hover",
-        FirstPartyToolInput::LspDiagnostics(_) => "lsp_diagnostics",
-        FirstPartyToolInput::NotebookEdit(_) => "notebook_edit",
-        FirstPartyToolInput::PowerShell(_) => "powershell",
+        BundledToolInput::Bash(_) => "bash",
+        BundledToolInput::Read(_) => "read",
+        BundledToolInput::ViewFile(_) => "view_file",
+        BundledToolInput::ApplyPatch(_) => "apply_patch",
+        BundledToolInput::Glob(_) => "glob",
+        BundledToolInput::Grep(_) => "grep",
+        BundledToolInput::Task(_) => "task",
+        BundledToolInput::ToolSearch(_) => "tool_search",
+        BundledToolInput::TodoWrite(_) => "todo_write",
+        BundledToolInput::AskUser(_) => "ask_user",
+        BundledToolInput::Monitor(_) => "monitor",
+        BundledToolInput::WebFetch(_) => "web_fetch",
+        BundledToolInput::WebSearch(_) => "web_search",
+        BundledToolInput::EnterPlanMode(_) => "enter_plan_mode",
+        BundledToolInput::ExitPlanMode(_) => "exit_plan_mode",
+        BundledToolInput::EnterWorktree(_) => "enter_worktree",
+        BundledToolInput::ExitWorktree(_) => "exit_worktree",
+        BundledToolInput::CronCreate(_) => "cron_create",
+        BundledToolInput::CronList(_) => "cron_list",
+        BundledToolInput::CronDelete(_) => "cron_delete",
+        BundledToolInput::ScheduleWakeup(_) => "schedule_wakeup",
+        BundledToolInput::LspDefinition(_) => "lsp_definition",
+        BundledToolInput::LspReferences(_) => "lsp_references",
+        BundledToolInput::LspHover(_) => "lsp_hover",
+        BundledToolInput::LspDiagnostics(_) => "lsp_diagnostics",
+        BundledToolInput::NotebookEdit(_) => "notebook_edit",
+        BundledToolInput::PowerShell(_) => "powershell",
     }
 }
 
@@ -522,103 +510,84 @@ pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> 
 }
 
 pub fn normalize_tool_tag(tag: impl AsRef<str>) -> Option<String> {
-    let normalized = tag
-        .as_ref()
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .split('_')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("_");
-    (!normalized.is_empty()).then_some(normalized)
+    normalize_tool_tag_name(tag)
 }
 
-pub fn first_party_tool_tags(input: &FirstPartyToolInput) -> Vec<String> {
+pub fn tool_tags_for_input(input: &BundledToolInput) -> Vec<ToolTag> {
     let mut tags = Vec::new();
     match input {
-        FirstPartyToolInput::Bash(bash) => {
-            push_tool_tag(&mut tags, "mutating");
-            push_tool_tag(&mut tags, "shell");
+        BundledToolInput::Bash(bash) => {
+            push_tool_tag(&mut tags, ToolTag::Mutating);
+            push_tool_tag(&mut tags, ToolTag::Shell);
             push_filesystem_effect_tags(&mut tags, &bash.filesystem_effects);
         }
-        FirstPartyToolInput::PowerShell(powershell) => {
-            push_tool_tag(&mut tags, "mutating");
-            push_tool_tag(&mut tags, "shell");
+        BundledToolInput::PowerShell(powershell) => {
+            push_tool_tag(&mut tags, ToolTag::Mutating);
+            push_tool_tag(&mut tags, ToolTag::Shell);
             push_filesystem_effect_tags(&mut tags, &powershell.filesystem_effects);
         }
-        FirstPartyToolInput::Monitor(_) => {
-            push_tool_tag(&mut tags, "mutating");
-            push_tool_tag(&mut tags, "shell");
+        BundledToolInput::Monitor(_) => {
+            push_tool_tag(&mut tags, ToolTag::Mutating);
+            push_tool_tag(&mut tags, ToolTag::Shell);
         }
-        FirstPartyToolInput::ApplyPatch(_) | FirstPartyToolInput::NotebookEdit(_) => {
-            push_tool_tag(&mut tags, "mutating");
-            push_tool_tag(&mut tags, "filesystem_write");
+        BundledToolInput::ApplyPatch(_) | BundledToolInput::NotebookEdit(_) => {
+            push_tool_tag(&mut tags, ToolTag::Mutating);
+            push_tool_tag(&mut tags, ToolTag::FilesystemWrite);
         }
-        FirstPartyToolInput::Read(_)
-        | FirstPartyToolInput::ViewFile(_)
-        | FirstPartyToolInput::Glob(_)
-        | FirstPartyToolInput::Grep(_)
-        | FirstPartyToolInput::LspDefinition(_)
-        | FirstPartyToolInput::LspReferences(_)
-        | FirstPartyToolInput::LspHover(_)
-        | FirstPartyToolInput::LspDiagnostics(_) => {
-            push_tool_tag(&mut tags, "read_only");
-            push_tool_tag(&mut tags, "filesystem_read");
+        BundledToolInput::Read(_)
+        | BundledToolInput::ViewFile(_)
+        | BundledToolInput::Glob(_)
+        | BundledToolInput::Grep(_)
+        | BundledToolInput::LspDefinition(_)
+        | BundledToolInput::LspReferences(_)
+        | BundledToolInput::LspHover(_)
+        | BundledToolInput::LspDiagnostics(_) => {
+            push_tool_tag(&mut tags, ToolTag::ReadOnly);
+            push_tool_tag(&mut tags, ToolTag::FilesystemRead);
         }
-        FirstPartyToolInput::WebFetch(_) | FirstPartyToolInput::WebSearch(_) => {
-            push_tool_tag(&mut tags, "read_only");
-            push_tool_tag(&mut tags, "network");
-            push_tool_tag(&mut tags, "internet");
+        BundledToolInput::WebFetch(_) | BundledToolInput::WebSearch(_) => {
+            push_tool_tag(&mut tags, ToolTag::ReadOnly);
+            push_tool_tag(&mut tags, ToolTag::Network);
+            push_tool_tag(&mut tags, ToolTag::Internet);
         }
-        FirstPartyToolInput::Task(_) => {
-            push_tool_tag(&mut tags, "task");
+        BundledToolInput::Task(_) => {
+            push_tool_tag(&mut tags, ToolTag::Task);
         }
-        FirstPartyToolInput::ToolSearch(_)
-        | FirstPartyToolInput::AskUser(_)
-        | FirstPartyToolInput::CronList(_)
-        | FirstPartyToolInput::EnterPlanMode(_)
-        | FirstPartyToolInput::ExitPlanMode(_) => {
-            push_tool_tag(&mut tags, "read_only");
+        BundledToolInput::ToolSearch(_)
+        | BundledToolInput::AskUser(_)
+        | BundledToolInput::CronList(_)
+        | BundledToolInput::EnterPlanMode(_)
+        | BundledToolInput::ExitPlanMode(_) => {
+            push_tool_tag(&mut tags, ToolTag::ReadOnly);
         }
-        FirstPartyToolInput::TodoWrite(_)
-        | FirstPartyToolInput::EnterWorktree(_)
-        | FirstPartyToolInput::ExitWorktree(_)
-        | FirstPartyToolInput::CronCreate(_)
-        | FirstPartyToolInput::CronDelete(_)
-        | FirstPartyToolInput::ScheduleWakeup(_) => {
-            push_tool_tag(&mut tags, "mutating");
+        BundledToolInput::TodoWrite(_)
+        | BundledToolInput::EnterWorktree(_)
+        | BundledToolInput::ExitWorktree(_)
+        | BundledToolInput::CronCreate(_)
+        | BundledToolInput::CronDelete(_)
+        | BundledToolInput::ScheduleWakeup(_) => {
+            push_tool_tag(&mut tags, ToolTag::Mutating);
         }
     }
     tags
 }
 
-pub fn push_tool_tag(tags: &mut Vec<String>, tag: impl AsRef<str>) {
-    let Some(tag) = normalize_tool_tag(tag) else {
-        return;
-    };
+pub fn push_tool_tag(tags: &mut Vec<ToolTag>, tag: ToolTag) {
     if !tags.iter().any(|existing| existing == &tag) {
         tags.push(tag);
     }
 }
 
 fn push_filesystem_effect_tags(
-    tags: &mut Vec<String>,
+    tags: &mut Vec<ToolTag>,
     effects: &[crate::message::FilesystemEffect],
 ) {
     for effect in effects {
         if effect.access.includes_read() {
-            push_tool_tag(tags, "filesystem_read");
+            push_tool_tag(tags, ToolTag::FilesystemRead);
         }
         if effect.access.includes_write() {
-            push_tool_tag(tags, "filesystem_write");
+            push_tool_tag(tags, ToolTag::FilesystemWrite);
         }
     }
 }
@@ -1512,7 +1481,7 @@ fn normalize_path_string(path: &Path) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::message::{ApplyPatchToolInput, FirstPartyToolInput, ReadToolInput};
+    use crate::message::{ApplyPatchToolInput, BundledToolInput, ReadToolInput};
 
     use super::{
         AccessKind, AccessSelector, NetworkPermissionPolicy, NetworkTarget, PermissionDecision,
@@ -1656,13 +1625,13 @@ mod tests {
     #[test]
     fn tool_permission_policy_uses_default_mode() {
         let policy = ToolPermissionPolicy::new(PermissionMode::Ask);
-        let input = FirstPartyToolInput::Read(ReadToolInput {
+        let input = BundledToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
 
-        match policy.check_first_party(&input) {
+        match policy.check_tool_input(&input) {
             PermissionDecision::Ask { reason } => {
                 assert!(reason.contains("read"));
             }
@@ -1673,21 +1642,21 @@ mod tests {
     #[test]
     fn tool_permission_policy_supports_per_tool_overrides() {
         let policy = ToolPermissionPolicy::new(PermissionMode::Deny)
-            .with_first_party_mode("read", PermissionMode::Allow)
-            .with_first_party_mode("apply_patch", PermissionMode::Ask);
+            .with_tool_mode("read", PermissionMode::Allow)
+            .with_tool_mode("apply_patch", PermissionMode::Ask);
 
-        let read = FirstPartyToolInput::Read(ReadToolInput {
+        let read = BundledToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
-        let apply_patch = FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
+        let apply_patch = BundledToolInput::ApplyPatch(ApplyPatchToolInput {
             patch: "*** Begin Patch\n*** Add File: README.md\n+hello\n*** End Patch".to_string(),
         });
 
-        assert_eq!(policy.check_first_party(&read), PermissionDecision::Allow);
+        assert_eq!(policy.check_tool_input(&read), PermissionDecision::Allow);
 
-        match policy.check_first_party(&apply_patch) {
+        match policy.check_tool_input(&apply_patch) {
             PermissionDecision::Ask { reason } => {
                 assert!(reason.contains("apply_patch"));
             }
@@ -1698,27 +1667,27 @@ mod tests {
     #[test]
     fn bash_pattern_rule_allows_matching_command_even_when_default_is_ask() {
         let policy = ToolPermissionPolicy::new(PermissionMode::Allow)
-            .with_first_party_mode("bash", PermissionMode::Ask)
+            .with_tool_mode("bash", PermissionMode::Ask)
             .with_bash_pattern_rule("git *", PermissionMode::Allow)
             .expect("git glob compiles");
 
-        let bash = FirstPartyToolInput::Bash(crate::message::BashToolInput {
+        let bash = BundledToolInput::Bash(crate::message::BashToolInput {
             command: "git status".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
             filesystem_effects: Vec::new(),
         });
-        assert_eq!(policy.check_first_party(&bash), PermissionDecision::Allow);
+        assert_eq!(policy.check_tool_input(&bash), PermissionDecision::Allow);
 
-        let other = FirstPartyToolInput::Bash(crate::message::BashToolInput {
+        let other = BundledToolInput::Bash(crate::message::BashToolInput {
             command: "make".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
             filesystem_effects: Vec::new(),
         });
-        match policy.check_first_party(&other) {
+        match policy.check_tool_input(&other) {
             PermissionDecision::Ask { reason } => assert!(reason.contains("bash")),
             other => panic!("expected ask decision, got {other:?}"),
         }
@@ -1730,25 +1699,25 @@ mod tests {
             .with_bash_pattern_rule("rm *", PermissionMode::Ask)
             .expect("rm glob compiles");
 
-        let bash = FirstPartyToolInput::Bash(crate::message::BashToolInput {
+        let bash = BundledToolInput::Bash(crate::message::BashToolInput {
             command: "rm -rf build".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
             filesystem_effects: Vec::new(),
         });
-        match policy.check_first_party(&bash) {
+        match policy.check_tool_input(&bash) {
             PermissionDecision::Ask { reason } => assert!(reason.contains("`rm *`")),
             other => panic!("expected ask decision, got {other:?}"),
         }
 
         // Non-bash invocations are unaffected by bash pattern rules.
-        let read = FirstPartyToolInput::Read(ReadToolInput {
+        let read = BundledToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
-        assert_eq!(policy.check_first_party(&read), PermissionDecision::Allow);
+        assert_eq!(policy.check_tool_input(&read), PermissionDecision::Allow);
     }
 
     #[test]
@@ -1759,26 +1728,26 @@ mod tests {
             .with_bash_pattern_rule("git *", PermissionMode::Allow)
             .expect("second rule compiles");
 
-        let push = FirstPartyToolInput::Bash(crate::message::BashToolInput {
+        let push = BundledToolInput::Bash(crate::message::BashToolInput {
             command: "git push origin master".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
             filesystem_effects: Vec::new(),
         });
-        match policy.check_first_party(&push) {
+        match policy.check_tool_input(&push) {
             PermissionDecision::Ask { reason } => assert!(reason.contains("`git push *`")),
             other => panic!("expected ask decision, got {other:?}"),
         }
 
-        let status = FirstPartyToolInput::Bash(crate::message::BashToolInput {
+        let status = BundledToolInput::Bash(crate::message::BashToolInput {
             command: "git status".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
             filesystem_effects: Vec::new(),
         });
-        assert_eq!(policy.check_first_party(&status), PermissionDecision::Allow);
+        assert_eq!(policy.check_tool_input(&status), PermissionDecision::Allow);
     }
 
     #[test]
@@ -1787,14 +1756,14 @@ mod tests {
             .with_bash_pattern_rule("git *", PermissionMode::Allow)
             .expect("rule compiles");
 
-        let bash = FirstPartyToolInput::Bash(crate::message::BashToolInput {
+        let bash = BundledToolInput::Bash(crate::message::BashToolInput {
             command: "make build".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
             filesystem_effects: Vec::new(),
         });
-        match policy.check_first_party(&bash) {
+        match policy.check_tool_input(&bash) {
             PermissionDecision::Deny { reason } => assert!(reason.contains("bash")),
             other => panic!("expected deny decision, got {other:?}"),
         }
@@ -1803,15 +1772,18 @@ mod tests {
     #[test]
     fn tag_defaults_combine_by_most_restrictive_mode() {
         let policy = ToolPermissionPolicy::allow_all()
-            .with_tag_mode("read_only", PermissionMode::Allow)
-            .with_tag_mode("network", PermissionMode::Ask)
-            .with_tag_mode("private_network", PermissionMode::Deny);
+            .with_tag_mode(crate::plugin::sdk::ToolTag::ReadOnly, PermissionMode::Allow)
+            .with_tag_mode(crate::plugin::sdk::ToolTag::Network, PermissionMode::Ask)
+            .with_tag_mode(crate::plugin::sdk::ToolTag::PrivateNetwork, PermissionMode::Deny);
 
         assert_eq!(
             policy.check_tool(
                 "plugin_paths",
                 None,
-                &["read_only".to_string(), "network".to_string()]
+                &[
+                    crate::plugin::sdk::ToolTag::ReadOnly,
+                    crate::plugin::sdk::ToolTag::Network,
+                ]
             ),
             PermissionDecision::Ask {
                 reason: "tool 'plugin_paths' requires confirmation by policy".to_string()
@@ -1820,7 +1792,10 @@ mod tests {
         match policy.check_tool(
             "plugin_paths",
             None,
-            &["network".to_string(), "private_network".to_string()],
+            &[
+                crate::plugin::sdk::ToolTag::Network,
+                crate::plugin::sdk::ToolTag::PrivateNetwork,
+            ],
         ) {
             PermissionDecision::Deny { reason } => assert!(reason.contains("plugin_paths")),
             other => panic!("expected deny decision, got {other:?}"),
@@ -1835,14 +1810,14 @@ mod tests {
             .with_bash_deny_pattern("rm -rf /*")
             .expect("deny pattern compiles");
 
-        let dangerous = FirstPartyToolInput::Bash(crate::message::BashToolInput {
+        let dangerous = BundledToolInput::Bash(crate::message::BashToolInput {
             command: "rm -rf /tmp/oops".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
             filesystem_effects: Vec::new(),
         });
-        match policy.check_first_party(&dangerous) {
+        match policy.check_tool_input(&dangerous) {
             PermissionDecision::Deny { reason } => {
                 assert!(reason.contains("deny pattern"));
             }
@@ -1850,14 +1825,14 @@ mod tests {
         }
 
         // A non-matching command still flows through the normal pipeline.
-        let safe = FirstPartyToolInput::Bash(crate::message::BashToolInput {
+        let safe = BundledToolInput::Bash(crate::message::BashToolInput {
             command: "rm tmpfile".to_string(),
             description: String::new(),
             timeout_ms: None,
             workdir: None,
             filesystem_effects: Vec::new(),
         });
-        assert_eq!(policy.check_first_party(&safe), PermissionDecision::Allow);
+        assert_eq!(policy.check_tool_input(&safe), PermissionDecision::Allow);
     }
 
     fn workspace_root() -> PathBuf {

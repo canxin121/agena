@@ -11,7 +11,7 @@ use async_trait::async_trait;
 
 use crate::message::{
     AskUserToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
-    ExitWorktreeToolInput, FirstPartyToolInput, MonitorStatus, MonitorStream, StructuredObject,
+    ExitWorktreeToolInput, BundledToolInput, MonitorStatus, MonitorStream, StructuredObject,
     TaskSubagentType, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation,
     ToolOutput, UserInputOption, UserInputQuestion,
 };
@@ -42,11 +42,13 @@ use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
     PermissionDecision as PluginPermissionDecision, PluginError, ToolInvokeOutput,
 };
-use crate::plugins::storage::{PluginSecretStore, PluginStorage, PluginStorageError, StorageLocator};
+use crate::plugins::storage::{
+    PluginSecretStore, PluginStorage, PluginStorageError, StorageLocator,
+};
 use crate::runtime::AgenaRuntime;
-use crate::tool::{EntrySource, MonitorError, MonitorReadParams, MonitorStartParams};
+use crate::tool::{MonitorError, MonitorReadParams, MonitorStartParams};
 use crate::{
-    entry::FirstPartyExecutionContext, plugins::bundled::router::first_party_to_invoke_output,
+    entry::BundledExecutionContext, plugins::bundled::router::bundled_to_invoke_output,
 };
 
 /// Build a `HostClient` impl for a runtime; use [`NoopHostClient`] when no
@@ -288,26 +290,16 @@ fn parse_subagent_type(value: &str) -> Result<TaskSubagentType, PluginError> {
     }
 }
 
-fn render_tool_descriptor(definition: crate::tool::EntryDefinition) -> ToolDescriptor {
-    let deferred = definition.is_deferred();
+fn render_tool_descriptor(tool: crate::plugin::registry::PluginEntry) -> ToolDescriptor {
+    let deferred = tool.is_deferred();
+    let description = tool.description_text().trim().to_string();
+    let tags = tool.effective_tags();
     ToolDescriptor {
-        name: definition.name,
-        description: (!definition.description.trim().is_empty()).then_some(definition.description),
-        search_terms: definition.search_terms,
-        behavior: Some(
-            match definition.behavior {
-                crate::tool::EntryBehavior::Mutating => "mutating",
-                crate::tool::EntryBehavior::ReadOnly => "read_only",
-                crate::tool::EntryBehavior::Task => "task",
-            }
-            .to_string(),
-        ),
+        name: tool.exposed_name,
+        description: (!description.is_empty()).then_some(description),
+        tags,
         deferred,
-        read_only: definition.read_only,
-        plugin_id: match definition.source {
-            EntrySource::FirstParty => None,
-            EntrySource::Plugin { plugin_name } => Some(plugin_name),
-        },
+        plugin_id: (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name),
     }
 }
 
@@ -501,17 +493,17 @@ fn map_create_goal_error(err: crate::AppError) -> PluginError {
     }
 }
 
-fn workflow_first_party_output(
+fn workflow_bundled_output(
     executor: &crate::tool::ToolExecutor,
-    input: FirstPartyToolInput,
+    input: BundledToolInput,
     session_id: Option<i64>,
     call_id: Option<i64>,
     session_context: Option<&crate::session::SessionExecutionContext>,
 ) -> Result<ToolInvokeOutput, PluginError> {
-    let execution = crate::entry::orchestrator::execute_first_party(
+    let execution = crate::entry::orchestrator::execute_bundled(
         executor,
         &input,
-        FirstPartyExecutionContext {
+        BundledExecutionContext {
             session_id,
             call_id,
             session_context: session_context.cloned(),
@@ -519,7 +511,7 @@ fn workflow_first_party_output(
         },
     )
     .map_err(|err| PluginError::new(err.to_string()))?;
-    Ok(first_party_to_invoke_output(execution))
+    Ok(bundled_to_invoke_output(execution))
 }
 
 #[async_trait]
@@ -672,7 +664,7 @@ impl HostClient for RuntimeHostClient {
             .ok_or_else(|| PluginError::new(format!("entry `{tool}` not found")))?;
 
         let caller = self.callback_context()?;
-        let plugin_id = resolution.handle.plugin_id.clone();
+        let plugin_id = resolution.plugin_name.clone();
         if caller
             .plugin_id
             .as_ref()
@@ -789,9 +781,9 @@ impl HostClient for RuntimeHostClient {
     async fn todo_write(&self, req: HostTodoWriteRequest) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_first_party_output(
+        workflow_bundled_output(
             &executor,
-            FirstPartyToolInput::TodoWrite(TodoWriteToolInput {
+            BundledToolInput::TodoWrite(TodoWriteToolInput {
                 items: req.items.into_iter().map(todo_item_from_host).collect(),
             }),
             context.session_id.filter(|id| *id >= 0),
@@ -895,9 +887,9 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_first_party_output(
+        workflow_bundled_output(
             &executor,
-            FirstPartyToolInput::EnterPlanMode(EnterPlanModeToolInput::default()),
+            BundledToolInput::EnterPlanMode(EnterPlanModeToolInput::default()),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
             session_context.as_ref(),
@@ -910,9 +902,9 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_first_party_output(
+        workflow_bundled_output(
             &executor,
-            FirstPartyToolInput::ExitPlanMode(ExitPlanModeToolInput::default()),
+            BundledToolInput::ExitPlanMode(ExitPlanModeToolInput::default()),
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
             session_context.as_ref(),
@@ -925,9 +917,9 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_first_party_output(
+        workflow_bundled_output(
             &executor,
-            FirstPartyToolInput::EnterWorktree(EnterWorktreeToolInput {
+            BundledToolInput::EnterWorktree(EnterWorktreeToolInput {
                 name: req.name,
                 path: req.path,
             }),
@@ -943,9 +935,9 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_first_party_output(
+        workflow_bundled_output(
             &executor,
-            FirstPartyToolInput::ExitWorktree(ExitWorktreeToolInput {
+            BundledToolInput::ExitWorktree(ExitWorktreeToolInput {
                 action: req.action,
                 discard_changes: req.discard_changes,
             }),
@@ -1455,7 +1447,7 @@ fn agent_scope_from_str(scope: &str) -> crate::agents::AgentScope {
     match scope {
         "project" => crate::agents::AgentScope::Project,
         "user" => crate::agents::AgentScope::User,
-        _ => crate::agents::AgentScope::FirstParty,
+        _ => crate::agents::AgentScope::Bundled,
     }
 }
 
@@ -1494,7 +1486,7 @@ fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostAgentDescrip
         scope: match profile.scope {
             crate::agents::AgentScope::Project => "project",
             crate::agents::AgentScope::User => "user",
-            crate::agents::AgentScope::FirstParty => "first_party",
+            crate::agents::AgentScope::Bundled => "bundled",
         }
         .to_string(),
     }
@@ -1675,8 +1667,8 @@ fn core_tool_permission_from_sdk(
             .into_iter()
             .map(|(tag, mode)| (tag, core_permission_mode_from_sdk(mode)))
             .collect(),
-        first_party: tools
-            .first_party
+        names: tools
+            .names
             .into_iter()
             .map(|(tool, mode)| (tool, core_permission_mode_from_sdk(mode)))
             .collect(),
@@ -1702,8 +1694,8 @@ fn sdk_tool_permission_from_core(
             .into_iter()
             .map(|(tag, mode)| (tag, sdk_permission_mode_from_core(mode)))
             .collect(),
-        first_party: tools
-            .first_party
+        names: tools
+            .names
             .into_iter()
             .map(|(tool, mode)| (tool, sdk_permission_mode_from_core(mode)))
             .collect(),

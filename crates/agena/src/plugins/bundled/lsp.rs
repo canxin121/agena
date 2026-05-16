@@ -2,7 +2,7 @@
 //! LSP servers plus the model-visible LSP entries (`lsp_definition`,
 //! `lsp_references`, `lsp_hover`, `lsp_diagnostics`). `lsp_servers` is
 //! plugin-native and uses `host.lsp_list_servers`; the other LSP entries share
-//! the in-process router bridge while remaining normal plugin entries.
+//! the in-process router bridge while remaining normal plugin tools.
 
 use std::sync::{Arc, RwLock};
 
@@ -16,9 +16,8 @@ use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
 use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
 use crate::plugin::sdk::{
-    EntryBehavior as SdkEntryBehavior, HookSubscription, HostCapability, InitContext, InitOutcome,
-    PlanModePolicy, Plugin, PluginEntryDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
-    ToolInvokeOutput,
+    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginToolDecl,
+    PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 use crate::plugins::bundled::router;
 
@@ -65,14 +64,14 @@ impl Plugin for LspPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-lsp", env!("CARGO_PKG_VERSION"))
             .description(
-                "LSP read-only observability and first-party LSP entry surface exposed as a plugin.",
+                "LSP read-only observability and bundled LSP entry surface exposed as a plugin.",
             )
             .hooks(HookSubscription::TOOL_INVOKE)
-            .entry(lsp_servers_decl())
-            .entry(lsp_definition_decl())
-            .entry(lsp_references_decl())
-            .entry(lsp_hover_decl())
-            .entry(lsp_diagnostics_decl())
+            .tool(lsp_servers_decl())
+            .tool(lsp_definition_decl())
+            .tool(lsp_references_decl())
+            .tool(lsp_hover_decl())
+            .tool(lsp_diagnostics_decl())
             .build()
     }
 
@@ -114,87 +113,83 @@ impl Plugin for LspPlugin {
             }
             name @ ("lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_diagnostics") => {
                 let _ = self.host()?;
-                router::invoke_first_party_tool(name, input.input, input.session_id, input.call_id)
+                router::invoke_bundled_tool(name, input.input, input.session_id, input.call_id)
             }
             other => Err(PluginError::invalid_params(format!(
-                "unknown lsp plugin entry '{other}'"
+                "unknown lsp plugin tool '{other}'"
             ))),
         }
     }
 }
 
-pub(crate) fn lsp_servers_decl() -> PluginEntryDecl {
-    PluginEntryDecl::new(
+pub(crate) fn lsp_servers_decl() -> PluginToolDecl {
+    PluginToolDecl::new(
         "lsp_servers",
         crate::entry::definition::json_schema_for::<LspServersInput>(),
     )
     .description("List the configured LSP servers known to the host (read-only).")
-    .behavior(SdkEntryBehavior::ReadOnly)
-    .search_terms(["lsp", "language-server", "list"])
+    .tags([ToolTag::ReadOnly, ToolTag::Lsp])
+    .concurrency_safe(true)
     .host_capability(HostCapability::LspRegistry)
 }
 
-pub(crate) fn lsp_definition_decl() -> PluginEntryDecl {
-    PluginEntryDecl::new(
+pub(crate) fn lsp_definition_decl() -> PluginToolDecl {
+    PluginToolDecl::new(
         "lsp_definition",
         crate::entry::definition::json_schema_for::<LspDefinitionToolInput>(),
     )
     .description(
         "Resolve the symbol at file_path:line:character to its definition site(s) via the configured LSP server.",
     )
-    .behavior(SdkEntryBehavior::ReadOnly)
+    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
     .input_path(required_path("$.file_path", PathKind::Read))
-    .search_terms(["lsp", "definition", "go to def", "jump"])
+    .concurrency_safe(true)
     .deferred_load()
-    .plan_mode_policy(PlanModePolicy::Allowed)
     .host_capability(HostCapability::LspRegistry)
 }
 
-pub(crate) fn lsp_references_decl() -> PluginEntryDecl {
-    PluginEntryDecl::new(
+pub(crate) fn lsp_references_decl() -> PluginToolDecl {
+    PluginToolDecl::new(
         "lsp_references",
         crate::entry::definition::json_schema_for::<LspReferencesToolInput>(),
     )
     .description(
         "List every reference to the symbol at file_path:line:character via the configured LSP server.",
     )
-    .behavior(SdkEntryBehavior::ReadOnly)
+    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
     .input_path(required_path("$.file_path", PathKind::Read))
-    .search_terms(["lsp", "references", "callers", "usages"])
+    .concurrency_safe(true)
     .deferred_load()
-    .plan_mode_policy(PlanModePolicy::Allowed)
     .host_capability(HostCapability::LspRegistry)
 }
 
-pub(crate) fn lsp_hover_decl() -> PluginEntryDecl {
-    PluginEntryDecl::new(
+pub(crate) fn lsp_hover_decl() -> PluginToolDecl {
+    PluginToolDecl::new(
         "lsp_hover",
         crate::entry::definition::json_schema_for::<LspHoverToolInput>(),
     )
     .description(
         "Read the hover documentation / type signature for the symbol at file_path:line:character.",
     )
-    .behavior(SdkEntryBehavior::ReadOnly)
+    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
     .input_path(required_path("$.file_path", PathKind::Read))
-    .search_terms(["lsp", "hover", "type", "signature", "docs"])
+    .concurrency_safe(true)
     .deferred_load()
-    .plan_mode_policy(PlanModePolicy::Allowed)
     .host_capability(HostCapability::LspRegistry)
 }
 
-pub(crate) fn lsp_diagnostics_decl() -> PluginEntryDecl {
-    PluginEntryDecl::new(
+pub(crate) fn lsp_diagnostics_decl() -> PluginToolDecl {
+    PluginToolDecl::new(
         "lsp_diagnostics",
         crate::entry::definition::json_schema_for::<LspDiagnosticsToolInput>(),
     )
     .description(
         "Return the latest LSP-published diagnostics (errors / warnings / hints) for a file.",
     )
-    .behavior(SdkEntryBehavior::ReadOnly)
+    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
     .input_path(required_path("$.file_path", PathKind::Read))
-    .search_terms(["lsp", "diagnostics", "errors", "warnings", "lint"])
+    .concurrency_safe(true)
     .deferred_load()
-    .plan_mode_policy(PlanModePolicy::Allowed)
     .host_capability(HostCapability::LspRegistry)
 }
 

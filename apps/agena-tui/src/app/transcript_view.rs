@@ -826,26 +826,26 @@ fn strip_terminal_ansi_sequences(text: &str) -> String {
 }
 
 fn apply_patch_diff(details: &agena::message::ToolOutput) -> Option<String> {
-    match details.as_first_party()? {
-        FirstPartyToolOutput::ApplyPatch { diff, .. } if !diff.trim().is_empty() => Some(diff),
+    match details.as_bundled()? {
+        BundledToolOutput::ApplyPatch { diff, .. } if !diff.trim().is_empty() => Some(diff),
         _ => None,
     }
 }
 
 fn tool_invocation_label(invocation: &ToolInvocation) -> String {
-    if let Some(input) = invocation.as_first_party() {
+    if let Some(input) = invocation.as_bundled() {
         return match input {
-            FirstPartyToolInput::Bash(input) => format!("bash {}", input.command),
-            FirstPartyToolInput::Read(input) => format!("read {}", input.file_path),
-            FirstPartyToolInput::ViewFile(input) => format!("view_file {}", input.path),
-            FirstPartyToolInput::ApplyPatch(_) => "apply_patch".to_string(),
-            FirstPartyToolInput::Glob(input) => format!("glob {}", input.pattern),
-            FirstPartyToolInput::Grep(input) => format!("grep {}", input.pattern),
-            FirstPartyToolInput::Task(input) => format!("task {}", input.description),
-            FirstPartyToolInput::ToolSearch(input) => format!("tool_search {}", input.query),
-            FirstPartyToolInput::TodoWrite(_) => "todo_write".to_string(),
-            FirstPartyToolInput::AskUser(_) => "ask_user".to_string(),
-            FirstPartyToolInput::Monitor(input) => match input {
+            BundledToolInput::Bash(input) => format!("bash {}", input.command),
+            BundledToolInput::Read(input) => format!("read {}", input.file_path),
+            BundledToolInput::ViewFile(input) => format!("view_file {}", input.path),
+            BundledToolInput::ApplyPatch(_) => "apply_patch".to_string(),
+            BundledToolInput::Glob(input) => format!("glob {}", input.pattern),
+            BundledToolInput::Grep(input) => format!("grep {}", input.pattern),
+            BundledToolInput::Task(input) => format!("task {}", input.description),
+            BundledToolInput::ToolSearch(input) => format!("tool_search {}", input.query),
+            BundledToolInput::TodoWrite(_) => "todo_write".to_string(),
+            BundledToolInput::AskUser(_) => "ask_user".to_string(),
+            BundledToolInput::Monitor(input) => match input {
                 agena::message::MonitorToolInput::Start { command, .. } => {
                     format!("monitor start {command}")
                 }
@@ -857,49 +857,49 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
                     format!("monitor stop {monitor_id}")
                 }
             },
-            FirstPartyToolInput::WebFetch(input) => format!("web_fetch {}", input.url),
-            FirstPartyToolInput::WebSearch(input) => format!("web_search {}", input.query),
-            FirstPartyToolInput::EnterPlanMode(_) => "enter_plan_mode".to_string(),
-            FirstPartyToolInput::ExitPlanMode(_) => "exit_plan_mode".to_string(),
-            FirstPartyToolInput::EnterWorktree(input) => match (&input.name, &input.path) {
+            BundledToolInput::WebFetch(input) => format!("web_fetch {}", input.url),
+            BundledToolInput::WebSearch(input) => format!("web_search {}", input.query),
+            BundledToolInput::EnterPlanMode(_) => "enter_plan_mode".to_string(),
+            BundledToolInput::ExitPlanMode(_) => "exit_plan_mode".to_string(),
+            BundledToolInput::EnterWorktree(input) => match (&input.name, &input.path) {
                 (Some(n), _) => format!("enter_worktree name={n}"),
                 (_, Some(p)) => format!("enter_worktree path={p}"),
                 _ => "enter_worktree".to_string(),
             },
-            FirstPartyToolInput::ExitWorktree(input) => format!("exit_worktree {}", input.action),
-            FirstPartyToolInput::CronCreate(input) => {
+            BundledToolInput::ExitWorktree(input) => format!("exit_worktree {}", input.action),
+            BundledToolInput::CronCreate(input) => {
                 format!("cron_create {}", input.expression)
             }
-            FirstPartyToolInput::CronList(_) => "cron_list".to_string(),
-            FirstPartyToolInput::CronDelete(input) => format!("cron_delete {}", input.id),
-            FirstPartyToolInput::ScheduleWakeup(input) => {
+            BundledToolInput::CronList(_) => "cron_list".to_string(),
+            BundledToolInput::CronDelete(input) => format!("cron_delete {}", input.id),
+            BundledToolInput::ScheduleWakeup(input) => {
                 format!("schedule_wakeup +{}s", input.delay_seconds)
             }
-            FirstPartyToolInput::LspDefinition(input) => {
+            BundledToolInput::LspDefinition(input) => {
                 format!(
                     "lsp_definition {}:{}:{}",
                     input.file_path, input.line, input.character
                 )
             }
-            FirstPartyToolInput::LspReferences(input) => {
+            BundledToolInput::LspReferences(input) => {
                 format!(
                     "lsp_references {}:{}:{}",
                     input.file_path, input.line, input.character
                 )
             }
-            FirstPartyToolInput::LspHover(input) => {
+            BundledToolInput::LspHover(input) => {
                 format!(
                     "lsp_hover {}:{}:{}",
                     input.file_path, input.line, input.character
                 )
             }
-            FirstPartyToolInput::LspDiagnostics(input) => {
+            BundledToolInput::LspDiagnostics(input) => {
                 format!("lsp_diagnostics {}", input.file_path)
             }
-            FirstPartyToolInput::NotebookEdit(input) => {
+            BundledToolInput::NotebookEdit(input) => {
                 format!("notebook_edit {}", input.notebook_path)
             }
-            FirstPartyToolInput::PowerShell(input) => format!("powershell {}", input.command),
+            BundledToolInput::PowerShell(input) => format!("powershell {}", input.command),
         };
     }
     let ToolInvocation { name, .. } = invocation;

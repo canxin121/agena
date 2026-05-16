@@ -21,7 +21,7 @@ pub use tool::{
     ApplyPatchToolInput, AskUserToolInput, BashToolInput, ClearGoalToolInput, CreateGoalToolInput,
     CronCreateToolInput, CronDeleteToolInput, CronJobSummary, CronListToolInput, CustomToolOutput,
     EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput,
-    FilesystemAccess, FilesystemEffect, FirstPartyToolInput, FirstPartyToolOutput,
+    FilesystemAccess, FilesystemEffect, BundledToolInput, BundledToolOutput,
     GetGoalToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, McpToolOutput,
     MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput, NotebookCellType,

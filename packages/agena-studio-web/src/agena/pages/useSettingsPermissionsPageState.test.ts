@@ -7,7 +7,7 @@ describe('useSettingsPermissionsPageState', () => {
   test('assembles permissions panel state from provided settings source', () => {
     const permissions = createSettingsPermissionsPanelState({
       permissionDraft: {
-        subjectKind: 'builtin_tool',
+        subjectKind: 'tool',
         toolName: 'bash',
         qualifier: '',
         pathAccessKind: 'read',
@@ -60,7 +60,7 @@ describe('useSettingsPermissionsPageState', () => {
             shared,
             state: {
               permissionDraft: {
-                subjectKind: 'builtin_tool',
+                subjectKind: 'tool',
                 toolName: 'bash',
                 qualifier: '',
                 pathAccessKind: 'read',

@@ -5,17 +5,17 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use mime_guess::MimeGuess;
 
 use crate::message::{
-    AttachmentKind, AttachmentSource, FirstPartyToolOutput, ToolAttachment, ViewFileToolInput,
+    AttachmentKind, AttachmentSource, BundledToolOutput, ToolAttachment, ViewFileToolInput,
 };
 
-use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
 
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &ViewFileToolInput,
-) -> Result<FirstPartyExecution, ToolError> {
+) -> Result<BundledExecution, ToolError> {
     let target = executor.resolve_target_path(&input.path);
     executor.ensure_read_permission(&target)?;
 
@@ -61,7 +61,7 @@ pub(super) fn execute(
         _ => (None, None),
     };
 
-    let output = FirstPartyToolOutput::ViewFile {
+    let output = BundledToolOutput::ViewFile {
         path: display_path.clone(),
         kind,
         mime: mime.clone(),
@@ -116,7 +116,7 @@ pub(super) fn execute(
         page_count: None,
     });
 
-    Ok(FirstPartyExecution::new(output, view))
+    Ok(BundledExecution::new(output, view))
 }
 
 fn render_summary(

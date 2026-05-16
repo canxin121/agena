@@ -35,23 +35,24 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    AskUserToolInput, CustomToolOutput, FilesystemEffect, FirstPartyToolInput,
-    FirstPartyToolOutput, Message, PartContent, PluginInvocation, StructuredObject,
+    AskUserToolInput, CustomToolOutput, FilesystemEffect, BundledToolInput,
+    BundledToolOutput, Message, PartContent, PluginInvocation, StructuredObject,
     ToolExecutionPart, ToolInvocation, ToolOutput,
 };
 use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
-    EntryDefinitionInput as PluginEntryDefinitionInput, EntrySource as SdkEntrySource, PluginHost,
-    PluginHostBuilder, ToolAfterInput as PluginToolAfterInput,
+    registry::PluginEntry as RegistryPluginEntry,
+    ToolDefinitionInput as PluginEntryDefinitionInput, PluginHost, PluginHostBuilder,
+    ToolAfterInput as PluginToolAfterInput,
     ToolBeforeInput as PluginToolBeforeInput, ToolFailureInput as PluginToolFailureInput,
     ToolInvokeInput as PluginToolInvokeInput,
     ToolPermissionNetworksInput as PluginToolPermissionNetworksInput,
     ToolPermissionPathsInput as PluginToolPermissionPathsInput,
     sdk::{
-        EntryBehavior as SdkEntryBehavior, EntryStreamingMode as SdkEntryStreamingMode,
-        InputNetworkSpec as SdkInputNetworkSpec, InputPathSpec as SdkInputPathSpec,
+        ToolStreamingMode as SdkEntryStreamingMode, InputNetworkSpec as SdkInputNetworkSpec,
+        InputPathSpec as SdkInputPathSpec, PathAccessSpec as SdkPathAccessSpec,
         NetworkAccessSpec as SdkNetworkAccessSpec, PathKind as SdkPathKind,
-        PlanModePolicy as SdkPlanModePolicy, ShellEnvInput as PluginShellEnvInput,
+        ShellEnvInput as PluginShellEnvInput,
     },
 };
 use crate::plugins::bundled::{
@@ -61,14 +62,14 @@ use crate::plugins::bundled::{
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
-pub use definition::{EntryBehavior, EntryDefinition, EntryLoadPriority, EntrySource};
 pub use monitor::{
     MonitorError, MonitorRead, MonitorRegistry, MonitorService, MonitorStart, MonitorStopOutcome,
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,
 };
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
-pub use result::{FirstPartyExecution, ToolExecutionView, ToolInvocationExecution};
+pub use result::{BundledExecution, ToolExecutionView, ToolInvocationExecution};
 pub use shell::{ShellError, ShellOutput, ShellRequest};
+pub use crate::plugin::sdk::ToolLoadPriority;
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 pub use worktree::{
     ActiveWorktree, ManagedWorktree, WorktreeRegistry, list_active as worktree_list_active,
@@ -132,30 +133,7 @@ pub fn new_workflow_plugin() -> impl crate::plugin::sdk::Plugin {
     bundled_workflow::new_plugin()
 }
 
-/// First-party plugins (`agena.*`) are surfaced to the catalog and to model
-/// callers as first_party tools, even though their entries now live in dedicated
-/// plugins. Third-party plugins still show up as `EntrySource::Plugin`.
-fn is_first_party_plugin(plugin_id: &str) -> bool {
-    plugin_id.starts_with("agena.")
-}
-
-fn uses_local_first_party_bridge(plugin_id: &str) -> bool {
-    matches!(
-        plugin_id,
-        bundled_fs::FS_PLUGIN_ID | bundled_shell::SHELL_PLUGIN_ID | bundled_web::WEB_PLUGIN_ID
-    )
-}
-
-fn plugin_invocation_uses_local_first_party_bridge(
-    plugins: &PluginHost,
-    invocation: &PluginInvocation,
-) -> bool {
-    plugins
-        .lookup_entry(invocation.entry_name.as_str())
-        .is_some_and(|resolution| uses_local_first_party_bridge(&resolution.handle.plugin_id))
-}
-
-pub fn first_party_plugin_host(
+pub fn default_tool_host(
     workspace_root: impl Into<PathBuf>,
 ) -> Result<Arc<PluginHost>, String> {
     let workspace_root = workspace_root.into();
@@ -207,7 +185,7 @@ pub fn first_party_plugin_host(
     })
     .map_err(|err| err.to_string())
 }
-/// Stable id used to register configured MCP servers as plugin entries.
+/// Stable id used to register configured MCP servers as plugin tools.
 pub fn mcp_plugin_id() -> &'static str {
     mcp::MCP_PLUGIN_ID
 }
@@ -245,7 +223,7 @@ enum PermissionEnforcementMode {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct FirstPartyExecutionContext {
+pub(super) struct BundledExecutionContext {
     pub session_id: Option<i64>,
     pub call_id: Option<i64>,
     pub session_context: Option<crate::session::SessionExecutionContext>,
@@ -415,43 +393,41 @@ impl ToolExecutor {
         }
 
         let tool_name = invocation_name(invocation);
-        let (behavior, policy) = self
-            .invocation_manifest_metadata(invocation)
-            .unwrap_or((SdkEntryBehavior::Mutating, SdkPlanModePolicy::Blocked));
+        let tags = self
+            .invocation_definition(invocation)
+            .map(|entry| entry.effective_tags())
+            .unwrap_or_default();
 
-        match policy {
-            SdkPlanModePolicy::Allowed => Ok(()),
-            SdkPlanModePolicy::Blocked => Err(ToolError::PermissionDenied(format!(
-                "tool '{tool_name}' is blocked in plan mode; call exit_plan_mode first"
-            ))),
-            SdkPlanModePolicy::ConditionalShellReadOnly => {
-                if let Some(first_party) = self.first_party_from_invocation(invocation)? {
-                    let is_read_only = match first_party {
-                        FirstPartyToolInput::Bash(payload) => {
-                            bash::is_read_only_command(payload.command.as_str())
-                        }
-                        FirstPartyToolInput::PowerShell(payload) => {
-                            bash::is_read_only_command(payload.command.as_str())
-                        }
-                        _ => false,
-                    };
-                    if is_read_only {
-                        return Ok(());
+        if tags
+            .iter()
+            .any(|tag| tag == &crate::plugin::sdk::ToolTag::ReadOnly)
+        {
+            return Ok(());
+        }
+
+        if tags
+            .iter()
+            .any(|tag| tag == &crate::plugin::sdk::ToolTag::Shell)
+        {
+            if let Some(bundled) = self.bundled_from_invocation(invocation)? {
+                let is_read_only = match bundled {
+                    BundledToolInput::Bash(payload) => {
+                        bash::is_read_only_command(payload.command.as_str())
                     }
-                }
-                Err(ToolError::PermissionDenied(format!(
-                    "tool '{tool_name}' is blocked in plan mode; call exit_plan_mode first"
-                )))
-            }
-            SdkPlanModePolicy::Derived => {
-                if matches!(behavior, SdkEntryBehavior::ReadOnly) {
+                    BundledToolInput::PowerShell(payload) => {
+                        bash::is_read_only_command(payload.command.as_str())
+                    }
+                    _ => false,
+                };
+                if is_read_only {
                     return Ok(());
                 }
-                Err(ToolError::PermissionDenied(format!(
-                    "tool '{tool_name}' is blocked in plan mode; call exit_plan_mode first"
-                )))
             }
         }
+
+        Err(ToolError::PermissionDenied(format!(
+            "tool '{tool_name}' is blocked in plan mode; call exit_plan_mode first"
+        )))
     }
 
     pub fn with_truncation_policy(mut self, policy: ToolOutputTruncationPolicy) -> Self {
@@ -505,103 +481,76 @@ impl ToolExecutor {
         ToolCatalog::for_model(self.model_id.as_deref())
     }
 
-    pub fn available_first_party_tools(&self) -> Vec<ToolAvailability> {
+    fn catalogued_tools(&self) -> Vec<RegistryPluginEntry> {
         let catalog = self.tool_catalog();
-        self.plugins
-            .entry_entries()
-            .into_iter()
-            .filter(|entry| is_first_party_plugin(&entry.plugin_name))
-            .map(|entry| {
-                EntryDefinition::from_decl(
-                    entry.exposed_name.clone(),
-                    &entry.decl,
-                    EntrySource::FirstParty,
-                )
-            })
-            .map(|definition| catalog.availability_for_definition(&self.agent, &definition))
-            .collect()
-    }
-
-    fn catalogued_tools(&self) -> Vec<EntryDefinition> {
-        let catalog = self.tool_catalog();
-        let mut definitions = self
+        let mut tools = self
             .plugins
             .entry_entries()
             .into_iter()
-            .map(|entry| {
-                let source = if is_first_party_plugin(&entry.plugin_name) {
-                    EntrySource::FirstParty
-                } else {
-                    EntrySource::Plugin {
-                        plugin_name: entry.plugin_name.clone(),
-                    }
-                };
-                EntryDefinition::from_decl(entry.exposed_name.clone(), &entry.decl, source)
-            })
-            .filter(|definition| catalog.is_behavior_enabled(definition.behavior))
+            .filter(|entry| catalog.is_tool_enabled(entry))
             .collect::<Vec<_>>();
 
-        definitions.sort_by(|left, right| {
-            left.name
-                .cmp(&right.name)
-                .then_with(|| left.description.cmp(&right.description))
+        tools.sort_by(|left, right| {
+            left.exposed_name
+                .cmp(&right.exposed_name)
+                .then_with(|| left.description_text().cmp(right.description_text()))
         });
 
         // Plugin chain: tool.definition. Let plugins rewrite descriptions /
         // input schemas before the list reaches the LLM.
         if !self.plugins.is_empty() {
-            definitions = definitions
+            tools = tools
                 .into_iter()
-                .map(|def| {
+                .map(|mut entry| {
                     let input = PluginEntryDefinitionInput {
-                        tool_name: def.name.clone(),
-                        source: local_to_sdk_source(&def.source),
-                        description: def.description.clone(),
-                        input_schema: def.input_schema.clone(),
+                        tool_name: entry.exposed_name.clone(),
+                        plugin_name: entry.plugin_name.clone(),
+                        description: entry.description_text().to_string(),
+                        input_schema: entry.sanitized_input_schema(),
                     };
                     match self.plugins.dispatch_tool_definition_blocking(input) {
-                        Ok(patched) => EntryDefinition {
-                            description: patched.description,
-                            input_schema: patched.input_schema,
-                            ..def
-                        },
+                        Ok(patched) => {
+                            entry.decl.description = Some(patched.description);
+                            entry.decl.input_schema = patched.input_schema;
+                            entry
+                        }
                         Err(err) => {
                             tracing::warn!(
                                 target: "agena_plugin_host::tool_definition",
-                                tool = %def.name,
+                                tool = %entry.exposed_name,
                                 "tool.definition hook failed (keeping original): {err}"
                             );
-                            def
+                            entry
                         }
                     }
                 })
                 .collect();
         }
 
-        definitions
+        tools
     }
 
-    pub fn searchable_tools(&self) -> Vec<EntryDefinition> {
+    pub fn searchable_tools(&self) -> Vec<RegistryPluginEntry> {
         self.catalogued_tools()
     }
 
-    pub fn available_tools(&self) -> Vec<EntryDefinition> {
+    pub fn available_tools(&self) -> Vec<RegistryPluginEntry> {
         self.catalogued_tools()
             .into_iter()
-            .filter(EntryDefinition::should_load_by_default)
+            .filter(RegistryPluginEntry::should_load_by_default)
             .collect()
     }
 
     pub fn is_concurrency_safe_invocation(&self, invocation: &ToolInvocation) -> bool {
         let invocation = PluginInvocation::from_tool_invocation(invocation);
-        self.catalogued_tools().into_iter().any(|definition| {
-            definition.name == invocation.entry_name
-                && definition.concurrency_safe
-                && !definition.requires_user_interaction
+        self.catalogued_tools().into_iter().any(|entry| {
+            entry.exposed_name == invocation.entry_name
+                && entry.decl.concurrency_safe
+                && !entry.has_tag(crate::plugin::sdk::ToolTag::Interactive)
         })
     }
 
-    pub fn available_tools_for_messages(&self, messages: &[Message]) -> Vec<EntryDefinition> {
+    pub fn available_tools_for_messages(&self, messages: &[Message]) -> Vec<RegistryPluginEntry> {
         self.available_tools_for_messages_and_loaded(messages, &[])
     }
 
@@ -609,91 +558,52 @@ impl ToolExecutor {
         &self,
         messages: &[Message],
         loaded_tools: &[String],
-    ) -> Vec<EntryDefinition> {
+    ) -> Vec<RegistryPluginEntry> {
         let loaded_tools = collect_loaded_tool_names(messages, loaded_tools);
         self.catalogued_tools()
             .into_iter()
-            .filter(|definition| {
-                definition.should_load_by_default()
-                    || loaded_tools.contains(definition.name.as_str())
+            .filter(|entry| {
+                entry.should_load_by_default()
+                    || loaded_tools.contains(entry.exposed_name.as_str())
             })
             .collect()
     }
 
-    fn invocation_definition(&self, invocation: &ToolInvocation) -> Option<EntryDefinition> {
+    fn invocation_definition(&self, invocation: &ToolInvocation) -> Option<RegistryPluginEntry> {
         self.plugin_invocation_definition(&PluginInvocation::from_tool_invocation(invocation))
     }
 
     fn plugin_invocation_definition(
         &self,
         invocation: &PluginInvocation,
-    ) -> Option<EntryDefinition> {
+    ) -> Option<RegistryPluginEntry> {
         self.catalogued_tools()
             .into_iter()
-            .find(|definition| definition.name == invocation.entry_name)
+            .find(|entry| entry.exposed_name == invocation.entry_name)
     }
 
-    fn invocation_source_for(&self, invocation: &ToolInvocation) -> EntrySource {
-        self.plugin_invocation_source_for(&PluginInvocation::from_tool_invocation(invocation))
+    fn invocation_plugin_name_for(&self, invocation: &ToolInvocation) -> String {
+        self.plugin_invocation_plugin_name_for(&PluginInvocation::from_tool_invocation(invocation))
     }
 
-    fn plugin_invocation_source_for(&self, invocation: &PluginInvocation) -> EntrySource {
-        if let Some(definition) = self.plugin_invocation_definition(invocation) {
-            return definition.source;
+    fn plugin_invocation_plugin_name_for(&self, invocation: &PluginInvocation) -> String {
+        if let Some(entry) = self.plugin_invocation_definition(invocation) {
+            return entry.plugin_name;
         }
 
         self.plugins
             .lookup_entry(invocation.entry_name.as_str())
-            .map(|res| EntrySource::Plugin {
-                plugin_name: res.handle.plugin_id.clone(),
-            })
-            .unwrap_or_else(|| EntrySource::Plugin {
-                plugin_name: "custom".to_string(),
-            })
+            .map(|entry| entry.plugin_name)
+            .unwrap_or_else(|| "custom".to_string())
     }
 
-    fn first_party_from_invocation(
+    fn bundled_from_invocation(
         &self,
         invocation: &ToolInvocation,
-    ) -> Result<Option<FirstPartyToolInput>, ToolError> {
-        self.first_party_from_plugin_invocation(&PluginInvocation::from_tool_invocation(invocation))
-    }
-
-    fn first_party_from_plugin_invocation(
-        &self,
-        invocation: &PluginInvocation,
-    ) -> Result<Option<FirstPartyToolInput>, ToolError> {
-        if !plugin_invocation_uses_local_first_party_bridge(&self.plugins, invocation) {
-            return Ok(None);
-        }
-        let invocation_view =
-            ToolInvocation::new(invocation.entry_name.clone(), invocation.input.clone());
-        FirstPartyToolInput::from_invocation(&invocation_view)
+    ) -> Result<Option<BundledToolInput>, ToolError> {
+        BundledToolInput::from_invocation(invocation)
             .map(Some)
-            .ok_or_else(|| {
-                ToolError::InvalidInput(format!(
-                    "decode first_party input: {}",
-                    invocation.entry_name
-                ))
-            })
-    }
-
-    fn invocation_manifest_metadata(
-        &self,
-        invocation: &ToolInvocation,
-    ) -> Option<(SdkEntryBehavior, SdkPlanModePolicy)> {
-        self.plugin_invocation_manifest_metadata(&PluginInvocation::from_tool_invocation(
-            invocation,
-        ))
-    }
-
-    fn plugin_invocation_manifest_metadata(
-        &self,
-        invocation: &PluginInvocation,
-    ) -> Option<(SdkEntryBehavior, SdkPlanModePolicy)> {
-        self.plugins
-            .lookup_entry(invocation.entry_name.as_str())
-            .map(|resolution| (resolution.decl.behavior, resolution.decl.plan_mode_policy))
+            .ok_or_else(|| ToolError::InvalidInput(format!("decode tool input: {}", invocation.name)))
     }
 
     fn invocation_streaming_mode(
@@ -709,20 +619,27 @@ impl ToolExecutor {
     ) -> Option<SdkEntryStreamingMode> {
         self.plugins
             .lookup_entry(invocation.entry_name.as_str())
-            .map(|resolution| resolution.decl.streaming)
+            .map(|entry| entry.decl.streaming)
     }
 
     fn authorize_invocation(
         &self,
         invocation: &ToolInvocation,
-        first_party: Option<&FirstPartyToolInput>,
+        bundled: Option<&BundledToolInput>,
     ) -> Result<(String, PermissionDecision), ToolError> {
-        if let Some(first_party) = first_party {
-            self.ensure_first_party_enabled(first_party)?;
-            let tool_name = crate::permission::first_party_tool_name(first_party).to_string();
+        if let Some(bundled) = bundled {
+            let tool_name = crate::permission::tool_name_for_input(bundled).to_string();
+            let definition = self
+                .invocation_definition(invocation)
+                .ok_or_else(|| ToolError::UnknownTool(tool_name.clone()))?;
+            if !self.tool_catalog().is_tool_enabled(&definition) {
+                return Err(ToolError::PermissionDenied(format!(
+                    "tool '{tool_name}' disabled for current model profile"
+                )));
+            }
             return Ok((
                 tool_name,
-                self.agent.authorize_first_party_tool(first_party),
+                self.agent.authorize_bundled_tool(bundled),
             ));
         }
 
@@ -730,7 +647,7 @@ impl ToolExecutor {
         let definition = self
             .invocation_definition(invocation)
             .ok_or_else(|| ToolError::UnknownTool(tool_name.clone()))?;
-        if !self.tool_catalog().is_behavior_enabled(definition.behavior) {
+        if !self.tool_catalog().is_tool_enabled(&definition) {
             return Err(ToolError::PermissionDenied(format!(
                 "tool '{tool_name}' disabled for current model profile"
             )));
@@ -738,31 +655,27 @@ impl ToolExecutor {
         Ok((
             tool_name.clone(),
             self.agent
-                .authorize_tool_tags(tool_name.as_str(), &definition.tags),
+                .authorize_tool_tags(tool_name.as_str(), &definition.effective_tags()),
         ))
     }
 
     fn plugin_resolution_for_invocation(
         &self,
         invocation: &ToolInvocation,
-        first_party: Option<&FirstPartyToolInput>,
-    ) -> Option<crate::plugin::PluginEntryResolution> {
+        bundled: Option<&BundledToolInput>,
+    ) -> Option<crate::plugin::registry::PluginEntry> {
         self.plugin_resolution_for_plugin_invocation(
             &PluginInvocation::from_tool_invocation(invocation),
-            first_party,
+            bundled,
         )
     }
 
     fn plugin_resolution_for_plugin_invocation(
         &self,
         invocation: &PluginInvocation,
-        first_party: Option<&FirstPartyToolInput>,
-    ) -> Option<crate::plugin::PluginEntryResolution> {
-        if let Some(first_party) = first_party {
-            return self
-                .plugins
-                .lookup_entry(crate::permission::first_party_tool_name(first_party));
-        }
+        bundled: Option<&BundledToolInput>,
+    ) -> Option<crate::plugin::registry::PluginEntry> {
+        let _ = bundled;
         self.plugins.lookup_entry(invocation.entry_name.as_str())
     }
 
@@ -771,7 +684,11 @@ impl ToolExecutor {
         checks: &mut Vec<ToolPermissionCheck>,
         input: &serde_json::Value,
         specs: &[SdkInputPathSpec],
+        static_specs: &[SdkPathAccessSpec],
     ) -> Result<(), ToolError> {
+        for spec in static_specs {
+            self.push_requested_path_checks(checks, spec.path.as_str(), spec.kind);
+        }
         for path_request in extract_input_path_requests(input, specs)? {
             self.push_requested_path_checks(checks, &path_request.path, path_request.kind);
         }
@@ -781,13 +698,13 @@ impl ToolExecutor {
     fn collect_dynamic_path_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        handle: &crate::plugin::PluginEntryHandle,
+        entry: &crate::plugin::registry::PluginEntry,
         input: &serde_json::Value,
     ) -> Result<(), ToolError> {
         let result = self.plugins.dispatch_tool_permission_paths(
-            handle,
+            entry,
             PluginToolPermissionPathsInput {
-                tool_name: handle.original_name.clone(),
+                tool_name: entry.original_name.clone(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
@@ -830,13 +747,13 @@ impl ToolExecutor {
     fn collect_dynamic_network_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        handle: &crate::plugin::PluginEntryHandle,
+        entry: &crate::plugin::registry::PluginEntry,
         input: &serde_json::Value,
     ) -> Result<(), ToolError> {
         let result = self.plugins.dispatch_tool_permission_networks(
-            handle,
+            entry,
             PluginToolPermissionNetworksInput {
-                tool_name: handle.original_name.clone(),
+                tool_name: entry.original_name.clone(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
@@ -863,10 +780,10 @@ impl ToolExecutor {
     fn collect_declared_filesystem_effect_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        first_party: Option<&FirstPartyToolInput>,
+        bundled: Option<&BundledToolInput>,
     ) -> Result<(), ToolError> {
-        match first_party {
-            Some(FirstPartyToolInput::Bash(input)) => {
+        match bundled {
+            Some(BundledToolInput::Bash(input)) => {
                 validate_shell_filesystem_effects(
                     "bash",
                     input.command.as_str(),
@@ -879,7 +796,7 @@ impl ToolExecutor {
                     base.as_path(),
                 );
             }
-            Some(FirstPartyToolInput::PowerShell(input)) => {
+            Some(BundledToolInput::PowerShell(input)) => {
                 let base = self.shell_effect_base_path(input.workdir.as_deref());
                 self.push_filesystem_effect_checks(
                     checks,
@@ -887,7 +804,7 @@ impl ToolExecutor {
                     base.as_path(),
                 );
             }
-            Some(FirstPartyToolInput::Monitor(crate::message::MonitorToolInput::Start {
+            Some(BundledToolInput::Monitor(crate::message::MonitorToolInput::Start {
                 command,
                 workdir,
                 filesystem_effects,
@@ -902,13 +819,13 @@ impl ToolExecutor {
         Ok(())
     }
 
-    fn collect_first_party_network_checks(
+    fn collect_bundled_network_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        first_party: Option<&FirstPartyToolInput>,
+        bundled: Option<&BundledToolInput>,
     ) -> Result<(), ToolError> {
-        match first_party {
-            Some(FirstPartyToolInput::WebFetch(input)) => {
+        match bundled {
+            Some(BundledToolInput::WebFetch(input)) => {
                 let raw_url = input.url.trim();
                 if raw_url.is_empty() {
                     return Ok(());
@@ -920,7 +837,7 @@ impl ToolExecutor {
                 };
                 self.push_network_check(checks, url.as_str())?;
             }
-            Some(FirstPartyToolInput::WebSearch(_)) => {
+            Some(BundledToolInput::WebSearch(_)) => {
                 let backend = self.web_search_backend();
                 self.push_network_check(checks, web_search::web_search_backend_target(&backend))?;
             }
@@ -966,21 +883,21 @@ impl ToolExecutor {
         }
     }
 
-    pub fn execute_first_party_detailed(
+    pub fn execute_bundled_detailed(
         &self,
-        input: &FirstPartyToolInput,
-    ) -> Result<FirstPartyExecution, ToolError> {
-        self.execute_first_party_detailed_with_context(input, FirstPartyExecutionContext::default())
+        input: &BundledToolInput,
+    ) -> Result<BundledExecution, ToolError> {
+        self.execute_bundled_detailed_with_context(input, BundledExecutionContext::default())
     }
 
-    pub fn execute_first_party_output_for_session(
+    pub fn execute_bundled_output_for_session(
         &self,
-        input: &FirstPartyToolInput,
+        input: &BundledToolInput,
         session_id: i64,
-    ) -> Result<FirstPartyToolOutput, ToolError> {
-        self.execute_first_party_detailed_with_context(
+    ) -> Result<BundledToolOutput, ToolError> {
+        self.execute_bundled_detailed_with_context(
             input,
-            FirstPartyExecutionContext {
+            BundledExecutionContext {
                 session_id: Some(session_id),
                 call_id: None,
                 session_context: None,
@@ -991,46 +908,56 @@ impl ToolExecutor {
     }
 
     #[cfg(test)]
-    pub(crate) fn execute_first_party_payload_for_host(
+    pub(crate) fn execute_bundled_payload_for_host(
         &self,
         tool_name: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
         call_id: Option<i64>,
     ) -> Result<crate::plugin::ToolInvokeOutput, ToolError> {
-        let first_party =
-            bundled_router::parse_first_party_tool(tool_name, input).map_err(|err| {
-                ToolError::InvalidInput(format!("parse first_party tool {tool_name}: {err}"))
+        let bundled =
+            bundled_router::parse_bundled_tool(tool_name, input).map_err(|err| {
+                ToolError::InvalidInput(format!("parse bundled tool {tool_name}: {err}"))
             })?;
-        let execution = orchestrator::execute_first_party(
+        let execution = orchestrator::execute_bundled(
             self,
-            &first_party,
-            FirstPartyExecutionContext {
+            &bundled,
+            BundledExecutionContext {
                 session_id,
                 call_id,
                 session_context: None,
                 prepared_shell_command: None,
             },
         )?;
-        Ok(bundled_router::first_party_to_invoke_output(
+        Ok(bundled_router::bundled_to_invoke_output(
             self.truncator.apply(execution),
         ))
     }
 
-    fn execute_first_party_detailed_with_context(
+    fn execute_bundled_detailed_with_context(
         &self,
-        input: &FirstPartyToolInput,
-        context: FirstPartyExecutionContext,
-    ) -> Result<FirstPartyExecution, ToolError> {
+        input: &BundledToolInput,
+        context: BundledExecutionContext,
+    ) -> Result<BundledExecution, ToolError> {
         let scoped_executor = context
             .session_context
             .as_ref()
             .map(|session_context| self.for_session_context(session_context))
             .unwrap_or_else(|| self.clone());
-        scoped_executor.ensure_first_party_enabled(input)?;
+        let invocation = input.clone().into_invocation();
+        let tool_name = crate::permission::tool_name_for_input(input);
+        let definition = scoped_executor
+            .invocation_definition(&invocation)
+            .ok_or_else(|| ToolError::UnknownTool(tool_name.to_string()))?;
+        if !scoped_executor
+            .tool_catalog()
+            .is_tool_enabled(&definition)
+        {
+            return Err(ToolError::UnsupportedInvocation(tool_name.to_string()));
+        }
 
         if scoped_executor.permission_mode == PermissionEnforcementMode::Enforced {
-            match scoped_executor.agent.authorize_first_party_tool(input) {
+            match scoped_executor.agent.authorize_bundled_tool(input) {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
                 PermissionDecision::Deny { reason } => {
@@ -1044,19 +971,19 @@ impl ToolExecutor {
             .as_ref()
             .map(|session_context| self.for_session_context(session_context))
             .unwrap_or_else(|| self.clone());
-        let tool_name = crate::permission::first_party_tool_name(input).to_string();
+        let tool_name = crate::permission::tool_name_for_input(input).to_string();
         let session_id = context.session_id.unwrap_or(-1);
         let call_id = context
             .call_id
             .unwrap_or_else(|| SYNTHETIC_BUILTIN_CALL_ID.fetch_sub(1, Ordering::Relaxed));
-        let payload_value = first_party_input_payload(input)?;
+        let payload_value = bundled_input_payload(input)?;
         let response = bundled_router::with_executor(
             &scoped_executor,
             session_id,
             call_id,
             tool_name.clone(),
             || {
-                bundled_router::invoke_first_party_tool(
+                bundled_router::invoke_bundled_tool(
                     &tool_name,
                     payload_value.clone(),
                     session_id,
@@ -1064,9 +991,9 @@ impl ToolExecutor {
                 )
             },
         )
-        .map_err(|err| first_party_plugin_error(tool_name.as_str(), err))?;
+        .map_err(|err| bundled_plugin_error(tool_name.as_str(), err))?;
 
-        let output = bundled_router::payload_to_first_party_envelope(response.payload.as_ref())
+        let output = bundled_router::payload_to_bundled_envelope(response.payload.as_ref())
             .map_err(|err| ToolError::Plugin(format!("decode {tool_name} output: {err}")))?;
         let view = ToolExecutionView {
             title: response.title,
@@ -1074,7 +1001,7 @@ impl ToolExecutor {
             metadata: response.metadata.into_iter().collect(),
             attachments: response.attachments,
         };
-        let mut execution = FirstPartyExecution::new(output.output, view);
+        let mut execution = BundledExecution::new(output.output, view);
         if let Some(apply) = output.apply_patch {
             execution = execution.with_apply_patch(apply);
         }
@@ -1083,7 +1010,7 @@ impl ToolExecutor {
 
     pub fn collect_permission_checks(
         &self,
-        input: &FirstPartyToolInput,
+        input: &BundledToolInput,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         self.collect_permission_checks_for_invocation(&input.clone().into_invocation())
     }
@@ -1103,8 +1030,8 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
-        let Some(crate::message::FirstPartyToolInput::Bash(bash_input)) =
-            self.first_party_from_invocation(invocation)?
+        let Some(crate::message::BundledToolInput::Bash(bash_input)) =
+            self.bundled_from_invocation(invocation)?
         else {
             return Ok((invocation.clone(), None));
         };
@@ -1118,7 +1045,7 @@ impl ToolExecutor {
         let mut rewritten = bash_input;
         rewritten.command = prepared_shell.command.clone();
         Ok((
-            crate::message::FirstPartyToolInput::Bash(rewritten).into_invocation(),
+            crate::message::BundledToolInput::Bash(rewritten).into_invocation(),
             Some(prepared_shell),
         ))
     }
@@ -1130,7 +1057,7 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<PreparedToolInvocation, ToolError> {
         let tool_name = invocation_name(invocation).to_owned();
-        let source = self.invocation_source_for(invocation);
+        let plugin_name = self.invocation_plugin_name_for(invocation);
         let input_json = invocation_input_json(invocation)?;
         let input_value: serde_json::Value = serde_json::from_str(&input_json)
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
@@ -1139,7 +1066,7 @@ impl ToolExecutor {
             .plugins
             .dispatch_tool_before(PluginToolBeforeInput {
                 tool_name: tool_name.clone(),
-                source: local_to_sdk_source(&source),
+                plugin_name: plugin_name.clone(),
                 session_id,
                 call_id,
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -1153,11 +1080,7 @@ impl ToolExecutor {
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
         Ok(PreparedToolInvocation {
-            invocation: parse_invocation_from_json(
-                tool_name.as_str(),
-                input_json.as_str(),
-                &source,
-            )?,
+            invocation: parse_invocation_from_json(tool_name.as_str(), input_json.as_str())?,
             title_override: hooked.title_override,
             metadata: hooked.metadata.into_iter().collect(),
         })
@@ -1167,12 +1090,12 @@ impl ToolExecutor {
         &self,
         invocation: &ToolInvocation,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
-        let first_party = self.first_party_from_invocation(invocation)?;
-        let (tool_name, decision) = self.authorize_invocation(invocation, first_party.as_ref())?;
-        let action = if let Some(first_party) = first_party.as_ref() {
-            crate::permission::builtin_tool_action(first_party, Some(&self.agent.tool_policy))
+        let bundled = self.bundled_from_invocation(invocation)?;
+        let (tool_name, decision) = self.authorize_invocation(invocation, bundled.as_ref())?;
+        let action = if let Some(bundled) = bundled.as_ref() {
+            crate::permission::tool_action(bundled, Some(&self.agent.tool_policy))
         } else {
-            PermissionAction::BuiltinTool {
+            PermissionAction::Tool {
                 tool_name: tool_name.clone(),
                 qualifier: None,
             }
@@ -1181,23 +1104,24 @@ impl ToolExecutor {
 
         let input_value = invocation_input_value(invocation);
         if let Some(resolution) =
-            self.plugin_resolution_for_invocation(invocation, first_party.as_ref())
+            self.plugin_resolution_for_invocation(invocation, bundled.as_ref())
         {
-            self.collect_declared_filesystem_effect_checks(&mut checks, first_party.as_ref())?;
-            self.collect_first_party_network_checks(&mut checks, first_party.as_ref())?;
+            self.collect_declared_filesystem_effect_checks(&mut checks, bundled.as_ref())?;
+            self.collect_bundled_network_checks(&mut checks, bundled.as_ref())?;
             self.collect_declared_path_checks(
                 &mut checks,
                 &input_value,
                 &resolution.decl.input_paths,
+                &resolution.decl.path_access,
             )?;
-            self.collect_dynamic_path_checks(&mut checks, &resolution.handle, &input_value)?;
+            self.collect_dynamic_path_checks(&mut checks, &resolution, &input_value)?;
             self.collect_declared_network_checks(
                 &mut checks,
                 &input_value,
                 &resolution.decl.input_networks,
                 &resolution.decl.network_access,
             )?;
-            self.collect_dynamic_network_checks(&mut checks, &resolution.handle, &input_value)?;
+            self.collect_dynamic_network_checks(&mut checks, &resolution, &input_value)?;
         }
         Ok(checks)
     }
@@ -1215,12 +1139,6 @@ impl ToolExecutor {
             return Ok(None);
         }
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
-        if self
-            .first_party_from_plugin_invocation(&plugin_invocation)?
-            .is_some()
-        {
-            return Ok(None);
-        }
 
         let resolution = self
             .plugins
@@ -1229,9 +1147,9 @@ impl ToolExecutor {
         let stream = self
             .plugins
             .invoke_tool_stream(
-                &resolution.handle,
+                &resolution,
                 PluginToolInvokeInput {
-                    tool_name: resolution.handle.original_name.clone(),
+                    tool_name: resolution.original_name.clone(),
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -1257,7 +1175,7 @@ impl ToolExecutor {
                         attachments: end.attachments,
                     };
                     let mut execution = if let Ok(envelope) =
-                        bundled_router::payload_to_first_party_envelope(end.payload.as_ref())
+                        bundled_router::payload_to_bundled_envelope(end.payload.as_ref())
                     {
                         ToolInvocationExecution::new(
                             ToolOutput::Custom {
@@ -1331,28 +1249,13 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
-        prepared_shell_command: Option<PreparedShellCommand>,
+        _prepared_shell_command: Option<PreparedShellCommand>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
         let tool_name = plugin_invocation_name(&plugin_invocation);
         let _tool_span =
             tracing::info_span!("tool.call", session_id, call_id, tool = tool_name.as_str(),)
                 .entered();
-        if let Some(first_party) = self.first_party_from_plugin_invocation(&plugin_invocation)? {
-            let mut execution: ToolInvocationExecution = self
-                .execute_first_party_detailed_with_context(
-                    &first_party,
-                    FirstPartyExecutionContext {
-                        session_id: Some(session_id),
-                        call_id: Some(call_id),
-                        session_context: None,
-                        prepared_shell_command,
-                    },
-                )?
-                .into();
-            self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
-            return Ok(execution);
-        }
         let resolution = self
             .plugins
             .lookup_entry(plugin_invocation.entry_name.as_str())
@@ -1361,9 +1264,9 @@ impl ToolExecutor {
         let response = self
             .plugins
             .invoke_tool(
-                &resolution.handle,
+                &resolution,
                 PluginToolInvokeInput {
-                    tool_name: resolution.handle.original_name.clone(),
+                    tool_name: resolution.original_name.clone(),
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -1379,7 +1282,7 @@ impl ToolExecutor {
             attachments: response.attachments,
         };
         let mut execution = if let Ok(envelope) =
-            bundled_router::payload_to_first_party_envelope(response.payload.as_ref())
+            bundled_router::payload_to_bundled_envelope(response.payload.as_ref())
         {
             ToolInvocationExecution::new(
                 ToolOutput::Custom {
@@ -1454,32 +1357,11 @@ impl ToolExecutor {
         Ok(patch.set.into_iter().collect())
     }
 
-    fn ensure_first_party_enabled(&self, input: &FirstPartyToolInput) -> Result<(), ToolError> {
-        let tool_name = crate::permission::first_party_tool_name(input);
-        let resolution = self
-            .plugins
-            .lookup_entry(tool_name)
-            .filter(|resolution| is_first_party_plugin(&resolution.handle.plugin_id))
-            .ok_or_else(|| ToolError::UnknownTool(tool_name.to_string()))?;
-        let definition = EntryDefinition::from_decl(
-            resolution.handle.exposed_name.clone(),
-            &resolution.decl,
-            EntrySource::FirstParty,
-        );
-        let availability = self
-            .tool_catalog()
-            .availability_for_definition(&self.agent, &definition);
-        if !availability.enabled {
-            return Err(ToolError::UnsupportedInvocation(availability.tool_name));
-        }
-        Ok(())
-    }
-
-    pub fn execute_first_party(
+    pub fn execute_bundled(
         &self,
-        input: &FirstPartyToolInput,
-    ) -> Result<(FirstPartyToolOutput, Option<ApplyPatchExecution>), ToolError> {
-        let execution = self.execute_first_party_detailed(input)?;
+        input: &BundledToolInput,
+    ) -> Result<(BundledToolOutput, Option<ApplyPatchExecution>), ToolError> {
+        let execution = self.execute_bundled_detailed(input)?;
         Ok((execution.output, execution.apply_patch))
     }
 
@@ -1491,7 +1373,7 @@ impl ToolExecutor {
         execution: &mut ToolInvocationExecution,
     ) -> Result<(), ToolError> {
         let tool_name = invocation_name(invocation).to_owned();
-        let source = self.invocation_source_for(invocation);
+        let plugin_name = self.invocation_plugin_name_for(invocation);
         let payload_value: Option<serde_json::Value> = match &execution.output {
             ToolOutput::Custom { output } => Some(serde_json::Value::from(output.payload.clone())),
             _ => None,
@@ -1499,7 +1381,7 @@ impl ToolExecutor {
 
         let after_in = PluginToolAfterInput {
             tool_name,
-            source: local_to_sdk_source(&source),
+            plugin_name: plugin_name.clone(),
             session_id,
             call_id,
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -1541,14 +1423,14 @@ impl ToolExecutor {
             return;
         }
         let tool_name = invocation_name(invocation).to_owned();
-        let source = self.invocation_source_for(invocation);
+        let plugin_name = self.invocation_plugin_name_for(invocation);
         let input_value = invocation_input_json(invocation)
             .ok()
             .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
             .unwrap_or(serde_json::Value::Null);
         let failure_input = PluginToolFailureInput {
             tool_name,
-            source: local_to_sdk_source(&source),
+            plugin_name,
             session_id,
             call_id,
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -1803,21 +1685,12 @@ fn plugin_invocation_name(invocation: &PluginInvocation) -> String {
     invocation.entry_name.clone()
 }
 
-fn local_to_sdk_source(source: &EntrySource) -> SdkEntrySource {
-    match source {
-        EntrySource::FirstParty => SdkEntrySource::FirstParty,
-        EntrySource::Plugin { plugin_name } => SdkEntrySource::Plugin {
-            plugin: plugin_name.clone(),
-        },
-    }
-}
-
-/// Serialize a `FirstPartyToolInput` to the JSON shape expected by the
-/// in-process first_party plugin. The plugin parses by tool name (passed as
+/// Serialize a `BundledToolInput` to the JSON shape expected by the
+/// in-process bundled plugin. The plugin parses by tool name (passed as
 /// `ToolInvokeInput::tool_name`) and consumes the inner payload only.
-fn first_party_input_payload(input: &FirstPartyToolInput) -> Result<serde_json::Value, ToolError> {
+fn bundled_input_payload(input: &BundledToolInput) -> Result<serde_json::Value, ToolError> {
     let value = serde_json::to_value(input)
-        .map_err(|err| ToolError::Plugin(format!("encode first_party input: {err}")))?;
+        .map_err(|err| ToolError::Plugin(format!("encode bundled input: {err}")))?;
     let mut obj = match value {
         serde_json::Value::Object(o) => o,
         other => return Ok(other),
@@ -1826,7 +1699,7 @@ fn first_party_input_payload(input: &FirstPartyToolInput) -> Result<serde_json::
     Ok(serde_json::Value::Object(obj))
 }
 
-fn first_party_plugin_error(tool_name: &str, err: crate::plugin::PluginError) -> ToolError {
+fn bundled_plugin_error(tool_name: &str, err: crate::plugin::PluginError) -> ToolError {
     let prefix = format!("{tool_name}: ");
     let detail = err.message.strip_prefix(&prefix).unwrap_or(&err.message);
     if let Some(reason) = detail.strip_prefix("permission denied: ") {
@@ -1861,7 +1734,6 @@ fn plugin_invocation_input_value(invocation: &PluginInvocation) -> serde_json::V
 fn parse_invocation_from_json(
     tool_name: &str,
     input_json: &str,
-    _source: &EntrySource,
 ) -> Result<ToolInvocation, ToolError> {
     let value = if input_json.trim().is_empty() {
         serde_json::json!({})
@@ -1886,8 +1758,8 @@ fn collect_loaded_tool_names(
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.content.as_ref() {
             Some(PartContent::ToolExecution(ToolExecutionPart::Completed { details, .. })) => {
-                match details.as_first_party() {
-                    Some(FirstPartyToolOutput::ToolSearch { loaded_tools, .. }) => {
+                match details.as_bundled() {
+                    Some(BundledToolOutput::ToolSearch { loaded_tools, .. }) => {
                         Some(loaded_tools)
                     }
                     _ => None,
@@ -2083,8 +1955,8 @@ mod tests {
 
     use crate::message::{
         ApplyPatchToolInput, BashToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-        FileChangeKind, FilesystemAccess, FilesystemEffect, FirstPartyToolInput,
-        FirstPartyToolOutput, GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput,
+        FileChangeKind, FilesystemAccess, FilesystemEffect, BundledToolInput,
+        BundledToolOutput, GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput,
         StructuredObject, TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority,
         TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput,
         ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
@@ -2100,7 +1972,7 @@ mod tests {
     use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
-    use super::{EntrySource, ToolError, ToolExecutor};
+    use super::{ToolError, ToolExecutor};
     use crate::plugins::bundled::router as bundled_router;
 
     #[derive(Debug)]
@@ -2124,7 +1996,7 @@ mod tests {
 
     fn build_executor(root: &Path) -> ToolExecutor {
         let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
-        ToolExecutor::new(root, agent).with_plugin_manager(build_first_party_plugin_manager(root))
+        ToolExecutor::new(root, agent).with_plugin_manager(build_bundled_plugin_manager(root))
     }
 
     #[derive(Debug)]
@@ -2174,10 +2046,11 @@ mod tests {
             Ok(vec![ToolDescriptor {
                 name: "apply_patch".to_string(),
                 description: Some("Patch files in the workspace".to_string()),
-                search_terms: vec!["patch".to_string(), "files".to_string()],
-                behavior: Some("mutating".to_string()),
+                tags: vec![
+                    crate::plugin::sdk::ToolTag::Mutating,
+                    crate::plugin::sdk::ToolTag::FilesystemWrite,
+                ],
                 deferred: true,
-                read_only: false,
                 plugin_id: None,
             }])
         }
@@ -2196,7 +2069,7 @@ mod tests {
                         PluginError::new("test host: no executor available for todo_write")
                     })?;
             executor
-                .execute_first_party_payload_for_host(
+                .execute_bundled_payload_for_host(
                     "todo_write",
                     serde_json::to_value(req).map_err(|err| PluginError::new(err.to_string()))?,
                     Some(session_id).filter(|id| *id >= 0),
@@ -2220,8 +2093,8 @@ mod tests {
                         | HookSubscription::TOOL_INVOKE
                         | HookSubscription::SHELL_ENV,
                 )
-                .entry(
-                    PluginEntryDecl::new(
+                .tool(
+                    PluginToolDecl::new(
                         "plugin_echo",
                         json!({
                             "type": "object",
@@ -2230,10 +2103,10 @@ mod tests {
                         }),
                     )
                     .description("Echo a message from the plugin.")
-                    .behavior(crate::plugin::sdk::EntryBehavior::ReadOnly),
+                    .tag(crate::plugin::sdk::ToolTag::ReadOnly),
                 )
-                .entry(
-                    PluginEntryDecl::new(
+                .tool(
+                    PluginToolDecl::new(
                         "plugin_paths",
                         json!({
                             "type": "object",
@@ -2251,7 +2124,7 @@ mod tests {
                         }),
                     )
                     .description("Expose declared and dynamic permission paths.")
-                    .behavior(crate::plugin::sdk::EntryBehavior::ReadOnly)
+                    .tag(crate::plugin::sdk::ToolTag::ReadOnly)
                     .input_path(InputPathSpec {
                         jsonpath: "$.file_path".to_string(),
                         kind: PathKind::Read,
@@ -2445,7 +2318,7 @@ mod tests {
         })
     }
 
-    fn build_first_party_plugin_manager(root: &Path) -> Arc<PluginHost> {
+    fn build_bundled_plugin_manager(root: &Path) -> Arc<PluginHost> {
         use std::collections::BTreeMap;
 
         let skills_fs_id = super::skills_fs_plugin_id().to_string();
@@ -2494,7 +2367,7 @@ mod tests {
                 .register_static(workflow_id, super::new_workflow_plugin())
                 .build()
                 .await
-                .expect("first_party plugin host should build")
+                .expect("bundled plugin host should build")
         })
     }
 
@@ -2510,7 +2383,7 @@ mod tests {
                 crate::message::ExecutionStatus::Completed,
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
                     call_id: 1,
-                    invocation: FirstPartyToolInput::ToolSearch(ToolSearchToolInput {
+                    invocation: BundledToolInput::ToolSearch(ToolSearchToolInput {
                         query: "load mutating tools".to_string(),
                         load: loaded_tools.iter().map(|name| name.to_string()).collect(),
                         limit: None,
@@ -2520,7 +2393,7 @@ mod tests {
                     blocks: Vec::new(),
                     attachments: Vec::new(),
                     details: ToolOutput::Custom {
-                        output: FirstPartyToolOutput::ToolSearch {
+                        output: BundledToolOutput::ToolSearch {
                             results: Vec::new(),
                             loaded_tools: loaded_tools
                                 .iter()
@@ -2548,22 +2421,22 @@ mod tests {
     }
 
     #[test]
-    fn read_first_party_returns_line_numbered_preview() {
+    fn read_bundled_returns_line_numbered_preview() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("notes.txt");
         fs::write(&file_path, "one\ntwo\nthree\n").expect("failed to seed file");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::Read(ReadToolInput {
+            .execute_bundled_detailed(&BundledToolInput::Read(ReadToolInput {
                 file_path: "notes.txt".to_string(),
                 offset: Some(2),
                 limit: Some(2),
             }))
-            .expect("read first_party should succeed");
+            .expect("read bundled should succeed");
 
         match result.output {
-            FirstPartyToolOutput::Read {
+            BundledToolOutput::Read {
                 preview,
                 truncated,
                 loaded_paths,
@@ -2579,7 +2452,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_patch_first_party_reports_typed_file_changes() {
+    fn apply_patch_bundled_reports_typed_file_changes() {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("keep.txt"), "before\n").expect("failed to seed keep.txt");
         fs::write(workspace.root.join("remove.txt"), "delete me\n")
@@ -2587,7 +2460,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
+            .execute_bundled_detailed(&BundledToolInput::ApplyPatch(ApplyPatchToolInput {
                 patch: "\
 *** Begin Patch
 *** Add File: added.txt
@@ -2603,7 +2476,7 @@ mod tests {
             .expect("apply_patch should succeed");
 
         match result.output {
-            FirstPartyToolOutput::ApplyPatch { changes, .. } => {
+            BundledToolOutput::ApplyPatch { changes, .. } => {
                 assert_eq!(changes.len(), 3);
                 assert!(changes.iter().any(|change| {
                     change.path == "added.txt" && change.kind == FileChangeKind::Added
@@ -2620,13 +2493,13 @@ mod tests {
     }
 
     #[test]
-    fn apply_patch_first_party_moves_files_and_reports_diff() {
+    fn apply_patch_bundled_moves_files_and_reports_diff() {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("old.txt"), "before\n").expect("failed to seed old.txt");
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
+            .execute_bundled_detailed(&BundledToolInput::ApplyPatch(ApplyPatchToolInput {
                 patch: "\
 *** Begin Patch
 *** Update File: old.txt
@@ -2645,7 +2518,7 @@ mod tests {
             "after\n"
         );
         match result.output {
-            FirstPartyToolOutput::ApplyPatch {
+            BundledToolOutput::ApplyPatch {
                 changes,
                 diff,
                 progress,
@@ -2668,20 +2541,20 @@ mod tests {
     }
 
     #[test]
-    fn view_file_first_party_returns_metadata_and_attachment() {
+    fn view_file_bundled_returns_metadata_and_attachment() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("pixel.png");
         fs::write(&file_path, sample_png_bytes()).expect("failed to seed png");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::ViewFile(ViewFileToolInput {
+            .execute_bundled_detailed(&BundledToolInput::ViewFile(ViewFileToolInput {
                 path: "pixel.png".to_string(),
             }))
             .expect("view_file should succeed");
 
         match result.output {
-            FirstPartyToolOutput::ViewFile {
+            BundledToolOutput::ViewFile {
                 path,
                 kind,
                 mime,
@@ -2717,20 +2590,20 @@ mod tests {
     }
 
     #[test]
-    fn view_file_first_party_attaches_generic_text_file() {
+    fn view_file_bundled_attaches_generic_text_file() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("notes.txt");
         fs::write(&file_path, "hello from agena\n").expect("failed to seed text file");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::ViewFile(ViewFileToolInput {
+            .execute_bundled_detailed(&BundledToolInput::ViewFile(ViewFileToolInput {
                 path: "notes.txt".to_string(),
             }))
             .expect("view_file should succeed for text file");
 
         match result.output {
-            FirstPartyToolOutput::ViewFile {
+            BundledToolOutput::ViewFile {
                 path,
                 kind,
                 mime,
@@ -2777,21 +2650,21 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let glob_result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::Glob(GlobToolInput {
+            .execute_bundled_detailed(&BundledToolInput::Glob(GlobToolInput {
                 pattern: "**/*.rs".to_string(),
                 path: Some("src".to_string()),
             }))
             .expect("glob should succeed");
 
         match glob_result.output {
-            FirstPartyToolOutput::Glob { count } => {
+            BundledToolOutput::Glob { count } => {
                 assert_eq!(count, Some(2));
             }
             other => panic!("expected glob output, got {other:?}"),
         }
 
         let grep_result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::Grep(GrepToolInput {
+            .execute_bundled_detailed(&BundledToolInput::Grep(GrepToolInput {
                 pattern: "hello".to_string(),
                 path: Some("src".to_string()),
                 include: Some("**/*.rs".to_string()),
@@ -2799,7 +2672,7 @@ mod tests {
             .expect("grep should succeed");
 
         match grep_result.output {
-            FirstPartyToolOutput::Grep { matches } => {
+            BundledToolOutput::Grep { matches } => {
                 assert_eq!(matches, Some(1));
             }
             other => panic!("expected grep output, got {other:?}"),
@@ -2810,7 +2683,7 @@ mod tests {
     fn task_plugin_entry_generates_session_id() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
-        let invocation = FirstPartyToolInput::Task(TaskToolInput {
+        let invocation = BundledToolInput::Task(TaskToolInput {
             description: "inspect code".to_string(),
             prompt: "find modules".to_string(),
             subagent_type: TaskSubagentType::Explore,
@@ -2821,7 +2694,7 @@ mod tests {
 
         let result = executor
             .execute_invocation_detailed(&invocation, 7, 9)
-            .expect("task plugin entry should succeed");
+            .expect("task plugin tool should succeed");
 
         assert_eq!(
             result
@@ -2843,10 +2716,10 @@ mod tests {
         match result.output {
             ToolOutput::Custom { output } => {
                 assert_eq!(output.name, "task");
-                let payload = FirstPartyToolOutput::from_custom(&output)
-                    .expect("task output should decode as first_party payload");
+                let payload = BundledToolOutput::from_custom(&output)
+                    .expect("task output should decode as bundled payload");
                 match payload {
-                    FirstPartyToolOutput::Task { session_id, .. } => {
+                    BundledToolOutput::Task { session_id, .. } => {
                         assert!(session_id.is_some());
                     }
                     other => panic!("expected task payload, got {other:?}"),
@@ -2857,12 +2730,12 @@ mod tests {
     }
 
     #[test]
-    fn tool_search_first_party_discovers_and_loads_deferred_tools() {
+    fn tool_search_bundled_discovers_and_loads_deferred_tools() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::ToolSearch(ToolSearchToolInput {
+            .execute_bundled_detailed(&BundledToolInput::ToolSearch(ToolSearchToolInput {
                 query: "patch files".to_string(),
                 load: vec!["apply_patch".to_string()],
                 limit: None,
@@ -2870,7 +2743,7 @@ mod tests {
             .expect("tool_search should succeed");
 
         match result.output {
-            FirstPartyToolOutput::ToolSearch {
+            BundledToolOutput::ToolSearch {
                 results,
                 loaded_tools,
             } => {
@@ -2889,33 +2762,36 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let initial = executor.available_tools();
-        assert!(initial.iter().any(|tool| tool.name == "tool_search"));
-        assert!(initial.iter().any(|tool| tool.name == "todo_write"));
-        assert!(!initial.iter().any(|tool| tool.name == "bash"));
-        assert!(!initial.iter().any(|tool| tool.name == "task"));
+        assert!(initial.iter().any(|tool| tool.exposed_name == "tool_search"));
+        assert!(initial.iter().any(|tool| tool.exposed_name == "todo_write"));
+        assert!(!initial.iter().any(|tool| tool.exposed_name == "bash"));
+        assert!(!initial.iter().any(|tool| tool.exposed_name == "task"));
 
         let messages = vec![loaded_tool_search_message(&["bash", "task"])];
         let available = executor.available_tools_for_messages(messages.as_slice());
 
-        assert!(available.iter().any(|tool| tool.name == "bash"));
-        assert!(available.iter().any(|tool| tool.name == "task"));
+        assert!(available.iter().any(|tool| tool.exposed_name == "bash"));
+        assert!(available.iter().any(|tool| tool.exposed_name == "task"));
     }
 
     #[test]
-    fn first_partys_plugin_entries_drive_available_tool_catalog() {
+    fn plugin_entries_drive_available_tool_catalog() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
 
         let tools = executor.available_tools();
         let read = tools
             .iter()
-            .find(|tool| tool.name == "read")
+            .find(|tool| tool.exposed_name == "read")
             .expect("read tool should be available");
-        assert!(matches!(read.source, EntrySource::FirstParty));
-        assert!(read.search_terms.iter().any(|term| term == "open file"));
+        assert_eq!(read.plugin_name, super::fs_plugin_id());
+        assert!(read.has_tag(crate::plugin::sdk::ToolTag::FilesystemRead));
 
-        let read_count = tools.iter().filter(|tool| tool.name == "read").count();
+        let read_count = tools
+            .iter()
+            .filter(|tool| tool.exposed_name == "read")
+            .count();
         assert_eq!(read_count, 1);
     }
 
@@ -2929,10 +2805,10 @@ mod tests {
             assert!(
                 executor
                     .plugin_manager()
-                    .lookup_entry(definition.name.as_str())
+                    .lookup_entry(definition.exposed_name.as_str())
                     .is_some(),
                 "missing registry entry for {}",
-                definition.name
+                definition.exposed_name
             );
         }
 
@@ -2940,30 +2816,29 @@ mod tests {
             assert!(
                 executor
                     .plugin_manager()
-                    .lookup_entry(definition.name.as_str())
+                    .lookup_entry(definition.exposed_name.as_str())
                     .is_some(),
                 "missing registry entry for {}",
-                definition.name
+                definition.exposed_name
             );
         }
     }
 
     #[test]
-    fn available_first_party_tools_are_projected_from_first_party_plugin_entries() {
+    fn plugin_entries_are_projected_into_available_tool_catalog() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
 
         let available = executor
-            .available_first_party_tools()
+            .available_tools()
             .into_iter()
-            .map(|item| item.tool_name)
+            .map(|item| item.exposed_name)
             .collect::<std::collections::BTreeSet<_>>();
         let registry = executor
             .plugin_manager()
             .entry_entries()
             .into_iter()
-            .filter(|entry| super::is_first_party_plugin(&entry.plugin_name))
             .map(|entry| entry.exposed_name.clone())
             .collect::<std::collections::BTreeSet<_>>();
 
@@ -2978,7 +2853,7 @@ mod tests {
         let names = executor
             .available_tools()
             .into_iter()
-            .map(|tool| tool.name)
+            .map(|tool| tool.exposed_name)
             .collect::<Vec<_>>();
         let mut expected = names.clone();
         expected.sort();
@@ -2987,12 +2862,12 @@ mod tests {
     }
 
     #[test]
-    fn todo_write_first_party_returns_items_for_session_state() {
+    fn todo_write_bundled_returns_items_for_session_state() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::TodoWrite(TodoWriteToolInput {
+            .execute_bundled_detailed(&BundledToolInput::TodoWrite(TodoWriteToolInput {
                 items: vec![TodoItem {
                     content: "Implement tool_search".to_string(),
                     status: TodoStatus::InProgress,
@@ -3002,7 +2877,7 @@ mod tests {
             .expect("todo_write should succeed");
 
         match result.output {
-            FirstPartyToolOutput::TodoWrite { items } => {
+            BundledToolOutput::TodoWrite { items } => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0].content, "Implement tool_search");
                 assert_eq!(items[0].status, TodoStatus::InProgress);
@@ -3012,7 +2887,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_first_party_runs_command() {
+    fn bash_bundled_runs_command() {
         if cfg!(windows) {
             // Windows host environments can include PATH entries whose ACL cannot be audited
             // in shell preflight, which makes this smoke test flaky/non-portable.
@@ -3023,17 +2898,17 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
+            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
                 command: "echo hello_agena".to_string(),
                 description: "smoke bash".to_string(),
                 timeout_ms: Some(30_000),
                 workdir: None,
                 filesystem_effects: Vec::new(),
             }))
-            .expect("bash first_party should succeed");
+            .expect("bash bundled should succeed");
 
         match &result.output {
-            FirstPartyToolOutput::Bash {
+            BundledToolOutput::Bash {
                 output,
                 description,
             } => {
@@ -3049,7 +2924,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_first_party_explains_no_match_exit_codes() {
+    fn bash_bundled_explains_no_match_exit_codes() {
         if cfg!(windows) {
             return;
         }
@@ -3060,7 +2935,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
+            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
                 command: "grep missing notes.txt".to_string(),
                 description: "search missing text".to_string(),
                 timeout_ms: Some(30_000),
@@ -3070,10 +2945,10 @@ mod tests {
                     access: crate::message::FilesystemAccess::Read,
                 }],
             }))
-            .expect("bash first_party should succeed");
+            .expect("bash bundled should succeed");
 
         match result.output {
-            FirstPartyToolOutput::Bash {
+            BundledToolOutput::Bash {
                 output,
                 description,
             } => {
@@ -3102,7 +2977,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_first_party_explains_diff_exit_codes() {
+    fn bash_bundled_explains_diff_exit_codes() {
         if cfg!(windows) {
             return;
         }
@@ -3113,7 +2988,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
+            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
                 command: "diff left.txt right.txt".to_string(),
                 description: "compare files".to_string(),
                 timeout_ms: Some(30_000),
@@ -3129,10 +3004,10 @@ mod tests {
                     },
                 ],
             }))
-            .expect("bash first_party should succeed");
+            .expect("bash bundled should succeed");
 
         match &result.output {
-            FirstPartyToolOutput::Bash { description, .. } => {
+            BundledToolOutput::Bash { description, .. } => {
                 assert!(
                     description
                         .as_deref()
@@ -3153,7 +3028,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_first_party_rejects_obvious_write_without_declared_effects() {
+    fn bash_bundled_rejects_obvious_write_without_declared_effects() {
         if cfg!(windows) {
             return;
         }
@@ -3162,7 +3037,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let err = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
+            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
                 command: "echo hi > created.txt".to_string(),
                 description: "attempt write".to_string(),
                 timeout_ms: Some(30_000),
@@ -3185,18 +3060,15 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root).with_model_id("gpt-readonly");
 
-        let availability = executor.available_first_party_tools();
-        let find = |tool_name: &str| {
-            availability
-                .iter()
-                .find(|item| item.tool_name == tool_name)
-                .expect("tool should exist")
-                .enabled
-        };
+        let availability = executor.available_tools();
+        let names = availability
+            .iter()
+            .map(|item| item.exposed_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
 
-        assert!(find("read"));
-        assert!(!find("apply_patch"));
-        assert!(!find("task"));
+        assert!(names.contains("read"));
+        assert!(!names.contains("apply_patch"));
+        assert!(!names.contains("task"));
     }
 
     #[test]
@@ -3206,11 +3078,8 @@ mod tests {
             .with_plugin_manager(build_plugin_manager(&workspace.root));
 
         assert!(executor.available_tools().iter().any(|tool| {
-            tool.name == "plugin_echo"
-                && matches!(
-                    tool.source,
-                    EntrySource::Plugin { ref plugin_name } if plugin_name == "fixture"
-                )
+            tool.exposed_name == "plugin_echo"
+                && tool.plugin_name == "fixture"
         }));
 
         let invocation = ToolInvocation {
@@ -3258,10 +3127,10 @@ mod tests {
     }
 
     #[test]
-    fn prepare_invocation_keeps_first_party_calls_in_custom_wire_shape() {
+    fn prepare_invocation_keeps_bundled_calls_in_custom_wire_shape() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
-        let invocation = FirstPartyToolInput::Read(ReadToolInput {
+        let invocation = BundledToolInput::Read(ReadToolInput {
             file_path: "notes.txt".to_string(),
             offset: Some(3),
             limit: Some(5),
@@ -3270,7 +3139,7 @@ mod tests {
 
         let prepared = executor
             .prepare_invocation(&invocation, 7, 9)
-            .expect("prepare should succeed for first_party");
+            .expect("prepare should succeed for bundled");
 
         let ToolInvocation { name, input } = prepared.invocation;
         assert_eq!(name, "read");
@@ -3292,7 +3161,7 @@ mod tests {
 
         let prepared = executor
             .prepare_invocation(&invocation, 7, 9)
-            .expect("prepare should preserve plugin entry invocation");
+            .expect("prepare should preserve plugin tool invocation");
 
         let ToolInvocation { name, input } = prepared.invocation;
         assert_eq!(name, "mcp:docs:search");
@@ -3365,11 +3234,11 @@ mod tests {
     }
 
     #[test]
-    fn collect_permission_checks_for_first_party_invocation_uses_dynamic_plugin_paths() {
+    fn collect_permission_checks_for_bundled_invocation_uses_dynamic_plugin_paths() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
-        let invocation = FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+        let invocation = BundledToolInput::ApplyPatch(ApplyPatchToolInput {
             patch: "*** Begin Patch\n*** Add File: notes.txt\n+hello\n*** Delete File: old.txt\n*** End Patch"
                 .to_string(),
         })
@@ -3377,7 +3246,7 @@ mod tests {
 
         let checks = executor
             .collect_permission_checks_for_invocation(&invocation)
-            .expect("first_party permission collection should succeed");
+            .expect("bundled permission collection should succeed");
 
         let path_actions = checks
             .iter()
@@ -3402,12 +3271,12 @@ mod tests {
     }
 
     #[test]
-    fn collect_permission_checks_for_workflow_plan_uses_dynamic_plugin_paths() {
+    fn collect_permission_checks_for_workflow_plan_uses_declared_path_access() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
         let invocation =
-            FirstPartyToolInput::EnterPlanMode(EnterPlanModeToolInput::default()).into_invocation();
+            BundledToolInput::EnterPlanMode(EnterPlanModeToolInput::default()).into_invocation();
 
         let checks = executor
             .collect_permission_checks_for_invocation(&invocation)
@@ -3435,9 +3304,9 @@ mod tests {
     fn collect_permission_checks_for_workflow_worktree_uses_dynamic_plugin_paths() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
 
-        let named_invocation = FirstPartyToolInput::EnterWorktree(EnterWorktreeToolInput {
+        let named_invocation = BundledToolInput::EnterWorktree(EnterWorktreeToolInput {
             name: Some("demo".to_string()),
             path: None,
         })
@@ -3469,7 +3338,7 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .unwrap_or("agena")
         ));
-        let existing_invocation = FirstPartyToolInput::EnterWorktree(EnterWorktreeToolInput {
+        let existing_invocation = BundledToolInput::EnterWorktree(EnterWorktreeToolInput {
             name: None,
             path: Some(outside.to_string_lossy().to_string()),
         })
@@ -3506,10 +3375,10 @@ mod tests {
             })
             .expect("network permission config compiles");
         let executor = ToolExecutor::new(workspace.root.clone(), agent)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
 
         let err = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::WebFetch(WebFetchToolInput {
+            .execute_bundled_detailed(&BundledToolInput::WebFetch(WebFetchToolInput {
                 url: "http://localhost:8000/".to_string(),
                 prompt: None,
             }))
@@ -3525,7 +3394,7 @@ mod tests {
     fn collect_permission_checks_for_bash_invocation_uses_declared_filesystem_effects() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
         let outside = workspace.root.with_file_name(format!(
             "{}-outside.txt",
             workspace
@@ -3534,7 +3403,7 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .unwrap_or("agena")
         ));
-        let invocation = FirstPartyToolInput::Bash(BashToolInput {
+        let invocation = BundledToolInput::Bash(BashToolInput {
             command: "cat src/lib.rs > target/out.txt".to_string(),
             description: "declared effects".to_string(),
             timeout_ms: Some(30_000),
@@ -3609,8 +3478,8 @@ mod tests {
             ),
         );
         let executor = ToolExecutor::new(&workspace.root, agent)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
-        let invocation = FirstPartyToolInput::Bash(BashToolInput {
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+        let invocation = BundledToolInput::Bash(BashToolInput {
             command: "touch created.txt".to_string(),
             description: "declared write".to_string(),
             timeout_ms: Some(30_000),
@@ -3690,8 +3559,8 @@ mod tests {
     fn bash_invocation_rejects_obvious_write_without_declared_effects() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
-        let invocation = FirstPartyToolInput::Bash(BashToolInput {
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+        let invocation = BundledToolInput::Bash(BashToolInput {
             command: "touch created.txt".to_string(),
             description: "missing effects".to_string(),
             timeout_ms: Some(30_000),
@@ -3727,10 +3596,10 @@ mod tests {
             ),
         );
         let executor = ToolExecutor::new(&workspace.root, agent)
-            .with_plugin_manager(build_first_party_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
 
         let err = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::Bash(BashToolInput {
+            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
                 command: "printf ok".to_string(),
                 description: "declared write denied".to_string(),
                 timeout_ms: Some(30_000),
@@ -3762,7 +3631,7 @@ mod tests {
 
         let execution = executor
             .execute_invocation_detailed(
-                &FirstPartyToolInput::Bash(BashToolInput {
+                &BundledToolInput::Bash(BashToolInput {
                     command: "printf %s \"$PLUGIN_FLAG\"".to_string(),
                     description: "print plugin env".to_string(),
                     timeout_ms: Some(30_000),
@@ -3775,8 +3644,8 @@ mod tests {
             )
             .expect("bash invocation should succeed");
 
-        match execution.output.as_first_party() {
-            Some(FirstPartyToolOutput::Bash {
+        match execution.output.as_bundled() {
+            Some(BundledToolOutput::Bash {
                 output,
                 description: _,
             }) => {
@@ -3805,7 +3674,7 @@ mod tests {
         );
 
         let bash_input = |cmd: &str| -> ToolInvocation {
-            FirstPartyToolInput::Bash(BashToolInput {
+            BundledToolInput::Bash(BashToolInput {
                 command: cmd.to_string(),
                 description: String::new(),
                 timeout_ms: None,
@@ -3861,7 +3730,7 @@ mod tests {
             },
         );
 
-        let inv = FirstPartyToolInput::Bash(BashToolInput {
+        let inv = BundledToolInput::Bash(BashToolInput {
             command: "rm -rf /".to_string(),
             description: String::new(),
             timeout_ms: None,

@@ -8,7 +8,7 @@ Agena 是一个本地优先的 LLM agent runtime。仓库同时包含命令行�
 - [Provider Auth 与 Credential](docs/provider-credentials.md): 新的 `provider.auth + provider.adapters` 结构、provider-local credential 语义和运行时刷新规则。
 - [Provider Auth + Adapters 重构说明](docs/provider-auth-adapters.md): 这次 provider/auth/adapter 重构的目标结构、兼容策略和迁移路径。
 - [架构说明](docs/architecture.md): workspace 布局、核心 crate/app/package 的职责、运行时快照、会话、事件、插件、Studio 与桌面关系。
-- [Plugin 体系](docs/plugin.md): plugin host、static/dynamic plugins、entry registry、MCP bridge、hooks、host callbacks、权限、存储和 marketplace。
+- [Plugin 体系](docs/plugin.md): plugin host、static/dynamic plugins、tool registry、MCP bridge、hooks、host callbacks、权限、存储和 marketplace。
 - [后端 API](docs/backend-api.md): Studio 服务、`/api/v1` REST、SSE、WebSocket、app-server JSON-RPC、鉴权和错误格式。
 
 ## 仓库布局
@@ -21,7 +21,7 @@ apps/
   agena-studio-desktop/      # Tauri 桌面封装，启动内置 Studio sidecar
 
 crates/
-  agena/                     # 核心 runtime、配置、会话、权限、provider、事件、数据库、first-party plugin entries
+  agena/                     # 核心 runtime、配置、会话、权限、provider、事件、数据库、bundled plugin tools
   agena-api/                 # API wire type，不绑定具体传输
   agena-api-server/          # HTTP/REST、SSE、WebSocket、IPC、JSON-RPC transport
   agena-client/              # Rust client SDK

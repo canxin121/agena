@@ -68,7 +68,7 @@ async fn stdio_echo_plugin_loads_invokes_and_streams() {
     let resolved = host.lookup_entry("echo").expect("tool exposed");
     let out = host
         .invoke_tool(
-            &resolved.handle,
+            &resolved,
             ToolInvokeInput {
                 tool_name: "echo".into(),
                 session_id: 7,
@@ -82,7 +82,7 @@ async fn stdio_echo_plugin_loads_invokes_and_streams() {
 
     let mut stream = host
         .invoke_tool_stream(
-            &resolved.handle,
+            &resolved,
             ToolInvokeInput {
                 tool_name: "echo".into(),
                 session_id: 7,

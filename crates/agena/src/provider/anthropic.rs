@@ -86,7 +86,7 @@ impl AnthropicProvider {
         let id = id.into();
         let base_url = utils::normalize_base_url(base_url.into().as_str());
         let mut extra_headers = HashMap::new();
-        if Self::is_first_party_base_url(base_url.as_str()) {
+        if Self::is_bundled_base_url(base_url.as_str()) {
             extra_headers.insert(
                 "anthropic-beta".to_owned(),
                 DEFAULT_ANTHROPIC_BETA_HEADER.to_owned(),
@@ -334,7 +334,7 @@ impl AnthropicProvider {
         }
     }
 
-    fn is_first_party_base_url(base_url: &str) -> bool {
+    fn is_bundled_base_url(base_url: &str) -> bool {
         url::Url::parse(base_url)
             .ok()
             .and_then(|url| url.host_str().map(|host| host.to_owned()))
@@ -348,18 +348,18 @@ impl AnthropicProvider {
 
     fn supports_eager_input_streaming(&self) -> bool {
         match self.profile {
-            AnthropicProfile::Standard => Self::is_first_party_base_url(self.base_url.as_str()),
+            AnthropicProfile::Standard => Self::is_bundled_base_url(self.base_url.as_str()),
             AnthropicProfile::GithubCopilot => false,
         }
     }
 
-    fn tools(&self, tools: &[crate::tool::EntryDefinition]) -> Vec<AnthropicEntryDefinition> {
+    fn tools(&self, tools: &[crate::plugin::registry::PluginEntry]) -> Vec<AnthropicEntryDefinition> {
         tools
             .iter()
             .map(|tool| AnthropicEntryDefinition {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                input_schema: tool.input_schema.clone(),
+                name: tool.exposed_name.clone(),
+                description: tool.description_text().to_string(),
+                input_schema: tool.sanitized_input_schema(),
                 cache_control: None,
                 eager_input_streaming: self.supports_eager_input_streaming().then_some(true),
             })
@@ -479,8 +479,8 @@ impl ModelProvider for AnthropicProvider {
                 .with_string("auth_header", self.auth_header.as_str())
                 .with_optional_string("auth_scheme", self.auth_scheme.as_deref())
                 .with_bool(
-                    "first_party_base_url",
-                    Self::is_first_party_base_url(self.base_url.as_str()),
+                    "bundled_base_url",
+                    Self::is_bundled_base_url(self.base_url.as_str()),
                 )
                 .with_bool(
                     "eager_input_streaming",
@@ -1336,8 +1336,9 @@ mod tests {
 
     use super::*;
     use crate::message::Message;
+    use crate::plugin::PluginToolDecl;
+    use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
     use crate::provider::CompletionRequest;
-    use crate::tool::{EntryBehavior, EntryDefinition};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1376,19 +1377,22 @@ mod tests {
         }
     }
 
-    fn sample_tool_definition() -> EntryDefinition {
-        EntryDefinition::plugin(
-            "project_search",
-            "Search project files.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string" }
-                },
-                "required": ["query"]
-            }),
-            EntryBehavior::ReadOnly,
+    fn sample_tool_definition() -> RegistryPluginEntry {
+        RegistryPluginEntry::new(
             "fixture",
+            PluginToolDecl::new(
+                "project_search",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            )
+            .description("Search project files.")
+            .tag(crate::plugin::sdk::ToolTag::ReadOnly)
+            .concurrency_safe(true),
         )
     }
 
@@ -1484,7 +1488,7 @@ mod tests {
     }
 
     #[test]
-    fn first_party_base_url_enables_default_beta_headers_and_eager_input_streaming() {
+    fn bundled_base_url_enables_default_beta_headers_and_eager_input_streaming() {
         let provider = AnthropicProvider::new(
             reqwest::Client::new(),
             "ak-test",

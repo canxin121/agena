@@ -124,7 +124,7 @@ export type RuntimeStatus = {
         permission?: AgentPermissionConfig
         model?: string | null
         aliases: string[]
-        scope: 'project' | 'user' | 'first_party'
+        scope: 'project' | 'user' | 'bundled'
         source_path?: string | null
       }>
     }
@@ -401,7 +401,7 @@ export type ToolPermissionRules = PermissionMode | Record<string, PermissionMode
 
 export type ToolPermissionConfig = {
   tags?: Record<string, PermissionMode>
-  first_party?: Record<string, PermissionMode>
+  names?: Record<string, PermissionMode>
   plugin?: Record<string, PermissionMode>
   rules?: Record<string, ToolPermissionRules>
 }
@@ -1094,7 +1094,7 @@ export async function listPermissionRules(search = ''): Promise<PermissionRuleRe
 
 export async function createPermissionRule(input: {
   actionKey?: string
-  subjectKind?: 'builtin_tool' | 'path_access'
+  subjectKind?: 'tool' | 'path_access'
   toolName?: string
   qualifier?: string
   pathAccessKind?: string
@@ -1125,7 +1125,7 @@ export async function createPermissionRule(input: {
 export async function updatePermissionRule(input: {
   id: number
   actionKey?: string
-  subjectKind?: 'builtin_tool' | 'path_access'
+  subjectKind?: 'tool' | 'path_access'
   toolName?: string
   qualifier?: string
   pathAccessKind?: string

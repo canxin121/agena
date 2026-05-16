@@ -241,7 +241,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                 Ok(Value::Object(Default::default()))
             }
             method::HOOK_TOOL_DEFINITION => {
-                let i: EntryDefinitionInput = serde_json::from_value(params)?;
+                let i: ToolDefinitionInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {
                     entry_name: Some(i.tool_name.clone()),
                     ..crate::host_api::HostCallbackContext::default()

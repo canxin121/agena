@@ -195,7 +195,7 @@ describe('useRuntimeSectionLoadActions', () => {
               {
                 id: 1,
                 action_key: 'Bash:ls',
-                subject_kind: 'builtin_tool',
+                subject_kind: 'tool',
                 tool_name: 'bash',
                 qualifier: null,
                 mode: 'ask',

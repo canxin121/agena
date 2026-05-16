@@ -1,4 +1,4 @@
-//! `web_search` first-party tool.
+//! `web_search` bundled tool.
 //!
 //! Backend selection: configured per-runtime via `[web.search] backend = "..."`.
 //! Supported backends:
@@ -14,9 +14,9 @@
 use serde::Deserialize;
 
 use crate::config::WebSearchBackend;
-use crate::message::{FirstPartyToolOutput, WebSearchHit, WebSearchToolInput};
+use crate::message::{BundledToolOutput, WebSearchHit, WebSearchToolInput};
 
-use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 const DEFAULT_MAX_RESULTS: u32 = 8;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -24,7 +24,7 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &WebSearchToolInput,
-) -> Result<FirstPartyExecution, ToolError> {
+) -> Result<BundledExecution, ToolError> {
     let q = input.query.trim();
     if q.is_empty() {
         return Err(ToolError::Plugin(
@@ -73,12 +73,12 @@ pub(super) fn execute(
     };
 
     let view = ToolExecutionView::simple(format!("WebSearch {q:?}"), summary);
-    let output = FirstPartyToolOutput::WebSearch {
+    let output = BundledToolOutput::WebSearch {
         query: q.to_string(),
         backend: backend_name.to_string(),
         results: hits,
     };
-    Ok(FirstPartyExecution::new(output, view))
+    Ok(BundledExecution::new(output, view))
 }
 
 fn domain_allowed(url: &str, allow: &[String], block: &[String]) -> bool {

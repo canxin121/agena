@@ -4,7 +4,7 @@
 
 ## 总览
 
-Agena 的核心是 `crates/agena`。它负责加载配置、构建 runtime snapshot、管理 provider、插件、agent、会话、事件、权限、数据库和 entry 执行。不同用户界面和传输层都围绕同一个核心 runtime 工作：
+Agena 的核心是 `crates/agena`。它负责加载配置、构建 runtime snapshot、管理 provider、插件、agent、会话、事件、权限、数据库和 tool 执行。不同用户界面和传输层都围绕同一个核心 runtime 工作：
 
 ```text
 CLI / TUI / Studio Web / Desktop / API clients
@@ -115,13 +115,13 @@ Vue 前端。主要通过 `packages/agena-studio-web/src/agena/lib/agenaApi.ts` 
 - `event`: event bus、publisher、store、filter、envelope。
 - `db`: SeaORM entities、migration、CRUD。
 - `provider`: model providers、credential、auth、runtime retry、streaming。
-- `permission`: path/network/entry permission、persisted rule、runtime request/reply。
-- `agent` / `agents`: first-party agent policy、disk/runtime subagent registry。
-- `entry` / `plugins/bundled`: first-party entries and bundled static plugins.
+- `permission`: path/network/tool permission、persisted rule、runtime request/reply。
+- `agent` / `agents`: bundled agent policy、disk/runtime subagent registry。
+- `tool` / `plugins/bundled`: bundled tools and bundled static plugins.
 - `hooks`: user-configurable shell/HTTP hooks, exposed as a static plugin.
 - `memory`: project instructions and memory plugin.
 - `storage`: database URL/path resolution.
-- `tracing` / `metrics`: logging, DB tracing, process/provider/entry/session counters.
+- `tracing` / `metrics`: logging, DB tracing, process/provider/tool/session counters.
 
 ## Runtime lifecycle
 
@@ -190,8 +190,8 @@ The resolved config builds:
 - `SessionStore`: 数据库存储和 history/event projection。
 - `EventPublisher`: 发布 domain events。
 - `EventBus`: live broadcast。
-- `SessionProcessor`: provider 调用、entry call loop、prompt window。
-- `ToolExecutor`: first-party/plugin entry 执行。
+- `SessionProcessor`: provider 调用、tool call loop、prompt window。
+- `ToolExecutor`: bundled/plugin tool 执行。
 - `CompactionWorker`: 上下文压缩。
 - `TurnRegistry`: active turn control/cancel。
 - session cache。
@@ -230,15 +230,15 @@ provider complete/complete_stream
   |
   +--> text deltas/messages
   |
-  +--> entry calls
+  +--> tool calls
          |
          v
       ToolExecutor
          |
-         +--> first-party plugin entries
+         +--> bundled plugin tools
          +--> configured plugins
          +--> permission runtime
-         +--> path/network/entry policies
+         +--> path/network/tool policies
   |
   v
 store history events + publish domain events
@@ -298,7 +298,7 @@ Plugins can patch provider list through the `provider.list` hook, allowing plugi
 
 ## Plugin architecture
 
-Plugin config is parsed by `agena-plugin-host`. `PluginHost` owns loaded plugins, entry registry, status registry, log store, transport runtime and host callback handle. Model-visible capabilities flow through plugin entries; filesystem/shell/web/workflow/skills/LSP/MCP are all represented inside the plugin host. For the full plugin surface and configuration details, see [Plugin 体系](plugin.md).
+Plugin config is parsed by `agena-plugin-host`. `PluginHost` owns loaded plugins, tool registry, status registry, log store, transport runtime and host callback handle. Model-visible capabilities flow through plugin tools; filesystem/shell/web/workflow/skills/LSP/MCP are all represented inside the plugin host. For the full plugin surface and configuration details, see [Plugin 体系](plugin.md).
 
 Transport kinds:
 
@@ -313,14 +313,13 @@ Plugin manifest defines:
 - schema/version/name/authors.
 - supported transports.
 - hook subscriptions.
-- entries.
-- execution behavior category.
+- tools.
 - input path/network declarations.
 - tags/search terms.
+- loading, plan-mode, and streaming policy.
 - host capabilities.
-- streaming mode.
 
-Core registers first-party static plugins during runtime build, including:
+Core registers bundled static plugins during runtime build, including:
 
 - filesystem entries.
 - shell entries.
@@ -335,8 +334,8 @@ Core registers first-party static plugins during runtime build, including:
 
 Plugin host can invoke hooks for:
 
-- entry before/after/failure.
-- entry invoke and streaming entry invoke.
+- tool before/after/failure.
+- tool invoke and streaming tool invoke.
 - chat message/params/headers/system transform.
 - auth and provider list.
 - permission ask.
@@ -356,7 +355,7 @@ Permission policy has three major surfaces:
 
 - path access: workspace/external defaults and path pattern rules.
 - network access: internet/private/loopback defaults and target rules.
-- entry access: tags, entry names, and entry-specific rules.
+- tool access: tags, tool names, and tool-specific rules.
 
 Static config produces base policy. During runtime:
 
@@ -487,15 +486,15 @@ interval_secs = 30
 Use these extension points depending on what you need:
 
 - New model backend: add provider implementation under `crates/agena/src/provider/` and materialize it in `config/registry.rs`, or provide a plugin provider through `provider.list`.
-- New first-party entry: implement plugin entry under `crates/agena/src/plugins/bundled/` or an `entry` module and register it in plugin host build.
-- External plugin entry/plugin: use `agena-plugin-sdk` and configure `[plugins.list.<id>]`.
+- New bundled tool: implement plugin tool under `crates/agena/src/plugins/bundled/` or an internal tool module and register it in plugin host build.
+- External plugin tool/plugin: use `agena-plugin-sdk` and configure `[plugins.list.<id>]`.
 - New API operation: add type to `crates/agena-api`, map it in `crates/agena-api-server/src/dispatch.rs`, and expose REST route if Studio/Web needs direct HTTP.
 - New Studio UI feature: add API wrapper in `packages/agena-studio-web/src/agena/lib/agenaApi.ts`, then page/state/component code.
 - New config field: add raw type, merge behavior, env/override if needed, resolved type, validation, example config, and `config_examples` test coverage.
 
 ## Implementation index
 
-- CLI app entry: `apps/agena-cli/src/main.rs`
+- CLI app entrypoint: `apps/agena-cli/src/main.rs`
 - CLI command definitions: `crates/agena/src/cli.rs`
 - Runtime builder/snapshot/reload: `crates/agena/src/runtime/`
 - Config loader/schema: `crates/agena/src/config/`

@@ -1,4 +1,4 @@
-//! `enter_plan_mode` / `exit_plan_mode` first-party tools.
+//! `enter_plan_mode` / `exit_plan_mode` bundled tools.
 //!
 //! Plan mode pattern (mirrors claude-code's EnterPlanMode/ExitPlanMode):
 //!
@@ -8,9 +8,10 @@
 //!    session, and the tool returns the path so the model knows where to
 //!    write its plan.
 //!
-//! 2. While plan mode is active, mutating tools are refused — only
-//!    Read/Glob/Grep/etc. are allowed.  This is enforced in
-//!    `ToolExecutor::collect_permission_checks_for_invocation`.
+//! 2. While plan mode is active, tools follow one uniform rule:
+//!    `ReadOnly` tools are allowed, shell tools are allowed only when the
+//!    command itself is classified as read-only, and everything else is
+//!    refused. This is enforced in `ToolExecutor::enforce_plan_mode_for`.
 //!
 //! 3. The model writes the plan to the file (via apply_patch is fine
 //!    since plan files live under workspace) and then calls
@@ -24,10 +25,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{EnterPlanModeToolInput, ExitPlanModeToolInput, FirstPartyToolOutput};
+use crate::message::{EnterPlanModeToolInput, ExitPlanModeToolInput, BundledToolOutput};
 use crate::session::PlanState;
 
-use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 /// Process-wide plan state — keyed by session id.  Conceptually this
 /// belongs in `SessionRuntimeState`, but plan-mode checks happen inside
@@ -43,7 +44,7 @@ pub(super) fn execute_enter(
     executor: &ToolExecutor,
     _input: &EnterPlanModeToolInput,
     session_id: Option<i64>,
-) -> Result<FirstPartyExecution, ToolError> {
+) -> Result<BundledExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("enter_plan_mode: no session in execution context".to_string())
     })?;
@@ -86,8 +87,8 @@ pub(super) fn execute_enter(
             file_path.display()
         ),
     );
-    Ok(FirstPartyExecution::new(
-        FirstPartyToolOutput::EnterPlanMode {
+    Ok(BundledExecution::new(
+        BundledToolOutput::EnterPlanMode {
             plan_path: file_path.to_string_lossy().to_string(),
             slug,
         },
@@ -99,7 +100,7 @@ pub(super) fn execute_exit(
     executor: &ToolExecutor,
     _input: &ExitPlanModeToolInput,
     session_id: Option<i64>,
-) -> Result<FirstPartyExecution, ToolError> {
+) -> Result<BundledExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("exit_plan_mode: no session in execution context".to_string())
     })?;
@@ -120,8 +121,8 @@ pub(super) fn execute_exit(
         ),
     );
 
-    Ok(FirstPartyExecution::new(
-        FirstPartyToolOutput::ExitPlanMode {
+    Ok(BundledExecution::new(
+        BundledToolOutput::ExitPlanMode {
             approved: true,
             plan_path,
         },

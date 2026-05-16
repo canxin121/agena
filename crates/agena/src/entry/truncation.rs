@@ -1,6 +1,6 @@
-use crate::message::FirstPartyToolOutput;
+use crate::message::BundledToolOutput;
 
-use super::result::FirstPartyExecution;
+use super::result::BundledExecution;
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024;
 
@@ -33,24 +33,24 @@ impl ToolOutputTruncator {
         Self { policy }
     }
 
-    pub fn apply(&self, mut execution: FirstPartyExecution) -> FirstPartyExecution {
+    pub fn apply(&self, mut execution: BundledExecution) -> BundledExecution {
         execution.view.output_text =
             truncate_text(&execution.view.output_text, self.policy.max_chars);
 
         match &mut execution.output {
-            FirstPartyToolOutput::Bash { output, .. }
-            | FirstPartyToolOutput::PowerShell { output, .. } => {
+            BundledToolOutput::Bash { output, .. }
+            | BundledToolOutput::PowerShell { output, .. } => {
                 if let Some(text) = output.as_mut() {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
             }
-            FirstPartyToolOutput::Read { preview, .. } => {
+            BundledToolOutput::Read { preview, .. } => {
                 if let Some(text) = preview.as_mut() {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
             }
-            FirstPartyToolOutput::ViewFile { .. } => {}
-            FirstPartyToolOutput::ApplyPatch {
+            BundledToolOutput::ViewFile { .. } => {}
+            BundledToolOutput::ApplyPatch {
                 inverse_patch,
                 diff,
                 ..
@@ -58,28 +58,28 @@ impl ToolOutputTruncator {
                 *inverse_patch = truncate_text(inverse_patch, self.policy.max_chars);
                 *diff = truncate_text(diff, self.policy.max_chars);
             }
-            FirstPartyToolOutput::Glob { .. }
-            | FirstPartyToolOutput::Grep { .. }
-            | FirstPartyToolOutput::Task { .. }
-            | FirstPartyToolOutput::ToolSearch { .. }
-            | FirstPartyToolOutput::TodoWrite { .. }
-            | FirstPartyToolOutput::AskUser { .. }
-            | FirstPartyToolOutput::Monitor { .. }
-            | FirstPartyToolOutput::WebFetch { .. }
-            | FirstPartyToolOutput::WebSearch { .. }
-            | FirstPartyToolOutput::EnterPlanMode { .. }
-            | FirstPartyToolOutput::ExitPlanMode { .. }
-            | FirstPartyToolOutput::EnterWorktree { .. }
-            | FirstPartyToolOutput::ExitWorktree { .. }
-            | FirstPartyToolOutput::CronCreate { .. }
-            | FirstPartyToolOutput::CronList { .. }
-            | FirstPartyToolOutput::CronDelete { .. }
-            | FirstPartyToolOutput::ScheduleWakeup { .. }
-            | FirstPartyToolOutput::LspDefinition { .. }
-            | FirstPartyToolOutput::LspReferences { .. }
-            | FirstPartyToolOutput::LspHover { .. }
-            | FirstPartyToolOutput::LspDiagnostics { .. }
-            | FirstPartyToolOutput::NotebookEdit { .. } => {}
+            BundledToolOutput::Glob { .. }
+            | BundledToolOutput::Grep { .. }
+            | BundledToolOutput::Task { .. }
+            | BundledToolOutput::ToolSearch { .. }
+            | BundledToolOutput::TodoWrite { .. }
+            | BundledToolOutput::AskUser { .. }
+            | BundledToolOutput::Monitor { .. }
+            | BundledToolOutput::WebFetch { .. }
+            | BundledToolOutput::WebSearch { .. }
+            | BundledToolOutput::EnterPlanMode { .. }
+            | BundledToolOutput::ExitPlanMode { .. }
+            | BundledToolOutput::EnterWorktree { .. }
+            | BundledToolOutput::ExitWorktree { .. }
+            | BundledToolOutput::CronCreate { .. }
+            | BundledToolOutput::CronList { .. }
+            | BundledToolOutput::CronDelete { .. }
+            | BundledToolOutput::ScheduleWakeup { .. }
+            | BundledToolOutput::LspDefinition { .. }
+            | BundledToolOutput::LspReferences { .. }
+            | BundledToolOutput::LspHover { .. }
+            | BundledToolOutput::LspDiagnostics { .. }
+            | BundledToolOutput::NotebookEdit { .. } => {}
         }
 
         execution

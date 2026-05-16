@@ -2,53 +2,48 @@
 
 use crate::message::{WebFetchToolInput, WebSearchToolInput};
 use crate::plugin::sdk::{
-    EntryBehavior as SdkEntryBehavior, InputNetworkSpec, NetworkAccessSpec, PlanModePolicy,
-    PluginEntryDecl,
+    InputNetworkSpec, NetworkAccessSpec, PluginToolDecl, ToolTag,
 };
-use crate::plugins::bundled::router::FirstPartyRouterPlugin;
+use crate::plugins::bundled::router::BundledRouterPlugin;
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
 
-pub(crate) fn new_plugin() -> FirstPartyRouterPlugin {
-    FirstPartyRouterPlugin::new(
+pub(crate) fn new_plugin() -> BundledRouterPlugin {
+    BundledRouterPlugin::new(
         "agena-web",
-        "Web tools (web_fetch, web_search) routed through the shared first-party executor bridge.",
+        "Web tools (web_fetch, web_search) routed through the shared bundled executor bridge.",
         entries(),
     )
 }
 
-fn entries() -> Vec<PluginEntryDecl> {
+fn entries() -> Vec<PluginToolDecl> {
     vec![
-        PluginEntryDecl::new(
+        PluginToolDecl::new(
             "web_fetch",
             crate::entry::definition::json_schema_for::<WebFetchToolInput>(),
         )
         .description(
             "Fetch a URL and return its content as Markdown. HTTP is upgraded to HTTPS; cached for 15 minutes.",
         )
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .tags(["read_only", "network", "internet"])
+        .tags([ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet])
         .input_network(InputNetworkSpec {
             jsonpath: "$.url".to_string(),
             optional: false,
         })
-        .search_terms(["web", "fetch", "download", "url", "http", "page"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed),
-        PluginEntryDecl::new(
+        .concurrency_safe(true)
+        .deferred_load(),
+        PluginToolDecl::new(
             "web_search",
             crate::entry::definition::json_schema_for::<WebSearchToolInput>(),
         )
         .description(
             "Search the web. Backend selectable in config (tavily, exa, brave, or duckduckgo_html as zero-config default).",
         )
-        .behavior(SdkEntryBehavior::ReadOnly)
-        .tags(["read_only", "network", "internet"])
+        .tags([ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet])
         .network_access(NetworkAccessSpec {
             target: "https://html.duckduckgo.com/html/".to_string(),
         })
-        .search_terms(["web", "search", "google", "ddg", "find online"])
-        .deferred_load()
-        .plan_mode_policy(PlanModePolicy::Allowed),
+        .concurrency_safe(true)
+        .deferred_load(),
     ]
 }

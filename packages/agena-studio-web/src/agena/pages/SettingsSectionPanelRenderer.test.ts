@@ -36,9 +36,9 @@ const panels = {
     statusFilter: 'active',
     scopeFilter: 'workspace',
     modeFilter: 'allow',
-    subjectFilter: 'builtin_tool',
+    subjectFilter: 'tool',
     draft: {
-      subjectKind: 'builtin_tool',
+      subjectKind: 'tool',
       toolName: 'bash',
       qualifier: 'git status *',
       pathAccessKind: 'read',
@@ -64,7 +64,7 @@ const panels = {
     deleteRuleAction: () => {},
     ruleLabel: () => 'bash :: git status *',
     rulePreview: () => 'Allow git status in workspace',
-    ruleFacts: () => ['workspace', 'builtin_tool'],
+    ruleFacts: () => ['workspace', 'tool'],
   },
   desktop: {
     enabled: true,

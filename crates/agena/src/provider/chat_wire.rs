@@ -155,17 +155,17 @@ pub(crate) struct ChatFunctionDefinition {
 }
 
 pub(crate) fn tools_to_chat_definitions(
-    tools: &[crate::tool::EntryDefinition],
+    tools: &[crate::plugin::registry::PluginEntry],
 ) -> Vec<ChatEntryDefinition> {
     tools
         .iter()
         .map(|tool| ChatEntryDefinition {
             kind: "function".to_owned(),
             function: ChatFunctionDefinition {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                parameters: tool.input_schema.clone(),
-                strict: tool.strict,
+                name: tool.exposed_name.clone(),
+                description: tool.description_text().to_string(),
+                parameters: tool.sanitized_input_schema(),
+                strict: tool.decl.strict,
             },
         })
         .collect()

@@ -318,7 +318,7 @@ mod tests {
             rule_id: 42,
             rule: UpsertPermissionRuleParams {
                 action_key: Some("{\"kind\":\"tool\"}".to_string()),
-                subject_kind: Some("builtin_tool".to_string()),
+                subject_kind: Some("tool".to_string()),
                 tool_name: Some("bash".to_string()),
                 qualifier: Some("git status".to_string()),
                 path_access_kind: None,

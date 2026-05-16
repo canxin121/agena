@@ -7,9 +7,9 @@ const props = defineProps<{
   permissionStatusFilter: 'all' | 'active' | 'revoked'
   permissionScopeFilter: 'all' | 'session' | 'workspace' | 'global'
   permissionModeFilter: 'all' | PermissionMode
-  permissionSubjectFilter: 'all' | 'builtin_tool' | 'path_access'
+  permissionSubjectFilter: 'all' | 'tool' | 'path_access'
   permissionDraft: {
-    subjectKind: 'builtin_tool' | 'path_access'
+    subjectKind: 'tool' | 'path_access'
     toolName: string
     qualifier: string
     pathAccessKind: string
@@ -37,7 +37,7 @@ const emit = defineEmits<{
   'update:permissionStatusFilter': [value: 'all' | 'active' | 'revoked']
   'update:permissionScopeFilter': [value: 'all' | 'session' | 'workspace' | 'global']
   'update:permissionModeFilter': [value: 'all' | PermissionMode]
-  'update:permissionSubjectFilter': [value: 'all' | 'builtin_tool' | 'path_access']
+  'update:permissionSubjectFilter': [value: 'all' | 'tool' | 'path_access']
 }>()
 </script>
 
@@ -111,10 +111,10 @@ const emit = defineEmits<{
           id="permission-subject-filter"
           :value="props.permissionSubjectFilter"
           class="select"
-          @change="emit('update:permissionSubjectFilter', ($event.target as HTMLSelectElement).value as 'all' | 'builtin_tool' | 'path_access')"
+          @change="emit('update:permissionSubjectFilter', ($event.target as HTMLSelectElement).value as 'all' | 'tool' | 'path_access')"
         >
           <option value="all">all</option>
-          <option value="builtin_tool">builtin_tool</option>
+          <option value="tool">tool</option>
           <option value="path_access">path_access</option>
         </select>
       </div>
@@ -124,7 +124,7 @@ const emit = defineEmits<{
       <div class="field">
         <label class="label" for="permission-subject-kind">Subject</label>
         <select id="permission-subject-kind" v-model="props.permissionDraft.subjectKind" class="select">
-          <option value="builtin_tool">builtin_tool</option>
+          <option value="tool">tool</option>
           <option value="path_access">path_access</option>
         </select>
       </div>
@@ -138,7 +138,7 @@ const emit = defineEmits<{
       </div>
     </div>
 
-    <div v-if="props.permissionDraft.subjectKind === 'builtin_tool'" class="grid two" style="margin-top: 12px">
+    <div v-if="props.permissionDraft.subjectKind === 'tool'" class="grid two" style="margin-top: 12px">
       <div class="field">
         <label class="label" for="permission-tool-name">Tool Name</label>
         <input

@@ -548,6 +548,9 @@ impl AgenaClient {
                     .await?;
                 Ok(CommandResult::PermissionRuleDeleted { id: rule_id })
             }
+            _ => Err(ClientError::Protocol(
+                "unsupported command in generic HTTP client".to_string(),
+            )),
         }
     }
 
@@ -712,6 +715,9 @@ impl AgenaClient {
                         .await?,
                 ))
             }
+            _ => Err(ClientError::Protocol(
+                "unsupported query in generic HTTP client".to_string(),
+            )),
         }
     }
 }

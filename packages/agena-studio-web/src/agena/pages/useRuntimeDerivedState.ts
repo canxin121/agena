@@ -40,7 +40,7 @@ export type RuntimeDerivedStateInput = {
   permissionRules: Ref<PermissionRuleResource[]>
   permissionScopeFilter: Ref<'all' | 'session' | 'workspace' | 'global'>
   permissionStatusFilter: Ref<'all' | 'active' | 'revoked'>
-  permissionSubjectFilter: Ref<'all' | 'builtin_tool' | 'path_access'>
+  permissionSubjectFilter: Ref<'all' | 'tool' | 'path_access'>
   routePath: Ref<string>
   runtime: Ref<RuntimeStatus | null>
   runtimeSkillQuery: Ref<string>

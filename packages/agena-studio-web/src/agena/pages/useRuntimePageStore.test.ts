@@ -38,7 +38,7 @@ describe('useRuntimePageStore', () => {
     expect(state.marketplaceLoading.value).toBe(false)
     expect(state.desktopUpdateRunning.value).toBe(false)
     expect(state.permissionDraft).toEqual({
-      subjectKind: 'builtin_tool',
+      subjectKind: 'tool',
       toolName: '',
       qualifier: '',
       pathAccessKind: 'read',

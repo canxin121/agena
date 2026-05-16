@@ -14,7 +14,7 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
-use crate::manifest::{PathKind, PluginEntryDecl};
+use crate::manifest::{PathKind, PluginToolDecl, ToolTag};
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
@@ -69,18 +69,18 @@ pub trait HostClient: Send + Sync + 'static {
 
     // ---------------- First-party host capabilities ----------------
     //
-    // These are used by the in-process first-party plugins (bash, ask_user,
+    // These are used by the in-process bundled plugins (bash, ask_user,
     // task, monitor, ...). External plugins generally don't need to implement them;
     // the default `NoopHostClient` and host implementations that don't expose
     // these capabilities should return `HostUnavailable`.
 
     /// Prompt the user for input via the active session UI (used by the
-    /// `ask_user` first-party tool).
+    /// `ask_user` bundled tool).
     async fn ask_user(&self, _req: AskUserRequest) -> Result<AskUserResponse> {
         Err(unavailable())
     }
 
-    /// Spawn a child agent / subtask. Used by the `task` first-party tool.
+    /// Spawn a child agent / subtask. Used by the `task` bundled tool.
     async fn spawn_subtask(&self, _req: SpawnSubtaskRequest) -> Result<SpawnSubtaskResponse> {
         Err(unavailable())
     }
@@ -155,7 +155,7 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Dynamic entry registry — register a new entry owned by this plugin.
+    /// Dynamic tool registry — register a new entry owned by this plugin.
     async fn entry_register(
         &self,
         _req: HostEntryRegisterRequest,
@@ -163,7 +163,7 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Dynamic entry registry — replace the decl of an existing entry owned by
+    /// Dynamic tool registry — replace the decl of an existing entry owned by
     /// this plugin (matched by `entry.name`).
     async fn entry_update(
         &self,
@@ -172,7 +172,7 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Dynamic entry registry — remove an entry owned by this plugin.
+    /// Dynamic tool registry — remove an entry owned by this plugin.
     async fn entry_remove(
         &self,
         _req: HostEntryRemoveRequest,
@@ -180,7 +180,7 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Dynamic entry registry — list all entries known to the plugin host.
+    /// Dynamic tool registry — list all entries known to the plugin host.
     async fn entry_list(&self) -> Result<HostEntryListResponse> {
         Err(unavailable())
     }
@@ -388,7 +388,7 @@ pub struct HostCallbackContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<String>,
     /// When the active host call originated from a `tool_invoke`, this holds
-    /// the plugin-original entry name. Used for per-entry capability scoping
+    /// the plugin-original tool name. Used for per-entry capability scoping
     /// so that capabilities declared by entry A do not implicitly authorize
     /// host calls coming back through entry B.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -574,13 +574,9 @@ pub struct ToolDescriptor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub search_terms: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub behavior: Option<String>,
+    pub tags: Vec<ToolTag>,
     #[serde(default)]
     pub deferred: bool,
-    #[serde(default)]
-    pub read_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
 }
@@ -803,16 +799,16 @@ pub struct MonitorStopRequest {
     pub force: bool,
 }
 
-// ---------------- entry registry ----------------
+// ---------------- tool registry ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostEntryRegisterRequest {
-    pub entry: PluginEntryDecl,
+    pub entry: PluginToolDecl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostEntryUpdateRequest {
-    pub entry: PluginEntryDecl,
+    pub entry: PluginToolDecl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -828,7 +824,7 @@ pub struct HostEntryMutationResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exposed_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entry: Option<PluginEntryDecl>,
+    pub entry: Option<PluginToolDecl>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -836,7 +832,7 @@ pub struct HostEntryDescriptor {
     pub plugin_id: String,
     pub original_name: String,
     pub exposed_name: String,
-    pub entry: PluginEntryDecl,
+    pub entry: PluginToolDecl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1276,7 +1272,7 @@ pub struct AgentToolPermissionConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tags: BTreeMap<String, AgentPermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub first_party: BTreeMap<String, AgentPermissionMode>,
+    pub names: BTreeMap<String, AgentPermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin: BTreeMap<String, AgentPermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::message::{FirstPartyToolOutput, ToolAttachment, ToolOutput};
+use crate::message::{BundledToolOutput, ToolAttachment, ToolOutput};
 
 use super::ApplyPatchExecution;
 
@@ -24,14 +24,14 @@ impl ToolExecutionView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FirstPartyExecution {
-    pub output: FirstPartyToolOutput,
+pub struct BundledExecution {
+    pub output: BundledToolOutput,
     pub view: ToolExecutionView,
     pub apply_patch: Option<ApplyPatchExecution>,
 }
 
-impl FirstPartyExecution {
-    pub fn new(output: FirstPartyToolOutput, view: ToolExecutionView) -> Self {
+impl BundledExecution {
+    pub fn new(output: BundledToolOutput, view: ToolExecutionView) -> Self {
         Self {
             output,
             view,
@@ -72,8 +72,8 @@ impl ToolInvocationExecution {
     }
 }
 
-impl From<FirstPartyExecution> for ToolInvocationExecution {
-    fn from(value: FirstPartyExecution) -> Self {
+impl From<BundledExecution> for ToolInvocationExecution {
+    fn from(value: BundledExecution) -> Self {
         Self {
             output: ToolOutput::Custom {
                 output: value.output.into_custom_output(),

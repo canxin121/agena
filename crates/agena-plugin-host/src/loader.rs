@@ -267,7 +267,7 @@ fn plugin_trust_level(
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> String {
     match entry {
-        PluginEntry::Static { .. } => "builtin".to_string(),
+        PluginEntry::Static { .. } => "static".to_string(),
         PluginEntry::Cdylib {
             signature, sha256, ..
         } => {
@@ -303,7 +303,7 @@ fn plugin_provenance(
 ) -> Vec<String> {
     let mut provenance = vec![format!("transport:{}", entry.kind_str())];
     match entry {
-        PluginEntry::Static { .. } => provenance.push("builtin registration".to_string()),
+        PluginEntry::Static { .. } => provenance.push("static registration".to_string()),
         PluginEntry::Cdylib {
             path,
             sha256,

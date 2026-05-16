@@ -56,10 +56,8 @@ impl HostClient for FakeHostClient {
         Ok(vec![ToolDescriptor {
             name: "demo".into(),
             description: None,
-            search_terms: Vec::new(),
-            behavior: None,
+            tags: vec![ToolTag::ReadOnly],
             deferred: false,
-            read_only: true,
             plugin_id: Some("demo".into()),
         }])
     }
@@ -81,13 +79,13 @@ impl CapabilityPlugin {
 #[async_trait]
 impl Plugin for CapabilityPlugin {
     fn manifest(&self) -> PluginManifest {
-        let mut entry = PluginEntryDecl::new("ping", json!({ "type": "object" }));
+        let mut entry = PluginToolDecl::new("ping", json!({ "type": "object" }));
         for capability in &self.capabilities {
             entry = entry.host_capability(*capability);
         }
         PluginManifest::builder("capability-plugin", "0.1.0")
             .hooks(HookSubscription::TOOL_INVOKE)
-            .entry(entry)
+            .tool(entry)
             .build()
     }
 
@@ -206,8 +204,8 @@ impl Plugin for TestPlugin {
                     | HookSubscription::SHELL_ENV
                     | HookSubscription::CHAT_PARAMS,
             )
-            .entry(
-                PluginEntryDecl::new(
+            .tool(
+                PluginToolDecl::new(
                     "ping",
                     json!({"type":"object","properties":{"text":{"type":"string"}}}),
                 )
@@ -290,12 +288,12 @@ async fn static_plugin_round_trips_every_hook() {
 
     assert_eq!(host.plugins().len(), 1);
     let resolved = host.lookup_entry("ping").expect("ping exposed");
-    assert_eq!(resolved.handle.original_name, "ping");
+    assert_eq!(resolved.original_name, "ping");
 
     // tool_invoke
     let out = host
         .invoke_tool(
-            &resolved.handle,
+            &resolved,
             ToolInvokeInput {
                 tool_name: "ping".into(),
                 session_id: 1,
@@ -307,13 +305,11 @@ async fn static_plugin_round_trips_every_hook() {
         .expect("invoke");
     assert_eq!(out.output_text, "pong: hi");
 
-    // tool hooks carry the active entry name into callback context.
+    // tool hooks carry the active tool name into callback context.
     let before = host
         .dispatch_tool_before(ToolBeforeInput {
             tool_name: "ping".into(),
-            source: EntrySource::Plugin {
-                plugin: "test".into(),
-            },
+            plugin_name: "test".into(),
             session_id: 1,
             call_id: 1,
             workspace_root: ".".into(),
@@ -330,9 +326,7 @@ async fn static_plugin_round_trips_every_hook() {
     let after = host
         .dispatch_tool_after(ToolAfterInput {
             tool_name: "ping".into(),
-            source: EntrySource::Plugin {
-                plugin: "test".into(),
-            },
+            plugin_name: "test".into(),
             session_id: 1,
             call_id: 1,
             workspace_root: ".".into(),
@@ -440,7 +434,7 @@ async fn entry_register_requires_capability() {
             agena_plugin_sdk::rpc::method::HOST_ENTRY_REGISTER,
             json!({
                 "request": {
-                    "entry": PluginEntryDecl::new("dynamic", json!({"type": "object"})),
+                    "entry": PluginToolDecl::new("dynamic", json!({"type": "object"})),
                 },
             }),
         )
@@ -463,7 +457,7 @@ async fn entry_register_then_lookup_resolves() {
             agena_plugin_sdk::rpc::method::HOST_ENTRY_REGISTER,
             json!({
                 "request": {
-                    "entry": PluginEntryDecl::new("dynamic-entry", json!({"type": "object"})),
+                    "entry": PluginToolDecl::new("dynamic-entry", json!({"type": "object"})),
                 },
             }),
         )
@@ -474,8 +468,8 @@ async fn entry_register_then_lookup_resolves() {
     let resolved = host
         .lookup_entry("dynamic-entry")
         .expect("dynamic entry should resolve via lookup");
-    assert_eq!(resolved.handle.plugin_id, "capability-plugin");
-    assert_eq!(resolved.handle.original_name, "dynamic-entry");
+    assert_eq!(resolved.plugin_name, "capability-plugin");
+    assert_eq!(resolved.original_name, "dynamic-entry");
 
     let removed = host
         .host_handle()
@@ -996,10 +990,10 @@ impl Plugin for TwoEntryPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("two-entry", "0.1.0")
             .hooks(HookSubscription::TOOL_INVOKE)
-            .entry(
-                PluginEntryDecl::new("loud", json!({})).host_capability(HostCapability::ReadConfig),
+            .tool(
+                PluginToolDecl::new("loud", json!({})).host_capability(HostCapability::ReadConfig),
             )
-            .entry(PluginEntryDecl::new("quiet", json!({})))
+            .tool(PluginToolDecl::new("quiet", json!({})))
             .build()
     }
 
@@ -1140,8 +1134,8 @@ impl Plugin for PermissionUiPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("perm-ui", "0.1.0")
             .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::PERMISSION_ASK)
-            .entry(
-                PluginEntryDecl::new("ui", json!({})).host_capability(HostCapability::PermissionUi),
+            .tool(
+                PluginToolDecl::new("ui", json!({})).host_capability(HostCapability::PermissionUi),
             )
             .build()
     }

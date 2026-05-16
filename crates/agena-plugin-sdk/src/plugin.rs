@@ -226,8 +226,8 @@ pub trait Plugin: Send + Sync + 'static {
     // -------- tool definition --------
     async fn tool_definition(
         &self,
-        _input: EntryDefinitionInput,
-    ) -> Result<Option<EntryDefinitionPatch>> {
+        _input: ToolDefinitionInput,
+    ) -> Result<Option<ToolDefinitionPatch>> {
         Ok(None)
     }
 

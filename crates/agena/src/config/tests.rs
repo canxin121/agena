@@ -1296,24 +1296,29 @@ brave_api_key = "secret"
 }
 
 #[test]
-fn first_party_plugin_config_requires_static_kind() {
+fn runtime_plugin_options_do_not_require_static_kind() {
     let path = write_temp_config(
         r#"
 [plugins.list."agena.web"]
 kind = "stdio"
 command = "web-plugin"
+
+[plugins.list."agena.web".options.search]
+backend = "brave"
+brave_api_key = "secret"
 "#,
     );
 
     let loader = ConfigLoader::new(TestEnvironment::default());
-    let err = loader
+    let resolution = loader
         .load(&LoadConfigRequest {
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect_err("runtime-owned plugin ids should require static kind");
-    assert!(
-        matches!(err, ConfigError::Validation(message) if message.contains("must use `kind = \"static\"`"))
+        .expect("runtime-managed plugin options should load");
+    assert_eq!(
+        resolution.config.web.search.backend,
+        crate::config::WebSearchBackendKind::Brave
     );
 }
 
@@ -1738,7 +1743,7 @@ enabled = true
         .build_plugin_host()
         .await
         .expect("host build accepts but skips broken plugins");
-    // The bogus cdylib entry is skipped; only the in-process first-party
+    // The bogus cdylib entry is skipped; only the in-process bundled
     // plugins plus runtime support plugins remain.
     assert_eq!(host.plugins().len(), 9);
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
@@ -1907,7 +1912,7 @@ todo_write = "allow"
             .permission
             .tools
             .as_ref()
-            .and_then(|tools| tools.first_party.get("todo_write")),
+            .and_then(|tools| tools.names.get("todo_write")),
         Some(&crate::permission::PermissionMode::Allow)
     );
     match planner

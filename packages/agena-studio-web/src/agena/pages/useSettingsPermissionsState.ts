@@ -4,7 +4,7 @@ import type { PermissionMode, PermissionRuleResource } from '../lib/agenaApi'
 
 export type SettingsPermissionsStateInput = {
   permissionDraft: {
-    subjectKind: 'builtin_tool' | 'path_access'
+    subjectKind: 'tool' | 'path_access'
     toolName: string
     qualifier: string
     pathAccessKind: string
@@ -24,7 +24,7 @@ export type SettingsPermissionsStateInput = {
   permissionScopeFilter: Ref<'all' | 'session' | 'workspace' | 'global'>
   permissionSearch: Ref<string>
   permissionStatusFilter: Ref<'all' | 'active' | 'revoked'>
-  permissionSubjectFilter: Ref<'all' | 'builtin_tool' | 'path_access'>
+  permissionSubjectFilter: Ref<'all' | 'tool' | 'path_access'>
   savePermissionRule: () => void | Promise<void>
   resetPermissionDraft: () => void
   revokePermissionRuleAction: (rule: PermissionRuleResource) => void | Promise<void>

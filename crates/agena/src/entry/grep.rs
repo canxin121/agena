@@ -4,10 +4,10 @@ use globset::Glob;
 use regex::Regex;
 use walkdir::WalkDir;
 
-use crate::message::{FirstPartyToolOutput, GrepToolInput};
+use crate::message::{BundledToolOutput, GrepToolInput};
 
 use super::{
-    FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor, normalize_path_for_display,
+    BundledExecution, ToolError, ToolExecutionView, ToolExecutor, normalize_path_for_display,
 };
 
 const MAX_MATCHES: usize = 500;
@@ -15,7 +15,7 @@ const MAX_MATCHES: usize = 500;
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &GrepToolInput,
-) -> Result<FirstPartyExecution, ToolError> {
+) -> Result<BundledExecution, ToolError> {
     let base_path = input
         .path
         .as_deref()
@@ -104,7 +104,7 @@ pub(super) fn execute(
         }
         text
     };
-    let output = FirstPartyToolOutput::Grep {
+    let output = BundledToolOutput::Grep {
         matches: Some(matches.len() as u32),
     };
 
@@ -121,5 +121,5 @@ pub(super) fn execute(
     view.metadata
         .insert("truncated".to_string(), truncated.to_string());
 
-    Ok(FirstPartyExecution::new(output, view))
+    Ok(BundledExecution::new(output, view))
 }

@@ -1,11 +1,11 @@
 # Plugin 体系
 
-Agena 的扩展能力统一通过 plugin host 接入。模型可见的 entries、MCP server 暴露出来的能力、LSP 查询、skills、workflow、memory、hooks、cron 等，都会在 runtime 中表达为 plugin 或 plugin entry，然后进入同一个 entry registry。
+Agena 的扩展能力统一通过 plugin host 接入。模型可见的 tools、MCP server 暴露出来的能力、LSP 查询、skills、workflow、memory、hooks、cron 等，都会在 runtime 中表达为 plugin 或 plugin tool，然后进入同一个 tool registry。
 
 这意味着使用者和开发者应该把 plugin 当成主要抽象：
 
-- 要新增一个模型可调用能力，写 plugin entry。
-- 要接入 MCP server，配置 MCP server，然后由 `agena.mcp` static plugin 暴露 entries。
+- 要新增一个模型可调用能力，写 plugin tool。
+- 要接入 MCP server，配置 MCP server，然后由 `agena.mcp` static plugin 暴露 tools。
 - 要扩展 prompt、provider、权限、shell env、事件、UI 状态栏等运行时行为，订阅 plugin hook。
 - 要给 plugin 持久化状态或 secret，使用 plugin host callback。
 - 要观察运行状态、日志、marketplace 安装状态，走 plugin CLI/API。
@@ -32,73 +32,69 @@ RuntimeConfigRegistry        PluginHostBuilder
                                    |
         +--------------------------+--------------------------+
         |                          |                          |
-  loaded plugins             entry registry             hook dispatch
+  loaded plugins             tool registry             hook dispatch
         |                          |                          |
         v                          v                          v
-  status/log/quota          model-visible entries       runtime extension
+  status/log/quota          model-visible tools       runtime extension
 ```
 
 `PluginHost` 负责：
 
 - 按 config 加载 plugin transport。
 - 调用 `init`，拿到 plugin manifest。
-- 将 manifest 中的 entries 注册到 entry registry。
-- 在 entry 调用、chat、权限、provider、session、event 等阶段分发 hooks。
+- 将 manifest 中声明的 tools 注册到 tool registry。
+- 在 tool 调用、chat、权限、provider、session、event 等阶段分发 hooks。
 - 为 plugin 提供 host callbacks。
 - 维护 plugin status、logs、quota 和 inspect 信息。
 - 在配置 reload 时复用配置完全一致的 plugin transport。
 
-## Plugin 和 Entry
+## Plugin 和 Tool
 
-一个 plugin 是一组扩展能力。它可以只提供 hooks，也可以提供一个或多个 entries。
+一个 plugin 是一组扩展能力。它可以只提供 hooks，也可以提供一个或多个 tools。
 
-一个 entry 是模型可调用的能力单元。Entry 包含：
+一个 tool 是模型可调用的能力单元。Tool 包含：
 
-- `name`: plugin 内部 entry 名称。
+- `name`: plugin 内部 tool 名称。
 - `description`: 展示给模型和 UI 的说明。
 - `input_schema`: JSON Schema，用来描述调用入参。
-- `behavior`: 行为类别，用于 plan mode、catalog 和权限推断。
 - `input_paths`: 从调用入参中提取本地路径并做读写权限审计。
 - `input_networks`: 从调用入参中提取网络目标并做网络权限审计。
-- `network_access`: entry 固定访问的网络目标。
-- `tags`: 权限策略没有命中精确 entry 规则时使用的标签。
-- `search_terms`: entry search/catalog 的检索词。
-- `load_priority`: entry 是否总是加载、标准加载或延迟加载。
-- `concurrency_safe`: 是否允许并发执行。
-- `requires_user_interaction`: 是否需要用户交互。
+- `path_access`: tool 固定会访问的本地路径，带 `read/write` 语义。
+- `network_access`: tool 固定访问的网络目标。
+- `tags`: tool 的规范化语义标签。权限 fallback、catalog/profile 过滤、tool search，以及运行时的一些判断都基于 tags、name 和 description。
+- `load_priority`: tool 是否总是加载、标准加载或延迟加载。
+- `concurrency_safe`: 是否允许并发执行。现在是显式字段，不再从 tags 自动推导。
 - `strict`: 是否启用更严格的 schema/调用约束。
-- `plan_mode_policy`: plan mode 中的可用性策略。
-- `streaming`: 是否支持流式 entry 输出。
-- `host_capabilities`: 这个 entry 调用 host callback 时需要的能力声明。
+- `streaming`: 是否支持流式 tool 输出。
+- `host_capabilities`: 这个 tool 调用 host callback 时需要的能力声明。
 
-Entry 的模型可见名称由 entry registry 决定：
+Tool 的模型可见名称由 tool registry 决定：
 
-- 如果名称没有冲突，暴露为 entry 原名。
-- 如果和已有 entry 或内置名称冲突，暴露为 `plugin_id__entry_name`。
-- 如果 manifest 设置了 `expose_as`，使用指定名称。
+- 如果名称没有冲突，暴露为 tool 原名。
+- 如果和已有 tool 名称冲突，暴露为 `plugin_id/tool_name`。
 
 这个规则让 plugin 可以安全地提供通用名称，同时避免覆盖其他 plugin 的能力。
 
-## First-Party Static Plugins
+## Bundled Static Plugins
 
-Runtime 会注册一组 first-party static plugins。这些 plugin 和外部 plugin 使用同一个 host、manifest、entry registry、hook dispatch 和 permission 路径。
+Runtime 会注册一组 bundled static plugins。这些 plugin 和外部 plugin 使用同一个 host、manifest、tool registry、hook dispatch 和 permission 路径。
 
 Runtime build 注册：
 
 | Plugin id | 作用 |
 | --- | --- |
-| `agena.fs` | 文件系统读写相关 entries |
-| `agena.shell` | shell / powershell / monitor 相关 entries |
-| `agena.web` | web search / web fetch entries |
-| `agena.workflow` | plan mode、todo、worktree 等 workflow entries |
-| `agena.skills_fs` | 扫描 `SKILL.md` 和 slash command，并动态注册 entries |
-| `agena.lsp` | LSP server 观测和 LSP 查询 entries |
-| `agena.cron` | cron 和 one-shot wakeup 调度 entries |
+| `agena.fs` | 文件系统读写相关 tools |
+| `agena.shell` | shell / powershell / monitor 相关 tools |
+| `agena.web` | web search / web fetch tools |
+| `agena.workflow` | plan mode、todo、worktree 等 workflow tools |
+| `agena.skills_fs` | 扫描 `SKILL.md` 和 slash command，并动态注册 tools |
+| `agena.lsp` | LSP server 观测和 LSP 查询 tools |
+| `agena.cron` | cron 和 one-shot wakeup 调度 tools |
 | `agena.memory` | memory 配置和项目记忆相关能力 |
 | `agena.hooks` | 用户配置的 shell/HTTP hooks |
-| `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt entries |
+| `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt tools |
 
-`agena.mcp` 读取 MCP server snapshot，并把每个 MCP capability 包装成 plugin entries，例如：
+`agena.mcp` 读取 MCP server snapshot，并把每个 MCP capability 包装成 plugin tools，例如：
 
 ```text
 mcp:<server>:tool:<tool>
@@ -108,7 +104,7 @@ mcp:<server>:prompts:list
 mcp:<server>:prompts:get
 ```
 
-因此，MCP 对模型的可见面统一进入 plugin host 和 plugin entry registry。
+因此，MCP 对模型的可见面统一进入 plugin host 和 plugin tool registry。
 
 ## Transport
 
@@ -221,7 +217,7 @@ Timeout 字段：
 | --- | --- |
 | `init` | `init` / manifest 初始化。 |
 | `tool_hook` | tool before/after/failure hooks。 |
-| `tool_invoke` | plugin entry invoke timeout。 |
+| `tool_invoke` | plugin tool invoke timeout。 |
 | `permission_ask` | permission hook。 |
 | `chat` | chat message/params/headers/system transform。 |
 | `fast` | shell env、command hooks、config hooks 等快速路径。 |
@@ -288,7 +284,7 @@ Runtime status 会记录 stdio plugin 的 pid、restart count、last exit code�
 
 ## HTTP Auth
 
-HTTP transport 的 auth 写在 plugin entry 内：
+HTTP transport 的 auth 写在 plugin tool 内：
 
 ```toml
 [plugins.list.policy]
@@ -342,8 +338,8 @@ impl Plugin for EchoPlugin {
         PluginManifest::builder("echo", env!("CARGO_PKG_VERSION"))
             .description("Echo text.")
             .hooks(HookSubscription::TOOL_INVOKE)
-            .entry(
-                PluginEntryDecl::new(
+            .tool(
+                PluginToolDecl::new(
                     "echo",
                     json!({
                         "type": "object",
@@ -354,7 +350,7 @@ impl Plugin for EchoPlugin {
                     }),
                 )
                 .description("Echo the supplied text.")
-                .behavior(EntryBehavior::ReadOnly),
+                .tag(ToolTag::ReadOnly),
             )
             .build()
     }
@@ -393,7 +389,7 @@ async fn main() -> std::io::Result<()> {
 ## Hooks
 
 Plugin 可以通过 manifest 的 `hooks` 订阅 runtime 生命周期和调用链事件。Host 只会向订阅了对应 hook 的 plugin 分发事件。
-Hook 名称遵循 plugin SDK 协议命名；`tool.*` hook 作用于 plugin entry 调用链。
+Hook 名称遵循 plugin SDK 协议命名；`tool.*` hook 作用于 plugin tool 调用链。
 
 主要 hook 组：
 
@@ -417,12 +413,12 @@ Hook 名称遵循 plugin SDK 协议命名；`tool.*` hook 作用于 plugin entry
 - 在 `chat.system.transform` 中改写 system prompt。
 - 在 `permission.ask` 中为组织策略提供建议或决策。
 - 在 `shell.env` 中注入 shell 环境变量。
-- 在 `tool.execute.before/after` 中改写 entry 调用入参或输出。
-- 在 `tool.definition` 中调整 entry definition。
+- 在 `tool.execute.before/after` 中改写 tool 调用入参或输出。
+- 在 `tool.definition` 中调整 tool definition。
 
 ## Host Capabilities
 
-Plugin 调用 host callback 前必须在 manifest 中声明对应 capability。Host 会按 plugin 和 entry 做 capability 校验，避免 plugin 拿到未声明的宿主能力。
+Plugin 调用 host callback 前必须在 manifest 中声明对应 capability。Host 会按 plugin 和 tool 做 capability 校验，避免 plugin 拿到未声明的宿主能力。
 
 常用 capability：
 
@@ -430,8 +426,8 @@ Plugin 调用 host callback 前必须在 manifest 中声明对应 capability。H
 | --- | --- |
 | `AskUser` | 向用户询问输入 |
 | `SpawnSubtask` | 启动 subtask/subagent |
-| `ListTools` | 列出可用 entries |
-| `InvokeTool` | 调用其他 entry |
+| `ListTools` | 列出可用 tools |
+| `InvokeTool` | 调用其他 tool |
 | `ReadConfig` | 读取配置 |
 | `PublishEvent` / `SubscribeEvents` | 发布或订阅事件 |
 | `Scheduler` / `CronScheduler` | 管理调度任务 |
@@ -439,7 +435,7 @@ Plugin 调用 host callback 前必须在 manifest 中声明对应 capability。H
 | `WorktreeRegistry` | 访问 worktree registry |
 | `LspRegistry` | 访问 LSP registry |
 | `McpRegistry` | 管理或查看 MCP server |
-| `EntryRegistry` | 动态注册或注销 entries |
+| `EntryRegistry` | 动态注册或注销 tools |
 | `AgentRegistry` | 注册或读取 agent profiles |
 | `HookRegistry` | 动态注册 hook |
 | `PluginStorage` | 使用 plugin-scoped storage |
@@ -451,26 +447,30 @@ Plugin 调用 host callback 前必须在 manifest 中声明对应 capability。H
 | `PermissionDecision` | 在 permission hook 中返回最终决策 |
 | `PermissionCheck` | 让 plugin 主动请求 host 按当前 path/network policy 做权限判断 |
 
-Capability 可以写在 entry 上，也可以写在 manifest 的 `plugin_capabilities` 上。Entry-level capability 更适合多 entry plugin，因为它可以把敏感能力限定到需要的 entry。
+Capability 可以写在 tool 上，也可以写在 manifest 的 `plugin_capabilities` 上。Tool-level capability 更适合多 tool plugin，因为它可以把敏感能力限定到需要的 tool。
 
 ## 权限关系
 
-Plugin entry 调用会经过同一套 permission system：
+Plugin tool 调用会经过同一套 permission system：
 
-1. Entry manifest 声明 `input_paths`、`input_networks`、`network_access`。
+1. Tool manifest 声明 `input_paths`、`input_networks`、`network_access`。
 2. Plugin 可以在运行时通过 `permission_paths` / `permission_networks` 补充动态审计项。
-3. Permission runtime 检查 path/network/entry policy。
+3. Permission runtime 检查 path/network/tool policy。
 4. `permission.ask` hooks 可以给出建议；拥有 `PermissionDecision` capability 的 plugin 可以返回最终决策。
 5. 需要用户确认时，session 状态和 UI/API 会产生 pending permission request。
 
-Manifest 中的权限声明适合 entry 调用前就能知道的资源：
+Manifest 中的权限声明适合 tool 调用前就能知道的资源：
 
 ```rust
-PluginEntryDecl::new("download", schema)
+PluginToolDecl::new("download", schema)
     .input_path(InputPathSpec {
         jsonpath: "$.output_path".to_string(),
         kind: PathKind::Write,
         optional: false,
+    })
+    .path_access(PathAccessSpec {
+        path: ".agena/cache".to_string(),
+        kind: PathKind::Write,
     })
     .input_network(InputNetworkSpec {
         jsonpath: "$.url".to_string(),
@@ -479,7 +479,7 @@ PluginEntryDecl::new("download", schema)
     .network_access(NetworkAccessSpec {
         target: "https://api.example.com".to_string(),
     })
-    .tag("network");
+    .tag(ToolTag::Network);
 ```
 
 如果路径或网络目标要先解析输入、读取 plugin 状态、展开 workspace 信息后才能知道，plugin 可以实现：
@@ -498,7 +498,7 @@ async fn permission_networks(
 ) -> Result<Vec<NetworkRequest>>;
 ```
 
-这些声明和动态返回项都会在 entry body 执行前进入同一套 path/network policy。
+这些声明和动态返回项都会在 tool body 执行前进入同一套 path/network policy。
 
 Plugin 内部发起的额外文件或网络操作不能由 host 做强沙箱隔离。需要在 plugin 内部配合权限系统时，manifest 要声明 `PermissionCheck` capability，然后通过 host callback 主动检查：
 
@@ -509,7 +509,7 @@ host.ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url)).
 
 也可以使用 `check_path_permission` / `check_network_permission` 拿到 `allow`、`prompt`、`deny` 结果自行处理。Host 会按当前 session、agent、persisted rule、permission hook 和静态 policy 解析该检查。
 
-Entry 权限配置分为 tag、entry name 和 entry-specific rules：
+Tool 权限配置分为 tag、tool name 和 tool-specific rules：
 
 ```toml
 [permission.entries.tags]
@@ -526,11 +526,11 @@ apply_patch = "ask"
 "my-plugin.echo" = "allow"
 ```
 
-`names` 覆盖 first-party static plugin entries 和外部 plugin entries。
+`names` 覆盖 bundled static plugin tools 和外部 plugin tools。
 
 ## MCP
 
-MCP server 本身配置在 `agena.mcp` static plugin options，并通过 `agena.mcp` plugin entries 对模型暴露。
+MCP server 本身配置在 `agena.mcp` static plugin options，并通过 `agena.mcp` plugin tools 对模型暴露。
 
 ```toml
 [plugins.list."agena.mcp"]
@@ -548,7 +548,7 @@ Runtime build 时：
 2. 构建 `McpConnectionManager`。
 3. 注册 `agena.mcp` static plugin。
 4. `agena.mcp` 从 MCP manager 读取 tool/resource/prompt capabilities。
-5. 每个 MCP capability 进入 plugin entry registry。
+5. 每个 MCP capability 进入 plugin tool registry。
 
 因此，MCP 的权限、catalog、调用、hook、status 都落在 plugin 体系中。
 
@@ -641,7 +641,7 @@ agena plugin uninstall lint
 常用安装参数：
 
 - `--config <path>`: 写入指定 config。
-- `--force`: 覆盖已有同名 plugin entry。
+- `--force`: 覆盖已有同名 plugin tool。
 - `--dry-run`: 计算结果但不写文件。
 - `--allow-unverified`: 允许没有 sha256 的 artifact。
 - `--require-signature`: 要求 registry record 带 signature。
@@ -731,13 +731,13 @@ agena plugin inspect echo
 
 ## Reload 行为
 
-Runtime reload 会重建 runtime snapshot 和 plugin host。对配置完全一致的 plugin entry，host 会复用已有 transport，所以未变更的 stdio subprocess 或 HTTP plugin 可以在 reload 后继续存活。
+Runtime reload 会重建 runtime snapshot 和 plugin host。对配置完全一致的 plugin tool，host 会复用已有 transport，所以未变更的 stdio subprocess 或 HTTP plugin 可以在 reload 后继续存活。
 
 发生以下变化时通常会重新加载对应 plugin：
 
 - plugin id 变化。
 - kind 变化。
-- path/command/url/options/timeouts/env/restart 等 entry config 变化。
+- path/command/url/options/timeouts/env/restart 等 tool config 变化。
 - trusted key、signature、hash 等校验信息变化。
 
 加载失败的 plugin 不会阻止整个 host 构建。Host 会记录 failed status 和 error log，其他 plugin 仍可继续运行。
@@ -748,12 +748,12 @@ Runtime reload 会重建 runtime snapshot 和 plugin host。对配置完全一�
 
 - Plugin config schema: `crates/agena-plugin-host/src/config.rs`
 - Plugin host/load/reload/status/logs: `crates/agena-plugin-host/src/host.rs`
-- Entry registry and name collision handling: `crates/agena-plugin-host/src/registry.rs`
+- Tool registry and name collision handling: `crates/agena-plugin-host/src/registry.rs`
 - Plugin manifest and hooks: `crates/agena-plugin-sdk/src/manifest.rs`
 - Plugin trait and SDK runtime surface: `crates/agena-plugin-sdk/src/plugin.rs`
 - Host callbacks: `crates/agena-plugin-sdk/src/host_api.rs`
 - Static plugin registration: `crates/agena/src/config/registry.rs`
-- First-party plugin ids and bridge: `crates/agena/src/entry/mod.rs`
+- First-party tool ids and bridge: `crates/agena/src/entry/mod.rs`
 - Bundled plugins: `crates/agena/src/plugins/bundled/`
 - MCP plugin bridge: `crates/agena/src/plugins/bundled/mcp.rs`
 - Plugin storage/secrets: `crates/agena/src/plugins/storage.rs`

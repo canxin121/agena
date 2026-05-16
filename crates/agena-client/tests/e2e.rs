@@ -345,13 +345,13 @@ api_key = "test"
 enabled = true
 "#,
     );
-    let plugins = agena::tool::first_party_plugin_host(workspace_root.clone())
-        .expect("first-party plugin host");
+    let plugins = agena::tool::default_tool_host(workspace_root.clone())
+        .expect("bundled plugin host");
     let executor = ToolExecutor::new(
         workspace_root.clone(),
         Agent::new("client-e2e-permission", PermissionPolicy::allow_all()).with_tool_policy(
             ToolPermissionPolicy::allow_all()
-                .with_first_party_mode("todo_write", PermissionMode::Ask),
+                .with_tool_mode("todo_write", PermissionMode::Ask),
         ),
     )
     .with_plugin_manager(Arc::clone(&plugins));
@@ -679,7 +679,7 @@ async fn rest_permission_rule_and_reply_flows_round_trip_via_sdk() {
     let created_rule = client
         .command(Command::UpsertPermissionRule(UpsertPermissionRuleParams {
             action_key: None,
-            subject_kind: Some("builtin_tool".to_string()),
+            subject_kind: Some("tool".to_string()),
             tool_name: Some("bash".to_string()),
             qualifier: Some("git status*".to_string()),
             path_access_kind: None,

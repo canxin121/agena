@@ -4,11 +4,12 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::message::FirstPartyToolInput;
+use crate::message::BundledToolInput;
 use crate::permission::{
     AccessKind, AccessSelector, NetworkPermissionPolicy, NetworkTarget, PermissionConfigError,
     PermissionDecision, PermissionMode, PermissionPolicy, ToolPermissionPolicy,
 };
+use crate::plugin::sdk::ToolTag;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -162,7 +163,7 @@ impl AgentPermissionConfig {
         }
         if self.inherit.tools() {
             effective.tools.tags = defaults.tools.tags.clone();
-            effective.tools.first_party = defaults.tools.first_party.clone();
+            effective.tools.names = defaults.tools.names.clone();
             effective.tools.rules = defaults.tools.rules.clone();
         }
         if self.inherit.plugin_tools() {
@@ -452,7 +453,7 @@ pub struct ToolPermissionConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tags: BTreeMap<String, PermissionMode>,
     #[serde(default, rename = "names", skip_serializing_if = "BTreeMap::is_empty")]
-    pub first_party: BTreeMap<String, PermissionMode>,
+    pub names: BTreeMap<String, PermissionMode>,
     #[serde(default, skip)]
     pub plugin: BTreeMap<String, PermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -462,14 +463,14 @@ pub struct ToolPermissionConfig {
 impl ToolPermissionConfig {
     pub fn is_empty(&self) -> bool {
         self.tags.is_empty()
-            && self.first_party.is_empty()
+            && self.names.is_empty()
             && self.plugin.is_empty()
             && self.rules.is_empty()
     }
 
     pub fn merge_from(&mut self, overlay: Self) {
         self.tags.extend(overlay.tags);
-        self.first_party.extend(overlay.first_party);
+        self.names.extend(overlay.names);
         self.plugin.extend(overlay.plugin);
         self.rules.extend(overlay.rules);
     }
@@ -479,9 +480,11 @@ impl ToolPermissionConfig {
         mut base: ToolPermissionPolicy,
     ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
         for (tag, mode) in &self.tags {
-            base = base.with_tag_mode(tag, *mode);
+            if let Some(tag) = ToolTag::from_tag(tag) {
+                base = base.with_tag_mode(tag, *mode);
+            }
         }
-        for (tool_name, mode) in self.first_party.iter().chain(self.plugin.iter()) {
+        for (tool_name, mode) in self.names.iter().chain(self.plugin.iter()) {
             let name = tool_name.trim();
             if name.is_empty() {
                 continue;
@@ -658,20 +661,20 @@ impl Agent {
         }
     }
 
-    pub fn authorize_first_party_tool(&self, input: &FirstPartyToolInput) -> PermissionDecision {
+    pub fn authorize_bundled_tool(&self, input: &BundledToolInput) -> PermissionDecision {
         if self.disable {
             return PermissionDecision::Deny {
                 reason: format!("agent '{}' is disabled", self.name),
             };
         }
-        self.tool_policy.check_first_party(input)
+        self.tool_policy.check_tool_input(input)
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
         self.authorize_tool_tags(tool_name, &[])
     }
 
-    pub fn authorize_tool_tags(&self, tool_name: &str, tags: &[String]) -> PermissionDecision {
+    pub fn authorize_tool_tags(&self, tool_name: &str, tags: &[ToolTag]) -> PermissionDecision {
         if self.disable {
             return PermissionDecision::Deny {
                 reason: format!("agent '{}' is disabled", self.name),
@@ -735,7 +738,7 @@ impl PermissionDecisionExt for PermissionDecision {
 mod tests {
     use std::{collections::BTreeMap, path::Path};
 
-    use crate::message::{BashToolInput, FirstPartyToolInput, ReadToolInput};
+    use crate::message::{BashToolInput, BundledToolInput, ReadToolInput};
     use crate::permission::{AccessKind, PermissionDecision, PermissionMode, PermissionPolicy};
     use indexmap::IndexMap;
 
@@ -773,16 +776,16 @@ mod tests {
     }
 
     #[test]
-    fn disabled_agent_denies_first_party_tools() {
+    fn disabled_agent_denies_bundled_tools() {
         let mut agent = Agent::new("build", PermissionPolicy::allow_all());
         agent.disable = true;
-        let input = FirstPartyToolInput::Read(ReadToolInput {
+        let input = BundledToolInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
 
-        match agent.authorize_first_party_tool(&input) {
+        match agent.authorize_bundled_tool(&input) {
             crate::permission::PermissionDecision::Deny { reason } => {
                 assert!(reason.contains("disabled"));
             }
@@ -820,14 +823,14 @@ mod tests {
                     ..Default::default()
                 },
                 tools: ToolPermissionConfig {
-                    first_party: BTreeMap::from([("bash".to_string(), PermissionMode::Ask)]),
+                    names: BTreeMap::from([("bash".to_string(), PermissionMode::Ask)]),
                     ..Default::default()
                 },
                 ..Default::default()
             })
             .expect("permission config compiles");
 
-        match agent.authorize_first_party_tool(&FirstPartyToolInput::Bash(BashToolInput {
+        match agent.authorize_bundled_tool(&BundledToolInput::Bash(BashToolInput {
             command: "git status".to_string(),
             description: String::new(),
             timeout_ms: None,
@@ -949,7 +952,7 @@ mod tests {
             .with_allowed_tools(["bash"]);
 
         assert_eq!(
-            agent.authorize_first_party_tool(&FirstPartyToolInput::Bash(BashToolInput {
+            agent.authorize_bundled_tool(&BundledToolInput::Bash(BashToolInput {
                 command: "git status".to_string(),
                 description: String::new(),
                 timeout_ms: None,
@@ -959,7 +962,7 @@ mod tests {
             PermissionDecision::Allow
         );
 
-        match agent.authorize_first_party_tool(&FirstPartyToolInput::Bash(BashToolInput {
+        match agent.authorize_bundled_tool(&BundledToolInput::Bash(BashToolInput {
             command: "git push origin main".to_string(),
             description: String::new(),
             timeout_ms: None,

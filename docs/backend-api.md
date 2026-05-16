@@ -207,7 +207,7 @@ Prometheus-style text metrics，包括：
 - HTTP request count。
 - HTTP duration histogram。
 - provider call/error/stream counters。
-- entry execution/error counters。
+- tool execution/error counters。
 - active session gauge。
 - process uptime。
 - build info。
@@ -871,7 +871,7 @@ Write request:
 ```json
 {
   "action_key": "...",
-  "subject_kind": "builtin_tool",
+  "subject_kind": "tool",
   "tool_name": "bash",
   "qualifier": "git status",
   "path_access_kind": null,

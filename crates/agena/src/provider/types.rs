@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     message::{Message, MessageUsage},
     model::{ModelId, ProviderId},
-    tool::EntryDefinition,
+    plugin::registry::PluginEntry as RegistryPluginEntry,
 };
 
 /// Controls extended thinking / reasoning for providers that support it.
@@ -70,7 +70,7 @@ pub struct CompletionRequest {
     pub system: Option<String>,
     pub messages: Vec<Message>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<EntryDefinition>,
+    pub tools: Vec<RegistryPluginEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

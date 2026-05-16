@@ -925,16 +925,16 @@ fn sanitize_function_parameters(value: &serde_json::Value) -> Option<serde_json:
     }
 }
 
-fn build_gemini_tools(tools: &[crate::tool::EntryDefinition]) -> Option<Vec<GeminiTool>> {
+fn build_gemini_tools(tools: &[crate::plugin::registry::PluginEntry]) -> Option<Vec<GeminiTool>> {
     if tools.is_empty() {
         return None;
     }
     let function_declarations = tools
         .iter()
         .map(|tool| GeminiFunctionDeclaration {
-            name: tool.name.clone(),
-            description: tool.description.clone(),
-            parameters: sanitize_function_parameters(&tool.input_schema),
+            name: tool.exposed_name.clone(),
+            description: tool.description_text().to_string(),
+            parameters: sanitize_function_parameters(&tool.sanitized_input_schema()),
         })
         .collect();
     Some(vec![GeminiTool {
@@ -1577,30 +1577,26 @@ mod tests {
 
     #[test]
     fn build_gemini_tools_emits_function_declarations_with_sanitized_schema() {
-        let definition = crate::tool::EntryDefinition {
-            name: "lookup".to_owned(),
-            description: "Look up something".to_owned(),
-            input_schema: serde_json::json!({
-                "$schema": "http://json-schema.org/draft-07/schema#",
-                "title": "Strip me",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "query": { "type": "string", "format": "uuid" },
-                    "limit": { "type": "integer" }
-                },
-                "required": ["query"]
-            }),
-            behavior: crate::entry::EntryBehavior::ReadOnly,
-            source: crate::entry::EntrySource::FirstParty,
-            search_terms: Vec::new(),
-            tags: vec!["read_only".to_string()],
-            read_only: true,
-            concurrency_safe: true,
-            requires_user_interaction: false,
-            load_priority: crate::entry::EntryLoadPriority::Standard,
-            strict: false,
-        };
+        let definition = crate::plugin::registry::PluginEntry::new(
+            "fixture",
+            crate::plugin::PluginToolDecl::new(
+                "lookup",
+                serde_json::json!({
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "title": "Strip me",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "query": { "type": "string", "format": "uuid" },
+                        "limit": { "type": "integer" }
+                    },
+                    "required": ["query"]
+                }),
+            )
+            .description("Look up something")
+            .tag(crate::plugin::sdk::ToolTag::ReadOnly)
+            .concurrency_safe(true),
+        );
         let tools =
             build_gemini_tools(std::slice::from_ref(&definition)).expect("tools should be present");
         assert_eq!(tools.len(), 1);

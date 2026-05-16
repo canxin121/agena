@@ -39,7 +39,7 @@ use crate::{
     error::AppError,
     memory::{MemoryStore, MemoryType},
     message::{
-        ApplyPatchToolInput, FirstPartyToolInput, PartContent, StructuredObject, ToolInvocation,
+        ApplyPatchToolInput, BundledToolInput, PartContent, StructuredObject, ToolInvocation,
     },
     model::ModelRef,
     permission::{
@@ -397,7 +397,7 @@ pub struct PluginInstallArgs {
     /// Registry id, used as a cache key (defaults to "default").
     #[arg(long, default_value = "default")]
     pub registry_id: String,
-    /// Path to the agena config.toml that should receive the plugin entry.
+    /// Path to the agena config.toml that should receive the plugin tool.
     #[arg(long)]
     pub config: Option<PathBuf>,
     /// Overwrite an existing entry with the same plugin id.
@@ -1873,7 +1873,7 @@ impl AgenaCli {
             .map(Ok)
             .unwrap_or_else(std::env::current_dir)?;
         let plugins =
-            crate::tool::first_party_plugin_host(workspace.clone()).map_err(AppError::Config)?;
+            crate::tool::default_tool_host(workspace.clone()).map_err(AppError::Config)?;
         let executor = ToolExecutor::new(
             workspace,
             Agent::new("cli", PermissionPolicy::allow_all())
@@ -1881,13 +1881,13 @@ impl AgenaCli {
         )
         .with_plugin_manager(plugins);
         let execution = executor
-            .execute_first_party_detailed(&FirstPartyToolInput::ApplyPatch(ApplyPatchToolInput {
+            .execute_bundled_detailed(&BundledToolInput::ApplyPatch(ApplyPatchToolInput {
                 patch,
             }))
             .map_err(|err| AppError::Config(err.to_string()))?;
         let patch = execution.apply_patch.ok_or_else(|| {
             AppError::Internal(
-                "apply_patch first-party tool did not return patch metadata".to_owned(),
+                "apply_patch bundled tool did not return patch metadata".to_owned(),
             )
         })?;
         if args.json {
@@ -2956,10 +2956,14 @@ impl McpServerBackend for AgenaMcpBackend {
             .executor
             .available_tools()
             .into_iter()
-            .map(|tool| ToolDescriptor {
-                name: tool.name,
-                description: Some(tool.description),
-                input_schema: Some(tool.input_schema),
+            .map(|tool| {
+                let description = tool.description_text().to_string();
+                let input_schema = tool.sanitized_input_schema();
+                ToolDescriptor {
+                    name: tool.exposed_name,
+                    description: Some(description),
+                    input_schema: Some(input_schema),
+                }
             })
             .collect())
     }
@@ -3081,7 +3085,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .lookup_entry(params.name.as_str())
             .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
         if !matches!(
-            entry.handle.plugin_id.as_str(),
+            entry.plugin_name.as_str(),
             "agena.workflow" | "agena.skills_fs"
         ) || entry.decl.input_schema
             != crate::entry::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>(
@@ -3104,7 +3108,7 @@ impl McpServerBackend for AgenaMcpBackend {
             }
         });
         let invocation = ToolInvocation::new(
-            entry.handle.exposed_name.clone(),
+            entry.exposed_name.clone(),
             StructuredObject::try_from(serde_json::json!({ "args": args }))
                 .map_err(McpServerError::InvalidParams)?,
         );
@@ -3167,7 +3171,7 @@ fn mcp_tool_invocation(
     input: StructuredObject,
 ) -> Result<ToolInvocation, McpServerError> {
     let invocation = ToolInvocation::new(name.to_owned(), input);
-    if let Some(builtin) = FirstPartyToolInput::from_invocation(&invocation) {
+    if let Some(builtin) = BundledToolInput::from_invocation(&invocation) {
         return Ok(builtin.into_invocation());
     }
     Ok(invocation)
@@ -3276,7 +3280,7 @@ fn permission_action_from_args(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Ok(PermissionAction::BuiltinTool {
+        return Ok(PermissionAction::Tool {
             tool_name: tool_name.to_string(),
             qualifier: args
                 .qualifier

@@ -11,7 +11,7 @@ use std::{
 use agena::{
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
-        AttachmentKind, FileChangeKind, FirstPartyToolInput, FirstPartyToolOutput, MessagePart,
+        AttachmentKind, FileChangeKind, BundledToolInput, BundledToolOutput, MessagePart,
         PartContent, ToolExecutionPart, ToolInvocation, UserInputReply, UserInputReplyKind,
         UserInputRequest,
     },
@@ -396,7 +396,7 @@ struct PermissionRuleDraft {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionRuleSubjectKind {
-    BuiltinTool,
+    Tool,
     PathAccess,
     NetworkAccess,
 }
@@ -4554,7 +4554,7 @@ impl App {
                 .backend
                 .exit_worktree(session_id, "remove".to_string(), discard_changes)
             {
-                Ok(agena::message::FirstPartyToolOutput::ExitWorktree { action, path }) => {
+                Ok(agena::message::BundledToolOutput::ExitWorktree { action, path }) => {
                     self.flash_success(format!("worktree {action}: {path}"));
                 }
                 Ok(_) => self.flash_success("worktree exited".to_string()),
@@ -4940,7 +4940,7 @@ impl App {
                         .enter_worktree(session_id, Some(argument.to_string()), None)
                 };
                 match result {
-                    Ok(agena::message::FirstPartyToolOutput::EnterWorktree { path, branch }) => {
+                    Ok(agena::message::BundledToolOutput::EnterWorktree { path, branch }) => {
                         self.flash_success(format!("worktree ready: {path} ({branch})"));
                     }
                     Ok(_) => self.flash_success("worktree entered".to_string()),
@@ -4960,7 +4960,7 @@ impl App {
                     .backend
                     .enter_worktree(session_id, None, Some(path.to_string()))
                 {
-                    Ok(agena::message::FirstPartyToolOutput::EnterWorktree { path, branch }) => {
+                    Ok(agena::message::BundledToolOutput::EnterWorktree { path, branch }) => {
                         self.flash_success(format!("worktree attached: {path} ({branch})"));
                     }
                     Ok(_) => self.flash_success("worktree attached".to_string()),
@@ -4972,7 +4972,7 @@ impl App {
                 let (mode, extra) = split_command_args_once(exit_args).unwrap_or((exit_args, ""));
                 match mode.to_ascii_lowercase().as_str() {
                     "" | "keep" => match self.backend.exit_worktree(session_id, "keep".to_string(), false) {
-                        Ok(agena::message::FirstPartyToolOutput::ExitWorktree { action, path }) => {
+                        Ok(agena::message::BundledToolOutput::ExitWorktree { action, path }) => {
                             self.flash_success(format!("worktree {action}: {path}"));
                         }
                         Ok(_) => self.flash_success("worktree exited".to_string()),
@@ -7850,7 +7850,7 @@ fn permission_overlay_choices(i18n: &I18n) -> [String; 8] {
 
 fn permission_action_label(i18n: &I18n, action: &PermissionAction) -> String {
     match action {
-        PermissionAction::BuiltinTool { tool_name, .. } => i18n.text_args(
+        PermissionAction::Tool { tool_name, .. } => i18n.text_args(
             "overlay-permission-action-tool",
             &crate::fl_args!("tool" => tool_name.clone()),
         ),
@@ -8006,7 +8006,17 @@ fn format_plugin_inspector_detail(
             lines.push(format!("hooks: {:?}", manifest.hooks));
             lines.push(format!("entries: {}", manifest.entries.len()));
             for entry in manifest.entries.iter().take(5) {
-                lines.push(format!("  - {} ({:?})", entry.name, entry.behavior));
+                let tags = if entry.tags.is_empty() {
+                    "untagged".to_string()
+                } else {
+                    entry
+                        .tags
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                lines.push(format!("  - {} [{}]", entry.name, tags));
             }
             if manifest.entries.len() > 5 {
                 lines.push(format!("  - ... +{} more", manifest.entries.len() - 5));
@@ -9454,7 +9464,7 @@ fn permission_mode_name(mode: PermissionMode) -> &'static str {
 impl Default for PermissionRuleDraft {
     fn default() -> Self {
         Self {
-            subject_kind: PermissionRuleSubjectKind::BuiltinTool,
+            subject_kind: PermissionRuleSubjectKind::Tool,
             tool_name: String::new(),
             qualifier: String::new(),
             path_access_kind: "read".to_string(),
@@ -9475,7 +9485,7 @@ fn permission_rule_draft_from_resource(rule: &PermissionRuleResource) -> Permiss
         subject_kind: match rule.subject_kind.as_str() {
             "path_access" => PermissionRuleSubjectKind::PathAccess,
             "network_access" => PermissionRuleSubjectKind::NetworkAccess,
-            _ => PermissionRuleSubjectKind::BuiltinTool,
+            _ => PermissionRuleSubjectKind::Tool,
         },
         tool_name: rule.tool_name.clone().unwrap_or_default(),
         qualifier: rule.qualifier.clone().unwrap_or_default(),
@@ -9503,7 +9513,7 @@ fn permission_rule_draft_from_resource(rule: &PermissionRuleResource) -> Permiss
 
 fn permission_rule_label(rule: &PermissionRuleResource) -> String {
     match rule.subject_kind.as_str() {
-        "builtin_tool" => match (rule.tool_name.as_deref(), rule.qualifier.as_deref()) {
+        "tool" => match (rule.tool_name.as_deref(), rule.qualifier.as_deref()) {
             (Some(tool_name), Some(qualifier)) if !qualifier.trim().is_empty() => {
                 format!("{tool_name} · {qualifier}")
             }
@@ -9572,7 +9582,7 @@ fn permission_rule_detail(rule: &PermissionRuleResource) -> String {
 
 fn permission_rule_draft_label(draft: &PermissionRuleDraft) -> String {
     match draft.subject_kind {
-        PermissionRuleSubjectKind::BuiltinTool => {
+        PermissionRuleSubjectKind::Tool => {
             let tool_name = draft.tool_name.trim();
             let qualifier = draft.qualifier.trim();
             if qualifier.is_empty() {
@@ -9601,7 +9611,7 @@ fn permission_rule_draft_label(draft: &PermissionRuleDraft) -> String {
 
 fn render_permission_rule_draft(draft: &PermissionRuleDraft) -> String {
     match draft.subject_kind {
-        PermissionRuleSubjectKind::BuiltinTool => {
+        PermissionRuleSubjectKind::Tool => {
             let mut parts = vec![
                 "tool".to_string(),
                 shell_quote_or_dash(draft.tool_name.trim()),
@@ -9660,9 +9670,9 @@ fn render_permission_rule_preview(input: &str) -> String {
             lines.push(format!("mode: {}", permission_mode_name(draft.mode)));
             lines.push(format!("scope: {}", draft.scope));
             match draft.subject_kind {
-                PermissionRuleSubjectKind::BuiltinTool => {
+                PermissionRuleSubjectKind::Tool => {
                     lines.push(format!(
-                        "subject: builtin_tool ({})",
+                        "subject: tool ({})",
                         draft.tool_name.trim()
                     ));
                     if !draft.qualifier.trim().is_empty() {
@@ -9704,9 +9714,9 @@ fn permission_rule_edit_help() -> String {
 
 fn permission_rule_params_from_draft(draft: &PermissionRuleDraft) -> UpsertPermissionRuleParams {
     match draft.subject_kind {
-        PermissionRuleSubjectKind::BuiltinTool => UpsertPermissionRuleParams {
+        PermissionRuleSubjectKind::Tool => UpsertPermissionRuleParams {
             action_key: None,
-            subject_kind: Some("builtin_tool".to_string()),
+            subject_kind: Some("tool".to_string()),
             tool_name: Some(draft.tool_name.trim().to_string()),
             qualifier: non_empty_owned(draft.qualifier.clone()),
             path_access_kind: None,
@@ -9776,7 +9786,7 @@ fn parse_permission_rule_input(input: &str) -> std::result::Result<PermissionRul
     let mut draft = PermissionRuleDraft::default();
     match subject.as_str() {
         "tool" => {
-            draft.subject_kind = PermissionRuleSubjectKind::BuiltinTool;
+            draft.subject_kind = PermissionRuleSubjectKind::Tool;
             draft.tool_name = tokens[1].clone();
             draft.mode = parse_permission_mode_token(tokens[2].as_str())?;
             for token in &tokens[3..] {
@@ -10099,12 +10109,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_permission_rule_input_supports_builtin_tool_rules() {
+    fn parse_permission_rule_input_supports_tool_rules() {
         let draft = parse_permission_rule_input(
             "tool bash allow qualifier='npm test' scope=session session=42",
         )
         .expect("permission rule input should parse");
-        assert_eq!(draft.subject_kind, PermissionRuleSubjectKind::BuiltinTool);
+        assert_eq!(draft.subject_kind, PermissionRuleSubjectKind::Tool);
         assert_eq!(draft.tool_name, "bash");
         assert_eq!(draft.qualifier, "npm test");
         assert_eq!(draft.scope, "session");
@@ -10146,7 +10156,7 @@ mod tests {
     fn parse_permission_rule_input_supports_global_scope() {
         let draft = parse_permission_rule_input("tool bash allow scope=global")
             .expect("global permission rule input should parse");
-        assert_eq!(draft.subject_kind, PermissionRuleSubjectKind::BuiltinTool);
+        assert_eq!(draft.subject_kind, PermissionRuleSubjectKind::Tool);
         assert_eq!(draft.tool_name, "bash");
         assert_eq!(draft.scope, "global");
         assert_eq!(draft.session_id, "");
@@ -10427,7 +10437,7 @@ api_key = "test"
             request: PermissionRequest {
                 request_id: "req\u{2068}-7\u{2069}\u{7}".to_string(),
                 session_id: Some(7),
-                action: PermissionAction::BuiltinTool {
+                action: PermissionAction::Tool {
                     tool_name: "exec\u{2068}".to_string(),
                     qualifier: Some("rg\u{2069}".to_string()),
                 },
@@ -10523,15 +10533,15 @@ api_key = "test"
             .author("Agena")
             .hooks(agena::plugin::HookSubscription::EVENT)
             .entry(
-                agena::plugin::PluginEntryDecl::new("inspect", json!({"type": "object"}))
-                    .behavior(agena::plugin::EntryBehavior::Task)
+                agena::plugin::PluginToolDecl::new("inspect", json!({"type": "object"}))
+                    .tag(agena::plugin::sdk::ToolTag::Task)
                     .host_capabilities([
                         agena::plugin::sdk::HostCapability::PluginStatus,
                         agena::plugin::sdk::HostCapability::ReadConfig,
                     ]),
             )
             .entry(
-                agena::plugin::PluginEntryDecl::new("logs", json!({"type": "object"}))
+                agena::plugin::PluginToolDecl::new("logs", json!({"type": "object"}))
                     .host_capability(agena::plugin::sdk::HostCapability::PluginStatus),
             )
             .build();

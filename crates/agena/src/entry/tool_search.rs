@@ -1,6 +1,8 @@
-use crate::message::{FirstPartyToolOutput, ToolSearchToolInput};
+use crate::message::{BundledToolOutput, ToolSearchToolInput};
+use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
+use crate::plugin::sdk::ToolTag;
 
-use super::{FirstPartyExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
 
 const DEFAULT_LIMIT: usize = 8;
 const MAX_LIMIT: usize = 25;
@@ -9,27 +11,19 @@ const MAX_LIMIT: usize = 25;
 pub(crate) struct SearchableTool {
     pub name: String,
     pub description: String,
-    pub search_terms: Vec<String>,
-    pub behavior_label: String,
-    pub read_only: bool,
+    pub tags: Vec<ToolTag>,
     pub deferred: bool,
 }
 
 impl SearchableTool {
-    pub(crate) fn from_definition(definition: super::EntryDefinition) -> Self {
-        let behavior_label = match definition.behavior {
-            super::EntryBehavior::Mutating => "mutating",
-            super::EntryBehavior::ReadOnly => "read_only",
-            super::EntryBehavior::Task => "task",
-        }
-        .to_string();
-        let deferred = definition.is_deferred();
+    pub(crate) fn from_entry(entry: RegistryPluginEntry) -> Self {
+        let deferred = entry.is_deferred();
+        let description = entry.description_text().to_string();
+        let tags = entry.effective_tags();
         Self {
-            name: definition.name,
-            description: definition.description,
-            search_terms: definition.search_terms,
-            behavior_label,
-            read_only: definition.read_only,
+            name: entry.exposed_name,
+            description,
+            tags,
             deferred,
         }
     }
@@ -38,11 +32,11 @@ impl SearchableTool {
 pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &ToolSearchToolInput,
-) -> Result<FirstPartyExecution, ToolError> {
+) -> Result<BundledExecution, ToolError> {
     let catalog = executor
         .searchable_tools()
         .into_iter()
-        .map(SearchableTool::from_definition)
+        .map(SearchableTool::from_entry)
         .collect::<Vec<_>>();
     execute_with_tools(&catalog, input)
 }
@@ -50,7 +44,7 @@ pub(crate) fn execute(
 pub(crate) fn execute_with_tools(
     catalog: &[SearchableTool],
     input: &ToolSearchToolInput,
-) -> Result<FirstPartyExecution, ToolError> {
+) -> Result<BundledExecution, ToolError> {
     if input.query.trim().is_empty() && input.load.is_empty() {
         return Err(ToolError::InvalidInput(
             "tool_search requires a non-empty query or at least one tool to load".to_string(),
@@ -71,7 +65,7 @@ pub(crate) fn execute_with_tools(
             lines.push(format!(
                 "- {} [{}{}]: {}",
                 definition.name,
-                behavior_label(definition),
+                tags_summary(definition),
                 if definition.deferred {
                     ", deferred"
                 } else {
@@ -94,7 +88,7 @@ pub(crate) fn execute_with_tools(
         );
     }
 
-    let output = FirstPartyToolOutput::ToolSearch {
+    let output = BundledToolOutput::ToolSearch {
         results: results.iter().map(|tool| tool.name.clone()).collect(),
         loaded_tools,
     };
@@ -108,7 +102,7 @@ pub(crate) fn execute_with_tools(
             .insert("query".to_string(), input.query.trim().to_string());
     }
 
-    Ok(FirstPartyExecution::new(output, view))
+    Ok(BundledExecution::new(output, view))
 }
 
 fn search_catalog(
@@ -173,9 +167,10 @@ fn resolve_requested_loads(
 fn score_tool(definition: &SearchableTool, normalized_query: &str, tokens: &[String]) -> i32 {
     let normalized_name = normalize(definition.name.as_str());
     let normalized_description = normalize(definition.description.as_str());
-    let normalized_terms = definition
-        .search_terms
+    let normalized_tags = definition
+        .tags
         .iter()
+        .map(ToString::to_string)
         .map(normalize)
         .collect::<Vec<_>>();
 
@@ -187,11 +182,11 @@ fn score_tool(definition: &SearchableTool, normalized_query: &str, tokens: &[Str
         score += 45;
     }
 
-    if normalized_terms
+    if normalized_tags
         .iter()
-        .any(|term| term == normalized_query || term.contains(normalized_query))
+        .any(|tag| tag == normalized_query || tag.contains(normalized_query))
     {
-        score += 35;
+        score += 24;
     }
 
     if normalized_description.contains(normalized_query) {
@@ -202,8 +197,8 @@ fn score_tool(definition: &SearchableTool, normalized_query: &str, tokens: &[Str
         if normalized_name.contains(token) {
             score += 12;
         }
-        if normalized_terms.iter().any(|term| term.contains(token)) {
-            score += 8;
+        if normalized_tags.iter().any(|tag| tag.contains(token)) {
+            score += 6;
         }
         if normalized_description.contains(token) {
             score += 5;
@@ -233,10 +228,14 @@ fn normalized_tokens(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn behavior_label(definition: &SearchableTool) -> &str {
-    if definition.read_only {
-        "read_only"
-    } else {
-        definition.behavior_label.as_str()
+fn tags_summary(definition: &SearchableTool) -> String {
+    if definition.tags.is_empty() {
+        return "untagged".to_string();
     }
+    definition
+        .tags
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }

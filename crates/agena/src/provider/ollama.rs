@@ -413,16 +413,16 @@ fn role_name(role: Role) -> &'static str {
 }
 
 fn tools_to_ollama_definitions(
-    tools: &[crate::tool::EntryDefinition],
+    tools: &[crate::plugin::registry::PluginEntry],
 ) -> Vec<OllamaEntryDefinition> {
     tools
         .iter()
         .map(|tool| OllamaEntryDefinition {
             kind: "function",
             function: OllamaFunctionDefinition {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                parameters: tool.input_schema.clone(),
+                name: tool.exposed_name.clone(),
+                description: tool.description_text().to_string(),
+                parameters: tool.sanitized_input_schema(),
             },
         })
         .collect()

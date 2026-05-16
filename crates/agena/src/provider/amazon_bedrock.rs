@@ -528,14 +528,14 @@ impl AmazonBedrockProvider {
     }
 
     fn anthropic_tools(
-        tools: &[crate::tool::EntryDefinition],
+        tools: &[crate::plugin::registry::PluginEntry],
     ) -> Vec<BedrockAnthropicEntryDefinition> {
         tools
             .iter()
             .map(|tool| BedrockAnthropicEntryDefinition {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                input_schema: tool.input_schema.clone(),
+                name: tool.exposed_name.clone(),
+                description: tool.description_text().to_string(),
+                input_schema: tool.sanitized_input_schema(),
                 cache_control: None,
                 eager_input_streaming: None,
             })
@@ -2414,7 +2414,8 @@ mod tests {
     use mockito::Matcher;
 
     use super::*;
-    use crate::tool::{EntryBehavior, EntryDefinition};
+    use crate::plugin::PluginToolDecl;
+    use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -2457,19 +2458,22 @@ mod tests {
         }
     }
 
-    fn sample_tool_definition() -> EntryDefinition {
-        EntryDefinition::plugin(
-            "project_search",
-            "Search project files.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string" }
-                },
-                "required": ["query"]
-            }),
-            EntryBehavior::ReadOnly,
+    fn sample_tool_definition() -> RegistryPluginEntry {
+        RegistryPluginEntry::new(
             "fixture",
+            PluginToolDecl::new(
+                "project_search",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            )
+            .description("Search project files.")
+            .tag(crate::plugin::sdk::ToolTag::ReadOnly)
+            .concurrency_safe(true),
         )
     }
 

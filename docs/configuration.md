@@ -92,6 +92,9 @@ runtime.request_retry.base_delay_ms
 runtime.request_retry.max_delay_ms
 runtime.stream_replay.max_retries_after_output
 runtime.stream_replay.max_tracked_events
+runtime.model_catalog.remote_url
+runtime.model_catalog.fallback_url
+runtime.model_catalog.cache_max_age_secs
 ```
 
 Provider 覆盖：
@@ -150,6 +153,12 @@ AGENA_PROVIDER_RETRY_BASE_DELAY_MS
 AGENA_PROVIDER_RETRY_MAX_DELAY_MS
 AGENA_PROVIDER_STREAM_REPLAY_MAX_RETRIES
 AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS
+AGENA_MODEL_CATALOG_URL
+AGENA_MODEL_CATALOG_FALLBACK_URL
+AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS
+AGENA_PROVIDER_MODELS_CACHE_DIR
+AGENA_PROVIDER_MODELS_CACHE_TTL_SECS
+AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL
 ```
 
 插件通过 `[plugins.list.<id>]` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
@@ -302,9 +311,18 @@ interval_secs = 30
 max_sessions = 128
 ttl_secs = 900
 max_bytes = 67108864
+
+[runtime.model_catalog]
+remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
+fallback_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
+cache_max_age_secs = 86400
 ```
 
 默认 agent 是 `build`。即使省略 `runtime.default_agent`，解析后的默认值也是 `build`。
+
+Model catalog 用来给 provider registry、Studio/TUI 的模型选择器、默认模型和本地模型覆盖提供元数据。默认 `remote_url` 指向本仓库的 `catalog/model-catalog.json` GitHub raw 文件；`fallback_url` 是远程失败时的备用地址，也默认指向同一个本仓库 raw catalog；official catalog 会缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`，本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存本地 override、删除本地 override，以及把某个 catalog model 设为 provider 默认模型。
+
+Provider 的 live `/models` 列表还有独立磁盘缓存，用于减少启动 UI 或打开模型选择器时的 provider API 请求。默认位置是 `~/.agena/provider-models`，默认 TTL 是 15 分钟；可以通过 `AGENA_PROVIDER_MODELS_CACHE_DIR`、`AGENA_PROVIDER_MODELS_CACHE_TTL_SECS` 覆盖。如果 live `/models` 请求失败且没有可用缓存，Agena 会尝试从 model catalog 派生列表；该回退地址可通过 `AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL` 覆盖。
 
 校验规则：
 
@@ -312,6 +330,7 @@ max_bytes = 67108864
 - reload poll interval 必须大于 0。
 - janitor interval 必须大于 0。
 - session cache TTL、max sessions、max bytes 必须大于 0。
+- model catalog cache max age 必须大于 0。
 - `runtime.request_retry.max_delay_ms` 会至少等于 `base_delay_ms`。
 
 Runtime 会根据配置构建 snapshot。手动 reload 或配置文件变更触发 reload 时，新的 snapshot 会重新构建 provider registry、plugin host、agent registry、MCP/LSP registry 等服务。

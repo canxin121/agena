@@ -217,9 +217,16 @@ impl RuntimeSnapshot {
         super::plugin_slot::install(Arc::clone(&plugins));
         let provider_client =
             ProviderRegistry::build_http_client(resolution.config.provider_http_client_config())?;
+        let mut model_catalog_config = ModelCatalogConfig::for_workspace_root(workspace_root);
+        model_catalog_config.remote_url =
+            resolution.config.runtime.model_catalog.remote_url.clone();
+        model_catalog_config.fallback_url =
+            resolution.config.runtime.model_catalog.fallback_url.clone();
+        model_catalog_config.cache_max_age_secs =
+            resolution.config.runtime.model_catalog.cache_max_age_secs;
         let model_catalog = Arc::new(ModelCatalogService::new(
             provider_client,
-            ModelCatalogStore::new(ModelCatalogConfig::for_workspace_root(workspace_root)),
+            ModelCatalogStore::new(model_catalog_config),
         )?);
         let mut catalog_snapshot = model_catalog.snapshot();
         if let Ok(snapshot) = model_catalog.refresh_if_stale_on_startup().await {

@@ -37,6 +37,17 @@ max_sessions = 128
 ttl_secs = 900
 max_bytes = 67108864
 
+[runtime.model_catalog]
+# Remote JSON catalog used to seed provider defaults, model metadata, variants,
+# and UI model pickers. Defaults to this repository's `catalog/model-catalog.json`
+# raw file; point it at another static JSON host only if you maintain a mirror.
+remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
+# Fallback checked when the remote catalog is unreachable.
+fallback_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
+# Maximum age for the workspace-local official catalog cache under
+# `.agena/catalog/model-catalog-cache.json`.
+cache_max_age_secs = 86400
+
 [agents.plan]
 description = "Read-only planning agent"
 prompt = "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable."
@@ -219,7 +230,7 @@ include_global = true
 # backend = "duck_duck_go_html"
 
 [providers.openai]
-default_model = "openai/gpt-4.1-mini"
+default_model = "openai/gpt-5.5"
 
 [providers.openai.auth]
 mode = "api"
@@ -244,10 +255,10 @@ stream_mode = "sse"
 # Per-model variants. Runtime can select these by name via run options; without
 # a selected variant, Agena does not inject explicit thinking settings.
 #
-# Example — OpenAI o-series / GPT-5 with named reasoning levels:
+# Example — OpenAI GPT-5.x with named reasoning levels:
 #
 # [providers.openai-reasoning]
-# default_model = "openai/o3-mini"
+# default_model = "openai/gpt-5.5"
 #
 # [providers.openai-reasoning.auth]
 # mode = "api"
@@ -257,11 +268,11 @@ stream_mode = "sse"
 # [providers.openai-reasoning.adapters.openai]
 # enabled = true
 #
-# [providers.openai-reasoning.adapters.openai.models."o3-mini".variants.light]
+# [providers.openai-reasoning.adapters.openai.models."gpt-5.5".variants.light]
 # display_name = "Light"
 # thinking = { type = "effort", effort = "low" }
 #
-# [providers.openai-reasoning.adapters.openai.models."o3-mini".variants.deep]
+# [providers.openai-reasoning.adapters.openai.models."gpt-5.5".variants.deep]
 # display_name = "Deep"
 # thinking = { type = "effort", effort = "high" }
 #

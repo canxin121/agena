@@ -189,6 +189,7 @@ pub struct RuntimeConfig {
     pub provider_http: ProviderHttpConfig,
     pub request_retry: RequestRetryConfig,
     pub stream_replay: StreamReplayConfig,
+    pub model_catalog: RuntimeModelCatalogConfig,
     pub reload: RuntimeReloadConfig,
     pub janitor: RuntimeJanitorConfig,
     pub session_cache: SessionCacheConfig,
@@ -213,6 +214,13 @@ pub struct RequestRetryConfig {
 pub struct StreamReplayConfig {
     pub max_retries_after_output: u32,
     pub max_tracked_events: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeModelCatalogConfig {
+    pub remote_url: String,
+    pub fallback_url: String,
+    pub cache_max_age_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

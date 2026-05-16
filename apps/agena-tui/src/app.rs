@@ -10527,7 +10527,7 @@ api_key = "test"
             .description("Operator surface")
             .author("Agena")
             .hooks(agena::plugin::HookSubscription::EVENT)
-            .entry(
+            .tool(
                 agena::plugin::PluginToolDecl::new("inspect", json!({"type": "object"}))
                     .tag(agena::plugin::sdk::ToolTag::Task)
                     .host_capabilities([
@@ -10535,7 +10535,7 @@ api_key = "test"
                         agena::plugin::sdk::HostCapability::ReadConfig,
                     ]),
             )
-            .entry(
+            .tool(
                 agena::plugin::PluginToolDecl::new("logs", json!({"type": "object"}))
                     .host_capability(agena::plugin::sdk::HostCapability::PluginStatus),
             )
@@ -11230,6 +11230,7 @@ api_key = "test"
             message_count: 0,
             child_session_count: 0,
             last_message_at: None,
+            goal: None,
         }
     }
 

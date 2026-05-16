@@ -32,7 +32,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 enabled = true
 
 # [providers.openai]
-# default_model = "openai/gpt-4o"
+# default_model = "openai/gpt-5.5"
 #
 # [providers.openai.auth]
 # mode = "api"
@@ -98,6 +98,15 @@ enabled = true
 # Set `default_agent` explicitly when you want a different primary persona for
 # new root sessions.
 default_agent = "build"
+
+# Agena also loads a remote model catalog for provider defaults, model picker
+# metadata, and local workspace overrides. Defaults point at this repository's
+# `catalog/model-catalog.json` raw file and fall back to the bundled copy.
+#
+# [runtime.model_catalog]
+# remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
+# fallback_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
+# cache_max_age_secs = 86400
 
 [agents.plan]
 description = "Read-only planning agent"

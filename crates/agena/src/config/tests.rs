@@ -88,6 +88,82 @@ enabled = true
 }
 
 #[test]
+fn loader_applies_model_catalog_config_from_file_env_and_cli() {
+    let path = write_temp_config(
+        r#"
+[runtime.model_catalog]
+remote_url = "https://example.invalid/file-catalog.json"
+fallback_url = "https://example.invalid/file-fallback.json"
+cache_max_age_secs = 60
+
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-test"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+    );
+
+    let env = TestEnvironment {
+        vars: BTreeMap::from([
+            (
+                "AGENA_MODEL_CATALOG_URL".to_owned(),
+                "https://example.invalid/env-catalog.json".to_owned(),
+            ),
+            (
+                "AGENA_MODEL_CATALOG_FALLBACK_URL".to_owned(),
+                "https://example.invalid/env-fallback.json".to_owned(),
+            ),
+            (
+                "AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS".to_owned(),
+                "120".to_owned(),
+            ),
+        ]),
+    };
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            overrides: vec![
+                ConfigOverride::ModelCatalogRemoteUrl(
+                    "https://example.invalid/cli-catalog.json".to_owned(),
+                ),
+                ConfigOverride::ModelCatalogCacheMaxAgeSecs(180),
+            ],
+        })
+        .expect("config should load");
+
+    assert_eq!(
+        resolution.config.runtime.model_catalog.remote_url,
+        "https://example.invalid/cli-catalog.json"
+    );
+    assert_eq!(
+        resolution.config.runtime.model_catalog.fallback_url,
+        "https://example.invalid/env-fallback.json"
+    );
+    assert_eq!(
+        resolution.config.runtime.model_catalog.cache_max_age_secs,
+        180
+    );
+}
+
+#[test]
+fn cli_override_parser_supports_model_catalog_fields() {
+    let parsed = "runtime.model_catalog.cache_max_age_secs=3600"
+        .parse::<ConfigOverride>()
+        .expect("override should parse");
+    assert!(matches!(
+        parsed,
+        ConfigOverride::ModelCatalogCacheMaxAgeSecs(3600)
+    ));
+}
+
+#[test]
 fn loader_reads_database_log_level_from_env() {
     let env = TestEnvironment {
         vars: BTreeMap::from([("AGENA_DATABASE_LOG".to_owned(), "error".to_owned())]),

@@ -23,10 +23,10 @@ pub use types::{
     ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
     ProviderGoogleAdcAuthConfig, ProviderHttpConfig, ProviderSapAiCoreAuthConfig,
     RequestRetryConfig, ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    ResolvedProviderModelConfig, RuntimeConfig, RuntimeJanitorConfig, RuntimeReloadConfig,
-    SessionCacheConfig, SharedGatewayEndpointLayout, SimpleHttpProviderOptions, StreamReplayConfig,
-    StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend, WebSearchBackendKind,
-    WebSearchConfig, WebToolsConfig,
+    ResolvedProviderModelConfig, RuntimeConfig, RuntimeJanitorConfig, RuntimeModelCatalogConfig,
+    RuntimeReloadConfig, SessionCacheConfig, SharedGatewayEndpointLayout,
+    SimpleHttpProviderOptions, StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig,
+    WebSearchBackend, WebSearchBackendKind, WebSearchConfig, WebToolsConfig,
 };
 
 pub use credential_store::{
@@ -37,5 +37,5 @@ pub use credential_store::{
 pub(crate) use error::parse_numeric;
 pub(crate) use raw::{
     RawConfig, RawConfigFile, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
-    RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
+    RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
 };

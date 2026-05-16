@@ -103,7 +103,7 @@ enabled = true
 #   * wasm    — WebAssembly module (requires plugin-wasm feature)
 #
 # First-party static plugins such as agena.fs, agena.shell, agena.web,
-# agena.workflow, agena.skills_fs, agena.lsp, agena.cron, agena.memory,
+# agena.workflow, agena.skills, agena.lsp, agena.cron, agena.memory,
 # agena.hooks, and agena.mcp are registered by the runtime. Model-visible
 # built-ins are plugin tools.
 #

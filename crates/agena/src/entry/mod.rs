@@ -56,7 +56,7 @@ use crate::plugin::{
 };
 use crate::plugins::provided::{
     cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp,
-    router as in_process_router, shell as provided_shell, skills_fs, web as provided_web,
+    router as in_process_router, shell as provided_shell, skills, web as provided_web,
     workflow as provided_workflow,
 };
 
@@ -78,12 +78,12 @@ pub use worktree::{
     registry_for_executor as worktree_registry_for_executor,
 };
 
-pub fn skills_fs_plugin_id() -> &'static str {
-    skills_fs::SKILLS_FS_PLUGIN_ID
+pub fn skills_plugin_id() -> &'static str {
+    skills::SKILLS_PLUGIN_ID
 }
 
-pub fn new_skills_fs_plugin() -> impl crate::plugin::sdk::Plugin {
-    skills_fs::SkillsFsPlugin::new()
+pub fn new_skills_plugin() -> impl crate::plugin::sdk::Plugin {
+    skills::SkillsPlugin::new()
 }
 
 pub fn lsp_plugin_id() -> &'static str {
@@ -136,7 +136,7 @@ pub fn new_workflow_plugin() -> impl crate::plugin::sdk::Plugin {
 
 pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
     let workspace_root = workspace_root.into();
-    let skills_fs_id = skills_fs_plugin_id().to_string();
+    let skills_id = skills_plugin_id().to_string();
     let lsp_id = lsp_plugin_id().to_string();
     let cron_id = cron_plugin_id().to_string();
     let fs_id = fs_plugin_id().to_string();
@@ -145,7 +145,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
     let workflow_id = workflow_plugin_id().to_string();
     let mut list = std::collections::BTreeMap::new();
     for id in [
-        &skills_fs_id,
+        &skills_id,
         &lsp_id,
         &cron_id,
         &fs_id,
@@ -172,7 +172,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
     mcp::block_on(async move {
         PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION"))
             .with_config(config)
-            .register_static(skills_fs_id, new_skills_fs_plugin())
+            .register_static(skills_id, new_skills_plugin())
             .register_static(lsp_id, new_lsp_plugin())
             .register_static(cron_id, new_cron_plugin())
             .register_static(fs_id, new_fs_plugin())
@@ -2154,7 +2154,7 @@ mod tests {
     fn build_plugin_manager(root: &Path) -> Arc<PluginHost> {
         use std::collections::BTreeMap;
 
-        let skills_fs_id = super::skills_fs_plugin_id().to_string();
+        let skills_id = super::skills_plugin_id().to_string();
         let lsp_id = super::lsp_plugin_id().to_string();
         let cron_id = super::cron_plugin_id().to_string();
         let fs_id = super::fs_plugin_id().to_string();
@@ -2163,7 +2163,7 @@ mod tests {
         let workflow_id = super::workflow_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
-            &skills_fs_id,
+            &skills_id,
             &lsp_id,
             &cron_id,
             &fs_id,
@@ -2198,7 +2198,7 @@ mod tests {
             PluginHostBuilder::new(root, "test")
                 .with_config(config)
                 .with_host_client(Arc::new(TestToolHost))
-                .register_static(skills_fs_id, super::new_skills_fs_plugin())
+                .register_static(skills_id, super::new_skills_plugin())
                 .register_static(lsp_id, super::new_lsp_plugin())
                 .register_static(cron_id, super::new_cron_plugin())
                 .register_static(fs_id, super::new_fs_plugin())
@@ -2215,7 +2215,7 @@ mod tests {
     fn build_default_plugin_manager(root: &Path) -> Arc<PluginHost> {
         use std::collections::BTreeMap;
 
-        let skills_fs_id = super::skills_fs_plugin_id().to_string();
+        let skills_id = super::skills_plugin_id().to_string();
         let lsp_id = super::lsp_plugin_id().to_string();
         let cron_id = super::cron_plugin_id().to_string();
         let fs_id = super::fs_plugin_id().to_string();
@@ -2224,7 +2224,7 @@ mod tests {
         let workflow_id = super::workflow_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
-            &skills_fs_id,
+            &skills_id,
             &lsp_id,
             &cron_id,
             &fs_id,
@@ -2252,7 +2252,7 @@ mod tests {
             PluginHostBuilder::new(root, "test")
                 .with_config(config)
                 .with_host_client(Arc::new(TestToolHost))
-                .register_static(skills_fs_id, super::new_skills_fs_plugin())
+                .register_static(skills_id, super::new_skills_plugin())
                 .register_static(lsp_id, super::new_lsp_plugin())
                 .register_static(cron_id, super::new_cron_plugin())
                 .register_static(fs_id, super::new_fs_plugin())

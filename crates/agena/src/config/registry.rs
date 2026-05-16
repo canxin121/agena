@@ -180,8 +180,8 @@ impl super::ConfigResolution {
             );
         }
         builder = builder.register_static(
-            crate::tool::skills_fs_plugin_id(),
-            crate::tool::new_skills_fs_plugin(),
+            crate::tool::skills_plugin_id(),
+            crate::tool::new_skills_plugin(),
         );
         if let (Some(prev_host), Some(prev_cfg)) = (previous_host, previous_config) {
             builder = builder.with_previous(prev_host, prev_cfg);

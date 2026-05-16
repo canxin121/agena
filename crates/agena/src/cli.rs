@@ -3063,7 +3063,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .filter(|entry| {
                 matches!(
                     entry.plugin_name.as_str(),
-                    "agena.workflow" | "agena.skills_fs"
+                    "agena.workflow" | "agena.skills"
                 ) && entry.decl.input_schema
                     == crate::entry::definition::json_schema_for::<
                         crate::message::WorkflowPromptToolInput,
@@ -3086,7 +3086,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
         if !matches!(
             entry.plugin_name.as_str(),
-            "agena.workflow" | "agena.skills_fs"
+            "agena.workflow" | "agena.skills"
         ) || entry.decl.input_schema
             != crate::entry::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>(
             )

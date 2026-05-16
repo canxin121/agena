@@ -153,7 +153,7 @@ def probe_with_retries(
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Probe authoritative cache behavior exposed by CLIProxyAPI-compatible "
+            "Probe authoritative cache behavior exposed by provider-routed gateway "
             "OpenAI, Claude, and Gemini endpoints."
         )
     )

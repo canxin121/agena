@@ -1,7 +1,7 @@
-//! `agena.skills_fs` — discovery plugin that scans the standard skill
-//! roots (workspace `.agena/skills/`, user `~/.agena/skills/`,
-//! `~/.claude/skills/`) plus user slash-command markdown, and registers
-//! everything it finds as dynamic plugin tools.
+//! `agena.skills` — discovery plugin that scans the standard skill
+//! roots (workspace `.agena/skills/` and user `~/.agena/skills/`) plus
+//! user slash-command markdown, and registers everything it finds as dynamic
+//! plugin tools.
 //!
 //! Packaged skills from `agena-skills` are also projected here so a fresh
 //! install has workflow-like entries before any user-defined content exists.
@@ -23,7 +23,7 @@ use crate::plugin::sdk::{
     PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 
-pub(crate) const SKILLS_FS_PLUGIN_ID: &str = "agena.skills_fs";
+pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
 
 #[derive(Clone)]
 enum DiscoveredEntryKind {
@@ -38,12 +38,12 @@ struct DiscoveredEntry {
     alias: bool,
 }
 
-pub(crate) struct SkillsFsPlugin {
+pub(crate) struct SkillsPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
     entries: RwLock<BTreeMap<String, DiscoveredEntry>>,
 }
 
-impl SkillsFsPlugin {
+impl SkillsPlugin {
     pub(crate) fn new() -> Self {
         Self {
             host: RwLock::new(None),
@@ -54,9 +54,9 @@ impl SkillsFsPlugin {
     fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
         self.host
             .read()
-            .map_err(|_| PluginError::new("skills_fs host lock poisoned"))?
+            .map_err(|_| PluginError::new("skills host lock poisoned"))?
             .clone()
-            .ok_or_else(|| PluginError::new("skills_fs invoked before init"))
+            .ok_or_else(|| PluginError::new("skills invoked before init"))
     }
 
     fn render_prompt(body: &str, args: &str) -> String {
@@ -173,7 +173,7 @@ impl SkillsFsPlugin {
         let old_names = self
             .entries
             .read()
-            .map_err(|_| PluginError::new("skills_fs entries lock poisoned"))?
+            .map_err(|_| PluginError::new("skills entries lock poisoned"))?
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
@@ -199,15 +199,15 @@ impl SkillsFsPlugin {
         *self
             .entries
             .write()
-            .map_err(|_| PluginError::new("skills_fs entries lock poisoned"))? = new_entries;
+            .map_err(|_| PluginError::new("skills entries lock poisoned"))? = new_entries;
         Ok(())
     }
 }
 
 #[async_trait]
-impl Plugin for SkillsFsPlugin {
+impl Plugin for SkillsPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena-skills-fs", env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder("agena-skills", env!("CARGO_PKG_VERSION"))
             .description("Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools.")
             .hooks(HookSubscription::INIT | HookSubscription::TOOL_INVOKE)
             .plugin_capability(HostCapability::EntryRegistry)
@@ -218,7 +218,7 @@ impl Plugin for SkillsFsPlugin {
         *self
             .host
             .write()
-            .map_err(|_| PluginError::new("skills_fs host lock poisoned"))? = Some(host);
+            .map_err(|_| PluginError::new("skills host lock poisoned"))? = Some(host);
         self.sync_entries(&ctx).await?;
         Ok(InitOutcome::ack(self.manifest()))
     }
@@ -228,14 +228,11 @@ impl Plugin for SkillsFsPlugin {
         let entry = self
             .entries
             .read()
-            .map_err(|_| PluginError::new("skills_fs entries lock poisoned"))?
+            .map_err(|_| PluginError::new("skills entries lock poisoned"))?
             .get(input.tool_name.as_str())
             .cloned()
             .ok_or_else(|| {
-                PluginError::invalid_params(format!(
-                    "unknown skills_fs entry '{}'",
-                    input.tool_name
-                ))
+                PluginError::invalid_params(format!("unknown skills entry '{}'", input.tool_name))
             })?;
         let prompt = Self::render_prompt(
             entry.skill.body.as_str(),
@@ -248,6 +245,6 @@ impl Plugin for SkillsFsPlugin {
         Ok(ToolInvokeOutput::text(prompt)
             .with_title(entry.skill.frontmatter.name.clone())
             .with_metadata("workflow", entry.skill.frontmatter.name)
-            .with_metadata("skills_fs_kind", kind))
+            .with_metadata("skill_entry_kind", kind))
     }
 }

@@ -910,7 +910,7 @@ impl Backend {
             .plugin_manager()
             .entry_entries()
             .into_iter()
-            .filter(|entry| entry.plugin_name == "agena.skills_fs")
+            .filter(|entry| entry.plugin_name == "agena.skills")
             .map(|entry| InspectorRow {
                 label: entry.exposed_name,
                 detail: format!(

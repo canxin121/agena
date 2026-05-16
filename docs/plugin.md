@@ -554,7 +554,22 @@ Runtime build 时：
 
 ## Plugin Storage 和 Secrets
 
-Plugin storage 是 plugin-scoped 的 key/value 存储。一个 plugin 不能读取另一个 plugin 的 storage。
+Plugin storage 是 host 提供的统一 key/value 存储接口。它现在按两个维度组织：
+
+- `scope`: `session`、`workspace`、`global`
+- `visibility`: `private`、`shared`
+
+组合起来就是：
+
+- `session + private`: 当前 plugin 在当前会话下的私有数据
+- `session + shared`: 当前会话下多个 plugin 共享的数据
+- `workspace + private`: 当前 plugin 在当前 workspace 下的私有数据
+- `workspace + shared`: 当前 workspace 下多个 plugin 共享的数据
+- `global + private`: 当前 plugin 在整个 runtime 下的私有数据
+- `global + shared`: 整个 runtime 下多个 plugin 共享的数据
+
+兼容旧插件：如果请求里没有显式传 `scope` / `visibility`，host 默认按
+`global + private` 处理，也就是旧的 plugin-scoped storage 语义。
 
 默认目录：
 
@@ -568,7 +583,19 @@ Plugin storage 是 plugin-scoped 的 key/value 存储。一个 plugin 不能读�
 export AGENA_PLUGIN_STORAGE_DIR=/var/lib/agena/plugin-storage
 ```
 
-Storage 按 `plugin_id / namespace / key` 组织，底层是 JSON 文件。目录和文件会尽量使用受限权限。
+Storage 按 `scope / visibility / namespace / key` 组织；`private` bucket 会再自动带上
+`plugin_id`。当前默认文件布局大致是：
+
+```text
+global/private/<plugin_id>/<namespace>.json
+global/shared/<namespace>.json
+workspace/<workspace-hash>/private/<plugin_id>/<namespace>.json
+workspace/<workspace-hash>/shared/<namespace>.json
+session/<session_id>/private/<plugin_id>/<namespace>.json
+session/<session_id>/shared/<namespace>.json
+```
+
+目录和文件会尽量使用受限权限。
 
 Secrets 使用独立 keyring service：
 

@@ -2,7 +2,8 @@
 //!
 //! These are the host-side implementations that back the plugin SDK's
 //! `storage_*` and `secret_*` `HostClient` methods. Both surfaces are scoped
-//! per plugin id so that one plugin cannot read or overwrite another's data.
+//! for plugins while keeping private/plugin-owned data separate from
+//! intentionally shared data.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -11,10 +12,16 @@ use std::sync::{Arc, RwLock};
 
 use agena_keyring_store::{KeyringSecretStore, SecretStore, SecretStoreError};
 
+use crate::plugin::sdk::host_api::{HostStorageScope, HostStorageVisibility};
+
 #[derive(Debug, thiserror::Error)]
 pub enum PluginStorageError {
     #[error("plugin id is required")]
     MissingPluginId,
+    #[error("session-scoped storage requires a session id")]
+    MissingSessionId,
+    #[error("workspace-scoped storage requires a workspace root")]
+    MissingWorkspaceRoot,
     #[error("namespace must not be empty")]
     EmptyNamespace,
     #[error("key must not be empty")]
@@ -29,9 +36,53 @@ pub enum PluginStorageError {
     Secret(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageLocator {
+    pub scope: HostStorageScope,
+    pub visibility: HostStorageVisibility,
+    pub plugin_id: String,
+    pub session_id: Option<i64>,
+    pub workspace_root: Option<String>,
+}
+
+impl StorageLocator {
+    pub fn new(
+        scope: HostStorageScope,
+        visibility: HostStorageVisibility,
+        plugin_id: impl Into<String>,
+        session_id: Option<i64>,
+        workspace_root: Option<String>,
+    ) -> Result<Self, PluginStorageError> {
+        let plugin_id = plugin_id.into();
+        validate_plugin_id(plugin_id.as_str())?;
+        match scope {
+            HostStorageScope::Session => {
+                if session_id.is_none() {
+                    return Err(PluginStorageError::MissingSessionId);
+                }
+            }
+            HostStorageScope::Workspace => {
+                if workspace_root
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err(PluginStorageError::MissingWorkspaceRoot);
+                }
+            }
+            HostStorageScope::Global => {}
+        }
+        Ok(Self {
+            scope,
+            visibility,
+            plugin_id,
+            session_id,
+            workspace_root,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StoredEntry {
-    pub plugin_id: String,
     pub namespace: String,
     pub key: String,
 }
@@ -39,22 +90,22 @@ pub struct StoredEntry {
 pub trait PluginStorage: Send + Sync {
     fn get(
         &self,
-        plugin_id: &str,
+        locator: &StorageLocator,
         namespace: &str,
         key: &str,
     ) -> Result<Option<String>, PluginStorageError>;
     fn set(
         &self,
-        plugin_id: &str,
+        locator: &StorageLocator,
         namespace: &str,
         key: &str,
         value: &str,
     ) -> Result<(), PluginStorageError>;
-    fn delete(&self, plugin_id: &str, namespace: &str, key: &str)
+    fn delete(&self, locator: &StorageLocator, namespace: &str, key: &str)
     -> Result<(), PluginStorageError>;
     fn list(
         &self,
-        plugin_id: &str,
+        locator: &StorageLocator,
         namespace: Option<&str>,
         prefix: Option<&str>,
     ) -> Result<Vec<StoredEntry>, PluginStorageError>;
@@ -188,10 +239,49 @@ fn plugin_dir(root: &Path, plugin_id: &str) -> PathBuf {
     p
 }
 
-fn namespace_path(root: &Path, plugin_id: &str, namespace: &str) -> PathBuf {
-    let mut p = plugin_dir(root, plugin_id);
+fn storage_scope_dir(root: &Path, locator: &StorageLocator) -> Result<PathBuf, PluginStorageError> {
+    let mut p = root.to_path_buf();
+    match locator.scope {
+        HostStorageScope::Session => {
+            let session_id = locator
+                .session_id
+                .ok_or(PluginStorageError::MissingSessionId)?;
+            p.push("session");
+            p.push(session_id.to_string());
+        }
+        HostStorageScope::Workspace => {
+            let workspace_root = locator
+                .workspace_root
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or(PluginStorageError::MissingWorkspaceRoot)?;
+            p.push("workspace");
+            p.push(hex::encode(blake3::hash(workspace_root.as_bytes()).as_bytes()));
+        }
+        HostStorageScope::Global => {
+            p.push("global");
+        }
+    }
+    match locator.visibility {
+        HostStorageVisibility::Private => {
+            p.push("private");
+            p.push(locator.plugin_id.as_str());
+        }
+        HostStorageVisibility::Shared => {
+            p.push("shared");
+        }
+    }
+    Ok(p)
+}
+
+fn namespace_path(
+    root: &Path,
+    locator: &StorageLocator,
+    namespace: &str,
+) -> Result<PathBuf, PluginStorageError> {
+    let mut p = storage_scope_dir(root, locator)?;
     p.push(format!("{namespace}.json"));
-    p
+    Ok(p)
 }
 
 fn secrets_index_path(root: &Path, plugin_id: &str) -> PathBuf {
@@ -206,8 +296,14 @@ fn secrets_fallback_path(root: &Path, plugin_id: &str) -> PathBuf {
     p
 }
 
-/// JSON-on-disk plugin storage. Each `plugin_id`/`namespace` pair lives in its
-/// own file under `root`.
+/// JSON-on-disk plugin storage. Each storage bucket lives under:
+///
+/// - `global/private/<plugin_id>/`
+/// - `global/shared/`
+/// - `workspace/<hash>/private/<plugin_id>/`
+/// - `workspace/<hash>/shared/`
+/// - `session/<session_id>/private/<plugin_id>/`
+/// - `session/<session_id>/shared/`
 #[derive(Debug, Clone)]
 pub struct FilePluginStorage {
     root: PathBuf,
@@ -226,29 +322,27 @@ impl FilePluginStorage {
 impl PluginStorage for FilePluginStorage {
     fn get(
         &self,
-        plugin_id: &str,
+        locator: &StorageLocator,
         namespace: &str,
         key: &str,
     ) -> Result<Option<String>, PluginStorageError> {
-        validate_plugin_id(plugin_id)?;
         validate_namespace(namespace)?;
         validate_key(key)?;
-        let path = namespace_path(&self.root, plugin_id, namespace);
+        let path = namespace_path(&self.root, locator, namespace)?;
         let map = read_namespace_map(&path)?;
         Ok(map.get(key).cloned())
     }
 
     fn set(
         &self,
-        plugin_id: &str,
+        locator: &StorageLocator,
         namespace: &str,
         key: &str,
         value: &str,
     ) -> Result<(), PluginStorageError> {
-        validate_plugin_id(plugin_id)?;
         validate_namespace(namespace)?;
         validate_key(key)?;
-        let path = namespace_path(&self.root, plugin_id, namespace);
+        let path = namespace_path(&self.root, locator, namespace)?;
         let mut map = read_namespace_map(&path)?;
         map.insert(key.to_string(), value.to_string());
         write_namespace_map(&path, &map)
@@ -256,14 +350,13 @@ impl PluginStorage for FilePluginStorage {
 
     fn delete(
         &self,
-        plugin_id: &str,
+        locator: &StorageLocator,
         namespace: &str,
         key: &str,
     ) -> Result<(), PluginStorageError> {
-        validate_plugin_id(plugin_id)?;
         validate_namespace(namespace)?;
         validate_key(key)?;
-        let path = namespace_path(&self.root, plugin_id, namespace);
+        let path = namespace_path(&self.root, locator, namespace)?;
         if !path.exists() {
             return Ok(());
         }
@@ -281,12 +374,11 @@ impl PluginStorage for FilePluginStorage {
 
     fn list(
         &self,
-        plugin_id: &str,
+        locator: &StorageLocator,
         namespace: Option<&str>,
         prefix: Option<&str>,
     ) -> Result<Vec<StoredEntry>, PluginStorageError> {
-        validate_plugin_id(plugin_id)?;
-        let dir = plugin_dir(&self.root, plugin_id);
+        let dir = storage_scope_dir(&self.root, locator)?;
         if !dir.exists() {
             return Ok(Vec::new());
         }
@@ -317,7 +409,6 @@ impl PluginStorage for FilePluginStorage {
                     continue;
                 }
                 entries.push(StoredEntry {
-                    plugin_id: plugin_id.to_string(),
                     namespace: stem.to_string(),
                     key: key.clone(),
                 });
@@ -543,6 +634,50 @@ impl SecretStore for InMemorySecretStore {
 mod tests {
     use super::*;
 
+    fn private_global(plugin_id: &str) -> StorageLocator {
+        StorageLocator::new(
+            HostStorageScope::Global,
+            HostStorageVisibility::Private,
+            plugin_id,
+            None,
+            None,
+        )
+        .expect("global private locator")
+    }
+
+    fn shared_global(plugin_id: &str) -> StorageLocator {
+        StorageLocator::new(
+            HostStorageScope::Global,
+            HostStorageVisibility::Shared,
+            plugin_id,
+            None,
+            None,
+        )
+        .expect("global shared locator")
+    }
+
+    fn shared_workspace(plugin_id: &str, workspace_root: &str) -> StorageLocator {
+        StorageLocator::new(
+            HostStorageScope::Workspace,
+            HostStorageVisibility::Shared,
+            plugin_id,
+            None,
+            Some(workspace_root.to_string()),
+        )
+        .expect("workspace shared locator")
+    }
+
+    fn shared_session(plugin_id: &str, session_id: i64) -> StorageLocator {
+        StorageLocator::new(
+            HostStorageScope::Session,
+            HostStorageVisibility::Shared,
+            plugin_id,
+            Some(session_id),
+            None,
+        )
+        .expect("session shared locator")
+    }
+
     fn temp_root() -> PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!(
@@ -554,50 +689,145 @@ mod tests {
     }
 
     #[test]
-    fn file_storage_roundtrips_per_namespace() {
+    fn file_storage_scopes_private_and_shared_entries() {
         let root = temp_root();
         let store = FilePluginStorage::new(&root);
+        let alpha_private = private_global("alpha");
+        let beta_private = private_global("beta");
+        let alpha_shared = shared_global("alpha");
+        let beta_shared = shared_global("beta");
+        let ws_one = shared_workspace("alpha", "/repo/one");
+        let ws_two = shared_workspace("beta", "/repo/two");
+        let session_one = shared_session("alpha", 7);
+        let session_two = shared_session("beta", 8);
 
-        store.set("alpha", "settings", "lang", "rust").unwrap();
-        store.set("alpha", "cache", "k1", "v1").unwrap();
-        store.set("beta", "settings", "lang", "go").unwrap();
+        store
+            .set(&alpha_private, "settings", "lang", "rust")
+            .unwrap();
+        store
+            .set(&alpha_shared, "registry", "flag", "on")
+            .unwrap();
+        store
+            .set(&ws_one, "index", "symbols", "workspace-one")
+            .unwrap();
+        store
+            .set(&ws_two, "index", "symbols", "workspace-two")
+            .unwrap();
+        store
+            .set(&session_one, "drafts", "step", "session-one")
+            .unwrap();
+        store
+            .set(&session_two, "drafts", "step", "session-two")
+            .unwrap();
 
         assert_eq!(
-            store.get("alpha", "settings", "lang").unwrap().as_deref(),
+            store
+                .get(&alpha_private, "settings", "lang")
+                .unwrap()
+                .as_deref(),
             Some("rust")
         );
         assert_eq!(
-            store.get("beta", "settings", "lang").unwrap().as_deref(),
-            Some("go")
+            store
+                .get(&beta_private, "settings", "lang")
+                .unwrap()
+                .as_deref(),
+            None
         );
-        let listed = store.list("alpha", None, None).unwrap();
-        assert_eq!(listed.len(), 2);
-        let listed_settings = store.list("alpha", Some("settings"), None).unwrap();
-        assert_eq!(listed_settings.len(), 1);
-        assert_eq!(listed_settings[0].key, "lang");
+        assert_eq!(
+            store
+                .get(&beta_shared, "registry", "flag")
+                .unwrap()
+                .as_deref(),
+            Some("on"),
+            "shared global storage should be readable across plugins"
+        );
+        assert_eq!(
+            store
+                .get(&ws_one, "index", "symbols")
+                .unwrap()
+                .as_deref(),
+            Some("workspace-one")
+        );
+        assert_eq!(
+            store
+                .get(&ws_two, "index", "symbols")
+                .unwrap()
+                .as_deref(),
+            Some("workspace-two")
+        );
+        assert_eq!(
+            store
+                .get(&session_one, "drafts", "step")
+                .unwrap()
+                .as_deref(),
+            Some("session-one")
+        );
+        assert_eq!(
+            store
+                .get(&session_two, "drafts", "step")
+                .unwrap()
+                .as_deref(),
+            Some("session-two")
+        );
 
-        store.delete("alpha", "cache", "k1").unwrap();
-        assert!(store.get("alpha", "cache", "k1").unwrap().is_none());
+        let listed_private = store.list(&alpha_private, None, None).unwrap();
+        assert_eq!(listed_private.len(), 1);
+        assert_eq!(listed_private[0].namespace, "settings");
+        let listed_shared = store.list(&beta_shared, Some("registry"), None).unwrap();
+        assert_eq!(listed_shared.len(), 1);
+        assert_eq!(listed_shared[0].key, "flag");
+
+        store.delete(&alpha_shared, "registry", "flag").unwrap();
+        assert!(store.get(&alpha_shared, "registry", "flag").unwrap().is_none());
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn file_storage_rejects_bad_inputs() {
         let store = FilePluginStorage::new(temp_root());
+        let valid = private_global("p");
+        let missing_plugin = StorageLocator::new(
+            HostStorageScope::Global,
+            HostStorageVisibility::Private,
+            "",
+            None,
+            None,
+        );
         assert!(matches!(
-            store.set("", "ns", "k", "v"),
+            missing_plugin,
             Err(PluginStorageError::MissingPluginId)
         ));
         assert!(matches!(
-            store.set("p", "", "k", "v"),
+            StorageLocator::new(
+                HostStorageScope::Session,
+                HostStorageVisibility::Shared,
+                "p",
+                None,
+                None
+            ),
+            Err(PluginStorageError::MissingSessionId)
+        ));
+        assert!(matches!(
+            StorageLocator::new(
+                HostStorageScope::Workspace,
+                HostStorageVisibility::Shared,
+                "p",
+                None,
+                None
+            ),
+            Err(PluginStorageError::MissingWorkspaceRoot)
+        ));
+        assert!(matches!(
+            store.set(&valid, "", "k", "v"),
             Err(PluginStorageError::EmptyNamespace)
         ));
         assert!(matches!(
-            store.set("p", "ns", "", "v"),
+            store.set(&valid, "ns", "", "v"),
             Err(PluginStorageError::EmptyKey)
         ));
         assert!(matches!(
-            store.set("p", "bad/ns", "k", "v"),
+            store.set(&valid, "bad/ns", "k", "v"),
             Err(PluginStorageError::Data(_))
         ));
     }

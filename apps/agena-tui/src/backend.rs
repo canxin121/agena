@@ -196,6 +196,7 @@ impl Backend {
     pub fn list_providers(&self) -> Vec<ProviderSummaryResource> {
         let snapshot = self.runtime.current_snapshot();
         let registry = snapshot.provider_registry();
+        let catalog_snapshot = snapshot.model_catalog_snapshot();
         let mut providers = registry
             .provider_ids()
             .into_iter()
@@ -205,7 +206,9 @@ impl Backend {
                     .map(|provider| ProviderSummaryResource {
                         default_model_ref: format!("{provider_id}/{}", provider.default_model()),
                         default_model: provider.default_model().to_string(),
-                        catalog_default_model: None,
+                        catalog_default_model: catalog_snapshot
+                            .merged_provider(provider_id.as_str())
+                            .and_then(|catalog_provider| catalog_provider.default_model),
                         provider_id,
                     })
             })

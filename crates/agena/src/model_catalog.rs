@@ -18,10 +18,10 @@ use crate::{
 };
 
 pub const DEFAULT_REMOTE_URL: &str =
-    "https://raw.githubusercontent.com/agena-ai/model-catalog/main/catalog.json";
+    "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json";
 pub const DEFAULT_GITHUB_FALLBACK_URL: &str =
-    "https://raw.githubusercontent.com/agena-ai/agena/main/catalog/model-catalog.json";
-const DEFAULT_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24;
+    "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json";
+pub const DEFAULT_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24;
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -193,29 +193,32 @@ impl ModelCatalogSnapshot {
         provider_ids.extend(self.custom.providers.keys().cloned());
 
         for provider_id in provider_ids {
-            let Some(provider) = self.merged_provider(provider_id.as_str()) else {
-                continue;
-            };
-            let merged_default = provider.default_model.clone();
-            let custom_provider = self.custom.providers.get(provider_id.as_str());
+            let merged_default = self
+                .merged_provider(provider_id.as_str())
+                .and_then(|provider| provider.default_model);
 
-            for (model_id, definition) in provider.models {
-                entries.push(ModelCatalogEntryRecord {
-                    provider_id: provider_id.clone(),
-                    model_id: model_id.clone(),
-                    default_model_for_provider: merged_default.clone(),
-                    display_name: definition.display_name,
-                    has_local_override: custom_provider
-                        .and_then(|provider| provider.models.get(model_id.as_str()))
-                        .is_some(),
-                    family: definition.family,
-                    lifecycle: definition.lifecycle,
-                    context_window_tokens: definition.context_window_tokens,
-                    max_output_tokens: definition.max_output_tokens,
-                    description: definition.description,
-                    variants: definition.variants,
-                    capabilities: definition.capabilities,
-                });
+            if let Some(official_provider) = self.official.providers.get(provider_id.as_str()) {
+                for (model_id, definition) in &official_provider.models {
+                    entries.push(Self::entry_record(
+                        provider_id.as_str(),
+                        model_id.as_str(),
+                        definition,
+                        merged_default.clone(),
+                        false,
+                    ));
+                }
+            }
+
+            if let Some(custom_provider) = self.custom.providers.get(provider_id.as_str()) {
+                for (model_id, definition) in &custom_provider.models {
+                    entries.push(Self::entry_record(
+                        provider_id.as_str(),
+                        model_id.as_str(),
+                        definition,
+                        merged_default.clone(),
+                        true,
+                    ));
+                }
             }
         }
 
@@ -223,8 +226,32 @@ impl ModelCatalogSnapshot {
             left.provider_id
                 .cmp(&right.provider_id)
                 .then(left.model_id.cmp(&right.model_id))
+                .then(left.has_local_override.cmp(&right.has_local_override))
         });
         entries
+    }
+
+    fn entry_record(
+        provider_id: &str,
+        model_id: &str,
+        definition: &CatalogModelDefinition,
+        default_model_for_provider: Option<String>,
+        has_local_override: bool,
+    ) -> ModelCatalogEntryRecord {
+        ModelCatalogEntryRecord {
+            provider_id: provider_id.to_owned(),
+            model_id: model_id.to_owned(),
+            default_model_for_provider,
+            display_name: definition.display_name.clone(),
+            has_local_override,
+            family: definition.family,
+            lifecycle: definition.lifecycle,
+            context_window_tokens: definition.context_window_tokens,
+            max_output_tokens: definition.max_output_tokens,
+            description: definition.description.clone(),
+            variants: definition.variants.clone(),
+            capabilities: definition.capabilities.clone(),
+        }
     }
 
     pub fn provider_ids(&self) -> Vec<String> {
@@ -770,7 +797,7 @@ mod tests {
     }
 
     #[test]
-    fn entries_merge_overrides_into_single_record() {
+    fn entries_keep_official_and_custom_records_separate() {
         let snapshot = ModelCatalogSnapshot {
             last_successful_source: Some(ModelCatalogEntrySourceKind::Remote),
             official: ModelCatalogDocument {
@@ -820,19 +847,27 @@ mod tests {
         };
 
         let entries = snapshot.entries();
-        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].provider_id, "anthropic");
         assert_eq!(entries[0].model_id, "claude-sonnet");
-        assert_eq!(
-            entries[0].display_name.as_deref(),
-            Some("Claude Sonnet Local")
-        );
-        assert!(entries[0].has_local_override);
+        assert_eq!(entries[0].display_name.as_deref(), Some("Claude Sonnet"));
+        assert!(!entries[0].has_local_override);
         assert_eq!(
             entries[0].default_model_for_provider.as_deref(),
             Some("claude-sonnet")
         );
-        assert!(entries[0].variants.contains_key("deep"));
+        assert_eq!(entries[1].provider_id, "anthropic");
+        assert_eq!(entries[1].model_id, "claude-sonnet");
+        assert_eq!(
+            entries[1].display_name.as_deref(),
+            Some("Claude Sonnet Local")
+        );
+        assert!(entries[1].has_local_override);
+        assert_eq!(
+            entries[1].default_model_for_provider.as_deref(),
+            Some("claude-sonnet")
+        );
+        assert!(entries[1].variants.contains_key("deep"));
     }
 
     #[test]
@@ -845,6 +880,35 @@ mod tests {
         assert!(provider_ids.iter().any(|id| id == "gemini"));
         assert!(provider_ids.iter().any(|id| id == "bedrock"));
         assert!(provider_ids.iter().any(|id| id == "gitlab"));
+
+        let openai = document
+            .providers
+            .get("openai")
+            .expect("openai provider should exist");
+        assert_eq!(openai.default_model.as_deref(), Some("openai/gpt-5.5"));
+        assert!(openai.models.contains_key("openai/gpt-5.5"));
+        assert!(openai.models.contains_key("openai/gpt-5.5-pro"));
+
+        let anthropic = document
+            .providers
+            .get("anthropic")
+            .expect("anthropic provider should exist");
+        assert_eq!(
+            anthropic.default_model.as_deref(),
+            Some("anthropic/claude-opus-4-7")
+        );
+        assert!(anthropic.models.contains_key("anthropic/claude-opus-4-7"));
+        assert!(anthropic.models.contains_key("anthropic/claude-opus-4-6"));
+
+        let gemini = document
+            .providers
+            .get("gemini")
+            .expect("gemini provider should exist");
+        assert_eq!(
+            gemini.default_model.as_deref(),
+            Some("gemini/gemini-3.1-pro-preview")
+        );
+        assert!(gemini.models.contains_key("gemini/gemini-3.1-flash-lite"));
 
         let bedrock = document
             .providers

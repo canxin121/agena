@@ -14,7 +14,7 @@ describe('SectionTabBar', () => {
 
     expect(html.includes('Overview')).toBe(true)
     expect(html.includes('Skills')).toBe(true)
-    expect(html.includes('primary button')).toBe(true)
+    expect(html.includes('aria-selected="true"')).toBe(true)
   })
 
   test('omits wrapper when there are no tabs', async () => {

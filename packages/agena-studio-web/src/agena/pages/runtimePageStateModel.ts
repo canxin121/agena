@@ -24,7 +24,7 @@ export const runtimeTabs: SectionTabOption<RuntimeTab>[] = [
 
 export const settingsTabs: SectionTabOption<SettingsTab>[] = [
   { id: 'providers', label: 'Providers' },
-  { id: 'permissions', label: 'Permissions' },
+  { id: 'permissions', label: 'Guardrails' },
   { id: 'desktop', label: 'Desktop' },
 ]
 
@@ -42,7 +42,7 @@ export const sectionTitles: Record<RuntimeRouteSection, string> = {
 export const sectionDescriptions: Record<RuntimeRouteSection, string> = {
   runtime: 'Inspect runtime state, workflows, MCP, LSP, skills, and operator snapshots.',
   plugins: 'Inspect installed plugins, marketplace readiness, manifests, and retained logs.',
-  settings: 'Manage providers, credentials, permission rules, and desktop configuration.',
+  settings: 'Configure Agena providers, runtime guardrails, and desktop services.',
 }
 
 export const sectionPagePaths: Record<RuntimeRouteSection, string> = {
@@ -313,11 +313,17 @@ export function queryMatchesText(parts: Array<string | null | undefined>, query:
   const normalizedQuery = query.trim().toLowerCase()
   if (!normalizedQuery) return true
   return parts
-    .map((part) => String(part || '').trim().toLowerCase())
+    .map((part) =>
+      String(part || '')
+        .trim()
+        .toLowerCase(),
+    )
     .join(' ')
     .includes(normalizedQuery)
 }
 
 export function filterRuntimeSkillsByQuery(entries: RuntimeSkill[], query: string): RuntimeSkill[] {
-  return entries.filter((entry) => queryMatchesText([entry.name, entry.description, ...(entry.aliases || []), entry.source_path || ''], query))
+  return entries.filter((entry) =>
+    queryMatchesText([entry.name, entry.description, ...(entry.aliases || []), entry.source_path || ''], query),
+  )
 }

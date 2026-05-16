@@ -98,6 +98,7 @@ export function useWorkspacePageState(
   const loading = ref(false)
   const actionError = ref('')
   const actionMessage = ref('')
+  const selectedWorkspacePathDraft = ref('')
 
   const selectedWorkspace = computed(
     () => workspaces.value.find((workspace) => workspace.id === selectedWorkspaceId.value) || null,
@@ -209,6 +210,15 @@ export function useWorkspacePageState(
     }
   }
 
+  async function selectWorkspace(workspaceId: number | string) {
+    const parsed = Number(workspaceId)
+    if (!Number.isFinite(parsed)) return
+    if (!workspaces.value.some((workspace) => workspace.id === parsed)) return
+    selectedWorkspaceId.value = parsed
+    pathInput.value = ''
+    await loadTree()
+  }
+
   async function load() {
     loading.value = true
     actionError.value = ''
@@ -216,6 +226,12 @@ export function useWorkspacePageState(
       const [workspaceItems] = await Promise.all([deps.listWorkspaces(), loadGitStatus()])
       workspaces.value = workspaceItems
       syncFromRoute()
+      if (
+        selectedWorkspaceId.value &&
+        !workspaces.value.some((workspace) => workspace.id === selectedWorkspaceId.value)
+      ) {
+        selectedWorkspaceId.value = null
+      }
       if (!selectedWorkspaceId.value && workspaces.value.length) {
         selectedWorkspaceId.value = workspaces.value[0]?.id ?? null
       }
@@ -277,7 +293,10 @@ export function useWorkspacePageState(
 
   function openRuntimeForWorkspace() {
     if (!selectedWorkspaceId.value) return
-    void input.router.push({ path: buildRuntimeSectionPath('runtime', 'workflow'), query: { workspace: String(selectedWorkspaceId.value) } })
+    void input.router.push({
+      path: buildRuntimeSectionPath('runtime', 'workflow'),
+      query: { workspace: String(selectedWorkspaceId.value) },
+    })
   }
 
   async function resolveWorkspaceAction(createIfMissing: boolean) {
@@ -301,12 +320,9 @@ export function useWorkspacePageState(
     }
   }
 
-  async function renameSelectedWorkspace() {
-    const workspace = selectedWorkspace.value
-    if (!workspace) return
-
-    const nextPath = typeof window !== 'undefined' ? window.prompt('Rename workspace path', workspace.path)?.trim() ?? '' : ''
-    if (!nextPath || nextPath === workspace.path) return
+  async function updateWorkspacePathAction(workspace: WorkspaceResource, nextPath: string) {
+    const normalizedPath = nextPath.trim()
+    if (!normalizedPath || normalizedPath === workspace.path) return
 
     loading.value = true
     actionError.value = ''
@@ -314,10 +330,11 @@ export function useWorkspacePageState(
     try {
       const updated = await deps.updateWorkspace({
         workspaceId: workspace.id,
-        path: nextPath,
+        path: normalizedPath,
       })
       await load()
       selectedWorkspaceId.value = updated.id
+      selectedWorkspacePathDraft.value = updated.path
       actionMessage.value = `Renamed workspace to ${updated.path}.`
     } catch (err) {
       actionError.value = err instanceof Error ? err.message : String(err)
@@ -326,9 +343,29 @@ export function useWorkspacePageState(
     }
   }
 
-  async function deleteSelectedWorkspace() {
+  async function saveSelectedWorkspacePath() {
     const workspace = selectedWorkspace.value
     if (!workspace) return
+    await updateWorkspacePathAction(workspace, selectedWorkspacePathDraft.value)
+  }
+
+  function resetSelectedWorkspacePathDraft() {
+    selectedWorkspacePathDraft.value = selectedWorkspace.value?.path || ''
+  }
+
+  function useSelectedWorkspaceAsResolverPath() {
+    workspacePath.value = selectedWorkspace.value?.path || ''
+  }
+
+  async function renameSelectedWorkspace() {
+    const workspace = selectedWorkspace.value
+    if (!workspace) return
+    const nextPath =
+      typeof window !== 'undefined' ? (window.prompt('Rename workspace path', workspace.path)?.trim() ?? '') : ''
+    await updateWorkspacePathAction(workspace, nextPath)
+  }
+
+  async function deleteWorkspaceAction(workspace: WorkspaceResource) {
     if (typeof window !== 'undefined' && !window.confirm(`Delete workspace #${workspace.id} (${workspace.path})?`)) {
       return
     }
@@ -339,12 +376,22 @@ export function useWorkspacePageState(
     try {
       const removed = await deps.deleteWorkspace(workspace.id)
       await load()
+      if (!workspaces.value.length) {
+        selectedWorkspaceId.value = null
+        tree.value = null
+      }
       actionMessage.value = `Deleted workspace ${removed.path}.`
     } catch (err) {
       actionError.value = err instanceof Error ? err.message : String(err)
     } finally {
       loading.value = false
     }
+  }
+
+  async function deleteSelectedWorkspace() {
+    const workspace = selectedWorkspace.value
+    if (!workspace) return
+    await deleteWorkspaceAction(workspace)
   }
 
   watch(
@@ -355,6 +402,14 @@ export function useWorkspacePageState(
         void loadTree()
       }
     },
+  )
+
+  watch(
+    () => selectedWorkspace.value?.path,
+    (path) => {
+      selectedWorkspacePathDraft.value = path || ''
+    },
+    { immediate: true },
   )
 
   return {
@@ -369,6 +424,7 @@ export function useWorkspacePageState(
     load,
     loadTree,
     loading,
+    deleteWorkspaceAction,
     openChatForWorkspace,
     openDirectory,
     openRuntimeConfigRoot,
@@ -384,13 +440,18 @@ export function useWorkspacePageState(
     rawDiffLoaded,
     rawDiffLoading,
     renameSelectedWorkspace,
+    resetSelectedWorkspacePathDraft,
     resolveWorkspaceAction,
     rows,
     selectedShortcutId,
     selectedWorkspace,
     selectedWorkspaceId,
+    selectedWorkspacePathDraft,
+    selectWorkspace,
+    saveSelectedWorkspacePath,
     deleteSelectedWorkspace,
     tree,
+    useSelectedWorkspaceAsResolverPath,
     workspaceConfigCards,
     workspacePath,
     workspaces,

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 
-import { deleteModelCatalogEntry, listProviderModels } from './agenaApi'
+import { createPermissionRule, deleteModelCatalogEntry, listProviderModels } from './agenaApi'
 
 const originalFetch = globalThis.fetch
 
@@ -90,5 +90,50 @@ describe('listProviderModels', () => {
         },
       },
     ])
+  })
+})
+
+describe('createPermissionRule', () => {
+  test('sends network access fields using the Agena permission wire shape', async () => {
+    let capturedBody: Record<string, unknown> | null = null
+
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
+      return new Response(
+        JSON.stringify({
+          id: 1,
+          action_key: 'network',
+          subject_kind: 'network_access',
+          network_target: 'api.example.com',
+          network_host: 'api.example.com',
+          network_port: 443,
+          mode: 'deny',
+          scope: 'global',
+          source: 'api',
+          created_at: '2026-05-10T00:00:00Z',
+          updated_at: '2026-05-10T00:00:00Z',
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
+    }) as typeof fetch
+
+    await createPermissionRule({
+      subjectKind: 'network_access',
+      networkTarget: 'api.example.com',
+      networkPort: 443,
+      scope: 'global',
+      mode: 'deny',
+    })
+
+    expect(capturedBody).toEqual({
+      subject_kind: 'network_access',
+      network_target: 'api.example.com',
+      network_port: 443,
+      scope: 'global',
+      mode: 'deny',
+    })
   })
 })

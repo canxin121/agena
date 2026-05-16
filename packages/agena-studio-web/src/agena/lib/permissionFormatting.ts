@@ -24,6 +24,9 @@ export function permissionRiskLabel(action: Record<string, unknown>): string {
     if (accessKind === 'external_directory') return 'external directory access'
     return 'workspace read'
   }
+  if (kind === 'network_access') {
+    return 'network access'
+  }
   return 'permission request'
 }
 
@@ -34,11 +37,7 @@ export function permissionActionView(action: Record<string, unknown>): Permissio
     const qualifier = readString(action.qualifier)
     return {
       title: qualifier ? `${toolName} · ${qualifier}` : toolName,
-      details: [
-        'kind=tool',
-        `tool=${toolName}`,
-        ...(qualifier ? [`qualifier=${qualifier}`] : []),
-      ],
+      details: ['kind=tool', `tool=${toolName}`, ...(qualifier ? [`qualifier=${qualifier}`] : [])],
     }
   }
   if (kind === 'path_access') {
@@ -55,9 +54,26 @@ export function permissionActionView(action: Record<string, unknown>): Permissio
       ],
     }
   }
+  if (kind === 'network_access') {
+    const target =
+      readString(action.target) || readString(action.network_target) || readString(action.host) || 'network'
+    const host = readString(action.host)
+    const port = typeof action.port === 'number' ? String(action.port) : readString(action.port)
+    return {
+      title: port ? `network · ${target}:${port}` : `network · ${target}`,
+      details: [
+        'kind=network_access',
+        `target=${target}`,
+        ...(host && host !== target ? [`host=${host}`] : []),
+        ...(port ? [`port=${port}`] : []),
+      ],
+    }
+  }
   return {
     title: kind || 'permission_request',
-    details: Object.entries(action).map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`),
+    details: Object.entries(action).map(
+      ([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`,
+    ),
   }
 }
 

@@ -61,6 +61,8 @@ function createState() {
       pathAccessKind: 'read',
       workspaceRoot: '',
       targetPath: '',
+      networkTarget: '',
+      networkPort: '',
       scope: 'workspace',
       sessionId: '',
       mode: 'ask',
@@ -122,6 +124,25 @@ describe('useRuntimePermissionActions', () => {
     expect(state.activeSettingsTab.value).toBe('permissions')
     expect(state.editingPermissionRuleId.value).toBe(9)
 
+    const networkRule = createRule({
+      id: 10,
+      subject_kind: 'network_access',
+      tool_name: null,
+      qualifier: null,
+      network_target: 'api.example.com',
+      network_host: 'api.example.com',
+      network_port: 443,
+    })
+
+    expect(actions.permissionRuleLabel(networkRule)).toBe('network · api.example.com:443')
+    expect(actions.permissionRulePreview(networkRule)).toBe('target=api.example.com · port=443')
+
+    actions.editPermissionRule(networkRule)
+
+    expect(state.permissionDraft.subjectKind).toBe('network_access')
+    expect(state.permissionDraft.networkTarget).toBe('api.example.com')
+    expect(state.permissionDraft.networkPort).toBe('443')
+
     actions.resetPermissionDraft()
 
     expect(state.permissionDraft.subjectKind).toBe('tool')
@@ -167,12 +188,29 @@ describe('useRuntimePermissionActions', () => {
 
     await actions.savePermissionRule()
 
+    expect(apiCalls).toEqual(['create:tool:bash:ask', 'update:11:path_access:src/**:allow'])
+    expect(calls).toEqual(['load'])
+    expect(state.actionMessage.value).toBe('Updated permission rule for write · src/**.')
+
+    state.permissionDraft.subjectKind = 'network_access'
+    state.permissionDraft.targetPath = ''
+    state.permissionDraft.networkTarget = 'api.example.com'
+    state.permissionDraft.networkPort = '443'
+    state.permissionDraft.scope = 'global'
+    state.permissionDraft.sessionId = ''
+    state.permissionDraft.mode = 'deny'
+    state.editingPermissionRuleId.value = null
+    calls.length = 0
+
+    await actions.savePermissionRule()
+
     expect(apiCalls).toEqual([
       'create:tool:bash:ask',
       'update:11:path_access:src/**:allow',
+      'create:network_access:undefined:deny',
     ])
     expect(calls).toEqual(['load'])
-    expect(state.actionMessage.value).toBe('Updated permission rule for write · src/**.')
+    expect(state.actionMessage.value).toBe('Created permission rule for network · api.example.com:443.')
   })
 
   test('revokePermissionRuleAction and approvePermission refresh state', async () => {

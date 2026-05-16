@@ -6,6 +6,7 @@ import type {
   MarketplaceInstalledPluginResource,
   MarketplacePluginResource,
   PermissionRuleResource,
+  PermissionSubjectKind,
   PluginInspect,
   RuntimeStatus,
   SessionExecutionResource,
@@ -193,7 +194,7 @@ describe('useRuntimeDerivedState', () => {
       permissionRules: ref<PermissionRuleResource[]>([]),
       permissionScopeFilter: ref<'all' | 'session' | 'workspace' | 'global'>('all'),
       permissionStatusFilter: ref<'all' | 'active' | 'revoked'>('active'),
-      permissionSubjectFilter: ref<'all' | 'tool' | 'path_access'>('all'),
+      permissionSubjectFilter: ref<'all' | PermissionSubjectKind>('all'),
       routePath: ref('/settings/desktop'),
       runtime: ref<RuntimeStatus | null>(runtime()),
       runtimeSkillQuery: ref(''),
@@ -235,10 +236,8 @@ describe('useRuntimeDerivedState', () => {
 
     expect(derived.routeSection.value).toBe('settings')
     expect(derived.pageTitle.value).toBe('Settings')
-    expect(derived.pageDescription.value).toBe(
-      'Manage providers, credentials, permission rules, and desktop configuration.',
-    )
-    expect(derived.visibleTabs.value).toEqual([])
+    expect(derived.pageDescription.value).toBe('Configure Agena providers, runtime guardrails, and desktop services.')
+    expect(derived.visibleTabs.value.map((item) => item.id)).toEqual(['providers', 'permissions', 'desktop'])
     expect(derived.desktopBackendUrl.value).toBe('http://127.0.0.1:3210')
     expect(derived.desktopBackendErrorFacts.value).toEqual([
       { label: 'Code', value: 'EADDRINUSE', mono: true },
@@ -355,7 +354,7 @@ describe('useRuntimeDerivedState', () => {
       permissionRules,
       permissionScopeFilter: ref<'all' | 'session' | 'workspace' | 'global'>('workspace'),
       permissionStatusFilter: ref<'all' | 'active' | 'revoked'>('active'),
-      permissionSubjectFilter: ref<'all' | 'tool' | 'path_access'>('tool'),
+      permissionSubjectFilter: ref<'all' | PermissionSubjectKind>('tool'),
       routePath: ref('/runtime/workflow'),
       runtime: ref<RuntimeStatus | null>(runtime()),
       runtimeSkillQuery: ref('review'),

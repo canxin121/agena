@@ -11,6 +11,7 @@ import type {
   ModelCatalogEntry,
   PermissionMode,
   PermissionRuleResource,
+  PermissionSubjectKind,
   PluginInspect,
   PluginLogEntry,
   PluginStatus,
@@ -67,7 +68,7 @@ export function useRuntimePageStore() {
   const permissionSearch = ref('')
   const permissionModeFilter = ref<'all' | PermissionMode>('all')
   const permissionScopeFilter = ref<'all' | 'session' | 'workspace' | 'global'>('all')
-  const permissionSubjectFilter = ref<'all' | 'tool' | 'path_access'>('all')
+  const permissionSubjectFilter = ref<'all' | PermissionSubjectKind>('all')
   const permissionStatusFilter = ref<'all' | 'active' | 'revoked'>('active')
   const marketplaceQuery = ref('')
   const runtimeSkillQuery = ref('')
@@ -86,12 +87,14 @@ export function useRuntimePageStore() {
   const marketplaceInstalled = ref<MarketplaceInstalledPluginResource[]>([])
   const marketplaceOutdated = ref<MarketplaceOutdatedPluginResource[]>([])
   const permissionDraft = reactive<{
-    subjectKind: 'tool' | 'path_access'
+    subjectKind: PermissionSubjectKind
     toolName: string
     qualifier: string
     pathAccessKind: string
     workspaceRoot: string
     targetPath: string
+    networkTarget: string
+    networkPort: string
     scope: 'session' | 'workspace' | 'global'
     sessionId: string
     mode: PermissionMode
@@ -102,6 +105,8 @@ export function useRuntimePageStore() {
     pathAccessKind: 'read',
     workspaceRoot: '',
     targetPath: '',
+    networkTarget: '',
+    networkPort: '',
     scope: 'workspace',
     sessionId: '',
     mode: 'ask',
